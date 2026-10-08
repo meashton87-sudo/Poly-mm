@@ -147,3 +147,18 @@ def test_offline_scan_finds_planted_opportunities():
     # Never recommends buying "NO Detroit" on Kalshi as if it were the Bucs.
     assert not any(l.contract.venue == "kalshi" and l.side == "NO"
                    for o in opps if o.kind == "sportsbook_value" for l in o.legs)
+
+
+def test_polymarket_paging_survives_server_page_cap(monkeypatch):
+    from polymm.scan import sources
+
+    allm = [{"id": str(i)} for i in range(250)]
+    calls = []
+
+    def fake_get(url, params=None, **kw):
+        calls.append(params)
+        o = params["offset"]
+        return allm[o:o + 100]  # server caps at 100 regardless of limit
+
+    monkeypatch.setattr(sources, "_get", fake_get)
+    assert len(sources.fetch_polymarket()) == 250

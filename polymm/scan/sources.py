@@ -147,17 +147,35 @@ def parse_polymarket_markets(markets: Iterable[dict]) -> list[Contract]:
     return out
 
 
-def fetch_polymarket(max_pages: int = 40, page_size: int = 500, min_volume: float = 0.0) -> list[dict]:
-    rows: list[dict] = []
+def fetch_polymarket(max_pages: int = 150, page_size: int = 500, min_volume: float = 0.0) -> list[dict]:
+    """Page through every open market, highest volume first.
+
+    Gamma silently caps `limit` (100 per page in practice), so a short page is
+    not the end: advance by what we actually got and stop on an empty page.
+    """
+    base = {"active": "true", "closed": "false", "limit": page_size, "volume_num_min": min_volume}
+    order = {"order": "volume24hr", "ascending": "false"}
+    rows: dict[str, dict] = {}
+    offset = 0
     for page in range(max_pages):
-        batch = _get(f"{GAMMA}/markets", {"active": "true", "closed": "false", "limit": page_size,
-                                          "offset": page * page_size, "volume_num_min": min_volume})
+        try:
+            batch = _get(f"{GAMMA}/markets", {**base, **order, "offset": offset})
+        except Exception:
+            if not order:
+                raise
+            order = {}  # sort field not accepted: fall back to default order
+            batch = _get(f"{GAMMA}/markets", {**base, "offset": offset})
         if not batch:
             break
-        rows += batch
-        if len(batch) < page_size:
-            break
-    return rows
+        before = len(rows)
+        for m in batch:
+            rows[str(m.get("id") or m.get("conditionId"))] = m
+        if len(rows) == before:
+            break  # offset ignored / looping on the same page
+        offset += len(batch)
+        if page % 10 == 9:
+            print(f"  ... {len(rows)} Polymarket markets so far", flush=True)
+    return list(rows.values())
 
 
 def polymarket_book(token_id: str) -> dict:
@@ -209,9 +227,11 @@ def parse_kalshi_events(events: Iterable[dict]) -> list[Contract]:
     return out
 
 
-def fetch_kalshi(max_pages: int = 50) -> list[dict]:
+def fetch_kalshi(max_pages: int = 200) -> list[dict]:
     events, cursor = [], None
-    for _ in range(max_pages):
+    for page in range(max_pages):
+        if page % 10 == 9:
+            print(f"  ... {len(events)} Kalshi events so far", flush=True)
         params = {"status": "open", "with_nested_markets": "true", "limit": 200}
         if cursor:
             params["cursor"] = cursor

@@ -37,7 +37,7 @@ def _fetch(name: str, fn) -> list:
         if "CERTIFICATE_VERIFY_FAILED" in str(e):
             print("     fix: python -m pip install truststore   (then run the scan again)")
         return []
-    print(f"  got {len(rows)} rows")
+    print(f"  got {len(rows)} {'markets' if name == 'Polymarket' else 'events' if name == 'Kalshi' else 'rows'}")
     return rows
 
 
@@ -59,6 +59,7 @@ def load_snapshot(args) -> Snapshot:
             d.mkdir(parents=True, exist_ok=True)
             for name, obj in (("polymarket_markets", pm), ("kalshi_events", ks), ("odds_api_h2h", odds)):
                 (d / f"{name}.json").write_text(json.dumps(obj))
+    print("parsing and matching...", flush=True)
     contracts = parse_polymarket_markets(pm) + parse_kalshi_events(ks)
     contracts = [c for c in contracts if c.volume >= args.min_volume]
     return Snapshot(contracts, odds, mapping)
