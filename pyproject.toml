@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rh-meme-bot"
+version = "0.1.0"
+description = "Robinhood Chain memecoin launch monitor with pluggable decision engine and paper trading"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "web3>=7.0,<9",
+    "rich>=13.7",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+rh-meme-bot = "rh_meme_bot.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
