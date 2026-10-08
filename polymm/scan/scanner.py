@@ -61,13 +61,72 @@ def format_opportunity(o: Opportunity) -> str:
     return "\n".join(lines)
 
 
+def _c(x: float) -> str:
+    """Price in cents, e.g. 0.315 -> '31.5¢'."""
+    v = x * 100
+    return f"{v:.0f}¢" if abs(v - round(v)) < 0.05 else f"{v:.1f}¢"
+
+
+def _venue(v: str) -> str:
+    return {"polymarket": "Polymarket", "kalshi": "Kalshi"}.get(v, v)
+
+
+def _what(l) -> str:
+    c = l.contract
+    if l.side == "YES":
+        return c.outcome if c.outcome != "Yes" else "YES"
+    return c.no_label if c.no_is_named_outcome else f"NO on '{c.outcome}'" if c.outcome != "Yes" else "NO"
+
+
+def explain(o: Opportunity) -> dict:
+    """Plain-English headline, summary and step list for one opportunity."""
+    steps = [f"Buy {_what(l)} on {_venue(l.contract.venue)} at {_c(l.price)}"
+             + (f" (+{_c(l.fee)} fee)" if l.fee >= 0.0005 else "") for l in o.legs]
+    profit = f"{_c(o.edge)} profit per $1 payout ({o.roi:.1%} return)"
+    if o.kind == "cross_venue_arb":
+        headline = "Locked profit across Polymarket and Kalshi" if o.confidence == "arb" \
+            else "Possible locked profit — confirm both markets ask the same question"
+        summary = (f"These two bets cover both outcomes, so exactly one of them pays $1. "
+                   f"Together they cost {_c(o.cost)} including fees: {profit}.")
+        if o.confidence != "arb":
+            summary = "IF both markets resolve the same way: " + summary[0].lower() + summary[1:]
+    elif o.kind == "multi_outcome_arb":
+        n = len(o.legs)
+        if o.legs[0].side == "YES":
+            headline = "Buy every outcome for less than $1"
+            summary = (f"Buying YES on all {n} outcomes costs {_c(o.cost)} in total; whichever one happens pays $1: "
+                       f"{profit}. Only safe if one of these {n} outcomes is certain to happen.")
+        else:
+            headline = f"Buy NO on all {n} outcomes for less than ${n - 1}"
+            summary = (f"Buying NO on all {n} costs ${o.cost:.2f}; at most one outcome can happen, so at least "
+                       f"{n - 1} NOs pay $1 each: {_c(o.edge)} profit per set ({o.roi:.1%}).")
+    elif o.kind == "sportsbook_value":
+        l = o.legs[0]
+        headline = f"Priced below the sportsbooks: {_what(l)}"
+        summary = (f"Sportsbooks (with their margin removed) give this a {o.fair:.1%} chance, "
+                   f"but {_venue(l.contract.venue)} sells it at {_c(l.price)}. Expected profit "
+                   f"{_c(o.edge)} per $1 share ({o.roi:.1%}). Not guaranteed: it's still a bet you can lose.")
+    else:  # cross_venue_value
+        l = o.legs[0]
+        other = "Kalshi" if l.contract.venue == "polymarket" else "Polymarket"
+        headline = f"Cheaper on {_venue(l.contract.venue)} than on {other}"
+        summary = (f"{other} prices this at about {o.fair:.1%}; {_venue(l.contract.venue)} sells it at {_c(l.price)}. "
+                   f"Expected {_c(o.edge)} per $1 share ({o.roi:.1%}) if {other} is right. Not a locked profit.")
+    if o.kelly:
+        summary += f" Suggested stake: up to {o.kelly / 4:.1%} of your bankroll (quarter-Kelly)."
+    return {"headline": headline, "summary": summary, "steps": steps}
+
+
 def to_json(o: Opportunity) -> dict:
     return {
+        **explain(o),
+        "key": o.key,
         "kind": o.kind, "title": o.title, "confidence": o.confidence, "edge": round(o.edge, 5),
         "cost": round(o.cost, 5), "roi": round(o.roi, 5), "annualized": o.annualized,
         "days_to_close": o.days_to_close, "fair": o.fair, "kelly": o.kelly, "max_units": o.max_units,
         "notes": o.notes,
-        "legs": [{"venue": l.contract.venue, "id": l.contract.id, "side": l.side, "price": l.price,
+        "legs": [{"venue": l.contract.venue, "id": l.contract.id, "market": l.contract.title,
+                  "side": l.side, "price": l.price,
                   "fee": l.fee, "label": l.label, "url": l.contract.url,
                   "token": l.contract.yes_token if l.side == "YES" else l.contract.no_token}
                  for l in o.legs],

@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Market Scanner</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --ink: #14171c; --muted: #5d6673; --line: #e3e6eb;
+  --accent: #2f5bd3; --accent-ink: #ffffff;
+  --lock: #0f7a4a; --lock-bg: #e3f5ec;
+  --check: #8a5a00; --check-bg: #fff3d6;
+  --model: #2f5bd3; --model-bg: #e7eeff;
+  --bad: #b3261e; --bad-bg: #fde8e6;
+  --poly: #2f5bd3; --kalshi: #0f7a4a;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 2px 8px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1216; --card: #171b21; --ink: #e8ebef; --muted: #9aa3ae; --line: #2a3038;
+    --accent: #7c9cff; --accent-ink: #0f1216;
+    --lock: #5fd39a; --lock-bg: #12301f; --check: #f2c25b; --check-bg: #33280f;
+    --model: #8fb0ff; --model-bg: #1a2442; --bad: #ff8a80; --bad-bg: #3a1714;
+    --poly: #8fb0ff; --kalshi: #5fd39a; --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1216; --card: #171b21; --ink: #e8ebef; --muted: #9aa3ae; --line: #2a3038;
+  --accent: #7c9cff; --accent-ink: #0f1216;
+  --lock: #5fd39a; --lock-bg: #12301f; --check: #f2c25b; --check-bg: #33280f;
+  --model: #8fb0ff; --model-bg: #1a2442; --bad: #ff8a80; --bad-bg: #3a1714;
+  --poly: #8fb0ff; --kalshi: #5fd39a; --shadow: none;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.wrap { max-width: 980px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 18px; }
+h1 { font-size: 22px; margin: 0; letter-spacing: -.01em; }
+.sub { color: var(--muted); font-size: 13px; }
+.grow { flex: 1; min-width: 180px; }
+button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--card); color: var(--ink); padding: 7px 12px; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+button:disabled { opacity: .55; cursor: default; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--lock); }
+.dot.busy { background: var(--check); animation: pulse 1s infinite alternate; }
+@keyframes pulse { to { opacity: .3; } }
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; box-shadow: var(--shadow); }
+.tile b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
+.tile span { font-size: 12px; color: var(--muted); }
+.controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--card); }
+.seg button { border: 0; border-radius: 0; padding: 6px 11px; font-size: 14px; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+input[type=search], select { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--card); color: var(--ink); }
+input[type=search] { flex: 1; min-width: 160px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px;
+  margin-bottom: 12px; box-shadow: var(--shadow); }
+.top { display: flex; gap: 10px; align-items: flex-start; }
+.badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.b-lock { color: var(--lock); background: var(--lock-bg); }
+.b-check { color: var(--check); background: var(--check-bg); }
+.b-model { color: var(--model); background: var(--model-bg); }
+.new { font-size: 11px; font-weight: 700; color: var(--accent); margin-left: 6px; }
+.roi { margin-left: auto; text-align: right; }
+.roi b { font-size: 22px; font-variant-numeric: tabular-nums; display: block; line-height: 1.1; }
+.roi span { font-size: 12px; color: var(--muted); }
+h2 { font-size: 16px; margin: 8px 0 2px; }
+.title { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+.summary { margin: 6px 0 10px; }
+ol { margin: 0 0 10px; padding-left: 22px; }
+ol li { margin: 3px 0; }
+.venue { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; margin-right: 6px; }
+.v-polymarket { color: var(--poly); } .v-kalshi { color: var(--kalshi); }
+.mkt { display: block; color: var(--muted); font-size: 12px; }
+.meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.notes { font-size: 12px; color: var(--muted); margin: 8px 0 0; padding-left: 18px; }
+.links { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.links a { font-size: 13px; color: var(--accent); text-decoration: none; border: 1px solid var(--line);
+  padding: 4px 10px; border-radius: 8px; }
+.links a:hover { border-color: var(--accent); }
+.empty, .error { text-align: center; padding: 40px 16px; color: var(--muted); background: var(--card);
+  border: 1px dashed var(--line); border-radius: 14px; }
+.error { color: var(--bad); background: var(--bad-bg); border-style: solid; text-align: left; margin-bottom: 12px; padding: 12px 16px; }
+details { margin-top: 24px; font-size: 13px; color: var(--muted); }
+pre { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
+@media (max-width: 640px) {
+  .tiles { grid-template-columns: repeat(2, 1fr); }
+  .top { flex-wrap: wrap; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="grow">
+      <h1>Market Scanner</h1>
+      <div class="sub" id="sub">Polymarket · Kalshi · sportsbooks</div>
+    </div>
+    <span class="pill"><span class="dot" id="dot"></span><span id="status">starting…</span></span>
+    <button class="primary" id="scan">Scan now</button>
+    <button id="theme" title="Switch light/dark">Light / dark</button>
+  </header>
+
+  <div class="tiles">
+    <div class="tile"><b id="t-lock">–</b><span>Locked profits</span></div>
+    <div class="tile"><b id="t-check">–</b><span>Check rules first</span></div>
+    <div class="tile"><b id="t-model">–</b><span>Value bets</span></div>
+    <div class="tile"><b id="t-mkts">–</b><span>Markets scanned</span></div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" id="filter">
+      <button data-f="all" aria-pressed="true">All</button>
+      <button data-f="arb" aria-pressed="false">Locked</button>
+      <button data-f="needs-verification" aria-pressed="false">Check first</button>
+      <button data-f="model" aria-pressed="false">Value bets</button>
+    </div>
+    <input type="search" id="q" placeholder="Search markets…">
+    <select id="sort" aria-label="Sort">
+      <option value="best">Best first</option>
+      <option value="roi">Highest return</option>
+      <option value="soon">Resolves soonest</option>
+    </select>
+  </div>
+
+  <div id="err"></div>
+  <div id="list"><div class="empty">Running the first scan… this can take a few minutes.</div></div>
+
+  <details>
+    <summary>Activity log</summary>
+    <pre id="log"></pre>
+  </details>
+
+  <footer>
+    “Locked” means the prices shown add up to a guaranteed profit if every step fills at those prices
+    and the markets resolve as described. Prices move fast and order books can be thin, so check
+    the live price before each step. “Value bets” are not guaranteed. Not financial advice.
+  </footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const safeUrl = u => /^https:\/\/[^\s"'<>]+$/.test(u || "") ? u : null;
+const pct = x => (x * 100).toFixed(x < 0.1 ? 1 : 0) + "%";
+const BADGE = {
+  "arb": ["b-lock", "Locked profit"],
+  "needs-verification": ["b-check", "Check rules first"],
+  "model": ["b-model", "Value bet"],
+};
+let state = null, filter = "all", lastList = "";
+
+try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+$("theme").onclick = () => {
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const cur = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("theme", next); } catch (e) {}
+};
+
+$("filter").onclick = e => {
+  const b = e.target.closest("button"); if (!b) return;
+  filter = b.dataset.f;
+  for (const x of $("filter").children) x.setAttribute("aria-pressed", x === b);
+  render();
+};
+$("q").oninput = render;
+$("sort").onchange = render;
+$("scan").onclick = async () => {
+  $("scan").disabled = true;
+  await fetch("/api/scan", { method: "POST" }).catch(() => {});
+  setTimeout(poll, 300);
+};
+
+function card(o) {
+  const [cls, label] = BADGE[o.confidence] || ["b-model", o.confidence];
+  const days = o.days_to_close == null ? null : o.days_to_close;
+  const meta = [];
+  if (days != null) meta.push(days < 1 ? "resolves within a day" : `resolves in ${Math.round(days)} days`);
+  if (o.annualized != null) meta.push(`≈ ${pct(o.annualized)} a year`);
+  if (o.max_units != null) meta.push(`≈ ${Math.round(o.max_units).toLocaleString()} shares available at these prices`);
+  const links = [...new Map(o.legs.map(l => [l.url, l])).values()]
+    .filter(l => safeUrl(l.url))
+    .map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">Open on ${l.venue === "kalshi" ? "Kalshi" : "Polymarket"} ↗</a>`)
+    .join("");
+  const steps = o.steps.map((s, i) => {
+    const l = o.legs[i];
+    return `<li><span class="venue v-${esc(l.venue)}">${esc(l.venue)}</span>${esc(s)}
+      ${o.legs.length > 1 && l.market !== o.title ? `<span class="mkt">${esc(l.market)}</span>` : ""}</li>`;
+  }).join("");
+  const notes = (o.notes || []).map(n => `<li>${esc(n)}</li>`).join("");
+  return `<article class="card">
+    <div class="top">
+      <div><span class="badge ${cls}">${label}</span>${o.new ? '<span class="new">NEW</span>' : ""}</div>
+      <div class="roi"><b>${pct(o.roi)}</b><span>${(o.edge * 100).toFixed(1)}¢ per $1</span></div>
+    </div>
+    <h2>${esc(o.headline)}</h2>
+    <div class="title">${esc(o.title)}</div>
+    <p class="summary">${esc(o.summary)}</p>
+    <ol>${steps}</ol>
+    <div class="meta">${meta.map(esc).join(" · ")}</div>
+    ${notes ? `<ul class="notes">${notes}</ul>` : ""}
+    ${links ? `<div class="links">${links}</div>` : ""}
+  </article>`;
+}
+
+function render() {
+  if (!state) return;
+  const opps = state.opportunities || [];
+  const count = c => opps.filter(o => o.confidence === c).length;
+  $("t-lock").textContent = count("arb");
+  $("t-check").textContent = count("needs-verification");
+  $("t-model").textContent = count("model");
+  const c = state.counts || {};
+  $("t-mkts").textContent = ((c.polymarket || 0) + (c.kalshi || 0)).toLocaleString();
+
+  const q = $("q").value.trim().toLowerCase();
+  let rows = opps.filter(o => filter === "all" || o.confidence === filter)
+    .filter(o => !q || (o.title + " " + o.headline + " " + o.legs.map(l => l.market).join(" ")).toLowerCase().includes(q));
+  const s = $("sort").value;
+  if (s === "roi") rows = [...rows].sort((a, b) => b.roi - a.roi);
+  if (s === "soon") rows = [...rows].sort((a, b) => (a.days_to_close ?? 1e9) - (b.days_to_close ?? 1e9));
+
+  $("list").innerHTML = rows.length ? rows.map(card).join("")
+    : `<div class="empty">${state.updated ? "Nothing matches right now. Markets move, so check back after the next scan."
+                                          : "Running the first scan… this can take a few minutes."}</div>`;
+}
+
+async function poll() {
+  let fresh;
+  try {
+    fresh = await (await fetch("/api/state", { cache: "no-store" })).json();
+  } catch (e) {
+    $("status").textContent = "scanner stopped (is the window still open?)";
+    $("dot").className = "dot busy";
+    return;
+  }
+  state = fresh;
+  const busy = state.scanning;
+  $("dot").className = "dot" + (busy ? " busy" : "");
+  $("scan").disabled = busy;
+  const when = state.updated ? new Date(state.updated).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
+  $("status").textContent = busy ? "scanning…" : when ? `updated ${when}` : "waiting";
+  const c = state.counts || {};
+  $("sub").textContent = `${state.mode === "live" ? "Live" : "Sample data"} · ${(c.polymarket || 0).toLocaleString()} Polymarket · `
+    + `${(c.kalshi || 0).toLocaleString()} Kalshi · ${c.sportsbook_events || 0} sportsbook games · rescans every ${Math.round(state.interval / 60)} min`;
+  $("err").innerHTML = state.error ? `<div class="error"><b>Last scan failed:</b> ${esc(state.error)}</div>` : "";
+  $("log").textContent = (state.log || []).join("\n");
+  // Only redraw cards when results change, so the page doesn't jump while you read.
+  const sig = (state.updated || "") + (state.opportunities || []).length;
+  if (sig !== lastList) { lastList = sig; render(); }
+}
+poll();
+setInterval(poll, 3000);
+</script>
+</body>
+</html>

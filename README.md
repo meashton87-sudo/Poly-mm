@@ -74,6 +74,24 @@ number in it.**
 
 ## Value scanner (`polymm.scan`)
 
+### The easy way: the dashboard
+
+**Windows:** double-click **`Start Scanner.bat`**. A browser tab opens with the
+dashboard. Leave the black window open while you use it; close it to stop.
+(`Start Scanner (demo).bat` opens the same page on built-in sample data.)
+
+**Mac / command line:** `python3 -m polymm.scan.app`, or add `--offline` for the demo.
+
+The dashboard rescans every 5 minutes (change this with `--interval 120`), or
+whenever you click **Scan now**. Each opportunity is a card that explains in
+plain English what to buy, where, at what price, and what you make, with links
+straight to the markets. Cards are labelled **Locked profit**, **Check rules
+first** or **Value bet**, and anything found since the last scan is marked
+**NEW**. The page only runs on your own computer (127.0.0.1), and API keys stay
+in the Python process; the page never sees them.
+
+### Command line
+
 Scans Polymarket and Kalshi (plus sportsbooks, if you have an Odds API key) and
 ranks what it finds:
 

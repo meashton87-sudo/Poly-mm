@@ -27,21 +27,21 @@ FIXTURES = Path(__file__).parent / "fixtures"
 OFFLINE_NOW = datetime(2026, 10, 8, 12, tzinfo=timezone.utc)
 
 
-def _fetch(name: str, fn) -> list:
+def _fetch(name: str, fn, log=print) -> list:
     """One venue being down (or blocked) shouldn't stop the scan of the others."""
-    print(f"fetching {name}...", flush=True)
+    log(f"fetching {name}...")
     try:
         rows = fn()
     except Exception as e:
-        print(f"  !! {name} failed: {e}")
+        log(f"  !! {name} failed: {e}")
         if "CERTIFICATE_VERIFY_FAILED" in str(e):
-            print("     fix: python -m pip install truststore   (then run the scan again)")
+            log("     fix: python -m pip install truststore   (then run the scan again)")
         return []
-    print(f"  got {len(rows)} {'markets' if name == 'Polymarket' else 'events' if name == 'Kalshi' else 'rows'}")
+    log(f"  got {len(rows)} {'markets' if name == 'Polymarket' else 'events' if name == 'Kalshi' else 'rows'}")
     return rows
 
 
-def load_snapshot(args) -> Snapshot:
+def load_snapshot(args, log=print) -> Snapshot:
     if args.offline:
         d = Path(args.offline)
         read = lambda n: json.loads((d / n).read_text()) if (d / n).exists() else []
@@ -49,24 +49,24 @@ def load_snapshot(args) -> Snapshot:
         mapping = load_mapping(args.mapping) if args.mapping else read("mapping.json")
     else:
         key = args.odds_api_key or os.environ.get("ODDS_API_KEY")
-        pm = _fetch("Polymarket", lambda: fetch_polymarket(min_volume=args.min_volume)) \
+        pm = _fetch("Polymarket", lambda: fetch_polymarket(min_volume=args.min_volume), log) \
             if "polymarket" in args.venues else []
-        ks = _fetch("Kalshi", fetch_kalshi) if "kalshi" in args.venues else []
-        odds = _fetch("The Odds API", lambda: fetch_odds_api_h2h(key)) if key else []
+        ks = _fetch("Kalshi", fetch_kalshi, log) if "kalshi" in args.venues else []
+        odds = _fetch("The Odds API", lambda: fetch_odds_api_h2h(key), log) if key else []
         mapping = load_mapping(args.mapping) if args.mapping else []
         if args.save_snapshot:
             d = Path(args.save_snapshot)
             d.mkdir(parents=True, exist_ok=True)
             for name, obj in (("polymarket_markets", pm), ("kalshi_events", ks), ("odds_api_h2h", odds)):
                 (d / f"{name}.json").write_text(json.dumps(obj))
-    print("parsing and matching...", flush=True)
+    log("parsing and matching...")
     contracts = parse_polymarket_markets(pm) + parse_kalshi_events(ks)
     contracts = [c for c in contracts if c.volume >= args.min_volume]
     return Snapshot(contracts, odds, mapping)
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def build_parser(description: str = __doc__) -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description=description, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--offline", nargs="?", const=str(FIXTURES), metavar="DIR",
                     help="scan a saved snapshot (default: bundled sample) instead of live APIs")
     ap.add_argument("--venues", default="polymarket,kalshi")
@@ -85,20 +85,30 @@ def main() -> None:
     ap.add_argument("--save-snapshot", help="dir to save raw API responses (replay with --offline DIR)")
     ap.add_argument("--watch", type=float, help="rescan every N seconds")
     ap.add_argument("--webhook", help="Discord/Slack webhook for NEW opportunities")
-    args = ap.parse_args()
+    return ap
 
+
+def run_once(args, log=print) -> tuple[Snapshot, list]:
+    """Fetch (or load) a snapshot, scan it, and apply the CLI filters."""
     cfg = ScanConfig(min_arb_edge=args.min_arb_edge, min_value_edge=args.min_value_edge,
                      max_days=args.max_days)
     fees = FeeModel(kalshi_rate=args.kalshi_fee_rate, polymarket_rate=args.polymarket_fee_rate)
+    snap = load_snapshot(args, log)
+    opps = scan(snap, cfg, fees, now=OFFLINE_NOW if args.offline == str(FIXTURES) else None)
+    if args.hide_unverified:
+        opps = [o for o in opps if o.confidence != "needs-verification"]
+    opps = opps[:args.top]
+    if args.depth and not args.offline:
+        log("checking order-book depth...")
+        enrich_depth(opps)
+    return snap, opps
+
+
+def main() -> None:
+    args = build_parser().parse_args()
     seen: set[str] = set()
     while True:
-        snap = load_snapshot(args)
-        opps = scan(snap, cfg, fees, now=OFFLINE_NOW if args.offline == str(FIXTURES) else None)
-        if args.hide_unverified:
-            opps = [o for o in opps if o.confidence != "needs-verification"]
-        opps = opps[:args.top]
-        if args.depth and not args.offline:
-            enrich_depth(opps)
+        snap, opps = run_once(args)
         n_pm = sum(c.venue == "polymarket" for c in snap.contracts)
         print(f"\n=== {datetime.now():%H:%M:%S}  scanned {n_pm} Polymarket + "
               f"{len(snap.contracts) - n_pm} Kalshi contracts, {len(snap.odds_events)} sportsbook events: "

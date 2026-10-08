@@ -21,6 +21,9 @@ from typing import Iterable
 from .models import Contract
 
 GAMMA = "https://gamma-api.polymarket.com"
+
+# Progress messages from long fetches; the desktop app swaps this for its own logger.
+progress = print
 CLOB = "https://clob.polymarket.com"
 KALSHI = "https://api.elections.kalshi.com/trade-api/v2"
 
@@ -174,7 +177,7 @@ def fetch_polymarket(max_pages: int = 150, page_size: int = 500, min_volume: flo
             break  # offset ignored / looping on the same page
         offset += len(batch)
         if page % 10 == 9:
-            print(f"  ... {len(rows)} Polymarket markets so far", flush=True)
+            progress(f"  ... {len(rows)} Polymarket markets so far")
     return list(rows.values())
 
 
@@ -231,7 +234,7 @@ def fetch_kalshi(max_pages: int = 200) -> list[dict]:
     events, cursor = [], None
     for page in range(max_pages):
         if page % 10 == 9:
-            print(f"  ... {len(events)} Kalshi events so far", flush=True)
+            progress(f"  ... {len(events)} Kalshi events so far")
         params = {"status": "open", "with_nested_markets": "true", "limit": 200}
         if cursor:
             params["cursor"] = cursor
@@ -264,5 +267,5 @@ def fetch_odds_api_h2h(api_key: str, sports: Iterable[str] = DEFAULT_SPORTS,
             out += _get(f"https://api.the-odds-api.com/v4/sports/{s}/odds",
                         {"apiKey": api_key, "regions": regions, "markets": "h2h", "oddsFormat": "american"})
         except Exception as e:  # one bad sport shouldn't kill the scan
-            print(f"[odds-api] {s}: {e}")
+            progress(f"  [odds-api] {s}: {e}")
     return out

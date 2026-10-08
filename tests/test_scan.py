@@ -162,3 +162,45 @@ def test_polymarket_paging_survives_server_page_cap(monkeypatch):
 
     monkeypatch.setattr(sources, "_get", fake_get)
     assert len(sources.fetch_polymarket()) == 250
+
+
+def test_plain_english_explanations():
+    from polymm.scan.scanner import explain, to_json
+
+    opps = scan(_snapshot(), now=NOW)
+    for o in opps:
+        e = explain(o)
+        assert e["headline"] and e["summary"] and len(e["steps"]) == len(o.legs)
+        assert to_json(o)["legs"][0]["market"]
+    lock = next(o for o in opps if o.confidence == "arb")
+    assert "Locked profit" in explain(lock)["headline"]
+    fuzzy = next(o for o in opps if o.kind == "cross_venue_arb" and o.confidence != "arb")
+    assert explain(fuzzy)["summary"].startswith("IF both markets")
+
+
+def test_app_serves_page_and_blocks_cross_site_scans():
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    from polymm.scan.__main__ import build_parser
+    from polymm.scan.app import App, make_handler
+
+    args = build_parser().parse_args(["--offline"])
+    args.interval, args.webhook = 300, None
+    app = App(args)
+    app.scan_once()
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        assert b"Market Scanner" in urllib.request.urlopen(base + "/").read()
+        state = json.load(urllib.request.urlopen(base + "/api/state"))
+        assert len(state["opportunities"]) == 4 and state["opportunities"][0]["headline"]
+        req = urllib.request.Request(base + "/api/scan", method="POST", headers={"Origin": "https://evil.example"})
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req)
+        assert e.value.code == 403
+    finally:
+        srv.shutdown()

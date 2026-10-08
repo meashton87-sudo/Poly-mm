@@ -17,4 +17,4 @@ build-backend = "setuptools.build_meta"
 packages = ["polymm", "polymm.scan"]
 
 [tool.setuptools.package-data]
-"polymm.scan" = ["fixtures/*.json"]
+"polymm.scan" = ["fixtures/*.json", "app.html"]
