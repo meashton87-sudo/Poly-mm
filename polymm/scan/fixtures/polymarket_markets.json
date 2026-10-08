@@ -1,0 +1,226 @@
+[
+ {
+  "id": "0xfed1",
+  "conditionId": "0xfed1",
+  "question": "Will the Fed hold rates in December?",
+  "slug": "fed-hold",
+  "outcomes": "[\"Yes\", \"No\"]",
+  "outcomePrices": "[\"0.555\", \"0.445\"]",
+  "clobTokenIds": "[\"0xfed11\", \"0xfed12\"]",
+  "bestBid": 0.55,
+  "bestAsk": 0.56,
+  "endDate": "2026-12-09T19:00:00Z",
+  "active": true,
+  "closed": false,
+  "enableOrderBook": true,
+  "volumeNum": 50000,
+  "negRisk": true,
+  "events": [
+   {
+    "id": "fed-dec",
+    "slug": "fed-decision-in-december",
+    "title": "Fed decision in December?"
+   }
+  ],
+  "negRiskMarketID": "0xnegfed",
+  "groupItemTitle": "No change"
+ },
+ {
+  "id": "0xfed2",
+  "conditionId": "0xfed2",
+  "question": "Will the Fed cut 25 bps in December?",
+  "slug": "fed-25",
+  "outcomes": "[\"Yes\", \"No\"]",
+  "outcomePrices": "[\"0.335\", \"0.665\"]",
+  "clobTokenIds": "[\"0xfed21\", \"0xfed22\"]",
+  "bestBid": 0.33,
+  "bestAsk": 0.34,
+  "endDate": "2026-12-09T19:00:00Z",
+  "active": true,
+  "closed": false,
+  "enableOrderBook": true,
+  "volumeNum": 50000,
+  "negRisk": true,
+  "events": [
+   {
+    "id": "fed-dec",
+    "slug": "fed-decision-in-december",
+    "title": "Fed decision in December?"
+   }
+  ],
+  "negRiskMarketID": "0xnegfed",
+  "groupItemTitle": "25 bps decrease"
+ },
+ {
+  "id": "0xfed3",
+  "conditionId": "0xfed3",
+  "question": "Will the Fed cut 50+ bps in December?",
+  "slug": "fed-50",
+  "outcomes": "[\"Yes\", \"No\"]",
+  "outcomePrices": "[\"0.035\", \"0.965\"]",
+  "clobTokenIds": "[\"0xfed31\", \"0xfed32\"]",
+  "bestBid": 0.03,
+  "bestAsk": 0.04,
+  "endDate": "2026-12-09T19:00:00Z",
+  "active": true,
+  "closed": false,
+  "enableOrderBook": true,
+  "volumeNum": 50000,
+  "negRisk": true,
+  "events": [
+   {
+    "id": "fed-dec",
+    "slug": "fed-decision-in-december",
+    "title": "Fed decision in December?"
+   }
+  ],
+  "negRiskMarketID": "0xnegfed",
+  "groupItemTitle": "50+ bps decrease"
+ },
+ {
+  "id": "0xfed4",
+  "conditionId": "0xfed4",
+  "question": "Will the Fed hike in December?",
+  "slug": "fed-hike",
+  "outcomes": "[\"Yes\", \"No\"]",
+  "outcomePrices": "[\"0.015\", \"0.985\"]",
+  "clobTokenIds": "[\"0xfed41\", \"0xfed42\"]",
+  "bestBid": 0.01,
+  "bestAsk": 0.02,
+  "endDate": "2026-12-09T19:00:00Z",
+  "active": true,
+  "closed": false,
+  "enableOrderBook": true,
+  "volumeNum": 50000,
+  "negRisk": true,
+  "events": [
+   {
+    "id": "fed-dec",
+    "slug": "fed-decision-in-december",
+    "title": "Fed decision in December?"
+   }
+  ],
+  "negRiskMarketID": "0xnegfed",
+  "groupItemTitle": "25+ bps increase"
+ },
+ {
+  "id": "btc150",
+  "conditionId": "0xbtc150",
+  "question": "Will Bitcoin reach $150,000 by December 31, 2026?",
+  "slug": "btc-150k-2026",
+  "outcomes": "[\"Yes\", \"No\"]",
+  "outcomePrices": "[\"0.305\", \"0.695\"]",
+  "clobTokenIds": "[\"0xbtc1501\", \"0xbtc1502\"]",
+  "bestBid": 0.3,
+  "bestAsk": 0.31,
+  "endDate": "2026-12-31T23:59:00Z",
+  "active": true,
+  "closed": false,
+  "enableOrderBook": true,
+  "volumeNum": 900000,
+  "negRisk": false,
+  "events": [
+   {
+    "id": "ec150",
+    "slug": "btc-150k-2026",
+    "title": "Will Bitcoin reach $150,000 by December 31, 2026?"
+   }
+  ]
+ },
+ {
+  "id": "btc200",
+  "conditionId": "0xbtc200",
+  "question": "Will Bitcoin reach $200,000 by December 31, 2026?",
+  "slug": "btc-200k-2026",
+  "outcomes": "[\"Yes\", \"No\"]",
+  "outcomePrices": "[\"0.145\", \"0.855\"]",
+  "clobTokenIds": "[\"0xbtc2001\", \"0xbtc2002\"]",
+  "bestBid": 0.14,
+  "bestAsk": 0.15,
+  "endDate": "2026-12-31T23:59:00Z",
+  "active": true,
+  "closed": false,
+  "enableOrderBook": true,
+  "volumeNum": 400000,
+  "negRisk": false,
+  "events": [
+   {
+    "id": "ec200",
+    "slug": "btc-200k-2026",
+    "title": "Will Bitcoin reach $200,000 by December 31, 2026?"
+   }
+  ]
+ },
+ {
+  "id": "xtbdet",
+  "conditionId": "0xtbdet",
+  "question": "Buccaneers vs. Lions",
+  "slug": "nfl-tb-det-2026-10-11",
+  "outcomes": "[\"Buccaneers\", \"Lions\"]",
+  "outcomePrices": "[\"0.265\", \"0.735\"]",
+  "clobTokenIds": "[\"0xtbdet1\", \"0xtbdet2\"]",
+  "bestBid": 0.26,
+  "bestAsk": 0.27,
+  "endDate": "2026-10-11T17:00:00Z",
+  "active": true,
+  "closed": false,
+  "enableOrderBook": true,
+  "volumeNum": 250000,
+  "negRisk": false,
+  "events": [
+   {
+    "id": "ebdet",
+    "slug": "nfl-tb-det-2026-10-11",
+    "title": "Buccaneers vs. Lions"
+   }
+  ]
+ },
+ {
+  "id": "0xrain",
+  "conditionId": "0xrain",
+  "question": "Will NYC get more than 4 inches of rain in October?",
+  "slug": "nyc-rain-oct",
+  "outcomes": "[\"Yes\", \"No\"]",
+  "outcomePrices": "[\"0.41\", \"0.59\"]",
+  "clobTokenIds": "[\"0xrain1\", \"0xrain2\"]",
+  "bestBid": 0.4,
+  "bestAsk": 0.42,
+  "endDate": "2026-10-31T23:59:00Z",
+  "active": true,
+  "closed": false,
+  "enableOrderBook": true,
+  "volumeNum": 50000,
+  "negRisk": false,
+  "events": [
+   {
+    "id": "erain",
+    "slug": "nyc-rain-oct",
+    "title": "Will NYC get more than 4 inches of rain in October?"
+   }
+  ]
+ },
+ {
+  "id": "0xold",
+  "conditionId": "0xold",
+  "question": "Resolved market",
+  "slug": "old",
+  "outcomes": "[\"Yes\", \"No\"]",
+  "outcomePrices": "[\"0.505\", \"0.495\"]",
+  "clobTokenIds": "[\"0xold1\", \"0xold2\"]",
+  "bestBid": 0.5,
+  "bestAsk": 0.51,
+  "endDate": "2026-01-01T00:00:00Z",
+  "active": true,
+  "closed": true,
+  "enableOrderBook": true,
+  "volumeNum": 50000,
+  "negRisk": false,
+  "events": [
+   {
+    "id": "exold",
+    "slug": "old",
+    "title": "Resolved market"
+   }
+  ]
+ }
+]

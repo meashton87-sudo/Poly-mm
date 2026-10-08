@@ -1,0 +1,116 @@
+[
+ {
+  "id": "abc123",
+  "sport_key": "americanfootball_nfl",
+  "commence_time": "2026-10-11T17:00:00Z",
+  "home_team": "Detroit Lions",
+  "away_team": "Tampa Bay Buccaneers",
+  "bookmakers": [
+   {
+    "key": "pinnacle",
+    "title": "pinnacle",
+    "last_update": "2026-10-08T11:58:00Z",
+    "markets": [
+     {
+      "key": "h2h",
+      "last_update": "2026-10-08T11:58:00Z",
+      "outcomes": [
+       {
+        "name": "Tampa Bay Buccaneers",
+        "price": 225
+       },
+       {
+        "name": "Detroit Lions",
+        "price": -250
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "circa",
+    "title": "circa",
+    "last_update": "2026-10-08T11:58:00Z",
+    "markets": [
+     {
+      "key": "h2h",
+      "last_update": "2026-10-08T11:58:00Z",
+      "outcomes": [
+       {
+        "name": "Tampa Bay Buccaneers",
+        "price": 215
+       },
+       {
+        "name": "Detroit Lions",
+        "price": -245
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "draftkings",
+    "title": "draftkings",
+    "last_update": "2026-10-08T11:58:00Z",
+    "markets": [
+     {
+      "key": "h2h",
+      "last_update": "2026-10-08T11:58:00Z",
+      "outcomes": [
+       {
+        "name": "Tampa Bay Buccaneers",
+        "price": 210
+       },
+       {
+        "name": "Detroit Lions",
+        "price": -258
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "fanduel",
+    "title": "fanduel",
+    "last_update": "2026-10-08T11:58:00Z",
+    "markets": [
+     {
+      "key": "h2h",
+      "last_update": "2026-10-08T11:58:00Z",
+      "outcomes": [
+       {
+        "name": "Tampa Bay Buccaneers",
+        "price": 220
+       },
+       {
+        "name": "Detroit Lions",
+        "price": -270
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betmgm",
+    "title": "betmgm",
+    "last_update": "2026-10-08T11:58:00Z",
+    "markets": [
+     {
+      "key": "h2h",
+      "last_update": "2026-10-08T11:58:00Z",
+      "outcomes": [
+       {
+        "name": "Tampa Bay Buccaneers",
+        "price": 200
+       },
+       {
+        "name": "Detroit Lions",
+        "price": -245
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ }
+]

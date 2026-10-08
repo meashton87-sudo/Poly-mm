@@ -1,0 +1,217 @@
+"""Market data: Polymarket (Gamma + CLOB), Kalshi (trade-api v2), sportsbooks.
+
+Parsers are pure functions over the venues' JSON so they can be tested and
+run offline against saved snapshots; fetchers are thin urllib wrappers.
+Field names follow the public docs as of 2026: Kalshi prices are the
+`*_dollars` strings (legacy integer-cent fields are accepted as a fallback);
+Polymarket Gamma ships `outcomes` / `outcomePrices` / `clobTokenIds` as JSON
+encoded strings.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from typing import Iterable
+
+from .models import Contract
+
+GAMMA = "https://gamma-api.polymarket.com"
+CLOB = "https://clob.polymarket.com"
+KALSHI = "https://api.elections.kalshi.com/trade-api/v2"
+
+
+def _get(url: str, params: dict | None = None, timeout: float = 15.0, retries: int = 3) -> object:
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={"User-Agent": "polymm-scanner/0.1", "Accept": "application/json"})
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.load(r)
+        except Exception:
+            if attempt == retries - 1:
+                raise
+            time.sleep(2**attempt)
+    raise AssertionError("unreachable")
+
+
+def _dt(s: str | None) -> datetime | None:
+    if not s:
+        return None
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def _f(x) -> float | None:
+    if x is None or x == "":
+        return None
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def _jsonish(x) -> list:
+    if isinstance(x, list):
+        return x
+    if isinstance(x, str) and x:
+        try:
+            return json.loads(x)
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+# --------------------------------------------------------------------- Polymarket
+
+def parse_polymarket_markets(markets: Iterable[dict]) -> list[Contract]:
+    out = []
+    for m in markets:
+        if m.get("closed") or m.get("active") is False or m.get("enableOrderBook") is False:
+            continue
+        outcomes = _jsonish(m.get("outcomes"))
+        tokens = _jsonish(m.get("clobTokenIds"))
+        if len(outcomes) != 2:
+            continue
+        bid, ask = _f(m.get("bestBid")), _f(m.get("bestAsk"))
+        indicative = False
+        if bid is None or ask is None or ask <= 0:
+            prices = [_f(p) for p in _jsonish(m.get("outcomePrices"))]
+            if len(prices) != 2 or prices[0] is None:
+                continue
+            bid = ask = prices[0]
+            indicative = True
+        if not (0 < ask < 1):
+            continue  # no live offer
+        events = m.get("events") or [{}]
+        ev = events[0] if isinstance(events[0], dict) else {}
+        neg_risk = bool(m.get("negRisk"))
+        is_yes_no = [o.lower() for o in outcomes] == ["yes", "no"]
+        out.append(Contract(
+            venue="polymarket",
+            id=str(m.get("conditionId") or m.get("id") or m.get("slug")),
+            title=m.get("question", ""),
+            outcome=(m.get("groupItemTitle") or outcomes[0]) if is_yes_no else outcomes[0],
+            no_label="No" if is_yes_no else outcomes[1],
+            no_is_named_outcome=not is_yes_no,
+            yes_bid=bid if bid and bid > 0 else None,
+            yes_ask=ask,
+            group=(m.get("negRiskMarketID") or ev.get("id")) if neg_risk else None,
+            group_title=ev.get("title", "") if neg_risk else "",
+            exhaustive=None,
+            close_time=_dt(m.get("endDate") or m.get("gameStartTime")),
+            volume=_f(m.get("volumeNum") or m.get("volume")) or 0.0,
+            url=f"https://polymarket.com/event/{ev.get('slug') or m.get('slug', '')}",
+            yes_token=str(tokens[0]) if len(tokens) == 2 else None,
+            no_token=str(tokens[1]) if len(tokens) == 2 else None,
+            indicative=indicative,
+        ))
+    return out
+
+
+def fetch_polymarket(max_pages: int = 40, page_size: int = 500, min_volume: float = 0.0) -> list[dict]:
+    rows: list[dict] = []
+    for page in range(max_pages):
+        batch = _get(f"{GAMMA}/markets", {"active": "true", "closed": "false", "limit": page_size,
+                                          "offset": page * page_size, "volume_num_min": min_volume})
+        if not batch:
+            break
+        rows += batch
+        if len(batch) < page_size:
+            break
+    return rows
+
+
+def polymarket_book(token_id: str) -> dict:
+    """{'bids': [{'price','size'}...], 'asks': [...]} for one outcome token."""
+    return _get(f"{CLOB}/book", {"token_id": token_id})
+
+
+# --------------------------------------------------------------------- Kalshi
+
+def _kalshi_price(m: dict, name: str) -> float | None:
+    v = _f(m.get(f"{name}_dollars"))
+    if v is None:
+        cents = _f(m.get(name))
+        v = cents / 100 if cents is not None else None
+    return v if v and 0 < v < 1 else None
+
+
+def parse_kalshi_events(events: Iterable[dict]) -> list[Contract]:
+    out = []
+    for ev in events:
+        et = ev.get("event_ticker", "")
+        if et.upper().startswith("KXMVE"):
+            continue  # multivariate combos (Kalshi's parlays); skip
+        mutex = bool(ev.get("mutually_exclusive"))
+        series = (ev.get("series_ticker") or et.split("-")[0]).lower()
+        for m in ev.get("markets") or []:
+            if m.get("status") not in (None, "active", "open"):
+                continue
+            ask = _kalshi_price(m, "yes_ask")
+            if ask is None:
+                continue
+            out.append(Contract(
+                venue="kalshi",
+                id=m["ticker"],
+                title=m.get("title") or ev.get("title", ""),
+                outcome=m.get("yes_sub_title") or "Yes",
+                no_label=f"not {m.get('yes_sub_title') or 'Yes'}",
+                yes_bid=_kalshi_price(m, "yes_bid"),
+                yes_ask=ask,
+                yes_ask_size=_f(m.get("yes_ask_size_fp")),
+                yes_bid_size=_f(m.get("yes_bid_size_fp")),
+                group=et if mutex else None,
+                group_title=ev.get("title", "") if mutex else "",
+                exhaustive=None,
+                close_time=_dt(m.get("expected_expiration_time") or m.get("close_time")),
+                volume=_f(m.get("volume_fp") or m.get("volume")) or 0.0,
+                url=f"https://kalshi.com/markets/{series}",
+            ))
+    return out
+
+
+def fetch_kalshi(max_pages: int = 50) -> list[dict]:
+    events, cursor = [], None
+    for _ in range(max_pages):
+        params = {"status": "open", "with_nested_markets": "true", "limit": 200}
+        if cursor:
+            params["cursor"] = cursor
+        resp = _get(f"{KALSHI}/events", params)
+        events += resp.get("events", [])
+        cursor = resp.get("cursor")
+        if not cursor:
+            break
+    return events
+
+
+def kalshi_book(ticker: str) -> dict:
+    """Kalshi books only list bids; YES asks are implied by NO bids (1 - p)."""
+    return _get(f"{KALSHI}/markets/{ticker}/orderbook").get("orderbook", {})
+
+
+# --------------------------------------------------------------------- sportsbooks
+
+DEFAULT_SPORTS = (
+    "americanfootball_nfl", "americanfootball_ncaaf", "basketball_nba", "basketball_ncaab",
+    "baseball_mlb", "icehockey_nhl", "soccer_epl", "soccer_uefa_champs_league", "mma_mixed_martial_arts",
+)
+
+
+def fetch_odds_api_h2h(api_key: str, sports: Iterable[str] = DEFAULT_SPORTS,
+                       regions: str = "us,us2,eu") -> list[dict]:
+    out = []
+    for s in sports:
+        try:
+            out += _get(f"https://api.the-odds-api.com/v4/sports/{s}/odds",
+                        {"apiKey": api_key, "regions": regions, "markets": "h2h", "oddsFormat": "american"})
+        except Exception as e:  # one bad sport shouldn't kill the scan
+            print(f"[odds-api] {s}: {e}")
+    return out

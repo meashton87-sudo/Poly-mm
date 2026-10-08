@@ -1,0 +1,173 @@
+[
+ {
+  "event_ticker": "KXBTCMAXY-26",
+  "series_ticker": "KXBTCMAXY",
+  "title": "How high will Bitcoin get in 2026?",
+  "mutually_exclusive": false,
+  "markets": [
+   {
+    "ticker": "KXBTCMAXY-26-150000",
+    "title": "Will Bitcoin reach $150,000 by Dec 31, 2026?",
+    "yes_sub_title": "$150,000 or above",
+    "no_sub_title": "$150,000 or above",
+    "status": "active",
+    "yes_bid_dollars": "0.3600",
+    "yes_ask_dollars": "0.3700",
+    "yes_bid_size_fp": "1800.00",
+    "yes_ask_size_fp": "2400.00",
+    "expected_expiration_time": "2027-01-01T05:00:00Z",
+    "close_time": "2027-01-01T05:00:00Z",
+    "volume_fp": "12000.00"
+   },
+   {
+    "ticker": "KXBTCMAXY-26-200000",
+    "title": "Will Bitcoin reach $200,000 by Dec 31, 2026?",
+    "yes_sub_title": "$200,000 or above",
+    "no_sub_title": "$200,000 or above",
+    "status": "active",
+    "yes_bid_dollars": "0.1000",
+    "yes_ask_dollars": "0.1100",
+    "yes_bid_size_fp": "700.00",
+    "yes_ask_size_fp": "900.00",
+    "expected_expiration_time": "2027-01-01T05:00:00Z",
+    "close_time": "2027-01-01T05:00:00Z",
+    "volume_fp": "12000.00"
+   }
+  ]
+ },
+ {
+  "event_ticker": "KXNFLGAME-26OCT11TBDET",
+  "series_ticker": "KXNFLGAME",
+  "title": "Tampa Bay at Detroit",
+  "mutually_exclusive": true,
+  "markets": [
+   {
+    "ticker": "KXNFLGAME-26OCT11TBDET-TB",
+    "title": "Tampa Bay at Detroit Winner?",
+    "yes_sub_title": "Tampa Bay",
+    "no_sub_title": "Tampa Bay",
+    "status": "active",
+    "yes_bid_dollars": "0.2900",
+    "yes_ask_dollars": "0.3000",
+    "yes_bid_size_fp": "500.00",
+    "yes_ask_size_fp": "500.00",
+    "expected_expiration_time": "2026-10-11T20:30:00Z",
+    "close_time": "2026-10-11T20:30:00Z",
+    "volume_fp": "12000.00"
+   },
+   {
+    "ticker": "KXNFLGAME-26OCT11TBDET-DET",
+    "title": "Tampa Bay at Detroit Winner?",
+    "yes_sub_title": "Detroit",
+    "no_sub_title": "Detroit",
+    "status": "active",
+    "yes_bid_dollars": "0.7000",
+    "yes_ask_dollars": "0.7100",
+    "yes_bid_size_fp": "500.00",
+    "yes_ask_size_fp": "500.00",
+    "expected_expiration_time": "2026-10-11T20:30:00Z",
+    "close_time": "2026-10-11T20:30:00Z",
+    "volume_fp": "12000.00"
+   }
+  ]
+ },
+ {
+  "event_ticker": "KXOSCARPIC-27",
+  "series_ticker": "KXOSCARPIC",
+  "title": "Best Picture 2027",
+  "mutually_exclusive": true,
+  "markets": [
+   {
+    "ticker": "KXOSCARPIC-27-0",
+    "title": "Best Picture winner?",
+    "yes_sub_title": "Film A",
+    "no_sub_title": "Film A",
+    "status": "active",
+    "yes_bid_dollars": "0.4200",
+    "yes_ask_dollars": "0.4300",
+    "yes_bid_size_fp": "500.00",
+    "yes_ask_size_fp": "500.00",
+    "expected_expiration_time": "2027-03-14T23:00:00Z",
+    "close_time": "2027-03-14T23:00:00Z",
+    "volume_fp": "12000.00"
+   },
+   {
+    "ticker": "KXOSCARPIC-27-1",
+    "title": "Best Picture winner?",
+    "yes_sub_title": "Film B",
+    "no_sub_title": "Film B",
+    "status": "active",
+    "yes_bid_dollars": "0.2800",
+    "yes_ask_dollars": "0.2900",
+    "yes_bid_size_fp": "500.00",
+    "yes_ask_size_fp": "500.00",
+    "expected_expiration_time": "2027-03-14T23:00:00Z",
+    "close_time": "2027-03-14T23:00:00Z",
+    "volume_fp": "12000.00"
+   },
+   {
+    "ticker": "KXOSCARPIC-27-2",
+    "title": "Best Picture winner?",
+    "yes_sub_title": "Film C",
+    "no_sub_title": "Film C",
+    "status": "active",
+    "yes_bid_dollars": "0.1700",
+    "yes_ask_dollars": "0.1800",
+    "yes_bid_size_fp": "500.00",
+    "yes_ask_size_fp": "500.00",
+    "expected_expiration_time": "2027-03-14T23:00:00Z",
+    "close_time": "2027-03-14T23:00:00Z",
+    "volume_fp": "12000.00"
+   },
+   {
+    "ticker": "KXOSCARPIC-27-3",
+    "title": "Best Picture winner?",
+    "yes_sub_title": "Film D",
+    "no_sub_title": "Film D",
+    "status": "active",
+    "yes_bid_dollars": "0.1000",
+    "yes_ask_dollars": "0.1100",
+    "yes_bid_size_fp": "500.00",
+    "yes_ask_size_fp": "500.00",
+    "expected_expiration_time": "2027-03-14T23:00:00Z",
+    "close_time": "2027-03-14T23:00:00Z",
+    "volume_fp": "12000.00"
+   },
+   {
+    "ticker": "KXOSCARPIC-27-4",
+    "title": "Best Picture winner?",
+    "yes_sub_title": "Film E",
+    "no_sub_title": "Film E",
+    "status": "active",
+    "yes_bid_dollars": "0.0600",
+    "yes_ask_dollars": "0.0700",
+    "yes_bid_size_fp": "500.00",
+    "yes_ask_size_fp": "500.00",
+    "expected_expiration_time": "2027-03-14T23:00:00Z",
+    "close_time": "2027-03-14T23:00:00Z",
+    "volume_fp": "12000.00"
+   }
+  ]
+ },
+ {
+  "event_ticker": "KXMVENFL-26OCT11-X",
+  "title": "parlay combo",
+  "mutually_exclusive": false,
+  "markets": [
+   {
+    "ticker": "KXMVENFL-26OCT11-X-1",
+    "title": "combo",
+    "yes_sub_title": "yes",
+    "no_sub_title": "yes",
+    "status": "active",
+    "yes_bid_dollars": "0.1000",
+    "yes_ask_dollars": "0.2000",
+    "yes_bid_size_fp": "500.00",
+    "yes_ask_size_fp": "500.00",
+    "expected_expiration_time": "2026-10-11T23:00:00Z",
+    "close_time": "2026-10-11T23:00:00Z",
+    "volume_fp": "12000.00"
+   }
+  ]
+ }
+]
