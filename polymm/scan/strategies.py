@@ -29,6 +29,29 @@ class ScanConfig:
     max_price: float = 0.98
     include_indicative: bool = False  # trade on mid/last prices? (no)
     max_days: float | None = None  # skip things resolving too far out
+    # "Effectively decided": once any outcome bids >= this (e.g. today's high
+    # temperature is already known), what's left is stale orders and data-revision
+    # risk, not value. Hidden unless include_decided.
+    decided_price: float = 0.95
+    include_decided: bool = False
+    # Unconfirmed cross-venue pairs whose prices differ by more than this are
+    # almost certainly different questions (or one is already resolved).
+    max_unconfirmed_gap: float = 0.25
+
+
+def is_decided(c: Contract, cfg: ScanConfig) -> bool:
+    """One side of this contract is (near) certain."""
+    hi = cfg.decided_price
+    return (c.yes_bid is not None and c.yes_bid >= hi) or (c.yes_ask is not None and c.yes_ask <= 1 - hi)
+
+
+def decided_groups(contracts: list[Contract], cfg: ScanConfig) -> int:
+    groups: dict[tuple[str, str], float] = {}
+    for c in contracts:
+        if c.group:
+            k = (c.venue, c.group)
+            groups[k] = max(groups.get(k, 0.0), c.yes_bid or 0.0)
+    return sum(v >= cfg.decided_price for v in groups.values())
 
 
 def _days(cs: Iterable[Contract], now: datetime) -> float | None:
@@ -58,11 +81,17 @@ def multi_outcome_arbs(contracts: list[Contract], fees: FeeModel, cfg: ScanConfi
                        now: datetime) -> list[Opportunity]:
     groups: dict[tuple[str, str], list[Contract]] = {}
     for c in contracts:
-        if c.group and (cfg.include_indicative or not c.indicative):
+        if c.group:
             groups.setdefault((c.venue, c.group), []).append(c)
     out = []
     for (venue, _), cs in groups.items():
         if len(cs) < 2:
+            continue
+        # The whole set or nothing: a member with no live price (or a stale one)
+        # means we can't price the set, not that the set is smaller.
+        if not cfg.include_indicative and any(c.indicative for c in cs):
+            continue
+        if not cfg.include_decided and max((c.yes_bid or 0.0) for c in cs) >= cfg.decided_price:
             continue
         n = len(cs)
         title = cs[0].group_title or cs[0].title
@@ -94,6 +123,12 @@ def cross_venue(pairs: list[Pair], fees: FeeModel, cfg: ScanConfig, now: datetim
         a, b = pr.a, pr.b
         if not cfg.include_indicative and (a.indicative or b.indicative):
             continue
+        if not cfg.include_decided and (is_decided(a, cfg) or is_decided(b, cfg)):
+            continue
+        if not pr.confirmed and a.mid is not None and b.mid is not None:
+            gap = abs((1 - b.mid if pr.inverted else b.mid) - a.mid)
+            if gap > cfg.max_unconfirmed_gap:
+                continue  # "same" question priced 25c+ apart: it isn't the same question
         combos = ([("YES", "YES"), ("NO", "NO")] if pr.inverted else [("YES", "NO"), ("NO", "YES")])
         conf = "arb" if pr.confirmed else "needs-verification"
         note = "confirmed mapping" if pr.confirmed else f"fuzzy match (score {pr.score:.2f}): CHECK BOTH RULEBOOKS"

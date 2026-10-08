@@ -250,7 +250,8 @@ async function poll() {
   $("status").textContent = busy ? "scanning…" : when ? `updated ${when}` : "waiting";
   const c = state.counts || {};
   $("sub").textContent = `${state.mode === "live" ? "Live" : "Sample data"} · ${(c.polymarket || 0).toLocaleString()} Polymarket · `
-    + `${(c.kalshi || 0).toLocaleString()} Kalshi · ${c.sportsbook_events || 0} sportsbook games · rescans every ${Math.round(state.interval / 60)} min`;
+    + `${(c.kalshi || 0).toLocaleString()} Kalshi · ${c.sportsbook_events || 0} sportsbook games · rescans every ${Math.round(state.interval / 60)} min`
+    + (c.decided_groups ? ` · ${c.decided_groups.toLocaleString()} already-decided markets hidden` : "");
   $("err").innerHTML = state.error ? `<div class="error"><b>Last scan failed:</b> ${esc(state.error)}</div>` : "";
   $("log").textContent = (state.log || []).join("\n");
   // Only redraw cards when results change, so the page doesn't jump while you read.

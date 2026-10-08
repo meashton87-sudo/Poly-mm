@@ -204,3 +204,63 @@ def test_app_serves_page_and_blocks_cross_site_scans():
         assert e.value.code == 403
     finally:
         srv.shutdown()
+
+
+# ------------------------------------------------------------------ resolved / stale markets
+
+def _weather_event(brackets, close="2026-10-09T04:59:00Z", expire="2026-10-09T14:00:00Z", ticker="KXHIGHNY-26OCT08"):
+    def px(v):
+        return None if v is None else f"{v:.4f}"
+    return {"event_ticker": ticker, "series_ticker": "KXHIGHNY", "mutually_exclusive": True,
+            "title": "Highest temperature in NYC today?",
+            "markets": [{"ticker": f"{ticker}-{i}", "title": "High temp in NYC?", "yes_sub_title": name,
+                         "status": "active", "yes_bid_dollars": px(b), "yes_ask_dollars": px(a),
+                         "close_time": close, "expected_expiration_time": expire}
+                        for i, (name, b, a) in enumerate(brackets)]}
+
+
+def test_bracket_with_no_sellers_does_not_shrink_the_set():
+    # Asks on the priced brackets sum to 96c, but the last bracket has no offer at
+    # all. That is NOT a complete set for 96c.
+    ev = _weather_event([("<66", .01, .02), ("66-67", .02, .03), ("68-69", .30, .32),
+                         ("70-71", .45, .47), ("72-73", .10, .12), (">=74", None, None)])
+    cs = parse_kalshi_events([ev])
+    assert len(cs) == 6
+    assert multi_outcome_arbs(cs, FeeModel(), ScanConfig(), NOW) == []
+
+
+def test_already_decided_weather_is_hidden_by_default():
+    # Afternoon: the high is known. Winner bids 97c, stale 2c bids linger on dead
+    # brackets, so "buy every NO" looks like a lock.
+    ev = _weather_event([("<66", .02, .03), ("66-67", .02, .03), ("68-69", .97, .99),
+                         ("70-71", .02, .03), ("72-73", .02, .03)])
+    cs = parse_kalshi_events([ev])
+    assert multi_outcome_arbs(cs, FeeModel(), ScanConfig(), NOW) == []
+    shown = multi_outcome_arbs(cs, FeeModel(), ScanConfig(include_decided=True), NOW)
+    assert shown and shown[0].legs[0].side == "NO"
+    from polymm.scan.strategies import decided_groups
+    assert decided_groups(cs, ScanConfig()) == 1
+
+
+def test_market_whose_trading_closed_is_dropped_even_if_not_yet_settled():
+    # Yesterday's event: trading closed, settlement pending tomorrow.
+    ev = _weather_event([("a", .30, .31), ("b", .30, .31), ("c", .30, .31)],
+                        close="2026-10-08T04:59:00Z", expire="2026-10-08T23:00:00Z", ticker="KXHIGHNY-26OCT07")
+    snap = Snapshot(parse_kalshi_events([ev]))
+    assert all(not c.tradable(NOW) for c in snap.contracts)
+    assert scan(snap, now=NOW) == []
+
+
+def test_polymarket_halted_or_resolving_markets_skipped():
+    base = {"question": "q", "outcomes": '["Yes","No"]', "bestBid": 0.5, "bestAsk": 0.51,
+            "endDate": "2026-12-01T00:00:00Z", "active": True, "closed": False}
+    assert len(parse_polymarket_markets([{**base, "conditionId": "ok"}])) == 1
+    assert parse_polymarket_markets([{**base, "conditionId": "x", "acceptingOrders": False}]) == []
+    assert parse_polymarket_markets([{**base, "conditionId": "y", "umaResolutionStatus": "proposed"}]) == []
+    no_ask = parse_polymarket_markets([{**base, "conditionId": "z", "bestAsk": 1.0}])
+    assert no_ask[0].yes_ask is None and not no_ask[0].indicative
+
+
+def test_unconfirmed_pair_far_apart_is_not_the_same_question():
+    a, b = C("polymarket", "p", 0.05, 0.06), C("kalshi", "k", 0.60, 0.62)
+    assert cross_venue([Pair(a, b, 0.7)], FeeModel(), ScanConfig(), NOW) == []

@@ -23,13 +23,14 @@ class Snapshot:
     contracts: list[Contract]
     odds_events: list[dict] = field(default_factory=list)
     mapping: list[dict] = field(default_factory=list)
+    stats: dict = field(default_factory=dict)
 
 
 def scan(snap: Snapshot, cfg: ScanConfig | None = None, fees: FeeModel | None = None,
          now: datetime | None = None) -> list[Opportunity]:
     cfg, fees = cfg or ScanConfig(), fees or FeeModel()
     now = now or datetime.now(timezone.utc)
-    live = [c for c in snap.contracts if c.close_time is None or c.close_time > now]
+    live = [c for c in snap.contracts if c.tradable(now)]
     pairs = match_cross_venue(live, snap.mapping)
     opps = (multi_outcome_arbs(live, fees, cfg, now)
             + cross_venue(pairs, fees, cfg, now)

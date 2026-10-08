@@ -21,7 +21,7 @@ from .matching import load_mapping
 from .scanner import Snapshot, enrich_depth, format_opportunity, post_webhook, scan, to_json
 from .sources import (fetch_kalshi, fetch_odds_api_h2h, fetch_polymarket, parse_kalshi_events,
                       parse_polymarket_markets)
-from .strategies import ScanConfig
+from .strategies import ScanConfig, decided_groups
 
 FIXTURES = Path(__file__).parent / "fixtures"
 OFFLINE_NOW = datetime(2026, 10, 8, 12, tzinfo=timezone.utc)
@@ -79,6 +79,8 @@ def build_parser(description: str = __doc__) -> argparse.ArgumentParser:
     ap.add_argument("--kalshi-fee-rate", type=float, default=0.07)
     ap.add_argument("--polymarket-fee-rate", type=float, default=0.0)
     ap.add_argument("--hide-unverified", action="store_true", help="drop fuzzy cross-venue matches")
+    ap.add_argument("--include-decided", action="store_true",
+                    help="also show markets whose outcome is already ~certain (hidden by default)")
     ap.add_argument("--depth", action="store_true", help="check real order-book depth for top results")
     ap.add_argument("--top", type=int, default=25)
     ap.add_argument("--json", help="write results to this file")
@@ -91,10 +93,17 @@ def build_parser(description: str = __doc__) -> argparse.ArgumentParser:
 def run_once(args, log=print) -> tuple[Snapshot, list]:
     """Fetch (or load) a snapshot, scan it, and apply the CLI filters."""
     cfg = ScanConfig(min_arb_edge=args.min_arb_edge, min_value_edge=args.min_value_edge,
-                     max_days=args.max_days)
+                     max_days=args.max_days, include_decided=args.include_decided)
     fees = FeeModel(kalshi_rate=args.kalshi_fee_rate, polymarket_rate=args.polymarket_fee_rate)
     snap = load_snapshot(args, log)
-    opps = scan(snap, cfg, fees, now=OFFLINE_NOW if args.offline == str(FIXTURES) else None)
+    now = OFFLINE_NOW if args.offline == str(FIXTURES) else datetime.now(timezone.utc)
+    opps = scan(snap, cfg, fees, now=now)
+    live = [c for c in snap.contracts if c.tradable(now)]
+    snap.stats["closed"] = len(snap.contracts) - len(live)
+    snap.stats["decided_groups"] = 0 if cfg.include_decided else decided_groups(live, cfg)
+    if snap.stats["closed"] or snap.stats["decided_groups"]:
+        log(f"hid {snap.stats['closed']} contracts no longer trading and "
+            f"{snap.stats['decided_groups']} outcome sets that are already decided")
     if args.hide_unverified:
         opps = [o for o in opps if o.confidence != "needs-verification"]
     opps = opps[:args.top]

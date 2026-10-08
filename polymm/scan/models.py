@@ -30,7 +30,8 @@ class Contract:
     group: str | None = None  # mutually exclusive set this contract belongs to
     group_title: str = ""
     exhaustive: bool | None = None  # does the group cover every outcome? None = unknown
-    close_time: datetime | None = None
+    close_time: datetime | None = None  # when it resolves (money is locked until then)
+    trading_close: datetime | None = None  # when trading stops, if earlier/known
     volume: float = 0.0
     url: str = ""
     yes_token: str | None = None  # Polymarket CLOB token ids
@@ -57,6 +58,10 @@ class Contract:
     @property
     def key(self) -> str:
         return f"{self.venue}:{self.id}"
+
+    def tradable(self, now: datetime) -> bool:
+        end = self.trading_close or self.close_time
+        return end is None or end > now
 
 
 @dataclass

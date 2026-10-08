@@ -56,7 +56,7 @@ class App:
             with self.lock:
                 self.state.update(opportunities=rows, updated=datetime.now().isoformat(timespec="seconds"),
                                   counts={"polymarket": n_pm, "kalshi": len(snap.contracts) - n_pm,
-                                          "sportsbook_events": len(snap.odds_events)})
+                                          "sportsbook_events": len(snap.odds_events), **snap.stats})
             self.log(f"done: {len(rows)} opportunities")
             if self.args.webhook and new:
                 post_webhook(self.args.webhook, new)

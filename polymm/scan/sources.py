@@ -110,20 +110,25 @@ def parse_polymarket_markets(markets: Iterable[dict]) -> list[Contract]:
     for m in markets:
         if m.get("closed") or m.get("active") is False or m.get("enableOrderBook") is False:
             continue
+        if m.get("acceptingOrders") is False:
+            continue  # trading halted / awaiting resolution: the "prices" are stale
+        uma = str(m.get("umaResolutionStatus") or m.get("umaResolutionStatuses") or "").lower()
+        if any(s in uma for s in ("proposed", "disputed", "resolved")):
+            continue  # outcome already reported, just not finalised
         outcomes = _jsonish(m.get("outcomes"))
         tokens = _jsonish(m.get("clobTokenIds"))
         if len(outcomes) != 2:
             continue
         bid, ask = _f(m.get("bestBid")), _f(m.get("bestAsk"))
+        bid = bid if bid is not None and 0 < bid < 1 else None
+        ask = ask if ask is not None and 0 < ask < 1 else None  # None = nobody selling
         indicative = False
-        if bid is None or ask is None or ask <= 0:
+        if bid is None and ask is None:
             prices = [_f(p) for p in _jsonish(m.get("outcomePrices"))]
             if len(prices) != 2 or prices[0] is None:
                 continue
             bid = ask = prices[0]
             indicative = True
-        if not (0 < ask < 1):
-            continue  # no live offer
         events = m.get("events") or [{}]
         ev = events[0] if isinstance(events[0], dict) else {}
         neg_risk = bool(m.get("negRisk"))
@@ -135,7 +140,7 @@ def parse_polymarket_markets(markets: Iterable[dict]) -> list[Contract]:
             outcome=(m.get("groupItemTitle") or outcomes[0]) if is_yes_no else outcomes[0],
             no_label="No" if is_yes_no else outcomes[1],
             no_is_named_outcome=not is_yes_no,
-            yes_bid=bid if bid and bid > 0 else None,
+            yes_bid=bid,
             yes_ask=ask,
             group=(m.get("negRiskMarketID") or ev.get("id")) if neg_risk else None,
             group_title=ev.get("title", "") if neg_risk else "",
@@ -207,23 +212,27 @@ def parse_kalshi_events(events: Iterable[dict]) -> list[Contract]:
         for m in ev.get("markets") or []:
             if m.get("status") not in (None, "active", "open"):
                 continue
-            ask = _kalshi_price(m, "yes_ask")
-            if ask is None:
+            ask, bid = _kalshi_price(m, "yes_ask"), _kalshi_price(m, "yes_bid")
+            if ask is None and bid is None and not mutex:
                 continue
+            # Keep price-less members of a mutually exclusive set: dropping them
+            # would make the rest look like a cheap "complete" set.
             out.append(Contract(
                 venue="kalshi",
                 id=m["ticker"],
                 title=m.get("title") or ev.get("title", ""),
                 outcome=m.get("yes_sub_title") or "Yes",
                 no_label=f"not {m.get('yes_sub_title') or 'Yes'}",
-                yes_bid=_kalshi_price(m, "yes_bid"),
+                yes_bid=bid,
                 yes_ask=ask,
                 yes_ask_size=_f(m.get("yes_ask_size_fp")),
                 yes_bid_size=_f(m.get("yes_bid_size_fp")),
                 group=et if mutex else None,
                 group_title=ev.get("title", "") if mutex else "",
                 exhaustive=None,
+                # Resolution (for game dates / days locked) vs when trading actually stops.
                 close_time=_dt(m.get("expected_expiration_time") or m.get("close_time")),
+                trading_close=_dt(m.get("close_time")),
                 volume=_f(m.get("volume_fp") or m.get("volume")) or 0.0,
                 url=f"https://kalshi.com/markets/{series}",
             ))
