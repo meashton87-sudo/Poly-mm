@@ -8,8 +8,12 @@ The contract is a single function::
 body or point ``DECISION_ENGINE`` in ``.env`` at any importable callable with
 the same signature, e.g. ``DECISION_ENGINE=my_models.memes:decide``.
 
-Engines may return extra keys (e.g. ``"reason"``); they are passed through to
-the dashboard and trade log.
+Engines may also return:
+
+* ``"risk_score"``: the engine's own risk estimate, in [0, 1], or on a 1..N
+  scale if ``"risk_levels": N`` is also returned. The risk gate uses the higher
+  of this and the built-in heuristic score.
+* any other keys (e.g. ``"reason"``), passed through to the dashboard and log.
 """
 
 from __future__ import annotations
@@ -76,7 +80,31 @@ def normalize_decision(raw: Any) -> dict[str, Any]:
     if confidence != confidence:  # NaN
         confidence = 0.0
     confidence = min(max(confidence, 0.0), 1.0)
-    return {**raw, "action": action, "confidence": confidence}
+    out = {**raw, "action": action, "confidence": confidence}
+    if raw.get("risk_score") is not None:
+        out["engine_risk"] = _normalize_risk(raw["risk_score"], raw.get("risk_levels"))
+    return out
+
+
+def _normalize_risk(score: Any, levels: Any) -> float:
+    """Map an engine risk score onto [0, 1].
+
+    With ``risk_levels=N`` the score is read as 1..N (1 = safe). Without it the
+    score must already be in [0, 1]. Anything unparseable counts as maximum
+    risk, so a malformed score can only block a buy, never allow one.
+    """
+    try:
+        s = float(score)
+        if s != s:
+            return 1.0
+        if levels is not None:
+            n = int(levels)
+            if n < 2:
+                return 1.0
+            return min(max((s - 1.0) / (n - 1.0), 0.0), 1.0)
+        return s if 0.0 <= s <= 1.0 else 1.0
+    except (TypeError, ValueError):
+        return 1.0
 
 
 def safe_decide(fn: DecisionFn, state: dict[str, Any]) -> dict[str, Any]:

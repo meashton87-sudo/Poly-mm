@@ -9,6 +9,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from .activity import summarize_activity
 from .chain import ChainReader, FactoryWatcher, PoolCreated
 from .config import Config
 from .decision import DecisionFn, safe_decide
@@ -28,6 +29,10 @@ class LaunchRow:
     price: float | None = None
     quote_reserve: float | None = None
     risk_score: float | None = None
+    engine_risk: float | None = None
+    buys: int | None = None
+    sells: int | None = None
+    created_ts: int | None = None
     risk_flags: list[str] = field(default_factory=list)
     decision: dict[str, Any] | None = None
     final_action: str | None = None
@@ -72,7 +77,10 @@ def classify_tokens(event: PoolCreated, quote_tokens: set[str]) -> tuple[str, st
 
 
 def build_state(
-    reader: ChainReader, event: PoolCreated, quote_tokens: set[str]
+    reader: ChainReader,
+    event: PoolCreated,
+    quote_tokens: set[str],
+    created_ts: int | None = None,
 ) -> dict[str, Any]:
     """Assemble the dict passed to ``decide``. Keys are documented in the README."""
     target, quote, quote_known = classify_tokens(event, quote_tokens)
@@ -91,6 +99,23 @@ def build_state(
     quote_reserve = reader.get_balance(quote, event.pool) if quote_known else None
     target_reserve = reader.get_balance(target, event.pool)
 
+    target_is_token0 = target == event.token0
+    dec_t = token.decimals if token.decimals is not None else 18
+    dec_q = quote_info.decimals if quote_info.decimals is not None else 18
+    try:
+        head = reader.latest_block()
+        logs = reader.get_pool_logs(event.pool, event.block_number, head)
+        activity = summarize_activity(
+            logs,
+            target_is_token0=target_is_token0,
+            decimals0=dec_t if target_is_token0 else dec_q,
+            decimals1=dec_q if target_is_token0 else dec_t,
+            age_seconds=(time.time() - created_ts) if created_ts is not None else None,
+            blocks_observed=head - event.block_number + 1,
+        )
+    except Exception as exc:  # noqa: BLE001 - activity is best-effort context
+        activity = {"error": str(exc)}
+
     state: dict[str, Any] = {
         "chain_id": reader.expected_chain_id,
         "event": event.to_dict(),
@@ -102,6 +127,7 @@ def build_state(
         "price": price or None,
         "quote_reserve": quote_reserve,
         "token_reserve": target_reserve,
+        "activity": activity,
         "timestamp": time.time(),
     }
     score, flags = score_risk(state)
@@ -181,13 +207,27 @@ class Bot:
                 self.state.pools_seen += 1
             self.state.log_action("info", f"new pool {event.pool} (fee {event.fee}) "
                                           f"block {event.block_number}")
+            try:
+                row.created_ts = self.reader.get_block_timestamp(event.block_number)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("block timestamp failed: %s", exc)
+            # Optionally let trading happen before the first decision, so the
+            # engine sees momentum. Pools already older than that (e.g. from
+            # the startup lookback scan) are evaluated immediately.
+            created = row.created_ts if row.created_ts is not None else row.seen_at
+            due = created + self.config.observe_delay
+            if self.config.observe_delay > 0 and due > time.time():
+                self._rechecks.append((due, row))
+                self.state.log_action(
+                    "info", f"observing {event.pool[:10]} for {due - time.time():.0f}s")
+                continue
             self.evaluate(row)
         self._mark_positions()
 
     def evaluate(self, row: LaunchRow) -> None:
         row.attempts += 1
         try:
-            st = build_state(self.reader, row.event, self.quote_tokens)
+            st = build_state(self.reader, row.event, self.quote_tokens, row.created_ts)
         except Exception as exc:  # noqa: BLE001
             row.error = str(exc)
             self.state.log_action("error", f"state build failed for {row.event.pool}: {exc}")
@@ -202,6 +242,9 @@ class Bot:
             row.quote_reserve = st.get("quote_reserve")
             row.risk_score = st["risk_score"]
             row.risk_flags = st["risk_flags"]
+            row.engine_risk = decision.get("engine_risk")
+            row.buys = st["activity"].get("buy_count")
+            row.sells = st["activity"].get("sell_count")
             row.decision = decision
             row.final_action = final_action
             row.gate_reasons = reasons
@@ -236,7 +279,8 @@ class Bot:
         due = [r for t, r in self._rechecks if t <= now]
         self._rechecks = [(t, r) for t, r in self._rechecks if t > now]
         for row in due:
-            self.state.log_action("info", f"re-checking {row.event.pool} "
+            verb = "re-checking" if row.attempts else "evaluating"
+            self.state.log_action("info", f"{verb} {row.event.pool} "
                                           f"(attempt {row.attempts + 1})")
             self.evaluate(row)
 

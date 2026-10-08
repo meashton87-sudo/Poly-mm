@@ -59,6 +59,7 @@ def _launches(rows: list[LaunchRow], limit: int) -> Panel:
     table.add_column("fee", justify="right")
     table.add_column("price", justify="right")
     table.add_column("liq (quote)", justify="right")
+    table.add_column("b/s", justify="right")
     table.add_column("risk", justify="right")
     table.add_column("engine")
     table.add_column("final")
@@ -69,18 +70,23 @@ def _launches(rows: list[LaunchRow], limit: int) -> Panel:
                        style=ACTION_STYLES.get(dec["action"], ""))
                   if dec else Text("pending", style="dim"))
         final = Text(row.final_action or "-", style=ACTION_STYLES.get(row.final_action or "", ""))
-        risk = Text(_num(row.risk_score, ".2f"),
-                    style="red" if (row.risk_score or 0) > 0.5 else "green")
+        eff = row.risk_score
+        if row.engine_risk is not None and eff is not None:
+            eff = max(eff, row.engine_risk)
+        risk = Text(_num(eff, ".2f") + ("*" if row.engine_risk is not None else ""),
+                    style="red" if (eff or 0) > 0.5 else "green")
+        flow = "-" if row.buys is None else f"{row.buys}/{row.sells}"
         notes = row.error or "; ".join(row.gate_reasons) or ", ".join(row.risk_flags)
         table.add_row(
             _ts(row.seen_at), str(row.event.block_number), _short(row.event.pool),
             row.symbol or "?", str(row.event.fee), _num(row.price),
-            _num(row.quote_reserve, ".4g"), risk, engine, final, notes,
+            _num(row.quote_reserve, ".4g"), flow, risk, engine, final, notes,
         )
     if not rows:
         table.add_row(*(["-"] * 2), Text("waiting for PoolCreated events…", style="dim"),
-                      *([""] * 8))
-    return Panel(table, title="New pool launches", border_style="cyan")
+                      *([""] * 9))
+    return Panel(table, title="New pool launches  [dim](b/s = buys/sells · risk* = includes engine score)[/]",
+                 border_style="cyan")
 
 
 def _positions(executor: PaperExecutor) -> Panel:

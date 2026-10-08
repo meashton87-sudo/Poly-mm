@@ -24,6 +24,17 @@ POOL_CREATED_TOPIC = "0x" + Web3.keccak(
     text="PoolCreated(address,address,uint24,int24,address)"
 ).hex().removeprefix("0x")
 
+# Pool events. Amounts are pool deltas: positive = paid into the pool.
+SWAP_TOPIC = "0x" + Web3.keccak(
+    text="Swap(address,address,int256,int256,uint160,uint128,int24)"
+).hex().removeprefix("0x")
+MINT_TOPIC = "0x" + Web3.keccak(
+    text="Mint(address,address,int24,int24,uint128,uint256,uint256)"
+).hex().removeprefix("0x")
+BURN_TOPIC = "0x" + Web3.keccak(
+    text="Burn(address,int24,int24,uint128,uint256,uint256)"
+).hex().removeprefix("0x")
+
 Q96 = Decimal(2) ** 96
 
 ERC20_ABI: list[dict[str, Any]] = [
@@ -125,6 +136,51 @@ class PoolPrice:
         return asdict(self)
 
 
+@dataclass
+class PoolLog:
+    """A decoded Swap, Mint or Burn from a Uniswap V3 pool."""
+
+    kind: str  # "swap" | "mint" | "burn"
+    block_number: int
+    log_index: int
+    amount0: int  # raw units; for swaps, signed pool delta
+    amount1: int
+    # Swap-only fields.
+    recipient: str | None = None
+    sqrt_price_x96: int | None = None
+
+
+def _word(data: bytes, i: int, signed: bool = False) -> int:
+    return int.from_bytes(data[32 * i: 32 * (i + 1)], "big", signed=signed)
+
+
+def decode_pool_log(log_entry: Any) -> PoolLog | None:
+    """Decode a raw pool log; returns None for unrelated topics."""
+    topics = log_entry["topics"]
+    if not topics:
+        return None
+    topic0 = "0x" + bytes(topics[0]).hex()
+    data = bytes(log_entry["data"])
+    block = int(log_entry["blockNumber"])
+    index = int(log_entry.get("logIndex", 0))
+    if topic0 == SWAP_TOPIC and len(data) >= 160:
+        return PoolLog(
+            kind="swap", block_number=block, log_index=index,
+            amount0=_word(data, 0, signed=True), amount1=_word(data, 1, signed=True),
+            recipient=Web3.to_checksum_address(bytes(topics[2])[-20:]),
+            sqrt_price_x96=_word(data, 2),
+        )
+    if topic0 == MINT_TOPIC and len(data) >= 128:
+        # data: sender, amount, amount0, amount1
+        return PoolLog(kind="mint", block_number=block, log_index=index,
+                       amount0=_word(data, 2), amount1=_word(data, 3))
+    if topic0 == BURN_TOPIC and len(data) >= 96:
+        # data: amount, amount0, amount1
+        return PoolLog(kind="burn", block_number=block, log_index=index,
+                       amount0=_word(data, 1), amount1=_word(data, 2))
+    return None
+
+
 def sqrt_price_x96_to_price(sqrt_price_x96: int, decimals0: int, decimals1: int) -> Decimal:
     """Return the price of token0 expressed in token1 (human units).
 
@@ -217,6 +273,26 @@ class ChainReader:
                     log.warning("skipping undecodable log: %s", exc)
             start = end + 1
         return events
+
+    def get_pool_logs(self, pool: str, from_block: int, to_block: int) -> list[PoolLog]:
+        """Swap/Mint/Burn logs for a pool in [from_block, to_block], oldest first."""
+        out: list[PoolLog] = []
+        start = from_block
+        while start <= to_block:
+            end = min(start + self.max_block_range - 1, to_block)
+            logs = self.w3.eth.get_logs({
+                "address": Web3.to_checksum_address(pool),
+                "topics": [[SWAP_TOPIC, MINT_TOPIC, BURN_TOPIC]],
+                "fromBlock": start,
+                "toBlock": end,
+            })
+            out.extend(d for d in (decode_pool_log(e) for e in logs) if d is not None)
+            start = end + 1
+        out.sort(key=lambda l: (l.block_number, l.log_index))
+        return out
+
+    def get_block_timestamp(self, block_number: int) -> int:
+        return int(self.w3.eth.get_block(block_number)["timestamp"])
 
     # -- tokens -----------------------------------------------------------
 

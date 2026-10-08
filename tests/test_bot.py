@@ -99,3 +99,39 @@ def test_dashboard_renders(tmp_path):
     console.print(render(bot.state, executor, cfg, 40))
     out = console.export_text()
     assert "MEME" in out and "PAPER BUY" in out
+
+
+def test_state_includes_activity(event):
+    from rh_meme_bot.chain import PoolLog
+    logs = [PoolLog("swap", 60, 0, -100 * 10**18, 10**18, recipient="0x" + "01" * 20,
+                    sqrt_price_x96=2**96)]
+    st = build_state(FakeReader(pool_logs=logs), event, {WETH.lower()}, created_ts=None)
+    assert st["activity"]["buy_count"] == 1
+    assert st["activity"]["buy_volume_quote"] == 1.0
+
+
+def test_observe_delay_defers_first_decision(tmp_path):
+    import time
+    cfg = _cfg(tmp_path, observe_delay=0.2)
+    calls = []
+    reader = FakeReader(events=[make_event(50)], created_ts=int(time.time()) + 1)
+    executor = PaperExecutor(cfg.paper_log_path, trade_size=0.1)
+    bot = Bot(cfg, reader, lambda s: calls.append(s) or {"action": "hold", "confidence": 0},
+              executor, BotState())
+    bot.start()
+    bot.tick()
+    assert calls == [] and bot.state.launches[0].decision is None
+    reader.created_ts = int(time.time()) - 10  # pretend time has passed
+    bot._rechecks = [(0, r) for _, r in bot._rechecks]
+    bot.tick()
+    assert len(calls) == 1 and bot.state.launches[0].attempts == 1
+
+
+def test_old_pool_skips_observation(tmp_path):
+    cfg = _cfg(tmp_path, observe_delay=60)
+    reader = FakeReader(events=[make_event(50)], created_ts=0)  # ancient
+    executor = PaperExecutor(cfg.paper_log_path, trade_size=0.1)
+    bot = Bot(cfg, reader, lambda s: {"action": "hold", "confidence": 0}, executor, BotState())
+    bot.start()
+    bot.tick()
+    assert bot.state.launches[0].decision is not None

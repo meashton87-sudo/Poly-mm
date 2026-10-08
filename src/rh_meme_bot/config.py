@@ -63,6 +63,7 @@ class Config:
     mark_interval: float = 15.0
     recheck_delay: float = 20.0
     recheck_attempts: int = 3
+    observe_delay: float = 0.0
 
     @classmethod
     def from_env(cls, env_file: str | os.PathLike | None = None) -> "Config":
@@ -90,6 +91,7 @@ class Config:
             mark_interval=_get_float("MARK_INTERVAL", 15.0),
             recheck_delay=_get_float("RECHECK_DELAY", 20.0),
             recheck_attempts=_get_int("RECHECK_ATTEMPTS", 3),
+            observe_delay=_get_float("OBSERVE_DELAY", 0.0),
         )
         cfg.validate()
         return cfg
@@ -107,5 +109,7 @@ class Config:
             raise ValueError("MAX_RISK_SCORE must be within [0, 1]")
         if self.risk.min_liquidity < 0:
             raise ValueError("MIN_LIQUIDITY must be >= 0")
+        if self.observe_delay < 0:
+            raise ValueError("OBSERVE_DELAY must be >= 0")
         if self.paper_trade_size <= 0:
             raise ValueError("PAPER_TRADE_SIZE must be > 0")

@@ -19,6 +19,7 @@ RISK_WEIGHTS = {
     "missing_metadata": 0.1,
     "zero_liquidity": 0.4,
     "unknown_liquidity": 0.15,
+    "liquidity_removed": 0.4,
 }
 
 
@@ -44,6 +45,8 @@ def score_risk(state: dict[str, Any]) -> tuple[float, list[str]]:
         flags.append("zero_liquidity")
     if state.get("quote_reserve") is None:
         flags.append("unknown_liquidity")
+    if ((state.get("activity") or {}).get("quote_removed") or 0) > 0:
+        flags.append("liquidity_removed")
 
     score = min(1.0, sum(RISK_WEIGHTS[f] for f in flags))
     return round(score, 4), flags
@@ -64,9 +67,14 @@ def apply_gates(
         reasons.append(
             f"confidence {decision['confidence']:.2f} < {thresholds.min_confidence:.2f}"
         )
-    risk = state.get("risk_score", 1.0)
+    # Use the stricter of the heuristic and the engine's own score, so an
+    # engine can raise risk but never talk down a hard red flag.
+    heuristic = state.get("risk_score", 1.0)
+    engine = decision.get("engine_risk")
+    risk = heuristic if engine is None else max(heuristic, engine)
     if risk > thresholds.max_risk_score:
-        reasons.append(f"risk {risk:.2f} > {thresholds.max_risk_score:.2f}")
+        source = "engine" if engine is not None and engine > heuristic else "heuristic"
+        reasons.append(f"{source} risk {risk:.2f} > {thresholds.max_risk_score:.2f}")
     reserve = state.get("quote_reserve")
     if thresholds.min_liquidity > 0 and (reserve is None or reserve < thresholds.min_liquidity):
         shown = "unknown" if reserve is None else f"{reserve:.4g}"

@@ -15,13 +15,15 @@ class FakeReader:
     expected_chain_id = 4663
 
     def __init__(self, events=None, price=0.002, liquidity=10**18, quote_reserve=5.0,
-                 owner_status="renounced", head=100):
+                 owner_status="renounced", head=100, pool_logs=None, created_ts=None):
         self.events = list(events or [])
         self.price = price
         self.liquidity = liquidity
         self.quote_reserve = quote_reserve
         self.owner_status = owner_status
         self.head = head
+        self.pool_logs = list(pool_logs or [])
+        self.created_ts = created_ts
 
     def check_connection(self):
         return 4663
@@ -45,6 +47,13 @@ class FakeReader:
         return PoolPrice(pool=pool, sqrt_price_x96=1 if p else 0, tick=0,
                          liquidity=self.liquidity,
                          price_token0_in_token1=p, price_token1_in_token0=(1 / p) if p else 0)
+
+    def get_pool_logs(self, pool, from_block, to_block):
+        return [l for l in self.pool_logs if from_block <= l.block_number <= to_block]
+
+    def get_block_timestamp(self, block_number):
+        import time
+        return self.created_ts if self.created_ts is not None else int(time.time())
 
     def get_balance(self, token, holder):
         return self.quote_reserve if token == WETH else 1_000_000.0

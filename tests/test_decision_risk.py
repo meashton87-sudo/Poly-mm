@@ -71,3 +71,31 @@ def test_load_engine_from_working_directory(tmp_path, monkeypatch):
                                      if p not in ("", str(tmp_path))])
     fn = load_decision_fn("my_cwd_engine:decide")
     assert fn({})["action"] == "skip"
+
+
+def test_engine_risk_normalization():
+    n = normalize_decision
+    assert n({"action": "buy", "confidence": 1, "risk_score": 1, "risk_levels": 10})["engine_risk"] == 0.0
+    assert n({"action": "buy", "confidence": 1, "risk_score": 10, "risk_levels": 10})["engine_risk"] == 1.0
+    assert n({"action": "buy", "confidence": 1, "risk_score": 0.3})["engine_risk"] == 0.3
+    # 1..10 score without risk_levels is ambiguous -> treated as max risk.
+    assert n({"action": "buy", "confidence": 1, "risk_score": 4})["engine_risk"] == 1.0
+    assert n({"action": "buy", "confidence": 1, "risk_score": "high"})["engine_risk"] == 1.0
+    assert "engine_risk" not in n({"action": "buy", "confidence": 1})
+
+
+def test_gate_uses_stricter_risk():
+    t = RiskThresholds(min_liquidity=1.0, min_confidence=0.7, max_risk_score=0.5)
+    # Engine says risky (7/10 -> 0.667) on a clean token: vetoed.
+    d = normalize_decision({"action": "buy", "confidence": 0.9, "risk_score": 7, "risk_levels": 10})
+    action, reasons = apply_gates(d, _state(), t)
+    assert action == "skip" and "engine risk" in reasons[0]
+    # Engine says safe on a token with no bytecode: heuristic still vetoes.
+    d = normalize_decision({"action": "buy", "confidence": 0.9, "risk_score": 1, "risk_levels": 10})
+    action, reasons = apply_gates(d, _state(token={"has_bytecode": False}), t)
+    assert action == "skip" and "heuristic risk" in reasons[0]
+
+
+def test_liquidity_removed_flag():
+    st = _state(activity={"quote_removed": 2.0})
+    assert "liquidity_removed" in st["risk_flags"]

@@ -22,6 +22,8 @@ class FakeRPC(BaseProvider):
     def __init__(self, responses: dict[tuple[str, str], bytes | None]):
         super().__init__()
         self.responses = responses
+        self.logs: list[dict] = []
+        self.last_filter: dict | None = None
 
     def make_request(self, method, params):
         if method == "eth_chainId":
@@ -29,6 +31,14 @@ class FakeRPC(BaseProvider):
         if method == "eth_getCode":
             code = "0x6080" if params[0].lower() in (TOKEN.lower(), QUOTE.lower()) else "0x"
             return {"jsonrpc": "2.0", "id": 1, "result": code}
+        if method == "eth_getLogs":
+            self.last_filter = params[0]
+            return {"jsonrpc": "2.0", "id": 1, "result": self.logs}
+        if method == "eth_getBlockByNumber":
+            return {"jsonrpc": "2.0", "id": 1, "result": {
+                "number": params[0], "timestamp": hex(1_700_000_000),
+                "hash": "0x" + "00" * 32, "parentHash": "0x" + "00" * 32,
+                "transactions": []}}
         if method == "eth_call":
             to = params[0]["to"].lower()
             data = params[0]["data"].removeprefix("0x")[:8]
@@ -93,3 +103,23 @@ def test_pool_price_from_slot0():
 
 def test_check_connection():
     assert _reader({}).check_connection() == 4663
+
+
+def test_pool_logs_and_block_timestamp():
+    from rh_meme_bot.chain import SWAP_TOPIC
+
+    rpc = FakeRPC({})
+    rpc.logs = [{
+        "address": POOL, "blockNumber": hex(42), "logIndex": "0x1",
+        "transactionIndex": "0x0", "transactionHash": "0x" + "cd" * 32,
+        "blockHash": "0x" + "ef" * 32, "removed": False,
+        "topics": [SWAP_TOPIC, "0x" + "00" * 32, "0x" + "00" * 12 + "bb" * 20],
+        "data": "0x" + encode(["int256", "int256", "uint160", "uint128", "int24"],
+                              [-5, 7, 2**96, 1, 0]).hex(),
+    }]
+    reader = ChainReader("http://unused", FACTORY, w3=Web3(rpc))
+    logs = reader.get_pool_logs(POOL, 40, 45)
+    assert len(logs) == 1 and logs[0].kind == "swap"
+    assert (logs[0].amount0, logs[0].amount1, logs[0].block_number) == (-5, 7, 42)
+    assert len(rpc.last_filter["topics"][0]) == 3  # Swap | Mint | Burn
+    assert reader.get_block_timestamp(42) == 1_700_000_000
