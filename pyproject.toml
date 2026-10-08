@@ -1,0 +1,17 @@
+[project]
+name = "polymm"
+version = "0.1.0"
+description = "Polymarket parlay market maker: sportsbook-derived fair value, spreads, and risk limits"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+live = ["py-clob-client"]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["polymm"]
