@@ -60,3 +60,14 @@ def test_gates():
     assert apply_gates(buy, _state(quote_reserve=None), t)[0] == "skip"
     assert apply_gates(buy, _state(token={"has_bytecode": False}), t)[0] == "skip"
     assert apply_gates({"action": "hold", "confidence": 1.0}, _state(), t) == ("hold", [])
+
+
+def test_load_engine_from_working_directory(tmp_path, monkeypatch):
+    (tmp_path / "my_cwd_engine.py").write_text(
+        "def decide(state):\n    return {'action': 'skip', 'confidence': 0.5}\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.path", [p for p in __import__("sys").path
+                                     if p not in ("", str(tmp_path))])
+    fn = load_decision_fn("my_cwd_engine:decide")
+    assert fn({})["action"] == "skip"

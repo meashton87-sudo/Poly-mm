@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
+import sys
 from typing import Any, Callable
 
 log = logging.getLogger(__name__)
@@ -42,6 +44,11 @@ def load_decision_fn(spec: str | None) -> DecisionFn:
     module_name, sep, attr = spec.partition(":")
     if not sep or not module_name or not attr:
         raise ValueError(f"DECISION_ENGINE must look like 'module:function', got {spec!r}")
+    # The ``rh-meme-bot`` console script doesn't put the working directory on
+    # sys.path (``python -m`` does); add it so a local engine file is importable.
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
     module = importlib.import_module(module_name)
     fn = getattr(module, attr)
     if not callable(fn):
