@@ -11,6 +11,7 @@ encoded strings.
 from __future__ import annotations
 
 import json
+import ssl
 import time
 import urllib.parse
 import urllib.request
@@ -24,16 +25,46 @@ CLOB = "https://clob.polymarket.com"
 KALSHI = "https://api.elections.kalshi.com/trade-api/v2"
 
 
+def ssl_context() -> ssl.SSLContext | None:
+    """Certificate verification that works on stock Windows/macOS Pythons.
+
+    Python's bundled OpenSSL often can't see roots that the OS trusts (on
+    Windows they're fetched lazily), giving CERTIFICATE_VERIFY_FAILED. If
+    `truststore` is installed, verify with the OS itself; else use `certifi`'s
+    bundle; else Python's default. Verification is never turned off.
+    """
+    try:
+        import truststore
+
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except ImportError:
+        pass
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return None
+
+
+_SSL = ssl_context()
+
+
+def urlopen(req, timeout: float):
+    return urllib.request.urlopen(req, timeout=timeout, context=_SSL)
+
+
 def _get(url: str, params: dict | None = None, timeout: float = 15.0, retries: int = 3) -> object:
     if params:
         url += "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"User-Agent": "polymm-scanner/0.1", "Accept": "application/json"})
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urlopen(req, timeout=timeout) as r:
                 return json.load(r)
-        except Exception:
-            if attempt == retries - 1:
+        except Exception as e:
+            cert_error = isinstance(getattr(e, "reason", e), ssl.SSLCertVerificationError)
+            if attempt == retries - 1 or cert_error:  # retrying won't fix a cert problem
                 raise
             time.sleep(2**attempt)
     raise AssertionError("unreachable")

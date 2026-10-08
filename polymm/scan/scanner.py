@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import urllib.request
+
+from .sources import urlopen
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -77,7 +79,7 @@ def post_webhook(url: str, opps: list[Opportunity]) -> None:
     body = "\n\n".join(format_opportunity(o) for o in opps)[:1900]
     data = json.dumps({"content": body, "text": body}).encode()
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    urllib.request.urlopen(req, timeout=10).read()
+    urlopen(req, timeout=10).read()
 
 
 # ------------------------------------------------------------------ depth check

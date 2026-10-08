@@ -65,7 +65,9 @@ def parse_odds_api_event(event: dict, sel: LegSelector, now: float) -> list[Book
 def fetch_odds_api(path: str, params: dict, api_key: str | None = None, timeout: float = 5.0) -> object:
     key = api_key or os.environ["ODDS_API_KEY"]
     q = urllib.parse.urlencode({**params, "apiKey": key, "oddsFormat": "american"})
-    with urllib.request.urlopen(f"https://api.the-odds-api.com/v4/{path}?{q}", timeout=timeout) as r:
+    from .scan.sources import urlopen  # OS-trusted SSL (see ssl_context)
+
+    with urlopen(f"https://api.the-odds-api.com/v4/{path}?{q}", timeout=timeout) as r:
         return json.load(r)
 
 

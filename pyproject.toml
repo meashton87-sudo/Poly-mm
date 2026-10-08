@@ -3,10 +3,10 @@ name = "polymm"
 version = "0.1.0"
 description = "Polymarket parlay market maker: sportsbook-derived fair value, spreads, and risk limits"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = []  # stdlib only; `truststore` (recommended on Windows) fixes SSL cert errors
 
 [project.optional-dependencies]
-live = ["py-clob-client"]
+live = ["py-clob-client", "truststore"]
 dev = ["pytest"]
 
 [build-system]

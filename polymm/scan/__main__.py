@@ -27,6 +27,20 @@ FIXTURES = Path(__file__).parent / "fixtures"
 OFFLINE_NOW = datetime(2026, 10, 8, 12, tzinfo=timezone.utc)
 
 
+def _fetch(name: str, fn) -> list:
+    """One venue being down (or blocked) shouldn't stop the scan of the others."""
+    print(f"fetching {name}...", flush=True)
+    try:
+        rows = fn()
+    except Exception as e:
+        print(f"  !! {name} failed: {e}")
+        if "CERTIFICATE_VERIFY_FAILED" in str(e):
+            print("     fix: python -m pip install truststore   (then run the scan again)")
+        return []
+    print(f"  got {len(rows)} rows")
+    return rows
+
+
 def load_snapshot(args) -> Snapshot:
     if args.offline:
         d = Path(args.offline)
@@ -34,10 +48,11 @@ def load_snapshot(args) -> Snapshot:
         pm, ks, odds = read("polymarket_markets.json"), read("kalshi_events.json"), read("odds_api_h2h.json")
         mapping = load_mapping(args.mapping) if args.mapping else read("mapping.json")
     else:
-        pm = fetch_polymarket(min_volume=args.min_volume) if "polymarket" in args.venues else []
-        ks = fetch_kalshi() if "kalshi" in args.venues else []
         key = args.odds_api_key or os.environ.get("ODDS_API_KEY")
-        odds = fetch_odds_api_h2h(key) if key else []
+        pm = _fetch("Polymarket", lambda: fetch_polymarket(min_volume=args.min_volume)) \
+            if "polymarket" in args.venues else []
+        ks = _fetch("Kalshi", fetch_kalshi) if "kalshi" in args.venues else []
+        odds = _fetch("The Odds API", lambda: fetch_odds_api_h2h(key)) if key else []
         mapping = load_mapping(args.mapping) if args.mapping else []
         if args.save_snapshot:
             d = Path(args.save_snapshot)
