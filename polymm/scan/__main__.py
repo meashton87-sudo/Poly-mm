@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .calibration import Calibration
 from .fees import FeeModel
 from .matching import load_mapping
 from .scanner import Snapshot, enrich_depth, format_opportunity, post_webhook, scan, to_json
@@ -39,6 +40,24 @@ def _fetch(name: str, fn, log=print) -> list:
         return []
     log(f"  got {len(rows)} {'markets' if name == 'Polymarket' else 'events' if name == 'Kalshi' else 'rows'}")
     return rows
+
+
+_CAL_CACHE: dict = {}
+
+
+def _load_calibration(path: str | None, log=print):
+    """calibration.json next to where you run the scanner, if you've built one."""
+    if not path or not Path(path).exists():
+        return None
+    mtime = Path(path).stat().st_mtime
+    if _CAL_CACHE.get("key") != (path, mtime):
+        try:
+            _CAL_CACHE.update(key=(path, mtime), cal=Calibration.load(path))
+            log(f"loaded historical calibration from {path} ({_CAL_CACHE['cal'].total_trades:,} trade positions)")
+        except Exception as e:
+            log(f"  !! could not read {path}: {e}")
+            _CAL_CACHE.update(key=(path, mtime), cal=None)
+    return _CAL_CACHE["cal"]
 
 
 def load_snapshot(args, log=print) -> Snapshot:
@@ -79,6 +98,9 @@ def build_parser(description: str = __doc__) -> argparse.ArgumentParser:
     ap.add_argument("--kalshi-fee-rate", type=float, default=0.07)
     ap.add_argument("--polymarket-fee-rate", type=float, default=0.0)
     ap.add_argument("--hide-unverified", action="store_true", help="drop fuzzy cross-venue matches")
+    ap.add_argument("--calibration", default="calibration.json",
+                    help="historical win-rate table (build with python -m polymm.scan.calibrate); used if present")
+    ap.add_argument("--min-calibration-edge", type=float, default=0.02)
     ap.add_argument("--include-decided", action="store_true",
                     help="also show markets whose outcome is already ~certain (hidden by default)")
     ap.add_argument("--depth", action="store_true", help="check real order-book depth for top results")
@@ -93,11 +115,14 @@ def build_parser(description: str = __doc__) -> argparse.ArgumentParser:
 def run_once(args, log=print) -> tuple[Snapshot, list]:
     """Fetch (or load) a snapshot, scan it, and apply the CLI filters."""
     cfg = ScanConfig(min_arb_edge=args.min_arb_edge, min_value_edge=args.min_value_edge,
-                     max_days=args.max_days, include_decided=args.include_decided)
+                     max_days=args.max_days, include_decided=args.include_decided,
+                     min_calibration_edge=args.min_calibration_edge)
     fees = FeeModel(kalshi_rate=args.kalshi_fee_rate, polymarket_rate=args.polymarket_fee_rate)
     snap = load_snapshot(args, log)
     now = OFFLINE_NOW if args.offline == str(FIXTURES) else datetime.now(timezone.utc)
-    opps = scan(snap, cfg, fees, now=now)
+    cal = _load_calibration(args.calibration, log)
+    snap.stats["calibration_positions"] = cal.total_trades if cal else 0
+    opps = scan(snap, cfg, fees, now=now, calibration=cal)
     live = [c for c in snap.contracts if c.tradable(now)]
     snap.stats["closed"] = len(snap.contracts) - len(live)
     snap.stats["decided_groups"] = 0 if cfg.include_decided else decided_groups(live, cfg)

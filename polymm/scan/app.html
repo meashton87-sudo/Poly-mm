@@ -66,6 +66,8 @@ input[type=search] { flex: 1; min-width: 160px; }
 .b-check { color: var(--check); background: var(--check-bg); }
 .b-model { color: var(--model); background: var(--model-bg); }
 .new { font-size: 11px; font-weight: 700; color: var(--accent); margin-left: 6px; }
+.cat { font-size: 12px; color: var(--muted); margin-left: 8px; }
+.b-hist { color: var(--check); background: var(--model-bg); }
 .roi { margin-left: auto; text-align: right; }
 .roi b { font-size: 22px; font-variant-numeric: tabular-nums; display: block; line-height: 1.1; }
 .roi span { font-size: 12px; color: var(--muted); }
@@ -122,6 +124,7 @@ footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
       <button data-f="model" aria-pressed="false">Value bets</button>
     </div>
     <input type="search" id="q" placeholder="Search markets…">
+    <select id="cat" aria-label="Category"><option value="">All categories</option></select>
     <select id="sort" aria-label="Sort">
       <option value="best">Best first</option>
       <option value="roi">Highest return</option>
@@ -172,6 +175,7 @@ $("filter").onclick = e => {
   render();
 };
 $("q").oninput = render;
+$("cat").onchange = render;
 $("sort").onchange = render;
 $("scan").onclick = async () => {
   $("scan").disabled = true;
@@ -180,7 +184,8 @@ $("scan").onclick = async () => {
 };
 
 function card(o) {
-  const [cls, label] = BADGE[o.confidence] || ["b-model", o.confidence];
+  const [cls, label] = o.kind === "calibration_value" ? ["b-hist", "Historical edge"]
+    : (BADGE[o.confidence] || ["b-model", o.confidence]);
   const days = o.days_to_close == null ? null : o.days_to_close;
   const meta = [];
   if (days != null) meta.push(days < 1 ? "resolves within a day" : `resolves in ${Math.round(days)} days`);
@@ -198,7 +203,7 @@ function card(o) {
   const notes = (o.notes || []).map(n => `<li>${esc(n)}</li>`).join("");
   return `<article class="card">
     <div class="top">
-      <div><span class="badge ${cls}">${label}</span>${o.new ? '<span class="new">NEW</span>' : ""}</div>
+      <div><span class="badge ${cls}">${label}</span><span class="cat">${esc(o.category || "")}</span>${o.new ? '<span class="new">NEW</span>' : ""}</div>
       <div class="roi"><b>${pct(o.roi)}</b><span>${(o.edge * 100).toFixed(1)}¢ per $1</span></div>
     </div>
     <h2>${esc(o.headline)}</h2>
@@ -221,8 +226,14 @@ function render() {
   const c = state.counts || {};
   $("t-mkts").textContent = ((c.polymarket || 0) + (c.kalshi || 0)).toLocaleString();
 
+  // Category dropdown: keep the user's choice, list categories present now.
+  const cats = [...new Set(opps.map(o => o.category || "Other"))].sort();
+  const sel = $("cat"), chosen = sel.value;
+  sel.innerHTML = '<option value="">All categories</option>'
+    + cats.map(c => `<option value="${esc(c)}"${c === chosen ? " selected" : ""}>${esc(c)}</option>`).join("");
   const q = $("q").value.trim().toLowerCase();
   let rows = opps.filter(o => filter === "all" || o.confidence === filter)
+    .filter(o => !chosen || (o.category || "Other") === chosen)
     .filter(o => !q || (o.title + " " + o.headline + " " + o.legs.map(l => l.market).join(" ")).toLowerCase().includes(q));
   const s = $("sort").value;
   if (s === "roi") rows = [...rows].sort((a, b) => b.roi - a.roi);
@@ -251,7 +262,9 @@ async function poll() {
   const c = state.counts || {};
   $("sub").textContent = `${state.mode === "live" ? "Live" : "Sample data"} · ${(c.polymarket || 0).toLocaleString()} Polymarket · `
     + `${(c.kalshi || 0).toLocaleString()} Kalshi · ${c.sportsbook_events || 0} sportsbook games · rescans every ${Math.round(state.interval / 60)} min`
-    + (c.decided_groups ? ` · ${c.decided_groups.toLocaleString()} already-decided markets hidden` : "");
+    + (c.decided_groups ? ` · ${c.decided_groups.toLocaleString()} already-decided markets hidden` : "")
+    + (c.calibration_positions ? ` · historical win rates from ${(c.calibration_positions / 1e6).toFixed(1)}M past trades`
+                               : " · historical win rates: not set up (see README)");
   $("err").innerHTML = state.error ? `<div class="error"><b>Last scan failed:</b> ${esc(state.error)}</div>` : "";
   $("log").textContent = (state.log || []).join("\n");
   // Only redraw cards when results change, so the page doesn't jump while you read.

@@ -13,7 +13,7 @@ from ..odds import fmt_american
 from .fees import FeeModel
 from .matching import match_cross_venue
 from .models import Contract, Opportunity
-from .strategies import ScanConfig, cross_venue, multi_outcome_arbs, sportsbook_value
+from .strategies import ScanConfig, calibration_value, cross_venue, multi_outcome_arbs, sportsbook_value
 
 _CONF_RANK = {"arb": 0, "model": 1, "needs-verification": 2}
 
@@ -27,14 +27,16 @@ class Snapshot:
 
 
 def scan(snap: Snapshot, cfg: ScanConfig | None = None, fees: FeeModel | None = None,
-         now: datetime | None = None) -> list[Opportunity]:
+         now: datetime | None = None, calibration=None) -> list[Opportunity]:
     cfg, fees = cfg or ScanConfig(), fees or FeeModel()
     now = now or datetime.now(timezone.utc)
     live = [c for c in snap.contracts if c.tradable(now)]
     pairs = match_cross_venue(live, snap.mapping)
+    book_priced: set[str] = set()
     opps = (multi_outcome_arbs(live, fees, cfg, now)
             + cross_venue(pairs, fees, cfg, now)
-            + sportsbook_value(live, snap.odds_events, fees, cfg, now))
+            + sportsbook_value(live, snap.odds_events, fees, cfg, now, matched=book_priced))
+    opps += calibration_value(live, calibration, fees, cfg, now, skip=book_priced)
     if cfg.max_days is not None:
         opps = [o for o in opps if o.days_to_close is None or o.days_to_close <= cfg.max_days]
     # Best first: locked profit before model edges, then by annualised return
@@ -51,7 +53,7 @@ def format_opportunity(o: Opportunity) -> str:
     if o.fair is not None:
         stats += f"  fair {o.fair:.3f} ({fmt_american(o.fair)})"
     if o.kelly is not None:
-        stats += f"  1/4-Kelly {o.kelly / 4:.1%} of bankroll"
+        stats += f"  1/{round(1 / o.kelly_fraction)}-Kelly {o.kelly * o.kelly_fraction:.1%} of bankroll"
     if o.max_units is not None:
         stats += f"  size@price {o.max_units:,.0f}"
     lines = [head, stats]
@@ -107,6 +109,16 @@ def explain(o: Opportunity) -> dict:
         summary = (f"Sportsbooks (with their margin removed) give this a {o.fair:.1%} chance, "
                    f"but {_venue(l.contract.venue)} sells it at {_c(l.price)}. Expected profit "
                    f"{_c(o.edge)} per $1 share ({o.roi:.1%}). Not guaranteed: it's still a bet you can lose.")
+    elif o.kind == "calibration_value":
+        l = o.legs[0]
+        headline = f"Historically underpriced: {_what(l)} at {_c(l.price)}"
+        g = o.extra.get("group", "*")
+        where = f"past {g} markets" if g not in ("*", "Other") else "past markets"
+        summary = (f"Across {o.extra.get('trades', 0):,} trades in {where} on {_venue(l.contract.venue)}, "
+                   f"{l.side} contracts bought at about this price won {o.fair:.1%} of the time, "
+                   f"but this one costs {_c(l.price)}. Expected {_c(o.edge)} per $1 share ({o.roi:.1%}) "
+                   f"if this market behaves like the ones before it. A base rate, not a tip: "
+                   f"spread small stakes over many of these.")
     else:  # cross_venue_value
         l = o.legs[0]
         other = "Kalshi" if l.contract.venue == "polymarket" else "Polymarket"
@@ -114,7 +126,8 @@ def explain(o: Opportunity) -> dict:
         summary = (f"{other} prices this at about {o.fair:.1%}; {_venue(l.contract.venue)} sells it at {_c(l.price)}. "
                    f"Expected {_c(o.edge)} per $1 share ({o.roi:.1%}) if {other} is right. Not a locked profit.")
     if o.kelly:
-        summary += f" Suggested stake: up to {o.kelly / 4:.1%} of your bankroll (quarter-Kelly)."
+        frac = "quarter" if o.kelly_fraction == 0.25 else "eighth"
+        summary += f" Suggested stake: up to {o.kelly * o.kelly_fraction:.1%} of your bankroll ({frac}-Kelly)."
     return {"headline": headline, "summary": summary, "steps": steps}
 
 
@@ -122,6 +135,7 @@ def to_json(o: Opportunity) -> dict:
     return {
         **explain(o),
         "key": o.key,
+        "category": o.legs[0].contract.category if o.legs else "Other",
         "kind": o.kind, "title": o.title, "confidence": o.confidence, "edge": round(o.edge, 5),
         "cost": round(o.cost, 5), "roi": round(o.roi, 5), "annualized": o.annualized,
         "days_to_close": o.days_to_close, "fair": o.fair, "kelly": o.kelly, "max_units": o.max_units,

@@ -37,6 +37,7 @@ class Contract:
     yes_token: str | None = None  # Polymarket CLOB token ids
     no_token: str | None = None
     indicative: bool = False  # prices are last/mid, not a live top of book
+    category: str = "Other"  # Sports / Weather / Crypto / Politics / ...
 
     @property
     def no_ask(self) -> float | None:
@@ -79,7 +80,7 @@ class Leg:
 
 @dataclass
 class Opportunity:
-    kind: str  # multi_outcome_arb | cross_venue_arb | cross_venue_value | sportsbook_value
+    kind: str  # multi_outcome_arb | cross_venue_arb | cross_venue_value | sportsbook_value | calibration_value
     title: str
     legs: list[Leg]
     edge: float  # $ expected (arb: guaranteed) profit per $1-payout unit, after fees
@@ -89,6 +90,12 @@ class Opportunity:
     days_to_close: float | None = None
     max_units: float | None = None  # executable size at quoted prices, if known
     notes: list[str] = field(default_factory=list)
+    extra: dict = field(default_factory=dict)  # strategy-specific detail for explanations
+
+    @property
+    def kelly_fraction(self) -> float:
+        """How much of full Kelly we suggest: base rates are noisier than book prices."""
+        return 0.125 if self.kind == "calibration_value" else 0.25
 
     @property
     def roi(self) -> float:

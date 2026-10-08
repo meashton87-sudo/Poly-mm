@@ -7,7 +7,8 @@ dependencies = []  # stdlib only; `truststore` (recommended on Windows) fixes SS
 
 [project.optional-dependencies]
 live = ["py-clob-client", "truststore"]
-dev = ["pytest"]
+calibration = ["duckdb", "zstandard"]
+dev = ["pytest", "duckdb", "zstandard"]
 
 [build-system]
 requires = ["setuptools>=61"]

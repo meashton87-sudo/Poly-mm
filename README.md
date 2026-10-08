@@ -90,6 +90,33 @@ first** or **Value bet**, and anything found since the last scan is marked
 **NEW**. The page only runs on your own computer (127.0.0.1), and API keys stay
 in the Python process; the page never sees them.
 
+### Historical win rates (optional, one-time setup)
+
+[Jon-Becker/prediction-market-analysis](https://github.com/Jon-Becker/prediction-market-analysis)
+publishes the largest open dataset of resolved Kalshi and Polymarket trades. The
+scanner can turn it into a small `calibration.json`: for each price, how often the
+contracts bought at that price actually paid out. With that file present, the
+scanner adds **Historical edge** cards: contracts trading below what history says
+that price is worth (the favourite-longshot bias and similar). These are base
+rates, not tips, so stakes are suggested at eighth-Kelly. Markets that
+sportsbooks already price are left to the sportsbook signal.
+
+1. Download `https://s3.jbecker.dev/data.tar.zst` in your browser. It's about
+   36 GB; a browser can resume it if the connection drops.
+2. Drag the downloaded file onto **`Build Calibration.bat`**. It streams through
+   the archive without unpacking it, so you only need room for the download.
+   Expect this to take a while.
+3. When it finishes, `calibration.json` sits next to the `.bat`, and the
+   dashboard uses it automatically. You can delete the 36 GB download.
+
+On the command line: `pip install duckdb zstandard`, then
+`python -m polymm.scan.calibrate --archive data.tar.zst`. Use `--data DIR`
+instead if you've already extracted the dataset with that repo's `make setup`.
+
+The scanner also borrows two smaller things from that repo: its Kalshi category
+map (used for the category labels and filter, and for per-category win rates)
+and its rate-limited, backoff-on-429 approach to API calls.
+
 ### Command line
 
 Scans Polymarket and Kalshi (plus sportsbooks, if you have an Odds API key) and
@@ -101,6 +128,7 @@ ranks what it finds:
 | `multi_outcome_arb` | Mutually exclusive outcomes on one venue: the YES asks add up to less than $1, or the NO asks add up to less than $(n−1) | YES side: `needs-verification` unless the list is known to cover every outcome |
 | `sportsbook_value` | A prediction market ask below the de-vigged sportsbook consensus, by more than both `min_value_edge` and 1.5σ | `model` |
 | `cross_venue_value` | No locked profit, but one venue's ask is well below the other venue's mid | `model` / `needs-verification` |
+| `calibration_value` | An ask below the historical win rate for contracts at that price, venue and category (needs `calibration.json`) | `model` |
 
 ```
 python -m polymm.scan --offline                       # bundled sample snapshot
@@ -135,6 +163,9 @@ scan with `--save-snapshot` and check the output before trusting it.
 
 ### Useful open-source projects (review before running anything with keys)
 
+- [Jon-Becker/prediction-market-analysis](https://github.com/Jon-Becker/prediction-market-analysis):
+  historical trade dataset and calibration research; used for the Historical edge
+  signal above (MIT licensed).
 - [Polymarket/py-clob-client](https://github.com/Polymarket/py-clob-client) and
   [py-clob-client-v2](https://github.com/Polymarket/py-clob-client-v2): the
   official order placement clients, for executing what the scanner finds.

@@ -11,13 +11,16 @@ encoded strings.
 from __future__ import annotations
 
 import json
+import random
 import ssl
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from typing import Iterable
 
+from .categories import kalshi_group, polymarket_group
 from .models import Contract
 
 GAMMA = "https://gamma-api.polymarket.com"
@@ -57,19 +60,43 @@ def urlopen(req, timeout: float):
     return urllib.request.urlopen(req, timeout=timeout, context=_SSL)
 
 
-def _get(url: str, params: dict | None = None, timeout: float = 15.0, retries: int = 3) -> object:
+RATE_LIMIT = 8.0  # requests/second, shared across venues; well under public API limits
+_last_request = 0.0
+
+
+def _throttle() -> None:
+    global _last_request
+    wait = _last_request + 1 / RATE_LIMIT - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+    _last_request = time.monotonic()
+
+
+def _retryable(e: Exception) -> bool:
+    if isinstance(e, urllib.error.HTTPError):
+        return e.code in (429, 500, 502, 503, 504)
+    return not isinstance(getattr(e, "reason", e), ssl.SSLCertVerificationError)  # a cert won't fix itself
+
+
+def _get(url: str, params: dict | None = None, timeout: float = 15.0, retries: int = 5) -> object:
+    """GET JSON with throttling and jittered exponential backoff on 429/5xx/network
+    errors (the approach of prediction-market-analysis' HttpClient)."""
     if params:
         url += "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"User-Agent": "polymm-scanner/0.1", "Accept": "application/json"})
     for attempt in range(retries):
+        _throttle()
         try:
             with urlopen(req, timeout=timeout) as r:
                 return json.load(r)
         except Exception as e:
-            cert_error = isinstance(getattr(e, "reason", e), ssl.SSLCertVerificationError)
-            if attempt == retries - 1 or cert_error:  # retrying won't fix a cert problem
+            if attempt == retries - 1 or not _retryable(e):
                 raise
-            time.sleep(2**attempt)
+            delay = min(60.0, 2**attempt) + random.uniform(0, 1)
+            retry_after = getattr(e, "headers", None) and e.headers.get("Retry-After")
+            if retry_after and str(retry_after).isdigit():
+                delay = max(delay, float(retry_after))
+            time.sleep(delay)
     raise AssertionError("unreachable")
 
 
@@ -151,6 +178,7 @@ def parse_polymarket_markets(markets: Iterable[dict]) -> list[Contract]:
             yes_token=str(tokens[0]) if len(tokens) == 2 else None,
             no_token=str(tokens[1]) if len(tokens) == 2 else None,
             indicative=indicative,
+            category=polymarket_group(f"{m.get('question', '')} {ev.get('title', '')}"),
         ))
     return out
 
@@ -235,6 +263,7 @@ def parse_kalshi_events(events: Iterable[dict]) -> list[Contract]:
                 trading_close=_dt(m.get("close_time")),
                 volume=_f(m.get("volume_fp") or m.get("volume")) or 0.0,
                 url=f"https://kalshi.com/markets/{series}",
+                category=kalshi_group(et),
             ))
     return out
 

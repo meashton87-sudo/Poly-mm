@@ -5,6 +5,8 @@
 2. cross_venue_arb     same question on Polymarket and Kalshi: YES here + NO there < $1
 3. cross_venue_value   no lock, but one venue's ask is well below the other's mid
 4. sportsbook_value    prediction-market ask below de-vigged sportsbook consensus
+5. calibration_value   ask below the historical win rate of contracts bought at that
+                       price (needs calibration.json; see calibration.py)
 """
 
 from __future__ import annotations
@@ -37,6 +39,10 @@ class ScanConfig:
     # Unconfirmed cross-venue pairs whose prices differ by more than this are
     # almost certainly different questions (or one is already resolved).
     max_unconfirmed_gap: float = 0.25
+    # Historical-calibration value bets (only when a calibration table is loaded).
+    min_calibration_edge: float = 0.02
+    calibration_max_days: float = 60.0  # small statistical edges aren't worth locking up money for months
+    max_calibration_results: int = 30
 
 
 def is_decided(c: Contract, cfg: ScanConfig) -> bool:
@@ -180,7 +186,9 @@ def _options(contracts: list[Contract]) -> list[tuple[Contract, str, str]]:
 
 def sportsbook_value(contracts: list[Contract], odds_events: list[dict], fees: FeeModel,
                      cfg: ScanConfig, now: datetime,
-                     fv: FairValueConfig | None = None) -> list[Opportunity]:
+                     fv: FairValueConfig | None = None, matched: set[str] | None = None) -> list[Opportunity]:
+    """`matched` (optional) collects every contract tied to a sportsbook line,
+    edge or not, so weaker signals can defer to the books on those markets."""
     fv = fv or FairValueConfig(max_quote_age=6 * 3600, recency_half_life=3600, min_books=3)
     opts = _options(contracts)
     out = []
@@ -218,6 +226,8 @@ def sportsbook_value(contracts: list[Contract], odds_events: list[dict], fees: F
                     continue
                 if c.close_time and abs((c.close_time - start).total_seconds()) > 4 * 86400:
                     continue
+                if matched is not None:
+                    matched.add(c.key)
                 if c.indicative and not cfg.include_indicative:
                     continue
                 l = _leg(c, side, fees)
@@ -239,3 +249,46 @@ def _candidate_names(text: str, opp: str) -> list[str]:
     words = text.split()
     k = len(opp.split())
     return [" ".join(words[i:i + n]) for n in range(1, k + 1) for i in range(len(words) - n + 1)]
+
+
+# ------------------------------------------------------------------ 5. historical calibration
+
+def calibration_value(contracts: list[Contract], cal, fees: FeeModel, cfg: ScanConfig,
+                      now: datetime, skip: set[str] | None = None) -> list[Opportunity]:
+    """Contracts trading below what history says that price is worth.
+
+    This is a base-rate edge across thousands of past markets (e.g. the
+    favourite-longshot bias), not information about this particular market,
+    so it needs a bigger cushion than an arb and many small bets, not one big one.
+    """
+    if cal is None:
+        return []
+    out = []
+    for c in contracts:
+        if c.indicative or (not cfg.include_decided and is_decided(c, cfg)):
+            continue
+        if skip and c.key in skip:
+            continue  # sportsbooks price this market directly; a base rate adds nothing
+        days = _days([c], now)
+        if days is not None and days > cfg.calibration_max_days:
+            continue
+        for side in ("YES", "NO"):
+            l = _leg(c, side, fees)
+            if l is None or not (cfg.min_price <= l.price <= cfg.max_price):
+                continue
+            w = cal.win_prob(c.venue, side, l.price, c.category)
+            if w is None:
+                continue
+            edge = w.p - l.price - l.fee
+            if edge < max(cfg.min_calibration_edge, 2 * w.se):
+                continue
+            where = "all markets" if w.group == "*" else f"{w.group} markets"
+            out.append(Opportunity(
+                "calibration_value", c.title, [l], edge, l.price + l.fee, fair=w.p, confidence="model",
+                days_to_close=days, max_units=_min_size([l]), extra={"group": w.group, "trades": w.n},
+                notes=[f"historically {w.p:.1%} of {side} contracts bought near {l.price * 100:.0f}c on "
+                       f"{c.venue} ({where}) won, from {w.n:,} past trades",
+                       "base rate across many markets, not news about this one: spread it over many small bets"]))
+    # Best per unit of capital-time first, then keep the list short.
+    out.sort(key=lambda o: -(o.roi / max(o.days_to_close or 1.0, 1.0)))
+    return out[:cfg.max_calibration_results]
