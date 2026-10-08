@@ -114,7 +114,7 @@ def explain(o: Opportunity) -> dict:
         headline = f"Historically underpriced: {_what(l)} at {_c(l.price)}"
         g = o.extra.get("group", "*")
         where = f"past {g} markets" if g not in ("*", "Other") else "past markets"
-        summary = (f"Across {o.extra.get('trades', 0):,} trades in {where} on {_venue(l.contract.venue)}, "
+        summary = (f"Across {o.extra.get('markets', 0):,} {where} on {_venue(l.contract.venue)}, "
                    f"{l.side} contracts bought at about this price won {o.fair:.1%} of the time, "
                    f"but this one costs {_c(l.price)}. Expected {_c(o.edge)} per $1 share ({o.roi:.1%}) "
                    f"if this market behaves like the ones before it. A base rate, not a tip: "

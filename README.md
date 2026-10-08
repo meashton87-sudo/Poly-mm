@@ -117,6 +117,36 @@ The scanner also borrows two smaller things from that repo: its Kalshi category
 map (used for the category labels and filter, and for per-category win rates)
 and its rate-limited, backoff-on-429 approach to API calls.
 
+### Backtest: would Historical edge have made money?
+
+**`Run Backtest.bat`** (or `python -m polymm.scan.backtest --archive data.tar.zst`)
+replays real Kalshi history month by month, without peeking at the future:
+
+- **Training data:** each month's win-rate table is built only from markets that
+  closed *before* that month.
+- **Buyable prices:** a real past trade at a price counts as proof that price was
+  available. The strategy buys the first one it would have liked in each market,
+  at most as many contracts as that trade had.
+- **Rules:** the same fees, edge threshold and filters as the live scanner.
+- **Benchmark:** buying every market in the same price range with no filter. If
+  the strategy can't beat that, it has no edge.
+
+It writes `backtest_report.html`: total return with a 95% range, profit over
+time, an eighth-Kelly bankroll simulation, and breakdowns by category, price and
+month. Each breakdown shows predicted against actual win rates, so you can see
+whether the estimates were honest. Without the dataset it runs a demo on
+made-up data, clearly labelled.
+
+The backtest has been checked on made-up markets. It found a real 5¢ bias
+(+2.7%), found nothing to bet on in a fair market, and reported a loss when a
+past bias vanished. It also caught a flaw in the first version: the win-rate
+table counted trades rather than markets, which faked precision. Both the
+backtest and the live table now count markets.
+
+Limits: Kalshi only (Polymarket's on-chain trades need block timestamps; not
+done yet). It doesn't model competing for the same fills or price impact. Only
+markets that had resolved when the dataset was built are included.
+
 ### Command line
 
 Scans Polymarket and Kalshi (plus sportsbooks, if you have an Odds API key) and

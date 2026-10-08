@@ -53,8 +53,8 @@ def _write_dataset(root):
 
 def _check(cal):
     k = cal["tables"]["kalshi"]
-    assert k["taker"]["Weather|yes"]["10"] == [1000, 100]  # 10% of 10c YES buys won
-    assert k["all"]["*|no"]["90"] == [1000, 900]  # makers on the other side
+    assert k["taker"]["Weather|yes"]["10"] == [10, 1]  # 10 markets bought at 10c, 1 won (trades don't multiply it)
+    assert k["all"]["*|no"]["90"] == [10, 9]  # makers on the other side
     assert "*|no" not in k["taker"]  # nobody took NO
     p = cal["tables"]["polymarket"]["all"]
     assert p["Weather|yes"]["20"] == [1, 0] and p["Weather|no"]["80"] == [1, 1]
@@ -100,8 +100,8 @@ def test_lookup_shrinks_and_falls_back_to_all_markets():
     cal = _cal()
     w = cal.win_prob("kalshi", "no", 0.90, "Weather")  # no Weather table -> all markets
     assert w.group == "*" and 0.95 < w.p < 0.96 and w.n == 50_000
-    thin = Calibration({"tables": {"kalshi": {"taker": {"*|no": {"90": [10, 10]}}}}}, window=0, min_trades=5)
-    assert thin.win_prob("kalshi", "no", 0.90).p < 0.91  # 10/10 wins barely moves a 300-trade prior
+    thin = Calibration({"tables": {"kalshi": {"taker": {"*|no": {"90": [10, 10]}}}}}, window=0, min_markets=5)
+    assert thin.win_prob("kalshi", "no", 0.90).p < 0.91  # 10/10 wins barely moves a 100-market prior
     assert cal.win_prob("polymarket", "yes", 0.5) is None
 
 

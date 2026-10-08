@@ -39,7 +39,7 @@ _MEMBER = re.compile(r"(?:^|/)(kalshi|polymarket)/(markets|trades)/[^/]+\.parque
 @dataclass
 class WinRate:
     p: float  # smoothed historical win probability
-    n: int  # past trades behind it
+    n: int  # past markets behind it (each market counted once per price)
     se: float  # standard error of p
     group: str  # category the estimate came from ("*" = all markets)
 
@@ -47,17 +47,21 @@ class WinRate:
 class Calibration:
     """Win probability lookup with pooling and shrinkage.
 
-    Neighbouring cents are pooled (+/- `window`) and the raw win rate is shrunk
-    toward the price itself with a Beta prior worth `prior_trades` trades, so a
-    thin bucket can't manufacture an edge out of noise.
+    Counts are *markets*, not trades: one market's dozens of trades share a
+    single outcome, so counting trades fakes precision (the backtest showed
+    exactly that: estimates chasing noise). Neighbouring cents are pooled
+    (+/- `window`) for the estimate, the raw win rate is shrunk toward the
+    price with a Beta prior worth `prior_markets` markets, and the standard
+    error uses the largest single bucket (a market trading at 29, 30 and 31c
+    sits in all three) so pooling can't inflate confidence.
     """
 
-    def __init__(self, data: dict, window: int = 1, prior_trades: float = 300.0, min_trades: int = 2000):
+    def __init__(self, data: dict, window: int = 1, prior_markets: float = 100.0, min_markets: int = 300):
         self.data = data
         self.tables: dict = data.get("tables", {})
         self.window = window
-        self.prior = prior_trades
-        self.min_trades = min_trades
+        self.prior = prior_markets
+        self.min_markets = min_markets
 
     @classmethod
     def load(cls, path: str | Path, **kw) -> "Calibration":
@@ -83,14 +87,14 @@ class Calibration:
             buckets = table.get(f"{g}|{side.lower()}")
             if not buckets:
                 continue
-            n = wins = 0
+            n = wins = n_max = 0
             for c in range(cents - self.window, cents + self.window + 1):
                 nb, wb = buckets.get(str(c), (0, 0))
-                n, wins = n + nb, wins + wb
-            if n < self.min_trades:
+                n, wins, n_max = n + nb, wins + wb, max(n_max, nb)
+            if n_max < self.min_markets:
                 continue
             p = (wins + self.prior * price) / (n + self.prior)
-            return WinRate(p, n, math.sqrt(p * (1 - p) / (n + self.prior)), g)
+            return WinRate(p, n_max, math.sqrt(p * (1 - p) / (n_max + self.prior)), g)
         return None
 
 
@@ -160,31 +164,34 @@ class Builder:
     # -- final join ----------------------------------------------------------
 
     def _kalshi(self) -> dict:
+        # One row per (market, side, price) that was ever bought: n counts markets.
         rows = self.con.execute("""
             WITH m AS (SELECT DISTINCT ticker, event_ticker, result FROM k_markets),
-            pos AS (
-                SELECT m.event_ticker, 'taker' AS role, t.taker_side AS side,
+            t AS (SELECT DISTINCT ticker, taker_side, yes_price, no_price FROM k_trades),
+            taker AS (
+                SELECT m.ticker, m.event_ticker, t.taker_side AS side,
                        CASE WHEN t.taker_side = 'yes' THEN t.yes_price ELSE t.no_price END AS price,
-                       (t.taker_side = m.result) AS won, t.n
-                FROM k_trades t JOIN m USING (ticker)
-                UNION ALL
-                SELECT m.event_ticker, 'maker',
-                       CASE WHEN t.taker_side = 'yes' THEN 'no' ELSE 'yes' END,
+                       (t.taker_side = m.result) AS won
+                FROM t JOIN m USING (ticker)),
+            maker AS (
+                SELECT m.ticker, m.event_ticker, CASE WHEN t.taker_side = 'yes' THEN 'no' ELSE 'yes' END,
                        CASE WHEN t.taker_side = 'yes' THEN t.no_price ELSE t.yes_price END,
-                       (t.taker_side != m.result), t.n
-                FROM k_trades t JOIN m USING (ticker)
-            )
-            SELECT regexp_extract(event_ticker, '^([A-Z0-9]+)', 1) AS cat, role, side, price,
-                   SUM(n) AS n, SUM(CASE WHEN won THEN n ELSE 0 END) AS wins
-            FROM pos WHERE price BETWEEN 1 AND 99 GROUP BY ALL""").fetchall()
+                       (t.taker_side != m.result)
+                FROM t JOIN m USING (ticker)),
+            allp AS (SELECT DISTINCT * FROM (SELECT * FROM taker UNION ALL SELECT * FROM maker))
+            SELECT regexp_extract(event_ticker, '^([A-Z0-9]+)', 1) AS cat, 'taker' AS role, side, price,
+                   COUNT(*) AS n, SUM(CASE WHEN won THEN 1 ELSE 0 END) AS wins
+            FROM taker WHERE price BETWEEN 1 AND 99 GROUP BY ALL
+            UNION ALL
+            SELECT regexp_extract(event_ticker, '^([A-Z0-9]+)', 1), 'all', side, price,
+                   COUNT(*), SUM(CASE WHEN won THEN 1 ELSE 0 END)
+            FROM allp WHERE price BETWEEN 1 AND 99 GROUP BY ALL""").fetchall()
         out: dict = {"taker": {}, "all": {}}
         group_of: dict[str, str] = {}
         for cat, role, side, price, n, wins in rows:
             g = group_of.setdefault(cat, kalshi_group(cat))
-            roles = ("taker", "all") if role == "taker" else ("all",)
-            for r in roles:
-                for gg in (g, ALL):
-                    _bump(out[r], f"{gg}|{side}", price, n, wins)
+            for gg in (g, ALL):
+                _bump(out[role], f"{gg}|{side}", price, n, wins)
         return out
 
     def _polymarket(self) -> dict:
@@ -205,19 +212,20 @@ class Builder:
             else:
                 continue
             g = polymarket_group(question or "")
-            res += [(toks[0], win == 0, "yes", g), (toks[1], win == 1, "no", g)]
-        self.con.execute("CREATE OR REPLACE TABLE p_res (token_id VARCHAR, won BOOLEAN, side VARCHAR, grp VARCHAR)")
+            res += [(toks[0], str(_id), win == 0, "yes", g), (toks[1], str(_id), win == 1, "no", g)]
+        self.con.execute("CREATE OR REPLACE TABLE p_res (token_id VARCHAR, market VARCHAR, won BOOLEAN, "
+                         "side VARCHAR, grp VARCHAR)")
         if res:
-            self.con.executemany("INSERT INTO p_res VALUES (?, ?, ?, ?)", res)
+            self.con.executemany("INSERT INTO p_res VALUES (?, ?, ?, ?, ?)", res)
+        # One row per (market, side, price) traded: n counts markets, not fills.
         rows = self.con.execute("""
-            WITH t AS (SELECT token_id, price, SUM(n) AS n FROM p_trades GROUP BY ALL),
-            pos AS (
-                SELECT r.grp, r.side, t.price, r.won, t.n FROM t JOIN p_res r USING (token_id)
+            WITH t AS (SELECT DISTINCT token_id, price FROM p_trades),
+            pos AS (SELECT DISTINCT * FROM (
+                SELECT r.market, r.grp, r.side, t.price, r.won FROM t JOIN p_res r USING (token_id)
                 UNION ALL  -- the other side of every fill: the complement at 100 - price
-                SELECT r.grp, CASE WHEN r.side = 'yes' THEN 'no' ELSE 'yes' END, 100 - t.price, NOT r.won, t.n
-                FROM t JOIN p_res r USING (token_id)
-            )
-            SELECT grp, side, price, SUM(n), SUM(CASE WHEN won THEN n ELSE 0 END)
+                SELECT r.market, r.grp, CASE WHEN r.side = 'yes' THEN 'no' ELSE 'yes' END, 100 - t.price, NOT r.won
+                FROM t JOIN p_res r USING (token_id)))
+            SELECT grp, side, price, COUNT(*), SUM(CASE WHEN won THEN 1 ELSE 0 END)
             FROM pos GROUP BY ALL""").fetchall()
         out: dict = {"all": {}}
         for g, side, price, n, wins in rows:
@@ -234,7 +242,7 @@ class Builder:
         total = sum(n for v in tables.values() for role, t in v.items() if role == "all"
                     for k, b in t.items() if k.startswith(f"{ALL}|") for n, _ in b.values())
         return {
-            "version": 1, "source": source, "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "version": 2,  # v2: counts are distinct markets per price, not trades "source": source, "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "files": self.files, "total_positions": total, "tables": tables,
         }
 
@@ -247,16 +255,16 @@ def _bump(table: dict, key: str, price: int, n: int, wins: int) -> None:
 
 def build_from_dir(data_dir: str | Path, log=print) -> dict:
     b = Builder()
-    for path in sorted(Path(data_dir).rglob("*.parquet")):
-        kind = Builder.classify(str(path))
-        if kind:
-            b.add_file(kind, str(path))
+    for kind, path in iter_dir(data_dir):
+        b.add_file(kind, path)
     log(f"aggregated {b.files}")
     return b.finish(str(data_dir))
 
 
-def build_from_archive(source: str, workdir: str | Path, log=print) -> dict:
-    """Stream a data.tar.zst (local path or https URL), aggregating as it goes."""
+def iter_archive(source: str, workdir: str | Path, log=print, kinds: set[str] | None = None):
+    """Stream a data.tar.zst (local path or https URL) and yield (kind, parquet_path)
+    for each dataset file of interest. Each file is deleted once the caller moves
+    on, so the ~36 GB archive never has to be unpacked on disk."""
     import tarfile
     import tempfile
 
@@ -281,25 +289,38 @@ def build_from_archive(source: str, workdir: str | Path, log=print) -> dict:
                 self.next_report = self.n + 2**30
             return chunk
 
-    b = Builder()
     tmp = Path(tempfile.mkdtemp(dir=workdir))
     try:
         reader = zstandard.ZstdDecompressor(max_window_size=2**31).stream_reader(Counting(raw))
         with tarfile.open(fileobj=reader, mode="r|") as tar:
             for member in tar:
                 kind = Builder.classify(member.name) if member.isfile() else None
-                if not kind:
+                if not kind or (kinds is not None and kind not in kinds):
                     continue  # tar streams skip unread member data on their own
                 part = tmp / "part.parquet"
                 with tar.extractfile(member) as src, open(part, "wb") as dst:
                     while chunk := src.read(1 << 20):
                         dst.write(chunk)
-                b.add_file(kind, str(part))
+                yield kind, str(part)
                 part.unlink()
     finally:
         raw.close()
         for p in tmp.glob("*"):
             p.unlink()
         tmp.rmdir()
+
+
+def iter_dir(data_dir: str | Path, kinds: set[str] | None = None):
+    for path in sorted(Path(data_dir).rglob("*.parquet")):
+        kind = Builder.classify(str(path))
+        if kind and (kinds is None or kind in kinds):
+            yield kind, str(path)
+
+
+def build_from_archive(source: str, workdir: str | Path, log=print) -> dict:
+    """Stream a data.tar.zst (local path or https URL), aggregating as it goes."""
+    b = Builder()
+    for kind, path in iter_archive(source, workdir, log):
+        b.add_file(kind, path)
     log(f"aggregated {b.files}")
     return b.finish(source)

@@ -263,7 +263,7 @@ async function poll() {
   $("sub").textContent = `${state.mode === "live" ? "Live" : "Sample data"} · ${(c.polymarket || 0).toLocaleString()} Polymarket · `
     + `${(c.kalshi || 0).toLocaleString()} Kalshi · ${c.sportsbook_events || 0} sportsbook games · rescans every ${Math.round(state.interval / 60)} min`
     + (c.decided_groups ? ` · ${c.decided_groups.toLocaleString()} already-decided markets hidden` : "")
-    + (c.calibration_positions ? ` · historical win rates from ${(c.calibration_positions / 1e6).toFixed(1)}M past trades`
+    + (c.calibration_positions ? ` · historical win rates loaded`
                                : " · historical win rates: not set up (see README)");
   $("err").innerHTML = state.error ? `<div class="error"><b>Last scan failed:</b> ${esc(state.error)}</div>` : "";
   $("log").textContent = (state.log || []).join("\n");

@@ -53,7 +53,11 @@ def _load_calibration(path: str | None, log=print):
     if _CAL_CACHE.get("key") != (path, mtime):
         try:
             _CAL_CACHE.update(key=(path, mtime), cal=Calibration.load(path))
-            log(f"loaded historical calibration from {path} ({_CAL_CACHE['cal'].total_trades:,} trade positions)")
+            cal = _CAL_CACHE["cal"]
+            if cal.data.get("version", 1) < 2:
+                log(f"  !! {path} is from an older version that over-counted trades; rebuild it "
+                    f"(python -m polymm.scan.calibrate) before trusting Historical edge cards")
+            log(f"loaded historical calibration from {path} ({cal.total_trades:,} market-price observations)")
         except Exception as e:
             log(f"  !! could not read {path}: {e}")
             _CAL_CACHE.update(key=(path, mtime), cal=None)

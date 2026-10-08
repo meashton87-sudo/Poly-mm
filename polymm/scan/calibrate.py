@@ -24,8 +24,8 @@ DATASET_URL = "https://s3.jbecker.dev/data.tar.zst"
 
 
 def summarize(cal: dict) -> str:
-    c = Calibration(cal, min_trades=1)
-    lines = [f"{cal['total_positions']:,} trade positions from {cal['files']}"]
+    c = Calibration(cal, min_markets=1)
+    lines = [f"{cal['total_positions']:,} market-price observations from {cal['files']}"]
     for venue in cal["tables"]:
         lines.append(f"\n{venue}: historical win rate of the side bought, by price (all markets)")
         lines.append("   price    YES won    NO won")

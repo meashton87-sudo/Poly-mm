@@ -285,9 +285,9 @@ def calibration_value(contracts: list[Contract], cal, fees: FeeModel, cfg: ScanC
             where = "all markets" if w.group == "*" else f"{w.group} markets"
             out.append(Opportunity(
                 "calibration_value", c.title, [l], edge, l.price + l.fee, fair=w.p, confidence="model",
-                days_to_close=days, max_units=_min_size([l]), extra={"group": w.group, "trades": w.n},
+                days_to_close=days, max_units=_min_size([l]), extra={"group": w.group, "markets": w.n},
                 notes=[f"historically {w.p:.1%} of {side} contracts bought near {l.price * 100:.0f}c on "
-                       f"{c.venue} ({where}) won, from {w.n:,} past trades",
+                       f"{c.venue} ({where}) won, from {w.n:,} past markets",
                        "base rate across many markets, not news about this one: spread it over many small bets"]))
     # Best per unit of capital-time first, then keep the list short.
     out.sort(key=lambda o: -(o.roi / max(o.days_to_close or 1.0, 1.0)))
