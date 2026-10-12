@@ -194,14 +194,17 @@ def extract_decisions(pbp: pd.DataFrame, seasons) -> pd.DataFrame:
     snap_live = live & s["down"].notna() & (s["two_point_attempt"].fillna(0) == 0)
     is_run = (s["play_type"] == "run") & (s["qb_scramble"].fillna(0) == 0)
     is_pass = s["qb_dropback"].fillna(0) == 1
+    # a botched snap says nothing about the call that was made
+    aborted = s["desc"].str.contains("Aborted", case=False, na=False)
     # play_select: leading late (clock killing) or trailing late (clock saving); not 4th down
     m = snap_live & (is_run | is_pass) & (s["down"] < 4) & q4 & (hs <= 300) & s["margin"].between(-16, 16) \
-        & (s["margin"] != 0)
+        & (s["margin"] != 0) & ~aborted
     d = s[m]
     add(d, "play_select", d["posteam"], np.where(is_run[m], "run", "pass"), "snap")
 
     # kneel: leading offense, kneel-out feasible (checked in the worker with exact rules)
-    m = snap_live & q4 & (hs <= 160) & (s["margin"] > 0) & (s["down"] < 4) & (is_run | (s["play_type"] == "qb_kneel"))
+    m = snap_live & q4 & (hs <= 160) & (s["margin"] > 0) & (s["down"] < 4) & (is_run | (s["play_type"] == "qb_kneel")) \
+        & ~aborted
     d = s[m]
     add(d, "kneel", d["posteam"], np.where(d["play_type"] == "qb_kneel", "kneel", "run_play"), "snap")
 
@@ -210,6 +213,9 @@ def extract_decisions(pbp: pd.DataFrame, seasons) -> pd.DataFrame:
         (q4 & (hs <= 600)) | (q2 & (hs <= 120))) & (s["margin"].abs() <= 16)
     d = s[fd]
     act = np.where(d["play_type"] == "punt", "punt", np.where(d["play_type"] == "field_goal", "fg", "go"))
+    # an aborted snap in punt or field-goal formation was a kick, not an attempt to convert
+    act = np.where(aborted[fd] & d["desc"].str.contains("Punt formation", na=False), "punt", act)
+    act = np.where(aborted[fd] & d["desc"].str.contains("Field Goal formation", na=False), "fg", act)
     add(d, "fourth_down", d["posteam"], act, "snap")
 
     # h1_end: first snap of a possession with 0:20-2:00 left in the first half, outside FG range

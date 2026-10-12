@@ -36,6 +36,11 @@ def load_graded(path=None, include_current: bool = True) -> pd.DataFrame:
     if include_current and path is None and current:
         df = pd.concat([df] + [pd.read_parquet(c) for c in current], ignore_index=True)
         df = df.drop_duplicates(["game_id", "play_id", "decision"])
+    # botched snaps graded before analyze.py learned to skip or relabel them
+    ab = df["desc"].str.contains("Aborted", case=False, na=False)
+    fmt = df["desc"].str.contains("Punt formation|Field Goal formation", na=False)
+    df = df[~(ab & (df["decision"].isin(["play_select", "kneel"])
+                    | ((df["decision"] == "fourth_down") & (df["actual"] == "go") & fmt)))].copy()
     df["is_rec"] = df["recommended"] == df["actual"]
     df["sig_error"] = (~df["is_rec"]) & (df["gain"] > 2 * df["gain_se"]) & (df["gain"] > 0.005)
     df["wp_cost"] = np.where(df["is_rec"], 0.0, df["gain"])  # cross-fit estimate, signed
