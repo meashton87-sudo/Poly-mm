@@ -54,6 +54,20 @@ class LiveState:
         return max(0, 4 - self.qtr) * 900 + self.clock if self.qtr <= 4 else self.clock
 
 
+PACES = (6, 8, 10, 12, 14, 16, 18, 20)   # seconds from the whistle to a hurried snap
+
+
+def pace_break_even(diffs) -> tuple[str, float | None]:
+    """Hurry-minus-spike win probability at each pace -> where hurrying stops paying."""
+    if diffs[0] <= 0:
+        return "never", None
+    for k in range(1, len(PACES)):
+        if diffs[k] <= 0:
+            a, b = PACES[k - 1], PACES[k]
+            return "within", a + (b - a) * diffs[k - 1] / (diffs[k - 1] - diffs[k])
+    return "always", None
+
+
 def _clock(s: float) -> str:
     s = max(0, int(round(s)))
     return f"{s // 60}:{s % 60:02d}"
@@ -212,6 +226,13 @@ class LiveConsole:
                              "coaches": _coach_share(self.tendency, _family(k, self.st, team_idx == root.pos), k,
                                                      self.st, root, team_idx)})
             results[team_idx] = pd.DataFrame(rows).sort_values("wp", ascending=False)
+            if "hurry" in team_opts and "spike" in team_opts:
+                # hurry vs. spike hinges on how fast the next snap comes: price the hurry at fixed paces
+                n2 = max(1500, self.sims // 2)
+                sp = sim.run(root, n=n2, action=team_opts["spike"], perspective=team_idx, seed=seed + 1)
+                diffs = [float((sim.run(root, n=n2, action={**team_opts["hurry"], "runoff": float(sec)},
+                                        perspective=team_idx, seed=seed + 1) - sp).mean()) for sec in PACES]
+                results[team_idx].attrs["pace"] = pace_break_even(diffs)
         if not opts:
             v = sim.run(root, n=self.sims, perspective=0, seed=seed)
             results[None] = float(v.mean())
@@ -238,11 +259,19 @@ class LiveConsole:
             print(f"\n  {team_name[team_idx]} options ({self.sims:,} simulations each, common random numbers)")
             print(f"  {'option':<30}{'win prob':>9}{'vs best':>9}{'±':>6}   {'grade if chosen':<22}{'NFL coaches':>11}")
             for _, r in df.iterrows():
-                share = "" if r["coaches"] is None else f"{r['coaches']:.0%}"
+                share = "" if r["coaches"] is None or pd.isna(r["coaches"]) else f"{r['coaches']:.0%}"
                 print(f"  {OPTION_HELP.get(r['option'], r['option']):<30}{r['wp']:>9.1%}{r['edge'] * 100:>+9.1f}"
                       f"{r['se'] * 100:>6.1f}   {r['grade']:<22}{share:>11}")
             best = df.iloc[0]
             print(f"  -> {team_name[team_idx]}: {OPTION_HELP.get(best['option'], best['option']).upper()}")
+            pace = df.attrs.get("pace")
+            if pace:
+                kind, sec = pace
+                print("     hurry or spike: " + {
+                    "within": f"hurrying wins only if the next snap comes within {sec:.0f}s of the whistle "
+                              "(a typical hurry-up snap takes about 15s)",
+                    "always": "hurrying wins even at a slow 20-second pace",
+                    "never": "the spike wins even with a 6-second snap"}[kind])
 
     def header(self):
         r = self.rec

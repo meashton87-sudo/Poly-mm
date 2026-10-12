@@ -103,6 +103,7 @@ details summary { cursor: pointer; font-weight: 600; }
 .hist button { all: unset; cursor: pointer; font-size: .85rem; padding: 6px 8px; border-radius: 6px; background: var(--surface-2); }
 .hist button:focus-visible { outline: 2px solid var(--accent); }
 .note { font-size: .8rem; color: var(--muted); max-width: 75ch; }
+.note.pace { margin: 6px 0 2px; color: var(--fg); }
 .cardgrid { overflow-x: auto; }
 .cardgrid table { border-collapse: separate; border-spacing: 3px; font-variant-numeric: tabular-nums; }
 .cardgrid th { font-size: .75rem; color: var(--muted); font-weight: 600; padding: 2px 4px; text-align: center; white-space: nowrap; }
@@ -374,6 +375,14 @@ details summary { cursor: pointer; font-weight: 600; }
       verdict.textContent = `${OPTION_TEXT[best.option] || best.option}` + (second ? ` · +${margin.toFixed(1)} win-prob points over ${(OPTION_TEXT[second.option] || second.option).toLowerCase()}` : '') +
         (second && Math.abs(second.edge) < 2 * second.se ? ' (close call)' : '');
       wrap.appendChild(verdict);
+      if (grp.pace) {
+        const pn = document.createElement('p'); pn.className = 'note pace';
+        pn.textContent = grp.pace.kind === 'within'
+          ? `Hurry or spike: hurrying wins only if the next snap comes within ${Math.round(grp.pace.sec)} seconds of the whistle (a typical hurry-up snap takes about 15).`
+          : grp.pace.kind === 'always' ? 'Hurry or spike: hurrying wins even at a slow 20-second pace.'
+            : 'Hurry or spike: the spike wins even if you could snap a real play 6 seconds after the whistle.';
+        wrap.appendChild(pn);
+      }
       const maxWp = Math.max(...grp.rows.map((r) => r.wp), 0.01);
       grp.rows.forEach((r, i) => {
         const row = document.createElement('div'); row.className = 'opt' + (i === 0 ? ' best' : '');
@@ -420,6 +429,8 @@ details summary { cursor: pointer; font-weight: 600; }
   // ------------------------------------------------------------ simulate ---
   // A pool of workers simulates options in parallel; all use one seed (common random numbers).
   const POOL_SIZE = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 2) - 1));
+  // Hurry vs. spike hinges on how fast the next snap comes: price the hurry at these paces (seconds after the whistle)
+  const PACES = [6, 8, 10, 12, 14, 16, 18, 20];
   const pool = [];
   let job = null;
 
@@ -464,6 +475,13 @@ details summary { cursor: pointer; font-weight: 600; }
       job.queue = [base];
       m.groups.forEach((g, gi) => g.options.forEach((o) => job.queue.push({ type: 'job', id: job.id, jobId: `${gi}:${o.name}`,
         st: job.st, settings: job.settings, n: job.n, action: o.action, perspective: g.team, seed })));
+      m.groups.forEach((g, gi) => {
+        const names = g.options.map((o) => o.name);
+        if (!names.includes('hurry') || !names.includes('spike')) return;
+        const n2 = Math.max(1500, Math.round(job.n / 2));   // same seed: rollout i shares its random numbers
+        PACES.forEach((sec) => job.queue.push({ type: 'job', id: job.id, jobId: `${gi}:pace:${sec}`, st: job.st,
+          settings: job.settings, n: n2, action: { to_off: false, tempo: 'urgent', runoff: sec }, perspective: g.team, seed }));
+      });
       job.total = job.queue.length; job.done = 0; job.results = {};
     } else if (m.type === 'job') {
       job.results[m.jobId] = m;
@@ -492,13 +510,33 @@ details summary { cursor: pointer; font-weight: 600; }
         const se = o.name === best ? 0 : Math.sqrt(ss / (a.length - 1) / a.length);
         return { option: o.name, family: o.family, wp: vals[o.name].mean, edge: mean, se, drive: vals[o.name].drive };
       }).sort((x, y) => y.wp - x.wp);
-      return { team: g.teamCode, side: g.side, rows };
+      return { team: g.teamCode, side: g.side, rows, pace: paceBreakEven(j, gi, vals) };
     });
     const ms = Date.now() - j.t0;
     $('status').textContent = `${j.n.toLocaleString()} simulations per option, common random numbers, ${POOL_SIZE} parallel worker${POOL_SIZE > 1 ? 's' : ''}.`;
     showResults({ results, baseHomeWp: j.results.base.mean, ms }, j.snapshot);
     const rec = results.map((g) => `${g.team}: ${(OPTION_TEXT[g.rows[0].option] || g.rows[0].option).toLowerCase()}`).join(' · ') || 'no decision';
     const h = loadHist(); h.unshift({ text: situationText(), rec, state: j.snapshot }); saveHist(h); renderHist();
+  }
+
+  // Snap time (seconds after the whistle) below which hurrying beats spiking, from paired rollouts.
+  function paceBreakEven(j, gi, vals) {
+    if (!j.results[`${gi}:pace:${PACES[0]}`] || !vals.spike) return null;
+    const sp = vals.spike.values;
+    const diffs = PACES.map((sec) => {
+      const v = j.results[`${gi}:pace:${sec}`].values;
+      let d = 0;
+      for (let i = 0; i < v.length; i++) d += v[i] - sp[i];
+      return d / v.length;
+    });
+    if (diffs[0] <= 0) return { kind: 'never' };
+    for (let k = 1; k < PACES.length; k++) {
+      if (diffs[k] <= 0) {
+        const sec = PACES[k - 1] + (PACES[k] - PACES[k - 1]) * diffs[k - 1] / (diffs[k - 1] - diffs[k]);
+        return { kind: 'within', sec };
+      }
+    }
+    return { kind: 'always' };
   }
 
   function simulate() {
