@@ -12,6 +12,8 @@ from .context import TeamInfo, make_context
 from .models import Bundle
 from .sim import KICKOFF, PAT, SNAP, RootState, Simulator
 
+LATE_FG_WINDOW = 30.0   # seconds left in the half from which a field goal is offered on 1st-3rd down
+
 PERSONNEL_PATH = config.ARTIFACT_DIR / "personnel.json"
 
 
@@ -172,6 +174,12 @@ class DecisionEngine:
         elif not sit.clock_running:
             opts["run"] = {"play": "run"}
             opts["pass"] = {"play": "pass"}
+        # last seconds of a half: kick on 1st-3rd down too (same rule as console.LATE_FG_WINDOW)
+        t_half = root.t - (1800.0 if root.t > 1800 else 0.0)
+        if sit.down < 4 and t_half <= LATE_FG_WINDOW:
+            p_fg = float(sim.fg_prob(np.array([root.yl + 17.0]), np.array([o]))[0])
+            if p_fg >= 0.02:
+                opts[f"field goal ({root.yl + 17:.0f} yds, {p_fg:.0%})"] = {"play": "fg", "to_off": False}
         if lead > 0 or (first_half and root.yl >= 50):
             if sit.down < 4:
                 opts["kneel"] = {"play": "kneel", "to_off": False}

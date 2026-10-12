@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from . import library as L, live
+from .decide import LATE_FG_WINDOW   # seconds left in a half from which a 1st-3rd down field goal is offered
 from .models import Bundle
 from .sim import FG_SNAP_YARDS, KICKOFF, PAT, SNAP, RootState, Simulator
 
@@ -56,7 +57,6 @@ class LiveState:
 
 
 PACES = (6, 8, 10, 12, 14, 16, 18, 20)   # seconds from the whistle to a hurried snap
-LATE_FG_WINDOW = 30.0     # seconds left in the half from which a field goal is offered on 1st-3rd down
 # Options whose win probabilities agree within TIE_WP are a tie (also the "best option" grade threshold).
 # The tie goes to the call that gives the opponent nothing: kneel, keep the timeout, let the clock run.
 TIE_WP = 0.0005
