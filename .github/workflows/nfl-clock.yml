@@ -4,6 +4,7 @@ name: nflclock tests
 # and the parity check that the browser engine (web/engine.js) reproduces the Python simulator.
 on:
   push:
+    branches: [main]   # feature branches are covered by their pull request
     paths: ["nfl-time-management/**", ".github/workflows/nfl-clock.yml"]
   pull_request:
     paths: ["nfl-time-management/**", ".github/workflows/nfl-clock.yml"]
