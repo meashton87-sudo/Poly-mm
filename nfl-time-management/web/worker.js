@@ -1,4 +1,6 @@
-/* Web Worker hosting the nflclock engine so the page stays responsive while it simulates. */
+/* Web Worker hosting the nflclock engine. Several run in parallel: one plans the options for a
+ * situation, then each option (and the baseline) is simulated as a separate job on whichever worker
+ * is free. Every job uses the same seed, so options share common random numbers across workers. */
 importScripts('engine.js');
 
 let eng = null;
@@ -14,6 +16,15 @@ function getSim(settings) {
     simCache = { key, sim: eng.simulator(ctx), ctx };
   }
   return simCache;
+}
+
+function rootFrom(st) {
+  const pos = st.pos === game.home.team ? 0 : 1;
+  const qsec = st.qtr <= 4 ? Math.max(0, 4 - st.qtr) * 900 + st.clock : st.clock;
+  return {
+    t: qsec, pos, score: [st.score[1], st.score[0]], down: st.down, ytg: st.ytg, yl: st.yl,
+    to: [st.to[1], st.to[0]], clock_running: st.running, phase: PHASE[st.phase],
+  };
 }
 
 // Options per deciding team, mirroring src/nflclock/console.py
@@ -67,53 +78,27 @@ self.onmessage = async (ev) => {
       ]);
       eng = new NFLClockEngine(data);
       game = g;
-      self.postMessage({ type: 'ready', game });
+      self.postMessage({ type: 'ready', game: msg.wantGame ? game : null });
       return;
     }
-    if (msg.type === 'simulate') {
-      const { st, settings, id } = msg;
+    if (msg.type === 'plan') {
+      const { sim } = getSim(msg.settings);
+      const root = rootFrom(msg.st);
+      const groups = optionsFor(msg.st, root, sim).map((g) => ({
+        team: g.team, teamCode: g.team === 0 ? game.home.team : game.away.team, side: g.side,
+        options: Object.entries(g.opts).map(([name, action]) => ({ name, action, family: familyOf(name, g) })),
+      }));
+      self.postMessage({ type: 'plan', id: msg.id, groups, root });
+      return;
+    }
+    if (msg.type === 'job') {
+      const { sim } = getSim(msg.settings);
+      const root = rootFrom(msg.st);
       const t0 = Date.now();
-      const { sim, ctx } = getSim(settings);
-      const homeTeam = game.home.team;
-      const pos = st.pos === homeTeam ? 0 : 1;
-      const qsec = st.qtr <= 4 ? Math.max(0, 4 - st.qtr) * 900 + st.clock : st.clock;
-      const root = {
-        t: qsec, pos, score: [st.score[1], st.score[0]], down: st.down, ytg: st.ytg, yl: st.yl,
-        to: [st.to[1], st.to[0]], clock_running: st.running, phase: PHASE[st.phase],
-      };
-      const groups = optionsFor(st, root, sim);
-      const n = settings.sims;
-      const seed = (Date.now() % 1000003) >>> 0;
-      const total = groups.reduce((a, g) => a + Object.keys(g.opts).length, 0) + 1;
-      let done = 0;
-      const base = sim.run(root, { n: Math.max(2000, Math.round(n / 2)), perspective: 0, seed });
-      done++;
-      self.postMessage({ type: 'progress', id, done, total });
-      const results = [];
-      for (const g of groups) {
-        const vals = {};
-        for (const [name, act] of Object.entries(g.opts)) {
-          vals[name] = sim.run(root, { n, action: act, perspective: g.team, seed });
-          done++;
-          self.postMessage({ type: 'progress', id, done, total });
-        }
-        const best = Object.keys(vals).reduce((a, b) => (vals[a].mean >= vals[b].mean ? a : b));
-        const rows = Object.keys(vals).map((k) => {
-          const a = vals[k].values, b = vals[best].values;
-          let m = 0;
-          for (let i = 0; i < a.length; i++) m += a[i] - b[i];
-          m /= a.length;
-          let ss = 0;
-          for (let i = 0; i < a.length; i++) { const x = a[i] - b[i] - m; ss += x * x; }
-          const se = k === best ? 0 : Math.sqrt(ss / (a.length - 1) / a.length);
-          return { option: k, family: familyOf(k, g), wp: vals[k].mean, edge: m, se };
-        }).sort((x, y) => y.wp - x.wp);
-        results.push({ team: g.team === 0 ? game.home.team : game.away.team, side: g.side, rows });
-      }
-      self.postMessage({
-        type: 'result', id, results, baseHomeWp: base.mean, ms: Date.now() - t0,
-        pFg: sim.fgProb(root.yl + 17, pos), ctxTeams: ctx.teams,
-      });
+      const res = sim.run(root, { n: msg.n, action: msg.action || {}, perspective: msg.perspective, seed: msg.seed });
+      const values = res.values;
+      self.postMessage({ type: 'job', id: msg.id, jobId: msg.jobId, mean: res.mean, values, ms: Date.now() - t0 },
+        [values.buffer]);
     }
   } catch (err) {
     self.postMessage({ type: 'error', id: msg.id, message: String(err && err.message || err) });

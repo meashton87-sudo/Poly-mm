@@ -213,7 +213,7 @@ details summary { cursor: pointer; font-weight: 600; }
     go: 'Go for it', fg: 'Field goal', punt: 'Punt', attack: 'Attack before the half', runout: 'Run out the half',
     xp: 'Kick the PAT', two: 'Go for two', onside: 'Onside kick', deep: 'Kick deep',
   };
-  let game = null, worker = null, busy = false, reqId = 0;
+  let game = null, busy = false, reqId = 0;
   const st = { qtr: 4, clock: 151, score: [20, 24], pos: null, down: 2, ytg: 7, goal: false, side: null, yard: 41,
     to: [2, 3], running: true, phase: 'snap', r2h: null, sims: 6000 };
   const manual = {};
@@ -411,31 +411,103 @@ details summary { cursor: pointer; font-weight: 600; }
   }
 
   // ------------------------------------------------------------ simulate ---
+  // A pool of workers simulates options in parallel; all use one seed (common random numbers).
+  const POOL_SIZE = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 2) - 1));
+  const pool = [];
+  let job = null;
+
+  function pump() {
+    if (!job) return;
+    for (const slot of pool) {
+      if (!slot.ready || slot.busy) continue;
+      const next = job.queue.shift();
+      if (!next) break;
+      slot.busy = true;
+      slot.w.postMessage(next);
+    }
+  }
+
+  function onWorker(slot, m) {
+    if (m.type === 'ready') {
+      slot.ready = true;
+      if (m.game && !game) {
+        setupGame(m.game);
+        $('go').disabled = false; $('go').textContent = 'Simulate';
+        $('status').textContent = 'Example situation loaded. Edit it to match the game, then simulate.';
+        simulate();
+      }
+      pump();
+      return;
+    }
+    if (m.type === 'error') {
+      slot.busy = false;
+      if (!game) { $('status').textContent = 'Could not load the engine: ' + m.message; return; }
+      busy = false; job = null; $('go').disabled = false; $('go').textContent = 'Simulate';
+      $('status').innerHTML = ''; const e = document.createElement('span'); e.className = 'err';
+      e.textContent = 'Simulation failed: ' + m.message; $('status').appendChild(e);
+      return;
+    }
+    slot.busy = false;
+    if (!job || m.id !== job.id) { pump(); return; }
+    if (m.type === 'plan') {
+      const seed = (Date.now() % 1000003) >>> 0;
+      job.groups = m.groups;
+      const base = { type: 'job', id: job.id, jobId: 'base', st: job.st, settings: job.settings,
+        n: Math.max(2000, Math.round(job.n / 2)), action: {}, perspective: 0, seed };
+      job.queue = [base];
+      m.groups.forEach((g, gi) => g.options.forEach((o) => job.queue.push({ type: 'job', id: job.id, jobId: `${gi}:${o.name}`,
+        st: job.st, settings: job.settings, n: job.n, action: o.action, perspective: g.team, seed })));
+      job.total = job.queue.length; job.done = 0; job.results = {};
+    } else if (m.type === 'job') {
+      job.results[m.jobId] = m;
+      job.done += 1;
+      $('bar').style.width = `${Math.round(job.done / job.total * 100)}%`;
+      $('status').textContent = `Simulated ${job.done} of ${job.total} options on ${POOL_SIZE} core${POOL_SIZE > 1 ? 's' : ''}…`;
+      if (job.done === job.total) { finish(); return; }
+    }
+    pump();
+  }
+
+  function finish() {
+    const j = job; job = null; busy = false;
+    $('go').disabled = false; $('go').textContent = 'Simulate';
+    const results = j.groups.map((g, gi) => {
+      const vals = {};
+      g.options.forEach((o) => { vals[o.name] = j.results[`${gi}:${o.name}`]; });
+      const best = Object.keys(vals).reduce((a, b) => (vals[a].mean >= vals[b].mean ? a : b));
+      const rows = g.options.map((o) => {
+        const a = vals[o.name].values, b = vals[best].values;
+        let mean = 0;
+        for (let i = 0; i < a.length; i++) mean += a[i] - b[i];
+        mean /= a.length;
+        let ss = 0;
+        for (let i = 0; i < a.length; i++) { const x = a[i] - b[i] - mean; ss += x * x; }
+        const se = o.name === best ? 0 : Math.sqrt(ss / (a.length - 1) / a.length);
+        return { option: o.name, family: o.family, wp: vals[o.name].mean, edge: mean, se };
+      }).sort((x, y) => y.wp - x.wp);
+      return { team: g.teamCode, side: g.side, rows };
+    });
+    const ms = Date.now() - j.t0;
+    $('status').textContent = `${j.n.toLocaleString()} simulations per option, common random numbers, ${POOL_SIZE} parallel worker${POOL_SIZE > 1 ? 's' : ''}.`;
+    showResults({ results, baseHomeWp: j.results.base.mean, ms }, j.snapshot);
+    const rec = results.map((g) => `${g.team}: ${(OPTION_TEXT[g.rows[0].option] || g.rows[0].option).toLowerCase()}`).join(' · ') || 'no decision';
+    const h = loadHist(); h.unshift({ text: situationText(), rec, state: j.snapshot }); saveHist(h); renderHist();
+  }
+
   function simulate() {
-    if (!worker || busy || !game) return;
+    if (busy || !game) return;
     if (!st.pos) { $('status').textContent = 'Pick who has the ball first.'; return; }
     busy = true;
     $('go').disabled = true; $('go').textContent = 'Simulating…';
     $('bar').style.width = '0%';
     const yl = ylToGo();
-    const snapshot = JSON.parse(JSON.stringify(st));
     const payload = { qtr: st.qtr, clock: st.clock, score: st.score.slice(), pos: st.pos, down: st.down,
       ytg: st.goal ? yl : Math.min(st.ytg, yl), yl, to: st.to.slice(), running: st.running, phase: st.phase };
+    const settings = { receive2h: st.r2h, manual: JSON.parse(JSON.stringify(manual)), coachMode: Object.assign({}, coachMode) };
     const id = ++reqId;
-    worker.onmessage = (ev) => {
-      const m = ev.data;
-      if (m.id !== id && m.type !== 'ready') return;
-      if (m.type === 'progress') { $('bar').style.width = `${Math.round(m.done / m.total * 100)}%`; $('status').textContent = `Simulating option ${m.done} of ${m.total}…`; }
-      if (m.type === 'result') {
-        busy = false; $('go').disabled = false; $('go').textContent = 'Simulate';
-        $('status').textContent = `${st.sims.toLocaleString()} simulations per option, common random numbers.`;
-        showResults(m, snapshot);
-        const rec = m.results.map((g) => `${g.team}: ${(OPTION_TEXT[g.rows[0].option] || g.rows[0].option).toLowerCase()}`).join(' · ') || 'no decision';
-        const h = loadHist(); h.unshift({ text: situationText(), rec, state: snapshot }); saveHist(h); renderHist();
-      }
-      if (m.type === 'error') { busy = false; $('go').disabled = false; $('go').textContent = 'Simulate'; $('status').innerHTML = ''; const e = document.createElement('span'); e.className = 'err'; e.textContent = 'Simulation failed: ' + m.message; $('status').appendChild(e); }
-    };
-    worker.postMessage({ type: 'simulate', id, st: payload, settings: { sims: st.sims, receive2h: st.r2h, manual, coachMode } });
+    job = { id, st: payload, settings, n: st.sims, t0: Date.now(), snapshot: JSON.parse(JSON.stringify(st)),
+      queue: [{ type: 'plan', id, st: payload, settings }], total: 1, done: 0 };
+    pump();
   }
 
   // --------------------------------------------------------------- setup ---
@@ -622,19 +694,12 @@ details summary { cursor: pointer; font-weight: 600; }
 
   // boot
   try {
-    worker = new Worker('worker.js');
-    worker.onmessage = (ev) => {
-      const m = ev.data;
-      if (m.type === 'ready') {
-        setupGame(m.game);
-        $('go').disabled = false; $('go').textContent = 'Simulate';
-        $('status').textContent = 'Example situation loaded. Edit it to match the game, then simulate.';
-        simulate();
-      } else if (m.type === 'error') {
-        $('status').textContent = 'Could not load the engine: ' + m.message;
-      }
-    };
-    worker.postMessage({ type: 'init', engineUrl: 'engine_data.json', gameUrl: GAME_FILE });
+    for (let i = 0; i < POOL_SIZE; i++) {
+      const slot = { w: new Worker('worker.js'), ready: false, busy: false };
+      slot.w.onmessage = (ev) => onWorker(slot, ev.data);
+      slot.w.postMessage({ type: 'init', engineUrl: 'engine_data.json', gameUrl: GAME_FILE, wantGame: true });
+      pool.push(slot);
+    }
     $('status').textContent = 'Loading the simulator (about 5 MB, once)…';
   } catch (e) {
     $('status').textContent = 'This browser cannot start the simulator: ' + e.message;
