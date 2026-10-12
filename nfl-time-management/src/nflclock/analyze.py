@@ -146,18 +146,22 @@ def extract_decisions(pbp: pd.DataFrame, seasons) -> pd.DataFrame:
     dur = _duration(s["play_type"].to_numpy(), yd, s["incomplete_pass"].fillna(0).to_numpy(),
                     s["sack"].fillna(0).to_numpy(), np.zeros(len(s), bool), s["turnover"].to_numpy())
     t_end = s["game_seconds_remaining"] - dur
+    # A timeout only counts as the decision we grade when it was called right after the whistle;
+    # one called later (e.g. icing the kicker at 0:05) means the clock was first allowed to run.
+    s["to_immediate"] = s["to_after_team"].notna() & (s["to_after_t"] >= t_end - 4.0)
     to_t = s["to_after_t"] + 1.0
-    s["t_end"] = np.where(s["to_after_team"].notna(), np.minimum(np.maximum(to_t, s["next_game_seconds_remaining"]),
-                                                                 s["game_seconds_remaining"]), t_end)
+    s["t_end"] = np.where(s["to_immediate"], np.minimum(np.maximum(to_t, s["next_game_seconds_remaining"]),
+                                                        s["game_seconds_remaining"]), t_end)
     s["t_end"] = np.maximum(s["t_end"], s["next_game_seconds_remaining"])
     s["runoff_actual"] = s["t_end"] - s["next_game_seconds_remaining"]
     two_min_cross = ((s["half"] == 2) & (s["t_end"] > 120) & (s["next_game_seconds_remaining"] <= 120)) | (
         (s["half"] == 1) & (s["t_end"] > 1920) & (s["next_game_seconds_remaining"] <= 1920))
     post = s[inb & live & ~two_min_cross & (s["t_end"] > s["next_game_seconds_remaining"] - 0.01)]
     p_hs = post["half_seconds_remaining"]
-    def_to_called = post["to_after_team"] == post["defteam"]
-    off_to_called = post["to_after_team"] == post["posteam"]
-    def_to_avail = post["n_defteam_timeouts_remaining"] + def_to_called.astype(int) > 0
+    def_to_called = post["to_immediate"] & (post["to_after_team"] == post["defteam"])
+    off_to_called = post["to_immediate"] & (post["to_after_team"] == post["posteam"])
+    off_to_delayed = ~post["to_immediate"] & (post["to_after_team"] == post["posteam"])
+    def_to_avail = post["n_defteam_timeouts_remaining"] + (post["to_after_team"] == post["defteam"]).astype(int) > 0
 
     # def_timeout: 4Q final 5:00 with the defense trailing or tied; or final 2:00 of the first half
     m = def_to_avail & ~off_to_called & (
@@ -167,9 +171,9 @@ def extract_decisions(pbp: pd.DataFrame, seasons) -> pd.DataFrame:
     add(d, "def_timeout", d["defteam"], np.where(def_to_called[m], "timeout", "no_timeout"), "post")
 
     # off_clock_stop: 4Q final 2:00 offense trailing (by <= 16) or tied; 1st-half final 1:00
-    off_to_avail = post["n_posteam_timeouts_remaining"] + off_to_called.astype(int)
+    off_to_avail = post["n_posteam_timeouts_remaining"] + (post["to_after_team"] == post["posteam"]).astype(int)
     nxt_spike = (post["next_play_type"] == "qb_spike") | post["n_desc"].str.contains("spiked the ball", na=False)
-    m = ~def_to_called & (
+    m = ~def_to_called & ~off_to_delayed & (
         ((post["qtr"] == 4) & (p_hs <= 120) & (post["margin"] <= 0) & (post["margin"] >= -16))
         | ((post["qtr"] == 2) & (p_hs <= 60) & (post["next_yardline_100"] <= 60)))
     d = post[m]

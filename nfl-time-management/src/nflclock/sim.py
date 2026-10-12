@@ -29,7 +29,10 @@ from .ratings import fg_logit
 
 RUN, PASS, KNEEL, SPIKE, FG, PUNT = range(6)
 PLAY_NAMES = {"run": RUN, "pass": PASS, "kneel": KNEEL, "spike": SPIKE, "fg": FG, "punt": PUNT}
-HURRY, NORMAL, MILK, T_SPIKE, T_KNEEL, URGENT = range(6)
+HURRY, NORMAL, MILK, T_SPIKE, T_KNEEL, URGENT, T_FIRE = range(7)
+BURN_SECONDS = 8.0           # leading in the last seconds: any snap is played to run out the clock
+FIRE_DRILL = (7.0, 12.0)     # seconds to rush the field-goal unit on with the clock running
+FIRE_DRILL_LOGIT = -0.3      # rushed kicks are a little less accurate
 TEMPO_NAMES = {"hurry": HURRY, "normal": NORMAL, "milk": MILK, "urgent": URGENT}
 SNAP, PAT, KICKOFF, DONE = range(4)
 KICKOFF_START_YL = 70.0   # mean receiving-team start under 2024-25 kickoff rules
@@ -354,7 +357,13 @@ class Simulator:
         if forced is not None:
             kneel_now[:] = forced == "kneel"
             spike_now[:] = (forced == "spike") & run_c
-        tempo = np.where(kneel_now, T_KNEEL, np.where(spike_now, T_SPIKE, tempo))
+        # 4th down with the clock running and a kick that ties or wins: rush the field-goal unit on
+        fg_useful0 = (half == 1) | ((margin >= -3) & (margin <= 0))
+        fire = run_c & (down == 4) & fg_useful0 & (self.fg_prob(yl + FG_SNAP_YARDS, o) >= 0.3) & (t_half <= 25)
+        fire &= ~kneel_now & ~spike_now
+        if forced is not None:
+            fire = run_c & (forced == "fg")
+        tempo = np.where(kneel_now, T_KNEEL, np.where(spike_now, T_SPIKE, np.where(fire, T_FIRE, tempo)))
         runoff = np.zeros(ix.size)
         for tm, arr in self.tempo.items():
             m = tempo == tm
@@ -362,6 +371,8 @@ class Simulator:
                 runoff[m] = arr[(u[ix[m], 0] * len(arr)).astype(int)]
         mk = tempo == T_KNEEL
         runoff[mk] = 38.0 + 2.0 * u[ix[mk], 0]
+        mf = tempo == T_FIRE
+        runoff[mf] = FIRE_DRILL[0] + (FIRE_DRILL[1] - FIRE_DRILL[0]) * u[ix[mf], 0]
         runoff = np.where(run_c, np.maximum(runoff - S.credit[ix], 0.0), 0.0)
         if "runoff" in act:
             runoff = np.where(run_c, float(act["runoff"]), 0.0)
@@ -382,6 +393,7 @@ class Simulator:
         ix, o, d, margin = ix[keep], o[keep], d[keep], margin[keep]
         kneel_now, spike_now, run_out = kneel_now[keep], spike_now[keep], run_out[keep]
         running_at_snap = running_at_snap[keep]
+        fire = fire[keep]
         t_half = S.t[ix] - half_end
         yl, down = S.yl[ix], S.down[ix]
 
@@ -398,6 +410,7 @@ class Simulator:
         fg_last |= (t_half <= snap_budget) & (p_fg >= 0.3) & fg_useful & ~running_at_snap
         kind[(kind < 0) & fg_last] = FG
         kind[(kind == SPIKE) & fg_last] = FG
+        kind[fire] = FG
         fourth = (kind < 0) & (down == 4)
         if fourth.any():
             kind[fourth] = self._fourth_down(S, ix[fourth], o[fourth], margin[fourth], t_half[fourth],
@@ -418,7 +431,7 @@ class Simulator:
             self._scrimmage(S, u, ix[scr], o[scr], kind[scr], margin[scr])
         m = kind == FG
         if m.any():
-            self._field_goal(S, u, ix[m], o[m])
+            self._field_goal(S, u, ix[m], o[m], fire[m])
         m = kind == PUNT
         if m.any():
             self._punt(S, u, ix[m], o[m])
@@ -553,6 +566,10 @@ class Simulator:
         sp = kind == SPIKE
         yards = np.where(kn, -np.minimum(1.0, 99.0 - yl0), yards)  # no kneel-down safeties
         dur = np.where(kn, self.kneel_dur, np.where(sp, self.spike_dur, dur))
+        # Leading with seconds left: the QB holds the ball / runs around until the clock hits zero.
+        t_half0 = S.t[ix] - self.half_end
+        burn = (margin > 0) & (t_half0 <= BURN_SECONDS) & ~sp
+        dur = np.where(burn, np.maximum(dur, t_half0 + 0.5), dur)
         incomplete |= sp
         # penalty yardage limits (half the distance; spot fouls to the 1)
         big = yards >= 15
@@ -605,10 +622,14 @@ class Simulator:
             S.free_kick[ix[m]] = True
         self._end_half_check(S, ix)
 
-    def _field_goal(self, S, u, ix, o):
+    def _field_goal(self, S, u, ix, o, fire=None):
         d = 1 - o
         yl0 = S.yl[ix]
-        made = u[ix, 3] < self.fg_prob(yl0 + FG_SNAP_YARDS, o)
+        p = self.fg_prob(yl0 + FG_SNAP_YARDS, o)
+        if fire is not None and fire.any():
+            z = np.log(np.clip(p, 1e-9, 1 - 1e-9) / np.clip(1 - p, 1e-9, 1)) + FIRE_DRILL_LOGIT
+            p = np.where(fire, np.where(p > 0, 1 / (1 + np.exp(-z)), 0.0), p)
+        made = u[ix, 3] < p
         self._clock_after_play(S, ix, np.full(ix.size, 5.0), np.ones(ix.size, bool), 0.0)
         if made.any():
             S.score[ix[made], o[made]] += 3

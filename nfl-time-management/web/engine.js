@@ -33,7 +33,10 @@
   // ---------------------------------------------------------------- constants ---
   const RUN = 0, PASS = 1, KNEEL = 2, SPIKE = 3, FG = 4, PUNT = 5;
   const PLAY = { run: RUN, pass: PASS, kneel: KNEEL, spike: SPIKE, fg: FG, punt: PUNT };
-  const HURRY = 0, NORMAL = 1, MILK = 2, T_SPIKE = 3, T_KNEEL = 4, URGENT = 5;
+  const HURRY = 0, NORMAL = 1, MILK = 2, T_SPIKE = 3, T_KNEEL = 4, URGENT = 5, T_FIRE = 6;
+  const BURN_SECONDS = 8.0;            // leading in the last seconds: any snap is played to run out the clock
+  const FIRE_DRILL = [7.0, 12.0];      // seconds to rush the field-goal unit on with the clock running
+  const FIRE_DRILL_LOGIT = -0.3;       // rushed kicks are a little less accurate
   const TEMPO = { hurry: HURRY, normal: NORMAL, milk: MILK, urgent: URGENT };
   const SNAP = 0, PAT = 1, KICKOFF = 2, DONE = 3;
   const MODE_NORMAL = 0, MODE_HURRY = 1, MODE_KILL = 2;
@@ -485,9 +488,15 @@
       if (act && act.tempo) { tempo = TEMPO[act.tempo]; spikeNow = false; kneelNow = false; }
       const forced = act ? act.play : undefined;
       if (forced !== undefined) { kneelNow = forced === 'kneel'; spikeNow = forced === 'spike' && runC; }
-      tempo = kneelNow ? T_KNEEL : spikeNow ? T_SPIKE : tempo;
+      // 4th down with the clock running and a kick that ties or wins: rush the field-goal unit on
+      const fgUseful0 = half === 1 || (margin >= -3 && margin <= 0);
+      let fire = runC && down === 4 && fgUseful0 && this.fgProb(yl + FG_SNAP_YARDS, o) >= 0.3 && tHalf <= 25;
+      fire = fire && !kneelNow && !spikeNow;
+      if (forced !== undefined) fire = runC && forced === 'fg';
+      tempo = kneelNow ? T_KNEEL : spikeNow ? T_SPIKE : fire ? T_FIRE : tempo;
       let runoff;
       if (tempo === T_KNEEL) runoff = 38.0 + 2.0 * u[0];
+      else if (tempo === T_FIRE) runoff = FIRE_DRILL[0] + (FIRE_DRILL[1] - FIRE_DRILL[0]) * u[0];
       else { const arr = this.e.tempo[tempo]; runoff = arr[Math.floor(u[0] * arr.length)]; }
       runoff = runC ? Math.max(runoff - S.credit, 0) : 0;
       if (act && act.runoff !== undefined) runoff = runC ? act.runoff : 0;
@@ -515,6 +524,7 @@
       fgLast = fgLast || (tHalf <= snapBudget && pFg >= 0.3 && fgUseful && !runningAtSnap);
       if (kind < 0 && fgLast) kind = FG;
       if (kind === SPIKE && fgLast) kind = FG;
+      if (fire) kind = FG;
       if (kind < 0 && down === 4) kind = this._fourthDown(S, g, o, margin, tHalf, pFg, u[5]);
       if (kind < 0 && runOut && down < 4) kind = RUN;
       if (forced !== undefined && forced !== 'kneel' && forced !== 'spike') kind = forced === 'go' ? -1 : PLAY[forced];
@@ -526,7 +536,7 @@
       }
       S.plays += 1;
       // (4) execute
-      if (kind === FG) this._fieldGoal(S, g, u, o);
+      if (kind === FG) this._fieldGoal(S, g, u, o, fire);
       else if (kind === PUNT) this._punt(S, g, u, o);
       else this._scrimmage(S, g, u, o, kind, margin);
     }
@@ -625,6 +635,9 @@
       }
       if (kind === KNEEL) { yards = -Math.min(1.0, 99.0 - yl0); dur = this.kneelDur; }
       if (kind === SPIKE) { dur = this.spikeDur; incomplete = true; }
+      // Leading with seconds left: the QB holds the ball / runs around until the clock hits zero.
+      const tHalf0 = S.t - g.halfEnd;
+      if (margin > 0 && tHalf0 <= BURN_SECONDS && kind !== SPIKE) dur = Math.max(dur, tHalf0 + 0.5);
       if (penalty && yards > 0) yards = yards >= 15 ? Math.min(yards, yl0 - 1) : Math.min(yards, yl0 / 2);
       if (penalty && yards < 0) yards = -Math.min(-yards, (100 - yl0) / 2);
       const newYl = yl0 - yards;
@@ -652,9 +665,14 @@
       this._endHalfCheck(S, g);
     }
 
-    _fieldGoal(S, g, u, o) {
+    _fieldGoal(S, g, u, o, fire) {
       const yl0 = S.yl;
-      const made = u[3] < this.fgProb(yl0 + FG_SNAP_YARDS, o);
+      let p = this.fgProb(yl0 + FG_SNAP_YARDS, o);
+      if (fire && p > 0) {
+        const z = Math.log(clip(p, 1e-9, 1 - 1e-9) / clip(1 - p, 1e-9, 1)) + FIRE_DRILL_LOGIT;
+        p = sigmoid(z);
+      }
+      const made = u[3] < p;
       this._clockAfterPlay(S, g, 5.0, true, 0);
       if (made) { S.s[o] += 3; S.phase = KICKOFF; } else this._flip(S, 100 - Math.max(yl0 + 8, 20));
       this._endHalfCheck(S, g);

@@ -46,6 +46,9 @@ class Bundle:
 def _tempo_samples(pbp: pd.DataFrame) -> dict:
     """Between-snap runoff (seconds after the whistle) when the clock keeps running."""
     s = pbp[pbp["is_snap"] & pbp["season"].isin(config.LIBRARY_SEASONS)].copy()
+    nh = pbp[["game_id", "row_order", "no_huddle"]].rename(
+        columns={"row_order": "next_row_order", "no_huddle": "next_no_huddle"})
+    s = s.merge(nh, on=["game_id", "next_row_order"], how="left")
     ok = ((s["qtr"] == s["next_qtr"]) & s["to_after_team"].isna() & (s["next_posteam"] == s["posteam"])
           & s["delta_t"].between(0, 80) & s["play_type"].isin(["run", "pass"])
           & (s["incomplete_pass"] == 0) & (s["out_of_bounds"] == 0) & (s["penalty"].fillna(0) == 0)
@@ -59,12 +62,13 @@ def _tempo_samples(pbp: pd.DataFrame) -> dict:
     x = s[ok]
     late = late[ok]
     nxt = x["next_play_type"]
-    hurry = x[late & (x["margin"] < 0) & nxt.isin(["run", "pass"])]["runoff"]
+    no_huddle = x["next_no_huddle"] == 1   # a real hurry-up: the next snap came without a huddle
+    hurry = x[late & (x["margin"] < 0) & nxt.isin(["run", "pass"]) & no_huddle]["runoff"]
     milk = x[(x["qtr"] == 4) & (x["quarter_seconds_remaining"] <= 360) & (x["margin"] > 0)
              & nxt.isin(["run", "pass", "qb_kneel", "punt", "field_goal"])]["runoff"]
     normal = x[~late & (x["qtr"] != 4) & nxt.isin(["run", "pass"])]["runoff"]
     spike = x[nxt == "qb_spike"]["runoff"]
-    urgent = x[nxt.isin(["run", "pass"]) & (
+    urgent = x[nxt.isin(["run", "pass"]) & no_huddle & (
         ((x["qtr"] == 2) & (x["quarter_seconds_remaining"] <= 60))
         | ((x["qtr"] == 4) & (x["quarter_seconds_remaining"] <= 120) & (x["margin"] < 0)))]["runoff"]
     clip = lambda a: np.clip(a.to_numpy(), 1.0, 40.0)
