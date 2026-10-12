@@ -295,7 +295,8 @@ details summary { cursor: pointer; font-weight: 600; }
     let k = 0; while (k < q.length && q[k] < cost) k++;
     const pct = k / q.length;
     const letter = cost <= (gs.a_floor || 0.0025) ? 'A' : (gs.letters.find(([thr]) => pct <= thr) || [1, 'F'])[1];
-    return { cls: `g-${letter}`, text: `${letter} · worse than ${Math.round(pct * 100)}% of NFL calls` };
+    const shown = pct >= 0.995 ? '99%+' : `${Math.round(pct * 100)}%`;
+    return { cls: `g-${letter}`, text: `${letter} · worse than ${shown} of NFL calls` };
   }
   // Coach tendencies are only quoted inside the situations they were learned from.
   function inDomain(family, s, side) {

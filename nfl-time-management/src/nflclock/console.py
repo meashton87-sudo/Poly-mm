@@ -372,7 +372,7 @@ def _grade(scale, family: str, cost: float) -> str:
     if not scale or family not in scale["families"]:
         return f"costs {cost * 100:.1f} WP"
     letter, pct = letter_for(scale, family, cost)
-    return f"{letter}: worse than {pct:.0%}"
+    return f"{letter}: worse than {'99%+' if pct >= 0.995 else f'{pct:.0%}'}"
 
 
 def _load_tendency():
