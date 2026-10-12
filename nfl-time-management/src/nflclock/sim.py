@@ -53,6 +53,9 @@ class GameContext:
     punter_shift: np.ndarray = field(default_factory=lambda: np.zeros(2))  # net punt yards
     two_pt: np.ndarray = field(default_factory=lambda: np.full(2, 0.47))
     ot_wp_home: float = 0.5
+    # 4th-down decision style per team: None = sound (WP look-ahead), or {"model": tendency model, "shift": go logit
+    # shift} to play like a typical NFL coach (shift 0) or a specific coach's measured tendencies.
+    coach4th: list = field(default_factory=lambda: [None, None])
 
     def spread_for(self, team):
         return np.where(np.asarray(team) == 0, self.home_spread, -self.home_spread)
@@ -398,7 +401,7 @@ class Simulator:
         fourth = (kind < 0) & (down == 4)
         if fourth.any():
             kind[fourth] = self._fourth_down(S, ix[fourth], o[fourth], margin[fourth], t_half[fourth],
-                                             p_fg[fourth])
+                                             p_fg[fourth], u[ix[fourth], 5])
         kind[(kind < 0) & run_out & (down < 4)] = RUN
         if forced is not None and forced not in ("kneel", "spike"):
             kind[:] = -1 if forced == "go" else PLAY_NAMES[forced]
@@ -421,7 +424,35 @@ class Simulator:
             self._punt(S, u, ix[m], o[m])
 
     # ------------------------------------------------------- fourth downs ---
-    def _fourth_down(self, S, ix, o, margin, t_half, p_fg):
+    def _coach_choice(self, S, ix, o, margin, t_half, p_fg, u5, choice):
+        """Replace the sound choice with a draw from a typical / specific coach's 4th-down tendencies."""
+        from .tendency import features_from_raw
+        for team in (0, 1):
+            cm = self.ctx.coach4th[team] if self.ctx.coach4th is not None else None
+            m = o == team
+            if cm is None or not m.any():
+                continue
+            mod = cm["model"]
+            j = ix[m]
+            X = features_from_raw(t_half[m], float(self.half == 2), margin[m], 4, S.ytg[j], S.yl[j],
+                                  S.to[j, team], S.to[j, 1 - team], 0.0)
+            Z = (X - np.array(mod["mean"])) / np.array(mod["scale"])
+            z = Z @ np.array(mod["coef"]).T + np.array(mod["intercept"])
+            cls = mod["classes"]
+            z[:, cls.index("go")] += cm.get("shift", 0.0)
+            z -= z.max(axis=1, keepdims=True)
+            p = np.exp(z)
+            p[:, cls.index("fg")] *= p_fg[m] > 0.02
+            p[:, cls.index("punt")] *= S.yl[j] >= 30
+            p /= p.sum(axis=1, keepdims=True)
+            cum = np.cumsum(p, axis=1)
+            pick = (u5[m][:, None] > cum).sum(axis=1)
+            pick = np.minimum(pick, len(cls) - 1)
+            code = {"go": -1, "fg": FG, "punt": PUNT}
+            choice[m] = np.array([code[c] for c in cls])[pick]
+        return choice
+
+    def _fourth_down(self, S, ix, o, margin, t_half, p_fg, u5=None):
         """One-step WP look-ahead (go / FG / punt) with end-of-half overrides."""
         half = self.half
         d = 1 - o
@@ -456,6 +487,8 @@ class Simulator:
         wp_fg = np.where(p_fg > 0.02, wp_fg, -1.0)
         wp_punt = np.where(yl >= 35, wp_punt, -1.0)
         choice = np.where((wp_go >= wp_fg) & (wp_go >= wp_punt), -1, np.where(wp_fg >= wp_punt, FG, PUNT))
+        if u5 is not None and self.ctx.coach4th is not None and any(c is not None for c in self.ctx.coach4th):
+            choice = self._coach_choice(S, ix, o, margin, t_half, p_fg, u5, choice)
         # Hard end-of-game logic the WP model cannot know precisely.
         if half == 2:
             late = t_half <= 40

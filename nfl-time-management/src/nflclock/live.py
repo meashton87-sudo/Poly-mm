@@ -236,7 +236,25 @@ def load_game(game_id: str) -> dict:
     return json.loads((LIVE_OUT / f"{game_id}.json").read_text())
 
 
-def context_from_game(bundle, rec: dict, receive_2h: str | None = None, manual: dict | None = None):
+def coach4th_for(rec: dict, coach_mode: dict | None) -> list:
+    """coach_mode: {team: "sound" | "typical" | "coach"} -> GameContext.coach4th [home, away]."""
+    if not coach_mode:
+        return [None, None]
+    prof_p = config.ARTIFACT_DIR / "coach_profiles.json"
+    prof = json.loads(prof_p.read_text()) if prof_p.exists() else rec.get("coach_profiles")
+    out = []
+    for side, coach_key in (("home", "home_coach"), ("away", "away_coach")):
+        mode = coach_mode.get(rec[side]["team"], "sound")
+        if mode == "sound" or prof is None:
+            out.append(None)
+            continue
+        shift = prof["coaches"].get(rec[coach_key], {}).get("go_shift", 0.0) if mode == "coach" else 0.0
+        out.append({"model": prof["fourth_model"], "shift": shift})
+    return out
+
+
+def context_from_game(bundle, rec: dict, receive_2h: str | None = None, manual: dict | None = None,
+                      coach_mode: dict | None = None):
     """GameContext for the simulator from a live game record. receive_2h: team code or None (unknown)."""
     from .context import make_context
     manual = manual or {}
@@ -248,4 +266,5 @@ def context_from_game(bundle, rec: dict, receive_2h: str | None = None, manual: 
                        indoor=rec["indoor"], wind=rec.get("wind") or 0.0, temp=rec.get("temp") or 65.0,
                        season=rec["season"], mu_pass=lg["mu_pass"], mu_rush=lg["mu_rush"],
                        home_pass=lg["home_pass"], home_rush=lg["home_rush"])
+    ctx.coach4th = coach4th_for(rec, coach_mode)
     return ctx, home, away

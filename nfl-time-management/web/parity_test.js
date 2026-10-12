@@ -14,6 +14,7 @@ let t0 = Date.now();
 const eng = new NFLClockEngine(data);
 const ctx = eng.makeContext(game, { receive2h: exp.receive2h });
 const sim = eng.simulator(ctx);
+const simCoach = eng.simulator(eng.makeContext(game, { receive2h: exp.receive2h, coachMode: exp.coach_mode }));
 console.log(`engine + simulator ready in ${Date.now() - t0} ms`);
 let fails = 0;
 const check = (label, ok, detail) => { if (!ok) fails++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? '  ' + detail : ''}`); };
@@ -46,7 +47,7 @@ for (const sc of exp.scenarios) {
   const r = sc.root;
   const root = { t: r.t, pos: r.pos, score: r.score, down: r.down || 1, ytg: r.ytg || 10, yl: r.yl || 75, to: r.to,
     clock_running: !!r.clock_running, phase: r.phase || 0 };
-  const res = sim.run(root, { n: N, action: sc.action, perspective: sc.perspective, seed: 11 });
+  const res = (sc.name.startsWith('COACH') ? simCoach : sim).run(root, { n: N, action: sc.action, perspective: sc.perspective, seed: 11 });
   const tol = Math.max(3.5 * Math.hypot(res.se, sc.se), 0.004);
   const d = res.mean - sc.mean;
   check(`sim ${sc.name.padEnd(26)}`, Math.abs(d) <= tol,

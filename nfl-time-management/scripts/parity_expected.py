@@ -29,13 +29,19 @@ SCENARIOS = [
     ("hurry_trail2_40s", dict(t=40, pos=1, score=(20, 18), down=1, ytg=10, yl=36, to=(2, 0), clock_running=True), {"tempo": "urgent", "to_off": False}, 1),
     ("lead7_kneel_check", dict(t=95, pos=0, score=(24, 17), down=1, ytg=10, yl=60, to=(3, 1)), {}, 0),
     ("q3_midfield_tied", dict(t=1500, pos=0, score=(14, 14), down=1, ytg=10, yl=50, to=(3, 3)), {}, 0),
+    ("COACH q3_midfield_tied", dict(t=1500, pos=0, score=(14, 14), down=1, ytg=10, yl=50, to=(3, 3)), {}, 0),
+    ("COACH 4th2_own45_q3", dict(t=1300, pos=1, score=(17, 14), down=4, ytg=2, yl=55, to=(3, 3)), {}, 1),
+    ("COACH trail3_10min", dict(t=600, pos=1, score=(20, 17), down=1, ytg=10, yl=75, to=(3, 3)), {}, 1),
 ]
+COACH_MODE = {"BUF": "coach", "LA": "typical"}
 
 if __name__ == "__main__":
     b = Bundle.load()
     rec = live.load_game(GAME)
     ctx, home, away = live.context_from_game(b, rec, receive_2h=rec["home"]["team"])
     sim = Simulator(b, ctx)
+    ctx_c, _, _ = live.context_from_game(b, rec, receive_2h=rec["home"]["team"], coach_mode=COACH_MODE)
+    sim_c = Simulator(b, ctx_c)
     rng = np.random.default_rng(0)
     # WP model rows
     m = rng.integers(-21, 22, 300)
@@ -48,7 +54,7 @@ if __name__ == "__main__":
     scen = []
     for name, r, act, persp in SCENARIOS:
         root = RootState(**r)
-        v = sim.run(root, n=N, action=act, perspective=persp, seed=11)
+        v = (sim_c if name.startswith("COACH") else sim).run(root, n=N, action=act, perspective=persp, seed=11)
         scen.append({"name": name, "root": {**r, "phase": r.get("phase", SNAP)}, "action": act, "perspective": persp,
                      "mean": float(v.mean()), "se": float(v.std() / np.sqrt(N))})
         print(f"{name:28s} {v.mean():.4f} ± {v.std() / np.sqrt(N):.4f}")
@@ -58,7 +64,7 @@ if __name__ == "__main__":
         "conv": [sim.conv[0].ravel().tolist(), sim.conv[1].ravel().tolist()],
         "cdf_probe": {str(i): [float(sim.cdf[0][i]), float(sim.cdf[1][i])] for i in range(0, len(sim.cdf[0]), 9973)},
         "delta": ctx.delta.tolist(), "two_pt": ctx.two_pt.tolist(), "ot_wp_home": ctx.ot_wp_home,
-        "scenarios": scen,
+        "scenarios": scen, "coach_mode": COACH_MODE,
     }
     with open("web/parity_expected.json", "w") as f:
         json.dump(out, f)

@@ -11,7 +11,7 @@ Situation lines use scoreboard order (AWAY first, then HOME) and accept tokens i
     q4 1:55 21-24 kick BUF to 2-3                        (kickoff decision: onside or deep)
 
 Commands: help | state | again | sims 8000 | r2h LA | set LA kicker -0.2 | set BUF off_pass -0.03 |
-          qb BUF backup | reset | sync | quit
+          qb BUF backup | coach LA coach|typical|sound | reset | sync | quit
 """
 from __future__ import annotations
 
@@ -133,6 +133,7 @@ class LiveConsole:
         self.st = LiveState()
         self.r2h = None
         self.manual: dict = {}
+        self.coach_mode: dict = {}
         self.sims = sims
         self.history = []
         self.tendency = _load_tendency()
@@ -140,7 +141,7 @@ class LiveConsole:
 
     # ------------------------------------------------------------ engine ---
     def sim(self):
-        ctx, home, away = live.context_from_game(self.b, self.rec, self.r2h, self.manual)
+        ctx, home, away = live.context_from_game(self.b, self.rec, self.r2h, self.manual, self.coach_mode)
         return Simulator(self.b, ctx), ctx
 
     def root(self) -> RootState:
@@ -281,8 +282,12 @@ class LiveConsole:
         elif cmd == "qb" and len(parts) >= 3:
             self._qb_override(parts[1].upper(), parts[2].lower())
             print(self.header())
+        elif cmd == "coach" and len(parts) >= 3:
+            self.coach_mode[parts[1].upper()] = parts[2].lower()
+            print(f"{parts[1].upper()} future 4th downs: {parts[2].lower()} (sound | typical | coach)")
         elif cmd == "reset":
             self.manual = {}
+            self.coach_mode = {}
         elif cmd == "sync":
             live.build_game(self.rec["game_id"], bundle=self.b)
             self.rec = live.load_game(self.rec["game_id"])
@@ -360,14 +365,13 @@ def _load_grade_scale():
 
 
 def _grade(scale, family: str, cost: float) -> str:
-    """Percentile of this cost among real NFL decisions of the same family (2023-25)."""
+    """Letter grade from the percentile of this cost among real NFL decisions of the same family."""
+    from .tendency import letter_for
     if cost <= 0.0005:
         return "best option"
-    if not scale or family not in scale:
+    if not scale or family not in scale["families"]:
         return f"costs {cost * 100:.1f} WP"
-    q = np.array(scale[family]["cost_quantiles"])
-    pct = float(np.searchsorted(q, cost) / len(q))
-    letter = next(lbl for thr, lbl in scale["letters"] if pct <= thr)
+    letter, pct = letter_for(scale, family, cost)
     return f"{letter}: worse than {pct:.0%}"
 
 
@@ -382,7 +386,7 @@ def _load_tendency():
 
 
 def _coach_share(tend, family, option, st: LiveState, root: RootState, team_idx: int):
-    if not tend or family not in tend:
+    if not tend or family not in tend["families"] or not _in_domain(family, st, root, team_idx):
         return None
     from .tendency import predict_share
     return predict_share(tend, family, option, st, root, team_idx)
@@ -390,3 +394,20 @@ def _coach_share(tend, family, option, st: LiveState, root: RootState, team_idx:
 
 def main(game_id: str, sims: int = 6000):
     LiveConsole(game_id, sims=sims).loop()
+
+
+def _in_domain(family: str, st: LiveState, root: RootState, team_idx: int) -> bool:
+    """Only quote coach tendencies inside the situations they were learned from."""
+    me = team_idx
+    margin = root.score[me] - root.score[1 - me]
+    q, th = st.qtr, (root.t if root.t <= 1800 else root.t - 1800)
+    return {
+        "def_timeout": (q == 4 and th <= 300 and -16 <= margin <= 0) or (q == 2 and th <= 120),
+        "off_clock_stop": (q == 4 and th <= 120 and -16 <= margin <= 0) or (q == 2 and th <= 60),
+        "fourth_down": ((q == 4 and th <= 600) or (q == 2 and th <= 120)) and abs(margin) <= 16,
+        "play_select": q == 4 and th <= 300 and margin != 0 and abs(margin) <= 16,
+        "kneel": q == 4 and th <= 160 and margin > 0,
+        "h1_end": q == 2 and 20 <= th <= 120,
+        "pat": q == 4,
+        "onside": q == 4 and th <= 420 and -16 <= margin < 0,
+    }.get(family, False)

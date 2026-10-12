@@ -1,0 +1,552 @@
+<title>Bills–Rams Live Decision Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap">
+<style>
+/* Layout: a sideline tablet tool. The scoreboard is the input; results stack under it (two columns on wide screens). */
+:root {
+  --bg: #eef1f4; --surface: #ffffff; --surface-2: #f6f8fa; --line: #d5dbe2; --fg: #131820; --muted: #5a6573;
+  --accent: #1d6b45; --accent-ink: #ffffff; --accent-soft: #e2f1e8;
+  --good: #1d6b45; --warn: #9a6200; --bad: #b3261e; --bar: #c9d3dd; --bar-best: #1d6b45;
+  --buf: #00338d; --buf-2: #c60c30; --la: #003594; --la-2: #ffa300;
+  --display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "Barlow", "Segoe UI", system-ui, sans-serif;
+  --radius: 10px; --gap: 12px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0d1117; --surface: #161b22; --surface-2: #1c232c; --line: #2b3440; --fg: #e8edf2; --muted: #9aa6b4;
+  --accent: #3fbf7f; --accent-ink: #0d1117; --accent-soft: #17311f;
+  --good: #3fbf7f; --warn: #e0a43c; --bad: #ff6b5e; --bar: #2f3a47; --bar-best: #3fbf7f;
+  --buf: #4d7fe0; --buf-2: #ff5a70; --la: #5a86ff; --la-2: #ffbe3d; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0d1117; --surface: #161b22; --surface-2: #1c232c; --line: #2b3440; --fg: #e8edf2; --muted: #9aa6b4;
+  --accent: #3fbf7f; --accent-ink: #0d1117; --accent-soft: #17311f;
+  --good: #3fbf7f; --warn: #e0a43c; --bad: #ff6b5e; --bar: #2f3a47; --bar-best: #3fbf7f;
+  --buf: #4d7fe0; --buf-2: #ff5a70; --la: #5a86ff; --la-2: #ffbe3d; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; margin: 0; }
+.wrap { max-width: 1180px; margin-inline: auto; padding: 12px 16px 40px; display: flex; flex-direction: column; gap: var(--gap); }
+h1, h2, h3 { font-family: var(--display); font-weight: 600; letter-spacing: .01em; margin: 0; text-wrap: balance; }
+h1 { font-size: 1.55rem; }
+h2 { font-size: 1.15rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; }
+.sub { color: var(--muted); font-size: .85rem; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--gap); }
+@media (min-width: 900px) { .grid { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); align-items: start; } }
+
+/* scoreboard */
+.board { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); grid-template-areas: "away mid home"; gap: 8px; align-items: stretch; }
+#team-away { grid-area: away; } #team-home { grid-area: home; } .board .mid { grid-area: mid; }
+@media (max-width: 600px) {
+  .board { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "away home" "mid mid"; }
+  .board .mid { flex-direction: row; flex-wrap: wrap; min-width: 0; }
+  .team .score input { font-size: 2rem; }
+}
+.team { border-radius: var(--radius); padding: 10px; display: flex; flex-direction: column; gap: 6px; border: 2px solid transparent; background: var(--surface-2); min-width: 0; }
+.team.has-ball { border-color: var(--accent); }
+.team .abbr { font-family: var(--display); font-size: 1.35rem; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.team .chip { width: 10px; height: 26px; border-radius: 3px; }
+.team .score { display: flex; align-items: center; gap: 6px; }
+.team .score input { width: 3.3ch; font-family: var(--display); font-size: 2.4rem; font-weight: 700; text-align: center; background: transparent; border: 0; color: var(--fg); padding: 0; }
+.mini { appearance: none; border: 1px solid var(--line); background: var(--surface); color: var(--fg); border-radius: 8px; min-width: 34px; height: 34px; font: 600 1rem var(--body); cursor: pointer; }
+.mini:focus-visible, .seg button:focus-visible, .go:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tos { display: flex; gap: 5px; align-items: center; }
+.tos button { appearance: none; width: 22px; height: 10px; border-radius: 3px; border: 1px solid var(--muted); background: transparent; cursor: pointer; padding: 0; }
+.tos button.on { background: var(--la-2); border-color: var(--la-2); }
+.tos .lbl { font-size: .75rem; color: var(--muted); margin-right: 2px; }
+.mid { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-width: 11rem; }
+.clock { font-family: var(--display); font-size: 2rem; font-weight: 700; width: 4.6ch; text-align: center; background: var(--surface-2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; flex-wrap: wrap; }
+.seg button { appearance: none; border: 0; background: var(--surface); color: var(--fg); font: 600 .95rem var(--body); padding: 7px 11px; cursor: pointer; min-width: 38px; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.rows { display: flex; flex-direction: column; gap: 10px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.row > label, .row > .lab { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); min-width: 4.8rem; }
+.num { width: 4.2ch; font: 600 1.05rem var(--body); padding: 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); text-align: center; }
+.go { appearance: none; border: 0; border-radius: var(--radius); background: var(--accent); color: var(--accent-ink); font: 700 1.25rem var(--display); letter-spacing: .05em; text-transform: uppercase; padding: 14px; cursor: pointer; width: 100%; }
+.go[disabled] { opacity: .55; cursor: progress; }
+.summary { font-family: var(--display); font-size: 1.1rem; }
+.status { font-size: .85rem; color: var(--muted); min-height: 1.2em; }
+.progress { height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
+.progress > div { height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+
+/* results */
+.res-team { display: flex; flex-direction: column; gap: 8px; }
+.res-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.res-head .who { font-family: var(--display); font-size: 1.25rem; font-weight: 700; }
+.verdict { background: var(--accent-soft); border-radius: 8px; padding: 10px 12px; font-weight: 600; }
+.opt { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.opt:first-of-type { border-top: 0; }
+.opt .name { font-weight: 600; }
+.opt .wp { font-family: var(--display); font-size: 1.25rem; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+.opt .meta { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: .82rem; color: var(--muted); align-items: center; }
+.barbox { grid-column: 1 / -1; height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+.barbox > div { height: 100%; background: var(--bar); border-radius: 4px; }
+.opt.best .barbox > div { background: var(--bar-best); }
+.grade { font-weight: 700; padding: 1px 7px; border-radius: 6px; border: 1px solid currentColor; font-size: .78rem; }
+.g-best { color: var(--good); } .g-A { color: var(--good); } .g-B { color: var(--good); } .g-C { color: var(--warn); } .g-D { color: var(--bad); } .g-F { color: var(--bad); }
+.edge { font-variant-numeric: tabular-nums; }
+.pill { font-size: .78rem; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); }
+
+/* roster */
+.roster { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+@media (min-width: 640px) { .roster { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.roster .t { background: var(--surface-2); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 5px; font-size: .88rem; min-width: 0; }
+.roster .t b { font-family: var(--display); font-size: 1.1rem; }
+.kv { display: flex; justify-content: space-between; gap: 8px; }
+.kv span:last-child { font-variant-numeric: tabular-nums; color: var(--muted); }
+details summary { cursor: pointer; font-weight: 600; }
+.hist { display: flex; flex-direction: column; gap: 6px; }
+.hist button { all: unset; cursor: pointer; font-size: .85rem; padding: 6px 8px; border-radius: 6px; background: var(--surface-2); }
+.hist button:focus-visible { outline: 2px solid var(--accent); }
+.note { font-size: .8rem; color: var(--muted); max-width: 75ch; }
+.err { color: var(--bad); font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .progress > div { transition: none; } }
+</style>
+
+<div class="wrap">
+  <div class="top">
+    <h1 id="title">Bills at Rams: live decision engine</h1>
+    <span class="sub" id="gameinfo">Loading game data…</span>
+  </div>
+
+  <div class="card" aria-label="Scoreboard and situation">
+    <div class="board">
+      <div class="team" id="team-away">
+        <div class="abbr"><span class="chip" id="chip-away"></span><span id="abbr-away">BUF</span></div>
+        <div class="score"><button class="mini" data-score="0" data-d="-1" aria-label="away score minus one">−</button>
+          <input id="score-away" inputmode="numeric" value="0" aria-label="away score">
+          <button class="mini" data-score="0" data-d="1" aria-label="away score plus one">+</button></div>
+        <div class="tos" id="tos-away"><span class="lbl">TO</span></div>
+      </div>
+      <div class="mid">
+        <div class="seg" id="qtr" role="group" aria-label="quarter"></div>
+        <input class="clock" id="clock" value="15:00" inputmode="numeric" aria-label="game clock (mm:ss)">
+        <div class="seg" id="running" role="group" aria-label="clock state">
+          <button data-v="1">Running</button><button data-v="0">Stopped</button></div>
+      </div>
+      <div class="team" id="team-home">
+        <div class="abbr"><span class="chip" id="chip-home"></span><span id="abbr-home">LA</span></div>
+        <div class="score"><button class="mini" data-score="1" data-d="-1" aria-label="home score minus one">−</button>
+          <input id="score-home" inputmode="numeric" value="0" aria-label="home score">
+          <button class="mini" data-score="1" data-d="1" aria-label="home score plus one">+</button></div>
+        <div class="tos" id="tos-home"><span class="lbl">TO</span></div>
+      </div>
+    </div>
+
+    <div class="rows">
+      <div class="row"><span class="lab">Ball</span><div class="seg" id="pos" role="group" aria-label="possession"></div>
+        <div class="seg" id="phase" role="group" aria-label="moment">
+          <button data-v="snap">Next snap</button><button data-v="pat">Try after TD</button><button data-v="kickoff">Kickoff</button></div></div>
+      <div class="row" id="row-down"><span class="lab">Down</span><div class="seg" id="down" role="group" aria-label="down">
+          <button data-v="1">1st</button><button data-v="2">2nd</button><button data-v="3">3rd</button><button data-v="4">4th</button></div>
+        <label for="ytg">&amp; to go</label><input class="num" id="ytg" inputmode="numeric" value="10">
+        <div class="seg" id="goal" role="group" aria-label="goal to go"><button data-v="1">Goal</button></div></div>
+      <div class="row" id="row-spot"><span class="lab">Ball on</span><div class="seg" id="side" role="group" aria-label="side of field"></div>
+        <input class="num" id="yard" inputmode="numeric" value="25" aria-label="yard line">
+        <span class="sub" id="spot-text"></span></div>
+      <div class="row"><span class="lab">2nd half</span><div class="seg" id="r2h" role="group" aria-label="team receiving the second-half kickoff"></div>
+        <span class="sub">receives the kickoff (the team that kicked first)</span></div>
+      <div class="row"><span class="lab">Sims</span><div class="seg" id="sims" role="group" aria-label="simulations per option">
+          <button data-v="3000">3k fast</button><button data-v="6000">6k</button><button data-v="12000">12k precise</button></div></div>
+    </div>
+    <button class="go" id="go" disabled>Loading engine…</button>
+    <div class="progress" aria-hidden="true"><div id="bar"></div></div>
+    <div class="status" id="status" role="status"></div>
+  </div>
+
+  <div class="grid">
+    <div class="card" id="results-card">
+      <h2>Recommendation</h2>
+      <div class="summary" id="sit-text"></div>
+      <div id="results"><p class="note">Results appear here.</p></div>
+    </div>
+    <div class="card">
+      <h2>Rosters (synced)</h2>
+      <div class="roster" id="roster"></div>
+      <details>
+        <summary>Adjust for in-game news</summary>
+        <div class="rows" style="margin-top:10px" id="adjust"></div>
+        <p class="note">Ratings are EPA per play versus league average (defense: positive is worse). Kicker: logit shift on make probability. Punter: net yards over average.</p>
+      </details>
+      <h2>Recent situations</h2>
+      <div class="hist" id="hist"><span class="note">Situations you simulate are listed here on this device.</span></div>
+      <p class="note" id="method"></p>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const GAME_FILE = '2026_05_BUF_LA.json';
+  const OPTION_TEXT = {
+    timeout: 'Call timeout now', no_timeout: 'Let the clock run', hurry: 'Hurry to the line (no stop)',
+    normal: 'Normal tempo', milk: 'Milk the play clock', spike: 'Spike it', kneel: 'Kneel', run: 'Run', pass: 'Pass',
+    go: 'Go for it', fg: 'Field goal', punt: 'Punt', attack: 'Attack before the half', runout: 'Run out the half',
+    xp: 'Kick the PAT', two: 'Go for two', onside: 'Onside kick', deep: 'Kick deep',
+  };
+  let game = null, worker = null, busy = false, reqId = 0;
+  const st = { qtr: 4, clock: 151, score: [20, 24], pos: null, down: 2, ytg: 7, goal: false, side: null, yard: 41,
+    to: [2, 3], running: true, phase: 'snap', r2h: null, sims: 6000 };
+  const manual = {};
+  const coachMode = {};
+
+  // ------------------------------------------------------------ helpers ---
+  const clockText = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+  function parseClock(v) {
+    v = String(v).trim();
+    if (v.includes(':')) { const [m, s] = v.split(':'); return Math.min(900, (parseInt(m, 10) || 0) * 60 + (parseInt(s, 10) || 0)); }
+    const d = v.replace(/\D/g, '');
+    if (!d) return 0;
+    if (d.length <= 2) return Math.min(900, parseInt(d, 10));
+    return Math.min(900, parseInt(d.slice(0, -2), 10) * 60 + parseInt(d.slice(-2), 10));
+  }
+  const teams = () => [game.away.team, game.home.team];
+  function seg(el, values, labels, get, set) {
+    el.innerHTML = '';
+    values.forEach((v, i) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = labels[i]; b.dataset.v = v;
+      b.addEventListener('click', () => { set(v); render(); });
+      el.appendChild(b);
+    });
+    el._get = get;
+  }
+  function wireSeg(el, set) {
+    el.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { set(b.dataset.v); render(); }));
+  }
+  function ylToGoFor(s) { // yards from the offense to the goal it attacks
+    if (s.yard >= 50) return 50;
+    return s.side === s.pos ? 100 - s.yard : s.yard;
+  }
+  const ylToGo = () => ylToGoFor(st);
+
+  // -------------------------------------------------------------- render ---
+  function render() {
+    if (!game) return;
+    const [A, H] = teams();
+    $('score-away').value = st.score[0]; $('score-home').value = st.score[1];
+    $('clock').value = clockText(st.clock);
+    $('team-away').classList.toggle('has-ball', st.pos === A);
+    $('team-home').classList.toggle('has-ball', st.pos === H);
+    for (const [i, id] of [[0, 'tos-away'], [1, 'tos-home']]) {
+      $(id).querySelectorAll('button').forEach((b, k) => { b.classList.toggle('on', k < st.to[i]); b.setAttribute('aria-pressed', k < st.to[i]); });
+    }
+    const press = (el, v) => el.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === String(v))));
+    press($('qtr'), st.qtr); press($('running'), st.running ? 1 : 0); press($('pos'), st.pos); press($('phase'), st.phase);
+    press($('down'), st.down); press($('side'), st.side); press($('r2h'), st.r2h); press($('sims'), st.sims);
+    $('goal').querySelector('button').setAttribute('aria-pressed', String(st.goal));
+    $('ytg').value = st.goal ? '' : st.ytg; $('ytg').disabled = st.goal;
+    $('yard').value = st.yard;
+    const snap = st.phase === 'snap';
+    $('row-down').hidden = !snap; $('row-spot').hidden = !snap;
+    $('spot-text').textContent = st.pos ? `${ylToGo()} yards to the end zone` : '';
+    $('sit-text').textContent = situationText();
+  }
+  function situationText() {
+    if (!game) return '';
+    const [A, H] = teams();
+    const q = st.qtr <= 4 ? `Q${st.qtr}` : 'OT';
+    let what = '';
+    if (!st.pos) what = 'pick who has the ball';
+    else if (st.phase === 'pat') what = `${st.pos} try after a TD`;
+    else if (st.phase === 'kickoff') what = `${st.pos} kicking off`;
+    else {
+      const spot = st.yard >= 50 ? 'midfield' : `${st.side} ${st.yard}`;
+      what = `${st.pos} ball, ${['1st', '2nd', '3rd', '4th'][st.down - 1]} & ${st.goal ? 'goal' : st.ytg} at ${spot}`;
+    }
+    return `${q} ${clockText(st.clock)} · ${A} ${st.score[0]}, ${H} ${st.score[1]} · ${what} · TO ${A} ${st.to[0]}, ${H} ${st.to[1]} · clock ${st.running ? 'running' : 'stopped'}`;
+  }
+
+  // -------------------------------------------------------------- grades ---
+  function grade(family, cost) {
+    if (cost <= 0.0005) return { cls: 'g-best', text: 'Best option' };
+    const gs = game && game.grade_scale;
+    if (!gs || !gs.families[family]) return { cls: 'g-C', text: `Costs ${(cost * 100).toFixed(1)} WP` };
+    const q = gs.families[family].q;
+    let k = 0; while (k < q.length && q[k] < cost) k++;
+    const pct = k / q.length;
+    const letter = cost <= (gs.a_floor || 0.0025) ? 'A' : (gs.letters.find(([thr]) => pct <= thr) || [1, 'F'])[1];
+    return { cls: `g-${letter}`, text: `${letter} · worse than ${Math.round(pct * 100)}% of NFL calls` };
+  }
+  // Coach tendencies are only quoted inside the situations they were learned from.
+  function inDomain(family, s, side) {
+    const [A, H] = teams();
+    const deciderIsHome = side === 'defense' ? s.pos === A : s.pos === H;
+    const margin = deciderIsHome ? s.score[1] - s.score[0] : s.score[0] - s.score[1];
+    const q = s.qtr, th = (q === 1 || q === 3 ? 900 : 0) + s.clock;
+    switch (family) {
+      case 'def_timeout': return (q === 4 && th <= 300 && margin <= 0 && margin >= -16) || (q === 2 && th <= 120);
+      case 'off_clock_stop': return (q === 4 && th <= 120 && margin <= 0 && margin >= -16) || (q === 2 && th <= 60);
+      case 'fourth_down': return ((q === 4 && th <= 600) || (q === 2 && th <= 120)) && Math.abs(margin) <= 16;
+      case 'play_select': return q === 4 && th <= 300 && margin !== 0 && Math.abs(margin) <= 16;
+      case 'kneel': return q === 4 && th <= 160 && margin > 0;
+      case 'h1_end': return q === 2 && th >= 20 && th <= 120;
+      case 'pat': return q === 4;
+      case 'onside': return q === 4 && th <= 420 && margin < 0 && margin >= -16;
+      default: return false;
+    }
+  }
+  function coachShare(family, option, side, st2) {
+    const T = game && game.tendency_web;
+    if (!T || !T.families[family] || !inDomain(family, st2, side)) return null;
+    const m = T.families[family];
+    const x = tendencyFeatures(st2, side, family);
+    const z = m.coef.map((row, c) => m.intercept[c] + row.reduce((a, w, j) => a + w * (x[j] - m.mean[j]) / m.scale[j], 0));
+    let probs;
+    if (m.classes.length === 2 && m.coef.length === 1) { const p = 1 / (1 + Math.exp(-z[0])); probs = [1 - p, p]; }
+    else { const mx = Math.max(...z); const e = z.map((v) => Math.exp(v - mx)); const s = e.reduce((a, b) => a + b, 0); probs = e.map((v) => v / s); }
+    const i = m.classes.indexOf(option);
+    return i < 0 ? null : probs[i];
+  }
+  // Same feature vector as src/nflclock/tendency.py (deciding team's view)
+  function tendencyFeatures(s, side, family) {
+    const [A, H] = teams();
+    const deciderIsHome = side === 'defense' ? s.pos === A : s.pos === H;
+    const myScore = deciderIsHome ? s.score[1] : s.score[0], opScore = deciderIsHome ? s.score[0] : s.score[1];
+    const margin = myScore - opScore;
+    const myTo = deciderIsHome ? s.to[1] : s.to[0], opTo = deciderIsHome ? s.to[0] : s.to[1];
+    const half2 = s.qtr >= 3 ? 1 : 0;
+    const tHalf = (s.qtr === 1 || s.qtr === 3 ? 900 : 0) + s.clock;
+    const special = s.phase !== 'snap';
+    const yl = special ? 75 : ylToGoFor(s);
+    const ytg = special ? 10 : (s.goal ? yl : Math.min(s.ytg, yl));
+    const down = special ? 1 : s.down;
+    return [tHalf / 60, Math.log1p(tHalf), half2, margin, Math.abs(margin), margin < 0 ? 1 : 0, margin > 0 ? 1 : 0,
+      down, ytg, Math.log(Math.max(ytg, 1)), yl / 10, (yl / 10) ** 2, myTo, opTo, tHalf <= 120 ? 1 : 0,
+      (tHalf <= 300 && half2) ? 1 : 0, s.running ? 1 : 0, yl <= 40 ? 1 : 0, Math.max(yl - 40, 0) / 10];
+  }
+
+  // ------------------------------------------------------------- results ---
+  function showResults(msg, snapshot) {
+    const box = $('results');
+    box.innerHTML = '';
+    const homeWp = msg.baseHomeWp;
+    const [A, H] = teams();
+    const head = document.createElement('p');
+    head.className = 'note';
+    head.textContent = `Win probability before the decision (both teams playing sound football): ${H} ${(homeWp * 100).toFixed(1)}%, ${A} ${((1 - homeWp) * 100).toFixed(1)}%. ${msg.ms < 1000 ? msg.ms + ' ms' : (msg.ms / 1000).toFixed(1) + ' s'}.`;
+    box.appendChild(head);
+    if (!msg.results.length) {
+      const p = document.createElement('p'); p.textContent = 'No clock decision in this spot (clock stopped and no 4th down). Try a running clock, 4th down, a try or a kickoff.';
+      box.appendChild(p);
+      return;
+    }
+    for (const grp of msg.results) {
+      const wrap = document.createElement('div'); wrap.className = 'res-team';
+      const hd = document.createElement('div'); hd.className = 'res-head';
+      const who = document.createElement('span'); who.className = 'who'; who.textContent = `${grp.team} ${grp.side === 'defense' ? '(defense)' : grp.side === 'kicking' ? '(kicking)' : '(offense)'}`;
+      hd.appendChild(who);
+      wrap.appendChild(hd);
+      const best = grp.rows[0];
+      const second = grp.rows[1];
+      const verdict = document.createElement('div'); verdict.className = 'verdict';
+      const margin = second ? (best.wp - second.wp) * 100 : 0;
+      verdict.textContent = `${OPTION_TEXT[best.option] || best.option}` + (second ? ` · +${margin.toFixed(1)} win-prob points over ${(OPTION_TEXT[second.option] || second.option).toLowerCase()}` : '') +
+        (second && Math.abs(second.edge) < 2 * second.se ? ' (close call)' : '');
+      wrap.appendChild(verdict);
+      const maxWp = Math.max(...grp.rows.map((r) => r.wp), 0.01);
+      grp.rows.forEach((r, i) => {
+        const row = document.createElement('div'); row.className = 'opt' + (i === 0 ? ' best' : '');
+        const nm = document.createElement('span'); nm.className = 'name'; nm.textContent = OPTION_TEXT[r.option] || r.option;
+        const wp = document.createElement('span'); wp.className = 'wp'; wp.textContent = `${(r.wp * 100).toFixed(1)}%`;
+        const bb = document.createElement('div'); bb.className = 'barbox';
+        const bar = document.createElement('div'); bar.style.width = `${Math.max(1, r.wp / maxWp * 100)}%`; bb.appendChild(bar);
+        const meta = document.createElement('div'); meta.className = 'meta';
+        const g = grade(r.family, -r.edge);
+        const gs = document.createElement('span'); gs.className = `grade ${g.cls}`; gs.textContent = g.text;
+        meta.appendChild(gs);
+        if (i > 0) { const e = document.createElement('span'); e.className = 'edge'; e.textContent = `${(r.edge * 100).toFixed(1)} pts ± ${(r.se * 100).toFixed(1)}`; meta.appendChild(e); }
+        const share = coachShare(r.family, r.option, grp.side, snapshot);
+        if (share != null) { const c = document.createElement('span'); c.className = 'pill'; c.textContent = `NFL coaches choose this ${Math.round(share * 100)}%`; meta.appendChild(c); }
+        row.append(nm, wp, bb, meta);
+        wrap.appendChild(row);
+      });
+      box.appendChild(wrap);
+    }
+  }
+
+  // ------------------------------------------------------------- history ---
+  const HKEY = 'nflclock-history-' + GAME_FILE;
+  function loadHist() { try { return JSON.parse(localStorage.getItem(HKEY) || '[]'); } catch (e) { return []; } }
+  function saveHist(h) { try { localStorage.setItem(HKEY, JSON.stringify(h.slice(0, 12))); } catch (e) { /* storage off */ } }
+  function renderHist() {
+    const h = loadHist(), box = $('hist');
+    if (!h.length) return;
+    box.innerHTML = '';
+    h.forEach((item) => {
+      const b = document.createElement('button'); b.type = 'button';
+      b.textContent = `${item.text} → ${item.rec}`;
+      b.addEventListener('click', () => { Object.assign(st, item.state); render(); });
+      box.appendChild(b);
+    });
+  }
+
+  // ------------------------------------------------------------ simulate ---
+  function simulate() {
+    if (!worker || busy || !game) return;
+    if (!st.pos) { $('status').textContent = 'Pick who has the ball first.'; return; }
+    busy = true;
+    $('go').disabled = true; $('go').textContent = 'Simulating…';
+    $('bar').style.width = '0%';
+    const yl = ylToGo();
+    const snapshot = JSON.parse(JSON.stringify(st));
+    const payload = { qtr: st.qtr, clock: st.clock, score: st.score.slice(), pos: st.pos, down: st.down,
+      ytg: st.goal ? yl : Math.min(st.ytg, yl), yl, to: st.to.slice(), running: st.running, phase: st.phase };
+    const id = ++reqId;
+    worker.onmessage = (ev) => {
+      const m = ev.data;
+      if (m.id !== id && m.type !== 'ready') return;
+      if (m.type === 'progress') { $('bar').style.width = `${Math.round(m.done / m.total * 100)}%`; $('status').textContent = `Simulating option ${m.done} of ${m.total}…`; }
+      if (m.type === 'result') {
+        busy = false; $('go').disabled = false; $('go').textContent = 'Simulate';
+        $('status').textContent = `${st.sims.toLocaleString()} simulations per option, common random numbers.`;
+        showResults(m, snapshot);
+        const rec = m.results.map((g) => `${g.team}: ${(OPTION_TEXT[g.rows[0].option] || g.rows[0].option).toLowerCase()}`).join(' · ') || 'no decision';
+        const h = loadHist(); h.unshift({ text: situationText(), rec, state: snapshot }); saveHist(h); renderHist();
+      }
+      if (m.type === 'error') { busy = false; $('go').disabled = false; $('go').textContent = 'Simulate'; $('status').innerHTML = ''; const e = document.createElement('span'); e.className = 'err'; e.textContent = 'Simulation failed: ' + m.message; $('status').appendChild(e); }
+    };
+    worker.postMessage({ type: 'simulate', id, st: payload, settings: { sims: st.sims, receive2h: st.r2h, manual, coachMode } });
+  }
+
+  // --------------------------------------------------------------- setup ---
+  function setupGame(g) {
+    game = g;
+    const [A, H] = teams();
+    $('title').textContent = `${A === 'BUF' ? 'Bills' : A} at ${H === 'LA' ? 'Rams' : H}: live decision engine`;
+    const fav = g.home_spread > 0 ? `${H} −${g.home_spread}` : g.home_spread < 0 ? `${A} −${-g.home_spread}` : 'pick';
+    $('gameinfo').textContent = `${g.gameday} ${g.gametime} ET · ${g.stadium} (${g.roof}) · ${fav}, total ${g.total}`;
+    $('abbr-away').textContent = A; $('abbr-home').textContent = H;
+    $('chip-away').style.background = A === 'BUF' ? 'var(--buf)' : 'var(--muted)';
+    $('chip-home').style.background = H === 'LA' ? 'var(--la)' : 'var(--muted)';
+    for (const [i, id] of [[0, 'tos-away'], [1, 'tos-home']]) {
+      const el = $(id);
+      for (let k = 0; k < 3; k++) {
+        const b = document.createElement('button'); b.type = 'button'; b.setAttribute('aria-label', `${teams()[i]} timeout ${k + 1}`);
+        b.addEventListener('click', () => { st.to[i] = st.to[i] === k + 1 ? k : k + 1; render(); });
+        el.appendChild(b);
+      }
+    }
+    seg($('qtr'), [1, 2, 3, 4], ['Q1', 'Q2', 'Q3', 'Q4'], null, (v) => { st.qtr = Number(v); });
+    seg($('pos'), [A, H], [`${A} ball`, `${H} ball`], null, (v) => { st.pos = v; if (!st.side) st.side = v; });
+    seg($('side'), [A, H], [A, H], null, (v) => { st.side = v; });
+    seg($('r2h'), [A, H], [A, H], null, (v) => { st.r2h = v; });
+    wireSeg($('running'), (v) => { st.running = v === '1'; });
+    wireSeg($('phase'), (v) => { st.phase = v; });
+    wireSeg($('down'), (v) => { st.down = Number(v); });
+    wireSeg($('sims'), (v) => { st.sims = Number(v); });
+    $('goal').querySelector('button').addEventListener('click', () => { st.goal = !st.goal; render(); });
+    document.querySelectorAll('[data-score]').forEach((b) => b.addEventListener('click', () => {
+      const i = Number(b.dataset.score); st.score[i] = Math.max(0, st.score[i] + Number(b.dataset.d)); render();
+    }));
+    $('score-away').addEventListener('change', (e) => { st.score[0] = Math.max(0, parseInt(e.target.value, 10) || 0); render(); });
+    $('score-home').addEventListener('change', (e) => { st.score[1] = Math.max(0, parseInt(e.target.value, 10) || 0); render(); });
+    $('clock').addEventListener('change', (e) => { st.clock = parseClock(e.target.value); render(); });
+    $('ytg').addEventListener('change', (e) => { st.ytg = Math.max(1, Math.min(99, parseInt(e.target.value, 10) || 10)); render(); });
+    $('yard').addEventListener('change', (e) => { st.yard = Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 25)); render(); });
+    $('go').addEventListener('click', simulate);
+    // example situation so the first view shows the tool working
+    st.pos = A; st.side = H; st.r2h = H;
+    renderRoster();
+    render();
+    renderHist();
+  }
+
+  function renderRoster() {
+    const box = $('roster'); box.innerHTML = '';
+    for (const side of ['away', 'home']) {
+      const t = game[side];
+      const d = document.createElement('div'); d.className = 't';
+      const b = document.createElement('b'); b.textContent = `${t.team} · ${side === 'home' ? game.home_coach : game.away_coach}`; d.appendChild(b);
+      const eff = (k) => (t.base[k] + (k === 'off_pass' ? t.qb.adjustment : 0) + t.injury_adjustment[k] + ((manual[t.team] || {})[k] || 0));
+      const kv = (a, v) => { const r = document.createElement('div'); r.className = 'kv'; const x = document.createElement('span'); x.textContent = a; const y = document.createElement('span'); y.textContent = v; r.append(x, y); d.appendChild(r); };
+      kv(`QB ${t.qb.name}`, `${t.qb.rating >= 0 ? '+' : ''}${t.qb.rating.toFixed(3)} EPA/dropback`);
+      kv(`K ${t.kicker.name}`, `${(((manual[t.team] || {}).kicker_rating ?? t.kicker.rating)).toFixed(2)} logit`);
+      kv(`P ${t.punter.name}`, `${(((manual[t.team] || {}).punter_rating ?? t.punter.rating)).toFixed(1)} net yds`);
+      kv('Pass offense / defense', `${eff('off_pass').toFixed(3)} / ${eff('def_pass').toFixed(3)}`);
+      kv('Run offense / defense', `${eff('off_rush').toFixed(3)} / ${eff('def_rush').toFixed(3)}`);
+      const coach = side === 'home' ? game.home_coach : game.away_coach;
+      const prof = game.coach_profiles && game.coach_profiles.coaches[coach];
+      if (prof) {
+        const ord = (p) => { const n = Math.round(p * 100); const s = ['th', 'st', 'nd', 'rd'][(n % 100 > 10 && n % 100 < 14) ? 0 : (n % 10 < 4 ? n % 10 : 0)]; return `${n}${s}`; };
+        kv('4th-down aggressiveness', `${ord(prof.aggressiveness_pct)} pct (goes ${Math.round(prof.go_rate * 100)}%, typical ${Math.round(prof.expected_go_rate * 100)}%)`);
+        if (prof.clock_quality_pct != null) kv('Clock decisions 2023–25', `${ord(prof.clock_quality_pct)} pct (${prof.clock_wins_lost_per_17.toFixed(2)} wins lost / 17 g)`);
+      }
+      const modeRow = document.createElement('div'); modeRow.className = 'kv';
+      const ml = document.createElement('span'); ml.textContent = 'Future 4th downs in sims';
+      const mseg = document.createElement('div'); mseg.className = 'seg';
+      const modes = [['sound', 'Sound'], ['typical', 'Typical coach']].concat(prof ? [['coach', coach.split(' ').slice(-1)[0]]] : []);
+      modes.forEach(([v, label]) => {
+        const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+        b.setAttribute('aria-pressed', String((coachMode[t.team] || 'sound') === v));
+        b.addEventListener('click', () => { coachMode[t.team] = v; renderRoster(); });
+        mseg.appendChild(b);
+      });
+      modeRow.append(ml, mseg); d.appendChild(modeRow);
+      const inj = t.unavailable.length ? `Starters out: ${t.unavailable.join(', ')}` : 'No starters ruled out';
+      const p = document.createElement('div'); p.className = 'note'; p.textContent = inj; d.appendChild(p);
+      if (t.injury_report.length) {
+        const q = document.createElement('div'); q.className = 'note';
+        q.textContent = 'Injury report: ' + t.injury_report.map((r) => `${r.full_name} (${r.position}, ${r.report_status})`).join(', ');
+        d.appendChild(q);
+      }
+      box.appendChild(d);
+    }
+    const adj = $('adjust'); adj.innerHTML = '';
+    for (const side of ['away', 'home']) {
+      const t = game[side];
+      const row = document.createElement('div'); row.className = 'row';
+      const lab = document.createElement('span'); lab.className = 'lab'; lab.textContent = t.team; row.appendChild(lab);
+      const qb = document.createElement('button'); qb.type = 'button'; qb.className = 'mini'; qb.style.padding = '0 10px';
+      const backupDelta = 0.75 * (-0.08 - t.qb.team_mix_rating) - t.qb.adjustment;
+      const isBackup = () => (manual[t.team] || {}).qbBackup;
+      qb.textContent = isBackup() ? 'Backup QB in (undo)' : 'Backup QB in';
+      qb.addEventListener('click', () => {
+        const m = manual[t.team] = manual[t.team] || {};
+        m.qbBackup = !m.qbBackup;
+        m.off_pass = (m.off_pass || 0) + (m.qbBackup ? backupDelta : -backupDelta);
+        renderRoster();
+      });
+      row.appendChild(qb);
+      for (const [key, label, step] of [['kicker_rating', 'K', 0.1], ['punter_rating', 'P', 0.5], ['off_pass', 'Pass O', 0.02]]) {
+        const l = document.createElement('label'); l.textContent = label; l.style.minWidth = 'auto';
+        const inp = document.createElement('input'); inp.className = 'num'; inp.style.width = '6ch'; inp.type = 'number'; inp.step = step;
+        inp.setAttribute('aria-label', `${t.team} ${label} adjustment`);
+        const cur = key === 'off_pass' ? ((manual[t.team] || {}).off_pass || 0) : ((manual[t.team] || {})[key] ?? t[key === 'kicker_rating' ? 'kicker' : 'punter'].rating);
+        inp.value = Number(cur).toFixed(2);
+        inp.addEventListener('change', () => { const m = manual[t.team] = manual[t.team] || {}; m[key] = parseFloat(inp.value) || 0; renderRoster(); });
+        row.append(l, inp);
+      }
+      adj.appendChild(row);
+    }
+    $('method').textContent = `Ratings as of ${game.season} week ${game.home.ratings_asof_week}; depth chart snapshot ${game.depth_chart_snapshot}; synced ${game.synced_at}. ` +
+      'Every option is played out thousands of times with real NFL clock rules, these teams’ opponent-adjusted pass and run strength, and these kickers and punters. ' +
+      'Grades rank the cost against every real NFL decision of the same type from 2023–2025.';
+  }
+
+  // boot
+  try {
+    worker = new Worker('worker.js');
+    worker.onmessage = (ev) => {
+      const m = ev.data;
+      if (m.type === 'ready') {
+        setupGame(m.game);
+        $('go').disabled = false; $('go').textContent = 'Simulate';
+        $('status').textContent = 'Example situation loaded. Edit it to match the game, then simulate.';
+        simulate();
+      } else if (m.type === 'error') {
+        $('status').textContent = 'Could not load the engine: ' + m.message;
+      }
+    };
+    worker.postMessage({ type: 'init', engineUrl: 'engine_data.json', gameUrl: GAME_FILE });
+    $('status').textContent = 'Loading the simulator (about 5 MB, once)…';
+  } catch (e) {
+    $('status').textContent = 'This browser cannot start the simulator: ' + e.message;
+  }
+})();
+</script>

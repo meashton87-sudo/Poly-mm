@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 web/engine_data.json
 web/parity_expected.json
+web/_test_index.html

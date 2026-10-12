@@ -286,7 +286,17 @@
       const two = [0, 1].map((i) => clip(0.47 + 0.3 * (0.6 * delta[i][PASS] + 0.4 * delta[i][RUN]), 0.35, 0.6));
       const spread = opts.homeSpread != null ? opts.homeSpread : game.home_spread;
       const r2h = opts.receive2h === game.home.team ? 0 : 1;
+      // 4th-down decision style per team: null = sound (WP look-ahead); else play like a typical NFL coach
+      // (shift 0) or like this coach (measured go-for-it shift)
+      const prof = game.coach_profiles, modes = opts.coachMode || {};
+      const coach4th = [[game.home, game.home_coach], [game.away, game.away_coach]].map(([t, coach]) => {
+        const m = modes[t.team] || 'sound';
+        if (m === 'sound' || !prof) return null;
+        const shift = m === 'coach' ? ((prof.coaches[coach] || {}).go_shift || 0) : 0;
+        return { model: prof.fourth_model, shift };
+      });
       return {
+        coach4th,
         homeSpread: spread, receive2h: r2h, indoor: !!game.indoor,
         wind: opts.wind != null ? opts.wind : (game.wind || 0), temp: opts.temp != null ? opts.temp : game.temp,
         season: game.season, delta, proe: [home.proe, away.proe],
@@ -505,7 +515,7 @@
       fgLast = fgLast || (tHalf <= snapBudget && pFg >= 0.3 && fgUseful && !runningAtSnap);
       if (kind < 0 && fgLast) kind = FG;
       if (kind === SPIKE && fgLast) kind = FG;
-      if (kind < 0 && down === 4) kind = this._fourthDown(S, g, o, margin, tHalf, pFg);
+      if (kind < 0 && down === 4) kind = this._fourthDown(S, g, o, margin, tHalf, pFg, u[5]);
       if (kind < 0 && runOut && down < 4) kind = RUN;
       if (forced !== undefined && forced !== 'kneel' && forced !== 'spike') kind = forced === 'go' ? -1 : PLAY[forced];
       if (kind < 0) {
@@ -521,7 +531,32 @@
       else this._scrimmage(S, g, u, o, kind, margin);
     }
 
-    _fourthDown(S, g, o, margin, tHalf, pFg) {
+    _coachChoice(S, g, o, margin, tHalf, pFg, u5, cm) {
+      const mod = cm.model, yl = S.yl, ytg = S.ytg, half2 = g.half === 2 ? 1 : 0;
+      const x = [tHalf / 60, Math.log1p(tHalf), half2, margin, Math.abs(margin), margin < 0 ? 1 : 0, margin > 0 ? 1 : 0,
+        4, ytg, Math.log(Math.max(ytg, 1)), yl / 10, (yl / 10) * (yl / 10), S.to[o], S.to[1 - o], tHalf <= 120 ? 1 : 0,
+        (tHalf <= 300 && half2) ? 1 : 0, 0, yl <= 40 ? 1 : 0, Math.max(yl - 40, 0) / 10];
+      const cls = mod.classes, z = new Array(cls.length);
+      let mx = -Infinity;
+      for (let c = 0; c < cls.length; c++) {
+        let v = mod.intercept[c];
+        for (let j = 0; j < x.length; j++) v += mod.coef[c][j] * (x[j] - mod.mean[j]) / mod.scale[j];
+        if (cls[c] === 'go') v += cm.shift || 0;
+        z[c] = v; if (v > mx) mx = v;
+      }
+      let sum = 0;
+      const p = z.map((v, c) => {
+        let e = Math.exp(v - mx);
+        if (cls[c] === 'fg' && !(pFg > 0.02)) e = 0;
+        if (cls[c] === 'punt' && !(yl >= 30)) e = 0;
+        sum += e; return e;
+      });
+      let cum = 0, pick = cls.length - 1;
+      for (let c = 0; c < cls.length; c++) { cum += p[c] / sum; if (u5 <= cum) { pick = c; break; } }
+      return cls[pick] === 'go' ? -1 : cls[pick] === 'fg' ? FG : PUNT;
+    }
+
+    _fourthDown(S, g, o, margin, tHalf, pFg, u5) {
       const half = g.half, d = 1 - o;
       const yl = S.yl, ytg = clip(S.ytg, 1, 20), t = S.t, offTo = S.to[o], defTo = S.to[d];
       const mode = gameMode(half, tHalf, margin), zone = zoneOf(yl);
@@ -549,6 +584,8 @@
         wpPunt = 1 - this.wpFull(d, -margin, t9, 1, Math.min(10, ry), ry, defTo, offTo);
       }
       let choice = (wpGo >= wpFg && wpGo >= wpPunt) ? -1 : (wpFg >= wpPunt ? FG : PUNT);
+      const cm = this.ctx.coach4th && this.ctx.coach4th[o];
+      if (cm && u5 !== undefined) choice = this._coachChoice(S, g, o, margin, tHalf, pFg, u5, cm);
       if (half === 2) {
         const late = tHalf <= 40;
         if (late && margin < -3) choice = -1;
