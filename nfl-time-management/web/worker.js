@@ -55,6 +55,9 @@ function optionsFor(st, root, sim) {
     off.run = { play: 'run' };
     off.pass = { play: 'pass' };
   }
+  // last seconds of a half: kick on 1st-3rd down (with the clock running, rush the field-goal unit on)
+  const tHalf = root.t - (root.t > 1800 ? 1800 : 0);
+  if (st.down < 4 && tHalf <= 30 && sim.fgProb(root.yl + 17, o) >= 0.02) off.fg = { play: 'fg', to_off: false };
   if (st.down < 4 && (lead > 0 || (firstHalf && root.yl >= 50))) off.kneel = { play: 'kneel', to_off: false };
   if (Object.keys(off).length >= 2) out.push({ team: o, side: 'offense', family: null, opts: off });
   // strategy for the rest of the half, separate from this snap's call
@@ -68,10 +71,10 @@ function optionsFor(st, root, sim) {
   return out;
 }
 
-function familyOf(option, group) {
+function familyOf(option, group, st) {
   if (group.family) return group.family;
   if (['timeout', 'hurry', 'spike', 'normal', 'milk', 'rundown'].includes(option)) return 'off_clock_stop';
-  if (['go', 'fg', 'punt'].includes(option)) return 'fourth_down';
+  if (['go', 'fg', 'punt'].includes(option) && st.down === 4) return 'fourth_down';
   if (['attack', 'runout'].includes(option)) return 'h1_end';
   if (option === 'kneel') return 'kneel';
   return 'play_select';
@@ -95,7 +98,7 @@ self.onmessage = async (ev) => {
       const root = rootFrom(msg.st);
       const groups = optionsFor(msg.st, root, sim).map((g) => ({
         team: g.team, teamCode: g.team === 0 ? game.home.team : game.away.team, side: g.side, label: g.label || null,
-        options: Object.entries(g.opts).map(([name, action]) => ({ name, action, family: familyOf(name, g) })),
+        options: Object.entries(g.opts).map(([name, action]) => ({ name, action, family: familyOf(name, g, msg.st) })),
       }));
       const info = msg.st.phase === 'snap' && msg.st.down === 4 ? sim.fourthInfo(root) : null;
       self.postMessage({ type: 'plan', id: msg.id, groups, root, info });

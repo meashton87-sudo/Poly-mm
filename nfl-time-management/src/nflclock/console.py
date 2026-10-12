@@ -56,6 +56,20 @@ class LiveState:
 
 
 PACES = (6, 8, 10, 12, 14, 16, 18, 20)   # seconds from the whistle to a hurried snap
+LATE_FG_WINDOW = 30.0     # seconds left in the half from which a field goal is offered on 1st-3rd down
+# Options whose win probabilities agree within TIE_WP are a tie (also the "best option" grade threshold).
+# The tie goes to the call that gives the opponent nothing: kneel, keep the timeout, let the clock run.
+TIE_WP = 0.0005
+TIE_ORDER = ("kneel", "no_timeout", "milk", "normal", "rundown", "hurry", "run", "pass", "go", "fg", "punt",
+             "xp", "two", "deep", "onside", "attack", "runout", "spike", "timeout")
+
+
+def pick_best(means: dict) -> str:
+    """Highest win probability; near-ties go to the earliest option in TIE_ORDER."""
+    top = max(means.values())
+    tied = [k for k, m in means.items() if m >= top - TIE_WP]
+    rank = {k: i for i, k in enumerate(TIE_ORDER)}
+    return min(tied, key=lambda k: (rank.get(k, len(TIE_ORDER)), -means[k]))
 
 
 def pace_break_even(diffs) -> tuple[str, float | None]:
@@ -92,6 +106,7 @@ def parse(line: str, st: LiveState, away: str, home: str) -> LiveState:
     toks = line.replace(",", " ").split()
     teams = {away.lower(): away, home.lower(): home}
     new = LiveState(**{**st.__dict__, "score": list(st.score), "to": list(st.to)})
+    spot = None   # (team, yard line): resolved after the loop, once "ball TEAM" is known
     i = 0
     while i < len(toks):
         t = toks[i].lower()
@@ -120,18 +135,17 @@ def parse(line: str, st: LiveState, away: str, home: str) -> LiveState:
                 idx = 0 if teams[t] == away else 1
                 new.score[idx] = int(nxt)
             else:
-                new.yl = _spot(teams[t], int(nxt), new.pos)
+                spot = (teams[t], int(nxt))
             i += 1
         elif re.fullmatch(r"@?[a-z]{2,3}\d{1,2}", t) and re.sub(r"[@\d]", "", t) in teams:
-            team = teams[re.sub(r"[@\d]", "", t)]
-            new.yl = _spot(team, int(re.sub(r"\D", "", t)), new.pos)
+            spot = (teams[re.sub(r"[@\d]", "", t)], int(re.sub(r"\D", "", t)))
         elif re.fullmatch(r"(own|opp)\d{1,2}", t) or (t in ("own", "opp") and nxt.isdigit()):
             if t in ("own", "opp"):
                 t, i = t + nxt, i + 1
             n = int(re.sub(r"\D", "", t))
-            new.yl = 100 - n if t.startswith("own") else n
+            new.yl, spot = (100 - n if t.startswith("own") else n), None
         elif t in ("50", "midfield"):
-            new.yl = 50.0
+            new.yl, spot = 50.0, None
         elif re.fullmatch(r"[1-4](st|nd|rd|th)?&(\d{1,2}|g|goal)", t):
             d, y = t.split("&")
             new.down = int(d[0])
@@ -141,6 +155,8 @@ def parse(line: str, st: LiveState, away: str, home: str) -> LiveState:
         elif t in ("stop", "stopped", "s"):
             new.running = False
         i += 1
+    if spot is not None:
+        new.yl = _spot(spot[0], spot[1], new.pos)
     if new.ytg == -1 or new.ytg > new.yl:
         new.ytg = new.yl
     return new
@@ -214,6 +230,11 @@ class LiveConsole:
         elif not st.running:
             off["run"] = {"play": "run"}
             off["pass"] = {"play": "pass"}
+        # last seconds of a half: kick on 1st-3rd down (with the clock running, rush the field-goal unit on)
+        t_half = root.t - (1800.0 if root.t > 1800 else 0.0)
+        if (st.down < 4 and t_half <= LATE_FG_WINDOW
+                and sim.fg_prob(np.array([root.yl + 17.0]), np.array([o]))[0] >= 0.02):
+            off["fg"] = {"play": "fg", "to_off": False}
         if st.down < 4 and (lead > 0 or (first_half and root.yl >= 50)):
             off["kneel"] = {"play": "kneel", "to_off": False}
         if len(off) >= 2:
@@ -234,7 +255,7 @@ class LiveConsole:
             team_idx = key[0]
             vals = {k: sim.run(root, n=self.sims, action=a, perspective=team_idx, seed=seed)
                     for k, a in team_opts.items()}
-            best = max(vals, key=lambda k: vals[k].mean())
+            best = pick_best({k: float(v.mean()) for k, v in vals.items()})
             rows = []
             for k, v in vals.items():
                 dlt = v - vals[best]
@@ -244,7 +265,9 @@ class LiveConsole:
                              "grade": _grade(self.grades, _family(k, self.st, team_idx == root.pos), cost),
                              "coaches": _coach_share(self.tendency, _family(k, self.st, team_idx == root.pos), k,
                                                      self.st, root, team_idx)})
-            results[key] = pd.DataFrame(rows).sort_values("wp", ascending=False)
+            df = pd.DataFrame(rows)
+            results[key] = df.assign(_b=df["option"] != best).sort_values(["_b", "wp"], ascending=[True, False]).drop(
+                columns="_b")
             if "hurry" in team_opts and "spike" in team_opts:
                 # hurry vs. spike hinges on how fast the next snap comes: price the hurry at fixed paces
                 n2 = max(1500, self.sims // 2)
@@ -405,7 +428,7 @@ def _family(option: str, st: LiveState, offense: bool) -> str:
         return "def_timeout"
     if option in ("timeout", "hurry", "spike", "normal", "milk", "rundown"):
         return "off_clock_stop"
-    if option in ("go", "fg", "punt"):
+    if option in ("go", "fg", "punt") and st.down == 4:
         return "fourth_down"
     if option in ("attack", "runout"):
         return "h1_end"

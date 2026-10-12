@@ -424,7 +424,7 @@ details summary { cursor: pointer; font-weight: 600; }
       const best = grp.rows[0];
       const second = grp.rows[1];
       const verdict = document.createElement('div'); verdict.className = 'verdict';
-      const margin = second ? (best.wp - second.wp) * 100 : 0;
+      const margin = second ? Math.max(0, best.wp - second.wp) * 100 : 0;
       verdict.textContent = `${OPTION_TEXT[best.option] || best.option}` + (second ? ` · +${margin.toFixed(1)} win-prob points over ${(OPTION_TEXT[second.option] || second.option).toLowerCase()}` : '') +
         (second && Math.abs(second.edge) < 2 * second.se ? ' (close call)' : '');
       wrap.appendChild(verdict);
@@ -561,7 +561,7 @@ details summary { cursor: pointer; font-weight: 600; }
     const results = j.groups.map((g, gi) => {
       const vals = {};
       g.options.forEach((o) => { vals[o.name] = j.results[`${gi}:${o.name}`]; });
-      const best = Object.keys(vals).reduce((a, b) => (vals[a].mean >= vals[b].mean ? a : b));
+      const best = pickBest(vals);
       const rows = g.options.map((o) => {
         const a = vals[o.name].values, b = vals[best].values;
         let mean = 0;
@@ -571,7 +571,7 @@ details summary { cursor: pointer; font-weight: 600; }
         for (let i = 0; i < a.length; i++) { const x = a[i] - b[i] - mean; ss += x * x; }
         const se = o.name === best ? 0 : Math.sqrt(ss / (a.length - 1) / a.length);
         return { option: o.name, family: o.family, wp: vals[o.name].mean, edge: mean, se, drive: vals[o.name].drive };
-      }).sort((x, y) => y.wp - x.wp);
+      }).sort((x, y) => (x.option === best ? -1 : y.option === best ? 1 : y.wp - x.wp));
       return { team: g.teamCode, side: g.side, label: g.label, rows, pace: paceBreakEven(j, gi, vals) };
     });
     const ms = Date.now() - j.t0;
@@ -579,6 +579,19 @@ details summary { cursor: pointer; font-weight: 600; }
     showResults({ results, baseHomeWp: j.results.base.mean, ms, info: j.info }, j.snapshot);
     const rec = results.map((g) => `${g.team}${g.label ? ' ' + g.label : ''}: ${(OPTION_TEXT[g.rows[0].option] || g.rows[0].option).toLowerCase()}`).join(' · ') || 'no decision';
     const h = loadHist(); h.unshift({ text: situationText(), rec, state: j.snapshot }); saveHist(h); renderHist();
+  }
+
+  // Highest win probability; near-ties (within the "best option" grade threshold) go to the call that gives the
+  // opponent nothing (same rule as src/nflclock/console.py pick_best).
+  const TIE_WP = 0.0005;
+  const TIE_ORDER = ['kneel', 'no_timeout', 'milk', 'normal', 'rundown', 'hurry', 'run', 'pass', 'go', 'fg', 'punt',
+    'xp', 'two', 'deep', 'onside', 'attack', 'runout', 'spike', 'timeout'];
+  function pickBest(vals) {
+    const names = Object.keys(vals);
+    const top = Math.max(...names.map((k) => vals[k].mean));
+    const rank = (k) => (TIE_ORDER.includes(k) ? TIE_ORDER.indexOf(k) : TIE_ORDER.length);
+    return names.filter((k) => vals[k].mean >= top - TIE_WP)
+      .sort((a, b) => rank(a) - rank(b) || vals[b].mean - vals[a].mean)[0];
   }
 
   // Snap time (seconds after the whistle) below which hurrying beats spiking, from paired rollouts.
