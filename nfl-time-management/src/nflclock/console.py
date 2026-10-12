@@ -179,15 +179,15 @@ class LiveConsole:
                          phase={"snap": SNAP, "pat": PAT, "kickoff": KICKOFF}[st.phase])
 
     def options(self, sim: Simulator, root: RootState) -> dict:
-        """{deciding team index: {option: action}} for the current state."""
+        """{(deciding team index, label): {option: action}} for the current state."""
         st = self.st
         o = root.pos
         d = 1 - o
         out = {}
         if st.phase == "pat":
-            return {o: {"xp": {"pat": "xp"}, "two": {"pat": "two"}}}
+            return {(o, ""): {"xp": {"pat": "xp"}, "two": {"pat": "two"}}}
         if st.phase == "kickoff":
-            return {o: {"deep": {"kick": "deep"}, "onside": {"kick": "onside"}}}
+            return {(o, ""): {"deep": {"kick": "deep"}, "onside": {"kick": "onside"}}}
         first_half = st.qtr <= 2
         lead = root.score[o] - root.score[d]
         off = {}
@@ -210,13 +210,12 @@ class LiveConsole:
             off["pass"] = {"play": "pass"}
         if st.down < 4 and (lead > 0 or (first_half and root.yl >= 50)):
             off["kneel"] = {"play": "kneel", "to_off": False}
-        if first_half and root.t - 1800 <= 150:
-            off["attack"] = {"h1": "attack"}
-            off["runout"] = {"h1": "runout"}
         if len(off) >= 2:
-            out[o] = off
+            out[(o, "")] = off
+        if first_half and root.t - 1800 <= 150:   # strategy for the rest of the half, separate from this snap
+            out[(o, "rest of the half")] = {"attack": {"h1": "attack"}, "runout": {"h1": "runout"}}
         if st.running and root.to[d] > 0:
-            out[d] = {"timeout": {"to_def": True}, "no_timeout": {"to_def": False}}
+            out[(d, "")] = {"timeout": {"to_def": True}, "no_timeout": {"to_def": False}}
         return out
 
     def evaluate(self):
@@ -225,7 +224,8 @@ class LiveConsole:
         opts = self.options(sim, root)
         seed = int(time.time()) % 100000
         results = {}
-        for team_idx, team_opts in opts.items():
+        for key, team_opts in opts.items():
+            team_idx = key[0]
             vals = {k: sim.run(root, n=self.sims, action=a, perspective=team_idx, seed=seed)
                     for k, a in team_opts.items()}
             best = max(vals, key=lambda k: vals[k].mean())
@@ -238,19 +238,19 @@ class LiveConsole:
                              "grade": _grade(self.grades, _family(k, self.st, team_idx == root.pos), cost),
                              "coaches": _coach_share(self.tendency, _family(k, self.st, team_idx == root.pos), k,
                                                      self.st, root, team_idx)})
-            results[team_idx] = pd.DataFrame(rows).sort_values("wp", ascending=False)
+            results[key] = pd.DataFrame(rows).sort_values("wp", ascending=False)
             if "hurry" in team_opts and "spike" in team_opts:
                 # hurry vs. spike hinges on how fast the next snap comes: price the hurry at fixed paces
                 n2 = max(1500, self.sims // 2)
                 sp = sim.run(root, n=n2, action=team_opts["spike"], perspective=team_idx, seed=seed + 1)
                 diffs = [float((sim.run(root, n=n2, action={**team_opts["hurry"], "runoff": float(sec)},
                                         perspective=team_idx, seed=seed + 1) - sp).mean()) for sec in PACES]
-                results[team_idx].attrs["pace"] = pace_break_even(diffs)
+                results[key].attrs["pace"] = pace_break_even(diffs)
         if not opts:
             v = sim.run(root, n=self.sims, perspective=0, seed=seed)
             results[None] = float(v.mean())
-        if self.st.phase == "snap" and self.st.down == 4 and root.pos in results:
-            results[root.pos].attrs["fourth"] = fourth_info(sim, root)
+        if self.st.phase == "snap" and self.st.down == 4 and (root.pos, "") in results:
+            results[(root.pos, "")].attrs["fourth"] = fourth_info(sim, root)
         return results, ctx
 
     # ---------------------------------------------------------- display ---
@@ -267,11 +267,13 @@ class LiveConsole:
 
     def show(self, results):
         team_name = {0: self.home, 1: self.away}
-        for team_idx, df in results.items():
-            if team_idx is None:
+        for key, df in results.items():
+            if key is None:
                 print(f"  No decision point. {self.home} win probability: {df:.1%}")
                 continue
-            print(f"\n  {team_name[team_idx]} options ({self.sims:,} simulations each, common random numbers)")
+            team_idx, label = key
+            what = f"{label} options" if label else "options"
+            print(f"\n  {team_name[team_idx]} {what} ({self.sims:,} simulations each, common random numbers)")
             print(f"  {'option':<30}{'win prob':>9}{'vs best':>9}{'±':>6}   {'grade if chosen':<22}{'NFL coaches':>11}")
             for _, r in df.iterrows():
                 share = "" if r["coaches"] is None or pd.isna(r["coaches"]) else f"{r['coaches']:.0%}"

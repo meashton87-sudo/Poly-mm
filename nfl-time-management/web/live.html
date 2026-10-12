@@ -416,7 +416,8 @@ details summary { cursor: pointer; font-weight: 600; }
     for (const grp of msg.results) {
       const wrap = document.createElement('div'); wrap.className = 'res-team';
       const hd = document.createElement('div'); hd.className = 'res-head';
-      const who = document.createElement('span'); who.className = 'who'; who.textContent = `${grp.team} ${grp.side === 'defense' ? '(defense)' : grp.side === 'kicking' ? '(kicking)' : '(offense)'}`;
+      const who = document.createElement('span'); who.className = 'who';
+      who.textContent = `${grp.team} ${grp.label ? `(${grp.label})` : grp.side === 'defense' ? '(defense)' : grp.side === 'kicking' ? '(kicking)' : '(offense)'}`;
       hd.appendChild(who);
       wrap.appendChild(hd);
       const best = grp.rows[0];
@@ -426,7 +427,7 @@ details summary { cursor: pointer; font-weight: 600; }
       verdict.textContent = `${OPTION_TEXT[best.option] || best.option}` + (second ? ` · +${margin.toFixed(1)} win-prob points over ${(OPTION_TEXT[second.option] || second.option).toLowerCase()}` : '') +
         (second && Math.abs(second.edge) < 2 * second.se ? ' (close call)' : '');
       wrap.appendChild(verdict);
-      if (msg.info && grp.side === 'offense') {
+      if (msg.info && grp.side === 'offense' && !grp.label) {
         const side = game.home.team === grp.team ? game.home : game.away;
         const kname = side.kicker && side.kicker.name ? ` (${side.kicker.name})` : '';
         const fi = document.createElement('p'); fi.className = 'note pace';
@@ -434,7 +435,7 @@ details summary { cursor: pointer; font-weight: 600; }
         fi.textContent = `4th & ${snapshot.goal ? 'goal' : Math.min(snapshot.ytg, ylToGoFor(snapshot))}: converts ${Math.round(msg.info.pConv * 100)}% · ${fgTxt}`;
         wrap.appendChild(fi);
       }
-      if (grp.pace) {
+      if (grp.pace && !grp.label) {
         const pn = document.createElement('p'); pn.className = 'note pace';
         pn.textContent = grp.pace.kind === 'within'
           ? `Hurry or spike: hurrying wins only if the next snap comes within ${Math.round(grp.pace.sec)} seconds of the whistle (a typical hurry-up snap takes about 15).`
@@ -570,12 +571,12 @@ details summary { cursor: pointer; font-weight: 600; }
         const se = o.name === best ? 0 : Math.sqrt(ss / (a.length - 1) / a.length);
         return { option: o.name, family: o.family, wp: vals[o.name].mean, edge: mean, se, drive: vals[o.name].drive };
       }).sort((x, y) => y.wp - x.wp);
-      return { team: g.teamCode, side: g.side, rows, pace: paceBreakEven(j, gi, vals) };
+      return { team: g.teamCode, side: g.side, label: g.label, rows, pace: paceBreakEven(j, gi, vals) };
     });
     const ms = Date.now() - j.t0;
     $('status').textContent = `${j.n.toLocaleString()} simulations per option, common random numbers, ${POOL_SIZE} parallel worker${POOL_SIZE > 1 ? 's' : ''}.`;
     showResults({ results, baseHomeWp: j.results.base.mean, ms, info: j.info }, j.snapshot);
-    const rec = results.map((g) => `${g.team}: ${(OPTION_TEXT[g.rows[0].option] || g.rows[0].option).toLowerCase()}`).join(' · ') || 'no decision';
+    const rec = results.map((g) => `${g.team}${g.label ? ' ' + g.label : ''}: ${(OPTION_TEXT[g.rows[0].option] || g.rows[0].option).toLowerCase()}`).join(' · ') || 'no decision';
     const h = loadHist(); h.unshift({ text: situationText(), rec, state: j.snapshot }); saveHist(h); renderHist();
   }
 

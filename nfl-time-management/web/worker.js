@@ -51,8 +51,12 @@ function optionsFor(st, root, sim) {
     off.pass = { play: 'pass' };
   }
   if (st.down < 4 && (lead > 0 || (firstHalf && root.yl >= 50))) off.kneel = { play: 'kneel', to_off: false };
-  if (firstHalf && root.t - 1800 <= 150) { off.attack = { h1: 'attack' }; off.runout = { h1: 'runout' }; }
   if (Object.keys(off).length >= 2) out.push({ team: o, side: 'offense', family: null, opts: off });
+  // strategy for the rest of the half, separate from this snap's call
+  if (firstHalf && root.t - 1800 <= 150) {
+    out.push({ team: o, side: 'offense', label: 'rest of the half', family: 'h1_end',
+      opts: { attack: { h1: 'attack' }, runout: { h1: 'runout' } } });
+  }
   if (st.running && root.to[d] > 0) {
     out.push({ team: d, side: 'defense', family: 'def_timeout', opts: { timeout: { to_def: true }, no_timeout: { to_def: false } } });
   }
@@ -85,7 +89,7 @@ self.onmessage = async (ev) => {
       const { sim } = getSim(msg.settings);
       const root = rootFrom(msg.st);
       const groups = optionsFor(msg.st, root, sim).map((g) => ({
-        team: g.team, teamCode: g.team === 0 ? game.home.team : game.away.team, side: g.side,
+        team: g.team, teamCode: g.team === 0 ? game.home.team : game.away.team, side: g.side, label: g.label || null,
         options: Object.entries(g.opts).map(([name, action]) => ({ name, action, family: familyOf(name, g) })),
       }));
       const info = msg.st.phase === 'snap' && msg.st.down === 4 ? sim.fourthInfo(root) : null;
