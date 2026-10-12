@@ -67,6 +67,33 @@ def validation_block() -> str:
     return "\n".join(lines)
 
 
+def playbook_block() -> str:
+    """A few concrete findings from the precomputed decision charts (league-average teams)."""
+    ch_p = R / "decision_charts.json"
+    if not ch_p.exists():
+        return ""
+    ch = json.loads(ch_p.read_text())
+    clock = lambda t: f"{int(t) // 60}:{int(t) % 60:02d}"
+    out = ["", "Playbook findings from the simulator (league-average teams; full charts in the report):", ""]
+    ld = [r for r in ch.get("leading_defense_timeouts", []) if r["def_lead"] == 1 and r["kick_yards"] == 42]
+    if ld:
+        r = max(ld, key=lambda r: r["edge"])
+        out.append(f"- **Ahead by 1 on defense, opponent lined up for a 42-yard try with {clock(r['t'])} left:** "
+                   f"letting the clock run wins {r['wp_run']:.0%} of the time; spending timeouts after each play so "
+                   f"you get the ball back wins {r['wp_save']:.0%}.")
+    dt = [r for r in ch.get("defensive_timeouts", []) if r["opp_lead"] == 3 and r["def_to"] == 3]
+    if dt:
+        r = max(dt, key=lambda r: r["edge"])
+        out.append(f"- **Down 3 on defense with three timeouts:** calling one right after a 1st-down run is worth "
+                   f"{r['edge'] * 100:+.1f} win-probability points at {clock(r['t'])} (largest in the chart).")
+    tp = {(r["t"], r["margin"]): r for r in ch.get("two_point", [])}
+    if (180, -2) in tp and (180, 1) in tp:
+        a, b = tp[(180, -2)], tp[(180, 1)]
+        out.append(f"- **Two-point tries at 3:00:** down 2 after the touchdown, going for two is worth "
+                   f"{a['edge'] * 100:+.1f} points; up 1, {b['edge'] * 100:+.1f}.")
+    return "\n".join(out)
+
+
 def summary_block() -> str:
     graded = report.load_graded()
     out = report.summarize(graded)
@@ -116,7 +143,7 @@ def example_block() -> str:
 if __name__ == "__main__":
     text = README.read_text()
     text = put(text, "RESULTS_VALIDATION", validation_block())
-    text = put(text, "RESULTS_SUMMARY", summary_block())
+    text = put(text, "RESULTS_SUMMARY", summary_block() + "\n" + playbook_block())
     text = put(text, "EXAMPLE_DECIDE", "```\n" + example_block() + "\n```")
     README.write_text(text)
     print("README updated")
