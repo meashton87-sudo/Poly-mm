@@ -1,0 +1,109 @@
+import numpy as np
+import pytest
+
+from nflclock import config
+from nflclock import library as L
+
+BUNDLE = config.ARTIFACT_DIR / "bundle.pkl"
+needs_bundle = pytest.mark.skipif(not BUNDLE.exists(), reason="run `nflclock build` first")
+
+
+def test_fine_key_roundtrip():
+    mode = np.array([0, 1, 2, 2])
+    down = np.array([1, 2, 3, 4])
+    ytg = np.array([1, 4, 8, 25])
+    yl = np.array([2, 15, 55, 99])
+    fk = L.fine_key(mode, down, ytg, yl)
+    m, db, yb, z = L.decode_fine(fk)
+    assert (m == mode).all()
+    assert (db == np.array([0, 1, 2, 2])).all()  # 3rd and 4th down share a bucket
+    assert (yb == L.ytg_bucket(ytg)).all()
+    assert (z == L.zone_of(yl)).all()
+    assert fk.max() < L.N_FINE
+
+
+def test_game_mode():
+    # trailing late in the 4th -> hurry; leading late -> kill; first-half 2:00 drill -> hurry
+    assert L.game_mode(2, 200, -3) == L.MODE_HURRY
+    assert L.game_mode(2, 200, 3) == L.MODE_KILL
+    assert L.game_mode(1, 90, 7) == L.MODE_HURRY
+    assert L.game_mode(2, 1500, -3) == L.MODE_NORMAL
+
+
+@pytest.fixture(scope="module")
+def sim():
+    from nflclock.models import Bundle
+    from nflclock.sim import GameContext, Simulator
+    return Simulator(Bundle.load(), GameContext())
+
+
+@needs_bundle
+def test_kneel_out_math(sim):
+    f = sim.kneel_out_possible
+    # 3 kneels, clock running, defense has no timeouts: ~4 x 38s can be burned
+    assert f(np.array([120.0]), np.array([1]), np.array([0]), np.array([True]), np.array([False]))[0]
+    # same but defense holds 3 timeouts: only ~45s can be burned
+    assert not f(np.array([120.0]), np.array([1]), np.array([3]), np.array([True]), np.array([False]))[0]
+    assert f(np.array([40.0]), np.array([1]), np.array([2]), np.array([False]), np.array([False]))[0]
+    assert not f(np.array([40.0]), np.array([1]), np.array([3]), np.array([False]), np.array([False]))[0]
+
+
+@needs_bundle
+def test_victory_formation_is_certain(sim):
+    from nflclock.sim import RootState
+    root = RootState(t=85, pos=0, score=(24, 17), down=1, ytg=10, yl=65, to=(2, 0))
+    v = sim.run(root, n=500, perspective=0, seed=1)
+    assert v.mean() == pytest.approx(1.0)
+
+
+@needs_bundle
+def test_last_second_field_goal(sim):
+    from nflclock.sim import RootState
+    root = RootState(t=3, pos=0, score=(17, 19), down=4, ytg=5, yl=10, to=(0, 1))
+    v = sim.run(root, n=4000, perspective=0, seed=2)
+    p_make = float(sim.fg_prob(np.array([27.0]), np.array([0]))[0])
+    assert v.mean() == pytest.approx(p_make, abs=0.02)
+
+
+@needs_bundle
+def test_invariants(sim):
+    from nflclock.sim import RootState
+    root = RootState(t=280, pos=1, score=(10, 13), down=2, ytg=7, yl=55, to=(2, 3), clock_running=True)
+    v, S = sim.run(root, n=3000, perspective=0, seed=3, return_state=True)
+    assert ((v >= 0) & (v <= 1)).all()
+    assert (S.t <= root.t + 1e-9).all() and (S.t >= 0).all()
+    assert (S.to >= 0).all() and (S.to <= 3).all()
+    assert (S.score >= np.array(root.score)).all()
+
+
+@needs_bundle
+def test_forced_timeout_is_used(sim):
+    from nflclock.sim import RootState
+    root = RootState(t=150, pos=0, score=(20, 17), down=2, ytg=6, yl=60, to=(3, 3), clock_running=True)
+    _, S = sim.run(root, n=200, perspective=1, seed=4, action={"to_def": True}, max_steps=1, return_state=True)
+    assert (S.to[:, 1] == 2).all()
+    _, S = sim.run(root, n=200, perspective=1, seed=4, action={"to_def": False}, max_steps=1, return_state=True)
+    assert (S.to[:, 1] == 3).all()
+
+
+@needs_bundle
+def test_common_random_numbers_identical_actions(sim):
+    from nflclock.sim import RootState
+    root = RootState(t=200, pos=0, score=(14, 14), down=1, ytg=10, yl=70)
+    a = sim.run(root, n=800, perspective=0, seed=9)
+    b = sim.run(root, n=800, perspective=0, seed=9)
+    assert np.array_equal(a, b)
+
+
+@needs_bundle
+def test_better_kicker_helps(sim):
+    """A 50-yard game-winner should be worth more with a better kicker."""
+    from nflclock.sim import RootState
+    root = RootState(t=2, pos=0, score=(17, 19), down=4, ytg=8, yl=33, to=(0, 0))
+    base = sim.run(root, n=4000, perspective=0, seed=5).mean()
+    sim.ctx.kicker_shift[0] = 0.5
+    try:
+        good = sim.run(root, n=4000, perspective=0, seed=5).mean()
+    finally:
+        sim.ctx.kicker_shift[0] = 0.0
+    assert good > base + 0.03
