@@ -48,9 +48,15 @@ def _clock_str(sec_in_qtr) -> str:
     return f"{sec_in_qtr // 60}:{sec_in_qtr % 60:02d}"
 
 
+def _post(r) -> bool:
+    """Decisions made after the whistle are described by the state when the play ended."""
+    return r.get("root_kind") == "post" and not pd.isna(r.get("t_end", np.nan))
+
+
 def _situation(r) -> str:
     q = int(r["qtr"])
-    sec_q = r["game_seconds_remaining"] - (4 - q) * 900 if q <= 4 else r["game_seconds_remaining"]
+    t = r["t_end"] if _post(r) else r["game_seconds_remaining"]
+    sec_q = t - (4 - q) * 900 if q <= 4 else t
     margin = r["margin_off"] if r["team"] == r["posteam"] else -r["margin_off"]
     if r["decision"] == "onside":
         margin = -r["margin_off"]
@@ -58,11 +64,12 @@ def _situation(r) -> str:
     s = f"Q{q} {_clock_str(sec_q)}, {score}"
     if r["decision"] in ("pat", "onside"):
         return s
-    if not np.isnan(r["down"]):
-        yl = r["yardline_100"]
+    down, ytg, yl = ((r["n_down"], r["n_ydstogo"], r["next_yardline_100"]) if _post(r)
+                     else (r["down"], r["ydstogo"], r["yardline_100"]))
+    if not np.isnan(down):
         spot = f"own {int(100 - yl)}" if yl > 50 else ("midfield" if yl == 50 else f"opp {int(yl)}")
         side = "" if r["team"] == r["posteam"] else " (opponent ball)"
-        s += f", {int(r['down'])}&{int(r['ydstogo'])} at {spot}{side}"
+        s += f", {int(down)}&{int(ytg)} at {spot}{side}"
     return s
 
 

@@ -33,6 +33,12 @@ HURRY, NORMAL, MILK, T_SPIKE, T_KNEEL, URGENT, T_FIRE = range(7)
 BURN_SECONDS = 8.0           # leading in the last seconds: any snap is played to run out the clock
 FIRE_DRILL = (7.0, 12.0)     # seconds to rush the field-goal unit on with the clock running
 FIRE_DRILL_LOGIT = -0.3      # rushed kicks are a little less accurate
+# Clock-aware play calls when the offense needs the clock stopped and has no timeouts (2020-25 data):
+# a pass that would end in bounds with a gain is kept with this probability, otherwise redrawn from the
+# same pool's incompletions / catches out of bounds; and the pass rate rises from ~81% to ~95%.
+CLOCK_AWARE = ((20.0, 0.53), (35.0, 0.79))   # (seconds left in the half at the snap, keep probability)
+CLOCK_PASS_SHIFT = 1.5                        # pass-rate logit shift in the final CLOCK_PASS_WINDOW seconds
+CLOCK_PASS_WINDOW = 60.0
 TEMPO_NAMES = {"hurry": HURRY, "normal": NORMAL, "milk": MILK, "urgent": URGENT}
 SNAP, PAT, KICKOFF, DONE = range(4)
 KICKOFF_START_YL = 70.0   # mean receiving-team start under 2024-25 kickoff rules
@@ -102,10 +108,12 @@ class Simulator:
         self.b = bundle
         self.ctx = ctx
         self.lib = bundle.lib
-        self.cdf, self.conv = [], []
+        self.cdf, self.conv, self.stop_cdf = [], [], []
+        self.stop_pos, self.stop_off = self.lib.clock_stop_subset()
         for team in (0, 1):
             cdf, prob = self.lib.tilt(ctx.delta[team, L.KIND_RUN], ctx.delta[team, L.KIND_PASS])
             self.cdf.append(cdf)
+            self.stop_cdf.append(self.lib.subset_cdf(prob, self.stop_pos, self.stop_off))
             self.conv.append(self.lib.conversion_table(prob, ctx.proe[team] / 0.24))
         pu = bundle.punts
         order = np.argsort(pu["yl"], kind="stable")
@@ -137,6 +145,9 @@ class Simulator:
         self.pen_credit = c["penalty_restart_credit"]
         self.onside_p = max(c["onside"], 0.05)
         self.F = self.lib.arr
+        fb = lambda k: self.F[k].astype(bool)
+        self.live_gain = ~(fb("incomplete") | fb("oob") | fb("penalty") | fb("td_off") | fb("td_def") | fb("turnover")
+                           | fb("safety")) & (self.F["yards"] > 0)
 
     # ------------------------------------------------------------ helpers ---
     def fg_prob(self, dist, team):
@@ -320,6 +331,8 @@ class Simulator:
             kneel_ok = run_out & self.kneel_out_possible(t_half, down, def_to, run_c, tmw_pending)
             def_wants = run_out & ~kneel_ok & (t_half <= 100) & (down >= 2)
             off_wants = attempt & (t_half <= 30.0 + 15.0 * off_to) & (t_half <= 75)
+        # offense that wants the clock stopped (for clock-aware play calls)
+        aware = ((margin <= 0) & (margin >= -16)) if half == 2 else attempt.copy()
         def_call = run_c & def_wants & (def_to > 0)
         off_call = run_c & ~def_call & off_wants & (off_to > 0) & ~kneel_ok
         if "to_def" in act:
@@ -392,6 +405,7 @@ class Simulator:
             return
         ix, o, d, margin = ix[keep], o[keep], d[keep], margin[keep]
         kneel_now, spike_now, run_out = kneel_now[keep], spike_now[keep], run_out[keep]
+        aware = aware[keep]
         running_at_snap = running_at_snap[keep]
         fire = fire[keep]
         t_half = S.t[ix] - half_end
@@ -423,12 +437,14 @@ class Simulator:
             fk = L.fine_key(L.game_mode(half, t_half[mix], margin[mix]), down[mix], S.ytg[ix[mix]], yl[mix])
             pr = self.lib.pass_rate[fk]
             lg = np.log(pr / (1 - pr)) + self.ctx.proe[o[mix]] / np.maximum(pr * (1 - pr), 0.1)
+            crit = aware[mix] & (S.to[ix[mix], o[mix]] == 0) & (t_half[mix] <= CLOCK_PASS_WINDOW)
+            lg = lg + CLOCK_PASS_SHIFT * crit
             kind[mix] = np.where(u[ix[mix], 1] < 1 / (1 + np.exp(-lg)), PASS, RUN)
 
         # (4) execute
         scr = np.isin(kind, [RUN, PASS, KNEEL, SPIKE])
         if scr.any():
-            self._scrimmage(S, u, ix[scr], o[scr], kind[scr], margin[scr])
+            self._scrimmage(S, u, ix[scr], o[scr], kind[scr], margin[scr], aware[scr])
         m = kind == FG
         if m.any():
             self._field_goal(S, u, ix[m], o[m], fire[m])
@@ -536,7 +552,7 @@ class Simulator:
     def _in_window(self, S, ix):
         return (S.t[ix] - self.half_end) <= self.oob_window
 
-    def _scrimmage(self, S, u, ix, o, kind, margin):
+    def _scrimmage(self, S, u, ix, o, kind, margin, aware=None):
         d = 1 - o
         n = ix.size
         yl0 = S.yl[ix]
@@ -553,6 +569,21 @@ class Simulator:
                 if m.any():
                     lib_rows[m] = self.lib.sample(self.cdf[team], np.where(kind[m] == PASS, 1, 0), fk[m],
                                                   u[ix[m], 2])
+            if aware is not None:
+                # no timeouts and the clock must stop: sideline throws and throw-aways replace some
+                # in-bounds gains (redrawn from the same pool's clock-stopping passes)
+                (t1, k1), (t2, k2) = CLOCK_AWARE
+                keep_p = np.where(t_half <= t1, k1, np.where(t_half <= t2, k2, 1.0))
+                swap = np.flatnonzero(lib_play & (kind == PASS) & aware & (S.to[ix, o] == 0)
+                                      & self.live_gain[lib_rows] & (u[ix, 6] >= keep_p))
+                if swap.size:
+                    pool = self.lib.pool_of[1, fk[swap]]
+                    for team in (0, 1):
+                        m = o[swap] == team
+                        if m.any():
+                            r = self.lib.sample_subset(self.stop_cdf[team], self.stop_pos, self.stop_off, pool[m],
+                                                       u[ix[swap[m]], 7])
+                            lib_rows[swap[m]] = np.where(r >= 0, r, lib_rows[swap[m]])
         g = lambda f: np.where(lib_play, F[f][lib_rows], 0)
         yards = g("yards").astype(float)
         penalty = g("penalty").astype(bool)

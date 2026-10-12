@@ -234,6 +234,35 @@ class PlayLibrary:
         pos = np.clip(pos, self.offsets[pool], self.offsets[pool + 1] - 1)
         return self.items[pos]
 
+    # ------------------------------------------------ clock-aware resampling ---
+    def clock_stop_subset(self):
+        """Pass plays that stop the clock and nothing else: incompletions and catches out of bounds.
+
+        Returns positions into ``items`` (grouped by pool) and per-pool offsets into that list.
+        """
+        if not hasattr(self, "_stop"):
+            it = self.items
+            f = lambda k: self.arr[k][it].astype(bool)
+            ok = (f("incomplete") | f("oob")) & ~f("penalty") & ~f("turnover") & ~f("td_off") & ~f("td_def") \
+                & ~f("safety") & (self._kind_of_pool() == KIND_PASS)[self.pool_id]
+            pos = np.flatnonzero(ok)
+            self._stop = (pos, np.searchsorted(self.pool_id[pos], np.arange(self.n_pools + 1)))
+        return self._stop
+
+    def subset_cdf(self, prob: np.ndarray, pos: np.ndarray, offsets: np.ndarray) -> np.ndarray:
+        """Pool-offset CDF over a subset of item positions, weighted by the (tilted) item probabilities."""
+        pool = self.pool_id[pos]
+        cum = np.concatenate([[0.0], np.cumsum(prob[pos])])
+        tot = cum[offsets[1:]] - cum[offsets[:-1]]
+        within = (cum[1:] - cum[offsets[pool]]) / np.maximum(tot[pool], 1e-300)
+        return pool + np.minimum(within, 1.0 - 1e-12)
+
+    def sample_subset(self, cdf, pos, offsets, pool, u) -> np.ndarray:
+        """Library rows drawn from the subset of each pool; -1 where a pool has no such plays."""
+        lo, hi = offsets[pool], offsets[pool + 1]
+        j = np.clip(np.searchsorted(cdf, pool + u, side="left"), lo, np.maximum(hi - 1, lo))
+        return np.where(hi > lo, self.items[pos[np.minimum(j, len(pos) - 1)]], -1)
+
     def conversion_table(self, prob: np.ndarray, pass_shift: float = 0.0) -> np.ndarray:
         """P(gain >= ytg or auto first down or TD) on 4th down: [mode, zone, ytg(0..20)]."""
         conv = np.zeros((N_MODE, N_ZONE, 21))

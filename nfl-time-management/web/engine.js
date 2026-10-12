@@ -37,6 +37,12 @@
   const BURN_SECONDS = 8.0;            // leading in the last seconds: any snap is played to run out the clock
   const FIRE_DRILL = [7.0, 12.0];      // seconds to rush the field-goal unit on with the clock running
   const FIRE_DRILL_LOGIT = -0.3;       // rushed kicks are a little less accurate
+  // Clock-aware play calls when the offense needs the clock stopped and has no timeouts (2020-25 data):
+  // a pass that would end in bounds with a gain is kept with this probability, otherwise redrawn from the
+  // same pool's incompletions / catches out of bounds; and the pass rate rises from ~81% to ~95%.
+  const CLOCK_AWARE = [[20.0, 0.53], [35.0, 0.79]];  // [seconds left in the half at the snap, keep probability]
+  const CLOCK_PASS_SHIFT = 1.5, CLOCK_PASS_WINDOW = 60.0;
+  const LIVE_MASK = 1 | 4 | 8 | 16 | 32 | 64 | 128;  // penalty, incomplete, oob, td, td_def, turnover, safety
   const TEMPO = { hurry: HURRY, normal: NORMAL, milk: MILK, urgent: URGENT };
   const SNAP = 0, PAT = 1, KICKOFF = 2, DONE = 3;
   const MODE_NORMAL = 0, MODE_HURRY = 1, MODE_KILL = 2;
@@ -114,6 +120,19 @@
           this.itemEpa[i] = this.lib.epa[this.lib.items[i]];
         }
       }
+      // pass plays that stop the clock and nothing else (incompletions, catches out of bounds), by pool
+      const stopPos = [];
+      this.stopOff = new Int32Array(this.nPools + 1);
+      for (let p = 0; p < this.nPools; p++) {
+        this.stopOff[p] = stopPos.length;
+        if (this.lib.poolKind[p] !== PASS) continue;
+        for (let i = this.lib.offsets[p]; i < this.lib.offsets[p + 1]; i++) {
+          const f = this.lib.flags[this.lib.items[i]];
+          if ((f & (4 | 8)) && !(f & (1 | 16 | 32 | 64 | 128))) stopPos.push(i);
+        }
+      }
+      this.stopOff[this.nPools] = stopPos.length;
+      this.stopPos = Int32Array.from(stopPos);
       this.tempo = {};
       const tmap = { hurry: HURRY, normal: NORMAL, milk: MILK, spike: T_SPIKE, urgent: URGENT };
       for (const [k, v] of Object.entries(data.tempo)) {
@@ -194,6 +213,21 @@
       x[5] = offSpread * Math.exp(-4 * elapsed); x[6] = isHome; x[7] = down; x[8] = ytg; x[9] = yl;
       x[10] = offTo; x[11] = defTo; x[12] = half === 1 ? r2h : 0;
       return x;
+    }
+
+    // CDF over the clock-stopping subset of each pool, weighted by tilted item probabilities
+    subsetCdf(prob) {
+      const pos = this.stopPos, off = this.stopOff, cdf = new Float64Array(pos.length);
+      for (let p = 0; p < this.nPools; p++) {
+        let tot = 0;
+        for (let j = off[p]; j < off[p + 1]; j++) tot += prob[pos[j]];
+        let cum = 0;
+        for (let j = off[p]; j < off[p + 1]; j++) {
+          cum += prob[pos[j]];
+          cdf[j] = p + Math.min(cum / Math.max(tot, 1e-300), 1 - 1e-12);
+        }
+      }
+      return cdf;
     }
 
     // ----------------------------------------------------- tilting (library) ---
@@ -316,10 +350,11 @@
   class Simulator {
     constructor(eng, ctx) {
       this.e = eng; this.ctx = ctx;
-      this.cdf = []; this.conv = [];
+      this.cdf = []; this.conv = []; this.stopCdf = [];
       for (let team = 0; team < 2; team++) {
         const { cdf, prob } = eng.tilt(ctx.delta[team][RUN], ctx.delta[team][PASS]);
         this.cdf.push(cdf);
+        this.stopCdf.push(eng.subsetCdf(prob));
         this.conv.push(eng.conversionTable(prob, ctx.proe[team] / 0.24));
       }
       const c = eng.consts;
@@ -357,6 +392,15 @@
       const target = pool + u;
       while (lo < hi) { const mid = (lo + hi) >> 1; if (cdf[mid] < target) lo = mid + 1; else hi = mid; }
       return L.items[lo];
+    }
+
+    sampleStop(team, pool, u) {
+      const E = this.e, cdf = this.stopCdf[team];
+      let lo = E.stopOff[pool], hi = E.stopOff[pool + 1] - 1;
+      if (hi < lo) return -1;
+      const target = pool + u;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (cdf[mid] < target) lo = mid + 1; else hi = mid; }
+      return E.lib.items[E.stopPos[lo]];
     }
 
     puntReceiveYl(yl, team) {
@@ -473,6 +517,8 @@
         defWants = runOut && !kneelOk && tHalf <= 100 && down >= 2;
         offWants = attempt && tHalf <= 30.0 + 15.0 * offTo && tHalf <= 75;
       }
+      // offense that wants the clock stopped (for clock-aware play calls)
+      const aware = half === 2 ? (margin <= 0 && margin >= -16) : attempt;
       let defCall = runC && defWants && defTo > 0;
       let offCall = runC && !defCall && offWants && offTo > 0 && !kneelOk;
       if (act && act.to_def !== undefined) defCall = runC && defTo > 0 && !!act.to_def;
@@ -543,14 +589,15 @@
       if (kind < 0) {
         const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl);
         const pr = this.e.lib.passRate[fk];
-        const lg = Math.log(pr / (1 - pr)) + ctx.proe[o] / Math.max(pr * (1 - pr), 0.1);
+        let lg = Math.log(pr / (1 - pr)) + ctx.proe[o] / Math.max(pr * (1 - pr), 0.1);
+        if (aware && S.to[o] === 0 && tHalf <= CLOCK_PASS_WINDOW) lg += CLOCK_PASS_SHIFT;
         kind = u[1] < sigmoid(lg) ? PASS : RUN;
       }
       S.plays += 1;
       // (4) execute
       if (kind === FG) this._fieldGoal(S, g, u, o, fire);
       else if (kind === PUNT) this._punt(S, g, u, o);
-      else this._scrimmage(S, g, u, o, kind, margin);
+      else this._scrimmage(S, g, u, o, kind, margin, aware);
     }
 
     _coachChoice(S, g, o, margin, tHalf, pFg, u5, cm) {
@@ -634,14 +681,23 @@
       S.credit = S.running ? credit : 0;
     }
 
-    _scrimmage(S, g, u, o, kind, margin) {
+    _scrimmage(S, g, u, o, kind, margin, aware) {
       const d = 1 - o, L = this.e.lib;
       const yl0 = S.yl, ytg0 = S.ytg, down0 = S.down;
       let yards = 0, penalty = false, autoFd = false, incomplete = false, oob = false, tdOff = false, tdDef = false,
         turnover = false, toRel = 0, safety = false, dur = 0;
       if (kind === RUN || kind === PASS) {
         const fk = fineKey(gameMode(g.half, S.t - g.halfEnd, margin), down0, ytg0, yl0);
-        const row = this.sampleLib(o, kind === PASS ? 1 : 0, fk, u[2]);
+        let row = this.sampleLib(o, kind === PASS ? 1 : 0, fk, u[2]);
+        if (aware && kind === PASS && S.to[o] === 0) {
+          // no timeouts and the clock must stop: sideline throws and throw-aways replace some in-bounds gains
+          const th = S.t - g.halfEnd;
+          const keep = th <= CLOCK_AWARE[0][0] ? CLOCK_AWARE[0][1] : th <= CLOCK_AWARE[1][0] ? CLOCK_AWARE[1][1] : 1.0;
+          if (u[6] >= keep && !(L.flags[row] & LIVE_MASK) && L.yards[row] > 0) {
+            const r2 = this.sampleStop(o, L.poolOf[this.e.nFine + fk], u[7]);
+            if (r2 >= 0) row = r2;
+          }
+        }
         const f = L.flags[row];
         yards = L.yards[row]; penalty = !!(f & 1); autoFd = !!(f & 2); incomplete = !!(f & 4); oob = !!(f & 8);
         tdOff = !!(f & 16); tdDef = !!(f & 32); turnover = !!(f & 64); safety = !!(f & 128);

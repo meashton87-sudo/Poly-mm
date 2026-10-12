@@ -178,7 +178,10 @@ def extract_decisions(pbp: pd.DataFrame, seasons) -> pd.DataFrame:
         | ((post["qtr"] == 2) & (p_hs <= 60) & (post["next_yardline_100"] <= 60)))
     d = post[m]
     act = np.where(off_to_called[m], "timeout", np.where(nxt_spike[m], "spike", "hurry"))
-    add(d, "off_clock_stop", d["posteam"], act, "post", {"off_to_avail": off_to_avail[m].to_numpy()})
+    # the pace the offense actually achieved (only measurable when no timeout came before the snap)
+    paced = d["to_after_team"].isna() & d["runoff_actual"].between(2.0, 40.0)
+    add(d, "off_clock_stop", d["posteam"], act, "post", {"off_to_avail": off_to_avail[m].to_numpy(),
+                                                          "runoff_actual": d["runoff_actual"].where(paced).to_numpy()})
 
     # lead_tempo: leading offense in the final 5:00, defense did not stop the clock
     m = ((post["qtr"] == 4) & (p_hs <= 300) & (post["margin"].between(1, 16)) & post["to_after_team"].isna()
@@ -270,6 +273,10 @@ def _options_for(r, root: RootState, sim: Simulator):
         return {"as_played": {"to_def": False, "runoff": ra}, "milk": {"to_def": False, "runoff": MILK_RUNOFF}}
     opts = dict(OPTIONS[dec])
     if dec == "off_clock_stop":
+        # the option the offense chose is played at the pace it actually achieved; the others at league pace
+        ra = r.get("runoff_actual", np.nan)
+        if r["actual"] in ("hurry", "spike") and ra == ra and ra is not None:
+            opts[r["actual"]] = {**opts[r["actual"]], "runoff": float(ra)}
         o = root.pos
         if root.to[o] <= 0:
             opts.pop("timeout")

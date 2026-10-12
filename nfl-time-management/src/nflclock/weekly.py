@@ -7,14 +7,15 @@ import numpy as np
 import pandas as pd
 
 from . import config
-from .report import FAMILY_LABEL, OPTION_LABEL, _clock_str, _situation
+from .report import FAMILY_LABEL, OPTION_LABEL, _clock_str, _post, _situation
 from .tendency import letter_for
 
 
 def _explain(r) -> str:
     fam, act, rec = r["decision"], r["actual"], r["recommended"]
     q = int(r["qtr"])
-    sec_q = r["game_seconds_remaining"] - (4 - q) * 900 if q <= 4 else r["game_seconds_remaining"]
+    t = r["t_end"] if _post(r) else r["game_seconds_remaining"]
+    sec_q = t - (4 - q) * 900 if q <= 4 else t
     clock = _clock_str(sec_q)
     gain = r["gain"] * 100
     offense = r["team"] == r["posteam"]
@@ -28,11 +29,13 @@ def _explain(r) -> str:
         return (f"{r['team']} burned a timeout with {clock} left. Here the timeout was worth more later "
                 f"(the two-minute warning or a later stop does the same job), by {gain:.1f} points.")
     if fam == "off_clock_stop":
-        what = {"hurry": "hurried to the line without stopping the clock", "spike": "spiked the ball",
-                "timeout": "called timeout"}[act]
+        ra = r.get("runoff_actual", np.nan)
+        pace = f" (the snap came {ra:.0f} seconds after the whistle)" if act in ("hurry", "spike") and ra == ra else ""
+        what = {"hurry": "let the clock run" if ra == ra and ra > 25 else "hurried to the line without stopping the clock",
+                "spike": "spiked the ball", "timeout": "called timeout"}[act]
         better = {"hurry": "snap a real play quickly", "spike": "spike it", "timeout": "call timeout"}[rec]
-        return (f"Needing points, {r['team']} {what} with {clock} left ({trail}). The better move was to {better}: "
-                f"+{gain:.1f} points of win probability, mostly from the seconds and downs it preserves.")
+        return (f"Needing points, {r['team']} {what} with {clock} left ({trail}){pace}. The better move was to "
+                f"{better}: +{gain:.1f} points of win probability, mostly from the seconds and downs it preserves.")
     if fam == "fourth_down":
         dist = int(r["yardline_100"]) + 17
         kick = f" (a {dist}-yard try for {r['kicker']})" if rec == "fg" or act == "fg" else ""
