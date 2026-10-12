@@ -52,6 +52,43 @@ def _decide(a):
     print(f"\nRecommendation: {df.iloc[0]['option']}")
 
 
+def _grades(a):
+    from . import config
+    from .report import CLOCK_FAMILIES, FAMILY_LABEL, OPTION_LABEL, _situation
+    path = config.REPORT_DIR / "all_graded_decisions.csv.gz"
+    if not path.exists():
+        print("No graded decisions yet: run `nflclock analyze` and `python scripts/make_report.py` first.")
+        return
+    df = pd.read_csv(path)
+    team = a.team.upper()
+    t = df[(df["team"] == team) & df["decision"].isin(CLOCK_FAMILIES)]
+    if a.season:
+        t = t[t["season"] == a.season]
+    if t.empty:
+        print(f"No graded clock decisions for {team}.")
+        return
+    t = t.assign(cost=t["gain"].where(t["actual"] != t["recommended"], 0.0))
+    print(f"\n{team} clock and game-management report card")
+    by = t.groupby("season").agg(coach=("coach", lambda x: x.mode().iat[0]), graded=("cost", "size"),
+                                 mistakes=("sig_error", "sum"), wins_lost=("cost", "sum"))
+    league = df[df["decision"].isin(CLOCK_FAMILIES)]
+    league = league.assign(cost=league["gain"].where(league["actual"] != league["recommended"], 0.0))
+    lg = league.groupby(["season", "team"])["cost"].sum().groupby("season").mean()
+    by["league_avg"] = lg.reindex(by.index)
+    print(by.round(2).to_string())
+    fam = t.groupby("decision").agg(graded=("cost", "size"), mistakes=("sig_error", "sum"), wins_lost=("cost", "sum"))
+    fam.index = fam.index.map(FAMILY_LABEL)
+    print("\nBy decision type:")
+    print(fam.sort_values("wins_lost", ascending=False).round(2).to_string())
+    worst = t[t["sig_error"]].sort_values("gain", ascending=False).head(a.top)
+    if len(worst):
+        print(f"\nCostliest {len(worst)} decisions:")
+        for _, r in worst.iterrows():
+            print(f"  {r['season']} wk {int(r['week'])} vs {r['opp']}: {_situation(r)} -- chose "
+                  f"{OPTION_LABEL[r['actual']]}, better: {OPTION_LABEL[r['recommended']]} "
+                  f"(+{r['gain'] * 100:.1f} WP pts)")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="nflclock", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -61,6 +98,10 @@ def main(argv=None):
     an.add_argument("--sims", type=int, default=600)
     an.add_argument("--games", type=int, default=None)
     sub.add_parser("report")
+    g = sub.add_parser("grades", help="a team's graded clock decisions (after the analysis has run)")
+    g.add_argument("--team", required=True)
+    g.add_argument("--season", type=int, default=None)
+    g.add_argument("--top", type=int, default=8)
     d = sub.add_parser("decide")
     d.add_argument("--qtr", type=int, required=True)
     d.add_argument("--clock", required=True, help="time left in quarter, e.g. 2:31")
@@ -86,6 +127,8 @@ def main(argv=None):
     a = p.parse_args(argv)
     if a.cmd == "decide":
         _decide(a)
+    elif a.cmd == "grades":
+        _grades(a)
     elif a.cmd == "build":
         from . import data
         from .decide import PERSONNEL_PATH, build_personnel
@@ -103,8 +146,8 @@ def main(argv=None):
         res = analyze.run(n=a.sims, limit_games=a.games)
         res.to_parquet(config.CACHE_DIR / "decisions.parquet")
     elif a.cmd == "report":
-        from .report import build_report
-        build_report()
+        import runpy
+        runpy.run_path(str(_scripts() / "make_report.py"), run_name="__main__")
     return 0
 
 

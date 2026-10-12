@@ -323,7 +323,9 @@ def _eval_game(args):
         vals_a, vals_b = {}, {}
         for name, act in opts.items():
             vals_a[name] = sim.run(root, n=n, action=act, perspective=persp, seed=seed)
-            vals_b[name] = sim.run(root, n=n, action=act, perspective=persp, seed=seed + 1)
+            # the neutral-team re-grade only needs which option wins, not a cross-fitted edge
+            vals_b[name] = vals_a[name] if _G.get("neutral") else sim.run(
+                root, n=n, action=act, perspective=persp, seed=seed + 1)
         mean_a = {k: float(v.mean()) for k, v in vals_a.items()}
         mean_b = {k: float(v.mean()) for k, v in vals_b.items()}
         rec = max(mean_a, key=mean_a.get)
@@ -359,11 +361,13 @@ def evaluate(dec: pd.DataFrame, pbp: pd.DataFrame, n: int = 600, workers: int = 
     return dec.merge(res, on=["game_id", "play_id", "decision"], how="inner")
 
 
-def run(seasons=None, n=600, workers=4, limit_games=None):
+def run(seasons=None, n=600, workers=4, limit_games=None, families=None):
     seasons = seasons or config.ANALYSIS_SEASONS
     pbp = data.load(tuple(range(2016, 2027)))
     pbp = pbp[pbp["season"].isin(seasons)]
     dec = extract_decisions(pbp, seasons)
+    if families:
+        dec = dec[dec["decision"].isin(families)]
     if limit_games:
         keep = dec["game_id"].drop_duplicates().sample(limit_games, random_state=0)
         dec = dec[dec["game_id"].isin(keep)]

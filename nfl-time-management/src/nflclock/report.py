@@ -120,8 +120,8 @@ def write_tables(df: pd.DataFrame, sens: pd.DataFrame | None = None) -> dict:
     out["by_coach"].sort_values("wins_lost_per_17").to_csv(config.REPORT_DIR / "coaches.csv", index=False)
     out["top"].to_csv(config.REPORT_DIR / "costliest_decisions.csv", index=False)
     cols = ["game_id", "play_id", "season", "week", "team", "opp", "coach", "decision", "actual", "recommended",
-            "gain", "gain_se", "sig_error", "wp_actual", "qtr", "game_seconds_remaining", "margin_off", "down",
-            "ydstogo", "yardline_100", "desc"]
+            "gain", "gain_se", "sig_error", "wp_actual", "qtr", "game_seconds_remaining", "posteam", "margin_off",
+            "down", "ydstogo", "yardline_100", "desc"]
     df[cols].to_csv(config.REPORT_DIR / "all_graded_decisions.csv.gz", index=False, compression="gzip")
     if sens is not None and len(sens):
         s = sens.groupby("decision").agg(decisions=("flipped", "size"), flipped=("flipped", "mean"),

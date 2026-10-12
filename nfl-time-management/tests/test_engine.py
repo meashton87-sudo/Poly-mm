@@ -107,3 +107,15 @@ def test_better_kicker_helps(sim):
     finally:
         sim.ctx.kicker_shift[0] = 0.0
     assert good > base + 0.03
+
+
+@needs_bundle
+def test_forced_tempo_runs_a_real_play(sim):
+    """'Hurry to the line' must snap a real play even when the policy would spike."""
+    from nflclock.sim import RootState
+    root = RootState(t=30, pos=0, score=(17, 20), down=1, ytg=10, yl=40, to=(0, 2), clock_running=True)
+    _, S = sim.run(root, n=1000, perspective=0, seed=6, action={"tempo": "urgent"}, max_steps=1, return_state=True)
+    spike_like = (S.down == 2) & (S.yl == 40) & ~S.running
+    assert spike_like.mean() < 0.6
+    _, S = sim.run(root, n=1000, perspective=0, seed=6, action={"play": "spike"}, max_steps=1, return_state=True)
+    assert ((S.down == 2) & (S.yl == 40) & ~S.running).all()

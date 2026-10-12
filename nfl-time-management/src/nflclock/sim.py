@@ -120,8 +120,9 @@ class Simulator:
             np.mean(self.punt["net"][self.punt_lo[y]:self.punt_hi[y]][clean[self.punt_lo[y]:self.punt_hi[y]]])
             if self.punt_hi[y] > self.punt_lo[y] else 40.0 for y in range(101)])
         tp = bundle.tempo
-        self.tempo = {HURRY: tp["hurry"], NORMAL: tp["normal"], MILK: tp["milk"], T_SPIKE: tp["spike"],
-                      URGENT: tp["urgent"]}
+        # A spike is hurried by definition; the measured tail beyond ~16s is injuries and reviews.
+        self.tempo = {HURRY: tp["hurry"], NORMAL: tp["normal"], MILK: tp["milk"],
+                      T_SPIKE: np.clip(tp["spike"], 1.0, 16.0), URGENT: tp["urgent"]}
         c = bundle.consts
         self.kneel_dur = c["kneel_duration"]
         self.spike_dur = c["spike_duration"]
@@ -342,8 +343,10 @@ class Simulator:
         spike_now = run_c & hurry & (S.to[ix, o] == 0) & (down <= 3) & (t_half <= 35)
         spike_now |= run_c & fg_range & fg_helps & (half == 2) & (S.to[ix, o] == 0) & (down <= 3) & (t_half <= 22)
         spike_now &= ~kneel_now
-        if "tempo" in act:
+        if "tempo" in act:  # a forced tempo means a real snap at that pace: no policy spike or kneel
             tempo[:] = TEMPO_NAMES[act["tempo"]]
+            spike_now[:] = False
+            kneel_now[:] = False
         forced = act.get("play")
         if forced is not None:
             kneel_now[:] = forced == "kneel"
@@ -365,6 +368,7 @@ class Simulator:
         t1 = np.where(stop, self.tmw, t1)
         stop_q = (t0 > self.q_end) & (t1 <= self.q_end)
         t1 = np.where(stop_q, self.q_end, t1)
+        running_at_snap = run_c & ~stop & ~stop_q
         ended = t1 <= half_end
         S.t[ix] = np.maximum(t1, half_end)
         S.credit[ix] = 0.0
@@ -374,6 +378,7 @@ class Simulator:
             return
         ix, o, d, margin = ix[keep], o[keep], d[keep], margin[keep]
         kneel_now, spike_now, run_out = kneel_now[keep], spike_now[keep], run_out[keep]
+        running_at_snap = running_at_snap[keep]
         t_half = S.t[ix] - half_end
         yl, down = S.yl[ix], S.down[ix]
 
@@ -387,7 +392,7 @@ class Simulator:
         fg_last = last_play & (p_fg >= 0.08) & fg_useful
         # Kick now if another snap would likely leave no time to set up the field goal.
         snap_budget = np.where(S.to[ix, o] > 0, 8.0, 15.0)
-        fg_last |= (t_half <= snap_budget) & (p_fg >= 0.3) & fg_useful & ~S.running[ix]
+        fg_last |= (t_half <= snap_budget) & (p_fg >= 0.3) & fg_useful & ~running_at_snap
         kind[(kind < 0) & fg_last] = FG
         kind[(kind == SPIKE) & fg_last] = FG
         fourth = (kind < 0) & (down == 4)
@@ -434,7 +439,7 @@ class Simulator:
         # batch every WP query into one model call
         q_team = np.concatenate([o, d, d, d, d, d])
         q_margin = np.concatenate([margin, -margin, -(margin + 7), -(margin + 3), -margin, -margin])
-        q_t = np.concatenate([t - 6, t - 6, t - 6, t - 5, t - 5, t - 9])
+        q_t = np.maximum(np.concatenate([t - 6, t - 6, t - 6, t - 5, t - 5, t - 9]), self.half_end + 1.0)
         q_yl = np.concatenate([new_yl, 100 - yl, np.full(n, KICKOFF_START_YL), np.full(n, KICKOFF_START_YL),
                                100 - np.maximum(yl + 8, 20),
                                self._punt_receive_yl(yl, o)])

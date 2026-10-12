@@ -54,7 +54,7 @@ def end_of_half_chart(bundle):
 def kicker_fourth_down_chart(bundle):
     """Q4, 1:50 left, trailing by 1, 4th & 4: go vs. FG by distance for bad/average/elite kickers."""
     rows = []
-    for label, k in (("bad kicker (-0.4)", -0.4), ("average", 0.0), ("elite kicker (+0.4)", 0.4)):
+    for label, k in (("weak kicker", -0.3), ("average kicker", 0.0), ("elite kicker", 0.3)):
         sim = _sim(bundle, home=TeamInfo("HOME", kicker_rating=k))
         for yl in (20, 25, 30, 35, 38, 41):
             root = RootState(t=110, pos=0, score=(19, 20), down=4, ytg=4, yl=yl, to=(2, 2))
@@ -68,7 +68,7 @@ def kicker_fourth_down_chart(bundle):
 def punter_fourth_down_chart(bundle):
     """Q4, 4:30 left, leading by 3, 4th & 2 at various spots: go vs. punt for bad/average/elite punters."""
     rows = []
-    for label, pr in (("bad punter (-3 yds)", -3.0), ("average", 0.0), ("elite punter (+3 yds)", 3.0)):
+    for label, pr in (("weak punter", -1.5), ("average punter", 0.0), ("elite punter", 1.5)):
         sim = _sim(bundle, home=TeamInfo("HOME", punter_rating=pr))
         for yl in (65, 58, 52, 46, 40):
             root = RootState(t=270, pos=0, score=(23, 20), down=4, ytg=2, yl=yl, to=(3, 3))

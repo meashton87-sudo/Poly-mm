@@ -22,8 +22,10 @@ RIDGE = {
     "pass": {"off": 160.0, "def": 300.0},
     "rush": {"off": 300.0, "def": 420.0},
 }
-KICKER_PRIOR_PRECISION = 40.0   # prior SD of kicker skill ~0.16 logits
-PUNTER_PRIOR_PUNTS = 25.0
+# Prior strengths from method-of-moments on 2016-25 careers (>= 60 FGs / 100 punts):
+# true kicker skill SD ~0.19 logits; true punter skill SD ~1.0 net yard (per-punt SD ~9.5).
+KICKER_PRIOR_PRECISION = 28.0
+PUNTER_PRIOR_PUNTS = 95.0
 
 
 def slate_index(df: pd.DataFrame) -> pd.Series:
