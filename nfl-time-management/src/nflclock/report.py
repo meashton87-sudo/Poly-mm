@@ -29,8 +29,13 @@ OPTION_LABEL = {
 }
 
 
-def load_graded(path=None) -> pd.DataFrame:
+def load_graded(path=None, include_current: bool = True) -> pd.DataFrame:
+    """Graded decisions for the analysis seasons, plus the current season to date if it was graded."""
     df = pd.read_parquet(path or config.CACHE_DIR / "decisions.parquet")
+    current = sorted(config.CACHE_DIR.glob("decisions_20[2-9][0-9].parquet"))
+    if include_current and path is None and current:
+        df = pd.concat([df] + [pd.read_parquet(c) for c in current], ignore_index=True)
+        df = df.drop_duplicates(["game_id", "play_id", "decision"])
     df["is_rec"] = df["recommended"] == df["actual"]
     df["sig_error"] = (~df["is_rec"]) & (df["gain"] > 2 * df["gain_se"]) & (df["gain"] > 0.005)
     df["wp_cost"] = np.where(df["is_rec"], 0.0, df["gain"])  # cross-fit estimate, signed
@@ -61,7 +66,9 @@ def _situation(r) -> str:
     return s
 
 
-def summarize(df: pd.DataFrame) -> dict:
+def summarize(df_all: pd.DataFrame) -> dict:
+    """League tables use the complete analysis seasons; the team table also lists the current season."""
+    df = df_all[df_all["season"].isin(config.ANALYSIS_SEASONS)]
     fam = df.groupby("decision").agg(
         decisions=("gain", "size"), agree=("is_rec", "mean"), sig_errors=("sig_error", "sum"),
         wins_lost=("wp_cost", "sum"),
@@ -79,7 +86,8 @@ def summarize(df: pd.DataFrame) -> dict:
     clock = df[df["decision"].isin(CLOCK_FAMILIES)]
     games = df["game_id"].nunique()
     team_games = df.groupby("season")["game_id"].nunique().sum() * 2
-    by_team = clock.groupby(["season", "team"]).agg(
+    clock_all = df_all[df_all["decision"].isin(CLOCK_FAMILIES)]
+    by_team = clock_all.groupby(["season", "team"]).agg(
         coach=("coach", lambda x: x.mode().iat[0]), decisions=("gain", "size"), sig_errors=("sig_error", "sum"),
         wins_lost=("wp_cost", "sum")).reset_index()
     by_team["error_rate"] = by_team["sig_errors"] / by_team["decisions"]
@@ -106,7 +114,8 @@ def summarize(df: pd.DataFrame) -> dict:
         "agree_rate_clock": float(clock["is_rec"].mean()),
         "sig_errors_clock": int(clock["sig_error"].sum()),
         "wins_lost_clock": float(clock["wp_cost"].sum()),
-        "wins_lost_clock_per_team_season": float(clock["wp_cost"].sum() / max(1, by_team.shape[0])),
+        "wins_lost_clock_per_team_season": float(
+            clock["wp_cost"].sum() / max(1, clock.groupby(["season", "team"]).ngroups)),
         "wins_lost_play_select": float(df.loc[df["decision"] == "play_select", "wp_cost"].sum()),
     }
     return {"families": fam, "by_team": by_team, "by_coach": by_coach, "top": top, "headline": headline}

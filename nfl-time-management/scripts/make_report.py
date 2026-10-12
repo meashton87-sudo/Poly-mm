@@ -24,6 +24,8 @@ if __name__ == "__main__":
         print("decision charts ...", flush=True)
         charts.build_all()
     out = report.write_tables(graded, sens)
+    dest = report.export_dashboard_files(out)
+    print(f"dashboard datasets -> {dest}")
     print(report.markdown_summary(out))
     if "sensitivity" in out:
         print(out["sensitivity"].to_string())
