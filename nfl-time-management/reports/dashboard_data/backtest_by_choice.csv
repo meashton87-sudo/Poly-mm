@@ -1,0 +1,17 @@
+family,choice,n,mean_predicted,actual_win_rate,z,label
+def_timeout,no_timeout,2815,0.38839,0.3794,-1.22771,Defensive timeouts (trailing late / before half): let clock run
+def_timeout,timeout,1492,0.25651,0.25938,0.32948,Defensive timeouts (trailing late / before half): timeout
+fourth_down,fg,803,0.57607,0.5741,-0.14451,Late 4th downs: go / FG / punt: field goal
+fourth_down,go,685,0.28777,0.27591,-0.91786,Late 4th downs: go / FG / punt: go for it
+fourth_down,punt,1139,0.53745,0.54083,0.29666,Late 4th downs: go / FG / punt: punt
+h1_end,attack,964,0.4815,0.49378,0.95008,End of 1st half: attack vs. run it out: attack
+h1_end,runout,82,0.50031,0.4878,-0.29421,End of 1st half: attack vs. run it out: run out the half
+off_clock_stop,hurry,924,0.40238,0.39935,-0.23455,Offense stopping the clock (timeout / spike / hurry): hurry to the line
+off_clock_stop,spike,201,0.40372,0.41791,0.54636,Offense stopping the clock (timeout / spike / hurry): spike
+off_clock_stop,timeout,877,0.49578,0.52109,1.91907,Offense stopping the clock (timeout / spike / hurry): timeout
+onside,deep,161,0.11669,0.10559,-0.45565,Onside vs. deep kick (trailing late): deep kick
+onside,onside,113,0.01196,0.00885,-0.30825,Onside vs. deep kick (trailing late): onside kick
+pat,two,205,0.40783,0.43902,1.26993,Late PAT: kick vs. two: go for two
+pat,xp,717,0.58996,0.57322,-1.27728,Late PAT: kick vs. two: kick PAT
+play_select,pass,4499,0.29378,0.29629,0.48455,Clock-critical run vs. pass: pass
+play_select,run,2069,0.74855,0.73079,-2.49627,Clock-critical run vs. pass: run

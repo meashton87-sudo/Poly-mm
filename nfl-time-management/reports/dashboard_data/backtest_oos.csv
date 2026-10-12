@@ -1,0 +1,4 @@
+model,logloss,brier,ece,n
+nflclock simulator,0.27804,0.09084,0.03501,1482
+nflclock WP model,0.28936,0.09332,0.03375,1482
+nflfastR (public),0.28061,0.09066,0.03294,1482

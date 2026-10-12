@@ -1,0 +1,10 @@
+decision,decisions,agree,sig_errors,wins_lost,cost_per_sig_error,label,pattern,pattern_n
+fourth_down,2628,0.72527,245,12.01144,0.03791,Late 4th downs: go / FG / punt,punt instead of go for it,118.0
+off_clock_stop,2006,0.67647,118,2.95118,0.02549,Offense stopping the clock (timeout / spike / hurry),timeout instead of hurry to the line,39.0
+def_timeout,4310,0.68028,116,1.47417,0.01221,Defensive timeouts (trailing late / before half),timeout instead of let clock run,95.0
+h1_end,1047,0.8233,84,1.304,0.01339,End of 1st half: attack vs. run it out,attack instead of run out the half,68.0
+pat,926,0.65875,23,1.19875,0.03564,Late PAT: kick vs. two,kick PAT instead of go for two,19.0
+play_select,6589,0.6441,72,0.6942,0.04743,Clock-critical run vs. pass,pass instead of run,48.0
+lead_tempo,33,0.12121,16,0.48802,0.02785,Leading offense burning play clock,snapped early instead of milk play clock,16.0
+kneel,321,0.98754,3,0.07108,0.02369,Kneel-down when the game can be iced,run a play instead of kneel,3.0
+onside,274,0.77372,0,-0.37194,,Onside vs. deep kick (trailing late),,

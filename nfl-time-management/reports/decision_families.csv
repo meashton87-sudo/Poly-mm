@@ -1,0 +1,10 @@
+decision,decisions,agree,sig_errors,wins_lost,cost_per_sig_error,label,pattern,pattern_n
+fourth_down,2628,0.7252663622526636,245,12.011437211473579,0.03791200041865794,Late 4th downs: go / FG / punt,punt instead of go for it,118.0
+off_clock_stop,2006,0.6764705882352942,118,2.9511783364052064,0.025489918322663282,Offense stopping the clock (timeout / spike / hurry),timeout instead of hurry to the line,39.0
+def_timeout,4310,0.6802784222737819,116,1.474170492941833,0.012213902082118056,Defensive timeouts (trailing late / before half),timeout instead of let clock run,95.0
+h1_end,1047,0.8233046800382043,84,1.3039991460463989,0.013392694077003406,End of 1st half: attack vs. run it out,attack instead of run out the half,68.0
+pat,926,0.6587473002159827,23,1.198745665352973,0.035635548725755195,Late PAT: kick vs. two,kick PAT instead of go for two,19.0
+play_select,6589,0.6441038093792685,72,0.6941986019251029,0.047430758460807604,Clock-critical run vs. pass,pass instead of run,48.0
+lead_tempo,33,0.12121212121212122,16,0.4880164929619684,0.027849992291228417,Leading offense burning play clock,snapped early instead of milk play clock,16.0
+kneel,321,0.9875389408099688,3,0.07107869614182614,0.02369289871394205,Kneel-down when the game can be iced,run a play instead of kneel,3.0
+onside,274,0.7737226277372263,0,-0.3719378666089201,,Onside vs. deep kick (trailing late),,

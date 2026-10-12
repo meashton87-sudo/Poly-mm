@@ -1,0 +1,11 @@
+{
+ "games": 855,
+ "team_games": 1710,
+ "decisions": 18134,
+ "clock_decisions": 11545,
+ "agree_rate_clock": 0.7102641836292768,
+ "sig_errors_clock": 605,
+ "wins_lost_clock": 19.126688174714864,
+ "wins_lost_clock_per_team_season": 0.19923633515327985,
+ "wins_lost_play_select": 0.694198601925103
+}

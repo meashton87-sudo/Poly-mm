@@ -100,11 +100,105 @@ points. Decisions by a team playing without a healthy kicker are excluded.
 
 Run `python scripts/validate_sim.py`. Results live in `reports/validation_*.{csv,json}`.
 
-RESULTS_VALIDATION
+<!-- RESULTS_VALIDATION:start -->
+Late-game win probability on real 4th-quarter snaps (final 10:00, one-score games), 2023–2025:
+
+| Model | Log loss | Brier | Calibration error | Snaps |
+|---|---:|---:|---:|---:|
+| nflclock simulator | 0.2832 | 0.0907 | 0.015 | 2,997 |
+| nflclock WP model | 0.2802 | 0.0903 | 0.016 | 2,997 |
+| nflfastR (public) | 0.2846 | 0.0918 | 0.019 | 2,997 |
+
+Drive replay: real drives restarted in the simulator from their first snap.
+
+| Drives | Count | TD real | TD sim | FG real | FG sim | Plays real | Plays sim |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| End of 1st half | 1,000 | 11.6% | 10.2% | 21.7% | 21.7% | 5.3 | 4.8 |
+| Trailing, final 5:00 | 498 | 20.3% | 18.4% | 14.9% | 13.0% | 6.6 | 6.1 |
+| leading_4q_final6 | 536 | 4.9% | 6.2% | 6.5% | 8.5% | 4.3 | 4.4 |
+
+**True holdout, 2026 season** (every model was fit through 2025):
+
+| Model | Log loss | Brier | Snaps |
+|---|---:|---:|---:|
+| nflclock simulator | 0.2780 | 0.0908 | 1,482 |
+| nflclock WP model | 0.2894 | 0.0933 | 1,482 |
+| nflfastR (public) | 0.2806 | 0.0907 | 1,482 |
+
+**Calibrated on what coaches chose.** The simulator's win probability for the option a coach actually took, against how often that team won (2023–2025). A bias against punting, spiking or kicking would show up as teams winning more often than predicted.
+
+| Decision: option chosen | Decisions | Predicted | Actual | z |
+|---|---:|---:|---:|---:|
+| Defensive timeouts (trailing late / before half): let clock run | 2,815 | 38.8% | 37.9% | -1.2 |
+| Defensive timeouts (trailing late / before half): timeout | 1,492 | 25.7% | 25.9% | +0.3 |
+| Late 4th downs: go / FG / punt: punt | 1,139 | 53.7% | 54.1% | +0.3 |
+| Late 4th downs: go / FG / punt: field goal | 803 | 57.6% | 57.4% | -0.1 |
+| Late 4th downs: go / FG / punt: go for it | 685 | 28.8% | 27.6% | -0.9 |
+| End of 1st half: attack vs. run it out: attack | 964 | 48.2% | 49.4% | +1.0 |
+| End of 1st half: attack vs. run it out: run out the half | 82 | 50.0% | 48.8% | -0.3 |
+| Offense stopping the clock (timeout / spike / hurry): hurry to the line | 924 | 40.2% | 39.9% | -0.2 |
+| Offense stopping the clock (timeout / spike / hurry): timeout | 877 | 49.6% | 52.1% | +1.9 |
+| Offense stopping the clock (timeout / spike / hurry): spike | 201 | 40.4% | 41.8% | +0.5 |
+| Onside vs. deep kick (trailing late): deep kick | 161 | 11.7% | 10.6% | -0.5 |
+| Onside vs. deep kick (trailing late): onside kick | 113 | 1.2% | 0.9% | -0.3 |
+| Late PAT: kick vs. two: kick PAT | 717 | 59.0% | 57.3% | -1.3 |
+| Late PAT: kick vs. two: go for two | 205 | 40.8% | 43.9% | +1.3 |
+| Clock-critical run vs. pass: pass | 4,499 | 29.4% | 29.6% | +0.5 |
+| Clock-critical run vs. pass: run | 2,069 | 74.9% | 73.1% | -2.5 |
+<!-- RESULTS_VALIDATION:end -->
 
 ## What the 2023–2025 grading found
 
-RESULTS_SUMMARY
+<!-- RESULTS_SUMMARY:start -->
+- **18,134 decisions graded** across 855 games (2023-2025, regular season + playoffs); 11,545 are clock / game-management decisions, the rest clock-critical run-vs-pass calls.
+- Coaches picked the simulator's best option **71%** of the time on clock decisions; **605** choices were clear mistakes (edge > 2 SE and > 0.5% WP).
+- Clock and game-management choices cost the league **19.1 expected wins** over three seasons (~0.20 per team-season).
+
+| Decision | Graded | Agree w/ model | Clear mistakes | Exp. wins lost | Most common mistake |
+|---|---:|---:|---:|---:|---|
+| Late 4th downs: go / FG / punt | 2,628 | 73% | 245 | 12.01 | punt instead of go for it |
+| Offense stopping the clock (timeout / spike / hurry) | 2,006 | 68% | 118 | 2.95 | timeout instead of hurry to the line |
+| Defensive timeouts (trailing late / before half) | 4,310 | 68% | 116 | 1.47 | timeout instead of let clock run |
+| End of 1st half: attack vs. run it out | 1,047 | 82% | 84 | 1.30 | attack instead of run out the half |
+| Late PAT: kick vs. two | 926 | 66% | 23 | 1.20 | kick PAT instead of go for two |
+| Clock-critical run vs. pass | 6,589 | 64% | 72 | 0.69 | pass instead of run |
+| Leading offense burning play clock | 33 | 12% | 16 | 0.49 | snapped early instead of milk play clock |
+| Kneel-down when the game can be iced | 321 | 99% | 3 | 0.07 | run a play instead of kneel |
+| Onside vs. deep kick (trailing late) | 274 | 77% | 0 | -0.37 | — |
+
+Costliest clear mistakes (each re-simulated with fresh seeds and 4,000 games per option):
+
+| Game | Coach | Situation | Chose | Better | Cost (WP pts) | Confirmed |
+|---|---|---|---|---|---:|---|
+| 2024 wk 10: ATL vs NO | Raheem Morris | Q4 0:07, down 3, 4&4 at opp 43 | go for it | field goal | 23.1 | yes |
+| 2023 wk 7: ATL vs TB | Arthur Smith | Q4 2:42, up 3, 4&1 at own 24 | punt | go for it | 15.0 | yes |
+| 2023 wk 1: KC vs DET | Andy Reid | Q4 5:16, down 1, 4&4 at own 31 | punt | go for it | 14.2 | yes |
+| 2024 wk 18: BUF vs NE | Sean McDermott | Q4 3:26, down 4, 4&7 at own 18 | punt | go for it | 13.5 | yes |
+| 2024 wk 18: GB vs CHI | Matt LaFleur | Q4 0:59, down 2, 4&4 at opp 37 | timeout | hurry to the line | 13.3 | yes |
+| 2024 wk 17: CHI vs SEA | Matt Eberflus | Q4 0:20, down 3, 4&10 at opp 40 | go for it | field goal | 12.4 | yes |
+| 2023 wk 18: SEA vs ARI | Pete Carroll | Q4 1:54, down 1 | go for two | kick PAT | 12.0 | yes |
+| 2025 wk 17: CHI vs SF | Ben Johnson | Q4 0:04, down 4, 2&2 at opp 2 | pass | run | 11.7 | yes |
+
+Worst calls of 2026 week 5 (full cards in `reports/worst_decisions_2026_wk05.md`):
+
+- **JAX** (Liam Coen), PHI at JAX: Q4 1:52, up 2, 3&8 at own 25. Chose run, better pass: F, +8.6 WP points (confirmed).
+- **SEA** (Mike Macdonald), SF at SEA: Q4 6:59, down 3, 4&10 at opp 22. Chose field goal, better go for it: D, +6.6 WP points.
+- **JAX** (Liam Coen), PHI at JAX: Q4 1:46, up 2, 4&2 at own 31. Chose punt, better go for it: D, +6.6 WP points (confirmed).
+- **DEN** (Sean Payton), DEN at LAC: Q4 5:10, tied, 4&1 at opp 1. Chose field goal, better go for it: D, +6.0 WP points (confirmed).
+- **SF** (Kyle Shanahan), SF at SEA: Q4 2:00, tied, 4&2 at opp 25. Chose field goal, better go for it: D, +4.8 WP points (confirmed).
+- **NYJ** (Aaron Glenn), CLE at NYJ: Q4 1:54, up 5, 3&6 at own 28. Chose run, better pass: F, +4.6 WP points.
+
+Tonight's head coaches:
+
+- **Sean McDermott**: 4th-down aggressiveness 96% percentile, clock management 83% percentile.
+- **Sean McVay**: 4th-down aggressiveness 45% percentile, clock management 10% percentile.
+
+Playbook findings from the simulator (league-average teams; full charts in the report):
+
+- **Ahead by 1 on defense, opponent lined up for a 42-yard try with 1:00 left:** letting the clock run wins 12% of the time; spending timeouts after each play so you get the ball back wins 32%.
+- **Down 3 on defense with three timeouts:** calling one right after a 1st-down run is worth +1.6 win-probability points at 2:30 (largest in the chart).
+- **Two-point tries at 3:00:** down 2 after the touchdown, going for two is worth +8.2 points; up 1, +6.4.
+<!-- RESULTS_SUMMARY:end -->
 
 Full tables are in `reports/`: `decision_families.csv`, `team_seasons.csv`, `coaches.csv`,
 `costliest_decisions.csv`, `all_graded_decisions.csv.gz`, `team_variable_sensitivity.csv` and
@@ -216,9 +310,23 @@ nflclock decide --qtr 4 --clock 2:31 --score 20-24 --ball us --down 2 --ytg 7 --
 
 Example output (ratings as of the latest available week):
 
+<!-- EXAMPLE_DECIDE:start -->
 ```
-EXAMPLE_DECIDE
+Situation: Q4 2:31 | BUF 20 - 24 LA | ball: us | 2&7.0 at opp 41 | TO 2-3 | clock running
+  BUF: pass off +0.110 rush off +0.066 | pass def -0.005 rush def +0.025 (EPA/play; defense + = worse) | K T.Bass (-0.02) P T.Doman (+0.0 yds)
+  LA: pass off +0.090 rush off +0.032 | pass def -0.039 rush def -0.009
+  ratings as of 2026 week 6; 4000 simulations per option
+
+              option win_prob vs_best   se
+ milk the play clock    36.0%    +0.0 ±0.0
+        normal tempo    35.9%    -0.0 ±0.2
+hurry-up (no huddle)    35.2%    -0.7 ±0.4
+         timeout now    33.5%    -2.4 ±0.4
+               spike    30.7%    -5.3 ±0.8
+
+Recommendation: milk the play clock
 ```
+<!-- EXAMPLE_DECIDE:end -->
 
 The `decide` command has more options: `--ball them` to make a defensive call, `--phase pat` or
 `--phase kickoff`, `--kicker-rating` and `--punter-rating` to override personnel, plus `--spread`, `--wind`,
