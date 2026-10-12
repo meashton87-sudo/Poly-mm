@@ -91,6 +91,66 @@ Full tables are in `reports/`: `decision_families.csv`, `team_seasons.csv`, `coa
 `costliest_decisions.csv`, `all_graded_decisions.csv.gz`, `team_variable_sensitivity.csv` and
 `decision_charts.json`.
 
+## Live games
+
+### 1. Sync rosters for the next games
+
+```bash
+nflclock sync                          # all of the next unplayed week
+nflclock sync --games 2026_05_BUF_LA   # one game
+```
+
+`sync` refreshes the season's play-by-play, schedule, **daily depth-chart snapshots**, injury reports
+and weekly rosters, and rebuilds every rating with the latest games. For each team it picks the current
+**starting QB, kicker and punter**, skipping anyone ruled Out or Doubtful, and rates each one: QB
+opponent-adjusted EPA per dropback, kicker make-probability shift, punter net yards over expected. It then
+adjusts the team's pass offense when a different QB starts than the ones whose plays built the rating.
+Small, transparent adjustments are applied for other starters ruled out, and everything is written to
+`artifacts/live/<game_id>.json`.
+
+### 2. Type situations during the game
+
+```bash
+nflclock live 2026_05_BUF_LA
+nflclock> r2h LA                                   # who gets the 2nd-half kickoff
+nflclock> q4 2:31 BUF 20 LA 24 ball BUF 2&7 LA41 to 2-3 run
+nflclock> q4 1:12 24-27 ball BUF 4&3 LA38 to 0-1 stop
+nflclock> q4 5:02 24-21 try BUF                    # PAT decision
+nflclock> coach LA coach                           # play LA's future 4th downs like McVay
+nflclock> qb BUF backup                            # in-game QB change
+```
+
+Scoreboard order is always AWAY then HOME. For every situation the console simulates every option for
+the team with the ball, and the timeout decision for the defense when the clock is running. Each option
+shows its win probability, its edge over the best option ± standard error, a **percentile grade** and
+**how often NFL coaches make that call**.
+
+### 3. Or use the browser version on a phone
+
+`web/live.html` runs the same simulator in the browser. `web/engine.js` is a line-for-line JavaScript
+port that runs in a Web Worker, so no Python is needed during the game. `web/parity_test.js` proves the two
+engines agree: the win-probability trees, field-goal model, matchup tilts and conversion tables match to
+1e-9, and every full-game simulation scenario matches within Monte Carlo error.
+
+```bash
+python -c "from nflclock import webexport as w; w.export_engine(); w.export_game('2026_05_BUF_LA')"
+node web/parity_test.js
+```
+
+### Percentiles everywhere
+
+* **Decision grades**: a decision's cost is ranked against every real NFL decision of the same type from
+  2023–2025, for example "D · worse than 97% of NFL calls". Letters run A (under 0.25 WP points, or
+  better than 80% of calls) through F (bottom 1%).
+* **What coaches do**: logistic models of coaches' real choices, by situation, give "NFL coaches choose
+  this 64%". They are shown only inside the situations each model was trained on.
+* **Coach percentiles**: each head coach's 4th-down aggressiveness (go-for-it rate versus a typical coach
+  in the same spots, shrunk for sample size) and clock-management quality are ranked against the league.
+* **Coach behaviour inside the simulator**: either team's future 4th downs can be played *soundly* (WP
+  look-ahead), like a *typical NFL coach*, or like *its actual coach*. The latter uses that coach's measured
+  aggressiveness shift on the whole-game 4th-down tendency model, so the simulation plays the opponent
+  you are actually facing.
+
 ## Use it
 
 ```bash

@@ -108,6 +108,9 @@ def export_game(game_id: str, extra: dict | None = None, path=None) -> dict:
         p = config.ARTIFACT_DIR / name
         if p.exists():
             rec[name.split(".")[0]] = json.loads(p.read_text())
+    card = config.ARTIFACT_DIR / f"gamecard_{game_id}.json"
+    if card.exists():
+        rec["gamecard"] = json.loads(card.read_text())
     rec.update(extra or {})
     WEB_DIR.mkdir(exist_ok=True)
     path = path or WEB_DIR / f"{game_id}.json"

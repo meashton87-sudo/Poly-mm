@@ -178,11 +178,48 @@ def export_dashboard_files(out: dict, dest=None):
     h.update(top_family=top["label"], top_family_wins=float(top["wins_lost"]))
     (dest / "headline.json").write_text(json.dumps([h], indent=1))
     fam.round(5).to_csv(dest / "families.csv", index=False)
-    out["by_team"].round(5).to_csv(dest / "team_seasons.csv", index=False)
-    out["by_coach"].round(5).to_csv(dest / "coaches.csv", index=False)
+    bt = out["by_team"].copy()
+    # percentile within the season: share of team-seasons that gave away more win probability
+    bt["pct"] = bt.groupby("season")["wins_lost"].rank(pct=True, ascending=False)
+    bt.round(5).to_csv(dest / "team_seasons.csv", index=False)
+    bc = out["by_coach"].copy()
+    bc["quality_pct"] = bc["wins_lost_per_17"].rank(pct=True, ascending=False)
+    prof_p = config.ARTIFACT_DIR / "coach_profiles.json"
+    if prof_p.exists():
+        prof = json.loads(prof_p.read_text())["coaches"]
+        bc["aggressiveness_pct"] = bc["coach"].map(lambda c: prof.get(c, {}).get("aggressiveness_pct"))
+        bc["go_rate"] = bc["coach"].map(lambda c: prof.get(c, {}).get("go_rate"))
+        bc["expected_go_rate"] = bc["coach"].map(lambda c: prof.get(c, {}).get("expected_go_rate"))
+    bc.round(5).to_csv(dest / "coaches.csv", index=False)
     top_dec = out["top"].head(25).copy()
+    scale_p = config.ARTIFACT_DIR / "grade_scale.json"
+    if scale_p.exists():
+        from .tendency import letter_for
+        scale = json.loads(scale_p.read_text())
+        lp = [letter_for(scale, d, float(c)) for d, c in zip(top_dec["decision"], top_dec["gain"])]
+        top_dec["grade"] = [f"{l} ({p:.1%})" if p < 0.999 else f"{l} (worst 0.1%)" for l, p in lp]
     top_dec["decision"] = top_dec["decision"].map(FAMILY_LABEL)
     top_dec.round(5).to_csv(dest / "costliest.csv", index=False)
+    for wk in sorted(config.REPORT_DIR.glob("worst_decisions_*_wk*.json"))[-1:]:
+        cards = json.loads(wk.read_text())
+        rows = []
+        for c in cards:
+            rows.append({**{k: c[k] for k in ("key", "matchup", "team", "coach", "family", "situation", "chose",
+                                              "better", "cost", "se", "grade", "percentile", "why", "play", "final")},
+                         "options": " · ".join(f"{k} {v:.1%}" for k, v in sorted(c["options"].items(), key=lambda kv: -kv[1]))})
+        pd.DataFrame(rows).round(5).to_csv(dest / "week_worst.csv", index=False)
+    bk = config.REPORT_DIR / "backtests.json"
+    if bk.exists():
+        b = json.loads(bk.read_text())
+        names = {"sim_wp_home": "nflclock simulator", "model_wp_home": "nflclock WP model",
+                 "nflfastr_wp_home": "nflfastR (public)"}
+        if "out_of_sample" in b:
+            oos = b["out_of_sample"]
+            pd.DataFrame([{"model": names[k], **oos[k]} for k in names if k in oos]).round(5).to_csv(
+                dest / "backtest_oos.csv", index=False)
+        tab = pd.DataFrame(b["decision_outcome"]["table"])
+        tab["label"] = [f"{p:.0%}" for p in tab["predicted"]]
+        tab.round(5).to_csv(dest / "backtest_decisions.csv", index=False)
     if "sensitivity" in out:
         s = out["sensitivity"].copy()
         s["label"] = s["decision"].map(FAMILY_LABEL)

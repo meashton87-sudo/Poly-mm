@@ -27,6 +27,7 @@
 body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; margin: 0; }
 .wrap { max-width: 1180px; margin-inline: auto; padding: 12px 16px 40px; display: flex; flex-direction: column; gap: var(--gap); }
 h1, h2, h3 { font-family: var(--display); font-weight: 600; letter-spacing: .01em; margin: 0; text-wrap: balance; }
+h3 { font-size: 1.05rem; }
 h1 { font-size: 1.55rem; }
 h2 { font-size: 1.15rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; }
@@ -102,6 +103,17 @@ details summary { cursor: pointer; font-weight: 600; }
 .hist button { all: unset; cursor: pointer; font-size: .85rem; padding: 6px 8px; border-radius: 6px; background: var(--surface-2); }
 .hist button:focus-visible { outline: 2px solid var(--accent); }
 .note { font-size: .8rem; color: var(--muted); max-width: 75ch; }
+.cardgrid { overflow-x: auto; }
+.cardgrid table { border-collapse: separate; border-spacing: 3px; font-variant-numeric: tabular-nums; }
+.cardgrid th { font-size: .75rem; color: var(--muted); font-weight: 600; padding: 2px 4px; text-align: center; white-space: nowrap; }
+.cardgrid td { min-width: 52px; text-align: center; border-radius: 6px; padding: 5px 4px; font-size: .8rem; line-height: 1.15; }
+.cardgrid td b { display: block; font-family: var(--display); font-size: .95rem; letter-spacing: .03em; }
+.c-go { background: var(--accent); color: var(--accent-ink); }
+.c-fg { background: var(--la); color: #fff; }
+.c-punt { background: var(--bar); color: var(--fg); }
+.c-two { background: var(--accent); color: var(--accent-ink); }
+.c-xp { background: var(--bar); color: var(--fg); }
+.c-close { opacity: .62; }
 .err { color: var(--bad); font-weight: 600; }
 @media (prefers-reduced-motion: reduce) { .progress > div { transition: none; } }
 </style>
@@ -175,6 +187,18 @@ details summary { cursor: pointer; font-weight: 600; }
       <div class="hist" id="hist"><span class="note">Situations you simulate are listed here on this device.</span></div>
       <p class="note" id="method"></p>
     </div>
+  </div>
+
+  <div class="card" id="gamecard" hidden>
+    <h2>Pregame game card</h2>
+    <p class="note" id="gc-note"></p>
+    <div class="row"><span class="lab">Offense</span><div class="seg" id="gc-team" role="group" aria-label="team on offense"></div></div>
+    <div class="row"><span class="lab">Game state</span><div class="seg" id="gc-state" role="group" aria-label="game state"></div></div>
+    <h3>4th down: go, kick or punt</h3>
+    <div class="cardgrid" id="gc-fourth"></div>
+    <h3>Two-point chart (4th quarter)</h3>
+    <div class="cardgrid" id="gc-two"></div>
+    <p class="note">Faded cells are close calls (the edge is under one win-probability point). Edges are in win-probability points over the next-best option.</p>
   </div>
 </div>
 
@@ -455,6 +479,7 @@ details summary { cursor: pointer; font-weight: 600; }
     renderRoster();
     render();
     renderHist();
+    renderCard();
   }
 
   function renderRoster() {
@@ -527,6 +552,72 @@ details summary { cursor: pointer; font-weight: 600; }
     $('method').textContent = `Ratings as of ${game.season} week ${game.home.ratings_asof_week}; depth chart snapshot ${game.depth_chart_snapshot}; synced ${game.synced_at}. ` +
       'Every option is played out thousands of times with real NFL clock rules, these teams’ opponent-adjusted pass and run strength, and these kickers and punters. ' +
       'Grades rank the cost against every real NFL decision of the same type from 2023–2025.';
+  }
+
+  // ------------------------------------------------------------ game card ---
+  const gcSel = { team: null, state: null };
+  function renderCard() {
+    const card = game && game.gamecard;
+    if (!card) return;
+    $('gamecard').hidden = false;
+    if (!gcSel.team) { gcSel.team = card.teams[1]; gcSel.state = card.states[0]; }
+    const segFill = (el, vals, cur, set) => {
+      el.innerHTML = '';
+      vals.forEach((v) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = v;
+        b.setAttribute('aria-pressed', String(v === cur)); b.addEventListener('click', () => { set(v); renderCard(); }); el.appendChild(b); });
+    };
+    segFill($('gc-team'), card.teams, gcSel.team, (v) => { gcSel.team = v; });
+    segFill($('gc-state'), card.states, gcSel.state, (v) => { gcSel.state = v; });
+    $('gc-note').textContent = `Simulated for this matchup with these kickers and punters, ${card.sims_per_option.toLocaleString()} games per option per cell. Both teams hold three timeouts.`;
+    const opp = card.teams.find((t) => t !== gcSel.team);
+    const spotName = (yl) => (yl > 50 ? `Own ${100 - yl}` : yl === 50 ? 'Midfield' : `${opp} ${yl}`);
+    const cells = card.fourth.filter((c) => c.team === gcSel.team && c.state === gcSel.state);
+    const tbl = document.createElement('table');
+    const hr = document.createElement('tr');
+    hr.appendChild(document.createElement('th'));
+    card.distances.forEach((d) => { const th = document.createElement('th'); th.textContent = `4th & ${d}`; hr.appendChild(th); });
+    tbl.appendChild(hr);
+    card.spots.forEach((yl) => {
+      const tr = document.createElement('tr');
+      const th = document.createElement('th'); th.textContent = spotName(yl); tr.appendChild(th);
+      card.distances.forEach((d) => {
+        const td = document.createElement('td');
+        const c = cells.find((x) => x.yl === yl && x.ytg === Math.min(d, yl));
+        if (c && (d <= yl || d === 1)) {
+          td.className = `c-${c.best}` + (c.edge < 0.01 ? ' c-close' : '');
+          const b = document.createElement('b'); b.textContent = c.best === 'go' ? 'GO' : c.best === 'fg' ? 'FG' : 'PUNT';
+          td.appendChild(b); td.appendChild(document.createTextNode(`+${(c.edge * 100).toFixed(1)}`));
+          td.title = Object.entries(c).filter(([k]) => k.startsWith('wp_')).map(([k, v]) => `${k.slice(3)} ${(v * 100).toFixed(1)}%`).join(', ');
+        }
+        tr.appendChild(td);
+      });
+      tbl.appendChild(tr);
+    });
+    $('gc-fourth').innerHTML = ''; $('gc-fourth').appendChild(tbl);
+    const two = card.two_point.filter((c) => c.team === gcSel.team);
+    const times = [...new Set(two.map((c) => c.t))].sort((a, b) => b - a);
+    const margins = [...new Set(two.map((c) => c.margin))].sort((a, b) => b - a);
+    const t2 = document.createElement('table');
+    const h2 = document.createElement('tr'); h2.appendChild(document.createElement('th'));
+    times.forEach((t) => { const th = document.createElement('th'); th.textContent = `${clockText(t)} left`; h2.appendChild(th); });
+    t2.appendChild(h2);
+    margins.forEach((m) => {
+      const tr = document.createElement('tr');
+      const th = document.createElement('th'); th.textContent = m > 0 ? `Up ${m}` : m < 0 ? `Down ${-m}` : 'Tied'; tr.appendChild(th);
+      times.forEach((t) => {
+        const c = two.find((x) => x.t === t && x.margin === m);
+        const td = document.createElement('td');
+        if (c) {
+          const go2 = c.edge > 0;
+          td.className = (go2 ? 'c-two' : 'c-xp') + (Math.abs(c.edge) < 0.01 ? ' c-close' : '');
+          const b = document.createElement('b'); b.textContent = go2 ? 'GO 2' : 'KICK';
+          td.appendChild(b); td.appendChild(document.createTextNode(`${go2 ? '+' : '+'}${(Math.abs(c.edge) * 100).toFixed(1)}`));
+        }
+        tr.appendChild(td);
+      });
+      t2.appendChild(tr);
+    });
+    $('gc-two').innerHTML = ''; $('gc-two').appendChild(t2);
   }
 
   // boot
