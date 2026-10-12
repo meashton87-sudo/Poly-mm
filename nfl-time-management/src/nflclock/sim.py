@@ -32,6 +32,7 @@ PLAY_NAMES = {"run": RUN, "pass": PASS, "kneel": KNEEL, "spike": SPIKE, "fg": FG
 HURRY, NORMAL, MILK, T_SPIKE, T_KNEEL, URGENT, T_FIRE = range(7)
 BURN_SECONDS = 8.0           # leading in the last seconds: any snap is played to run out the clock
 FIRE_DRILL = (7.0, 12.0)     # seconds to rush the field-goal unit on with the clock running
+KNEEL_RUNOFF = (38.0, 40.0)  # seconds run off between kneels (40 s play clock, snapped with 0-2 s left)
 FIRE_DRILL_LOGIT = -0.3      # rushed kicks are a little less accurate
 # Clock-aware play calls when the offense needs the clock stopped and has no timeouts (2020-25 data):
 # a pass that would end in bounds with a gain is kept with this probability, otherwise redrawn from the
@@ -181,7 +182,8 @@ class Simulator:
         k = np.clip(4 - np.asarray(down), 0, 3)
         gaps = k + np.asarray(clock_running).astype(int)
         stops = np.asarray(def_to) + np.asarray(tmw_pending).astype(int)
-        burn = k * self.kneel_dur + np.maximum(gaps - stops, 0) * 38.0 + np.minimum(gaps, stops) * 1.0
+        gap = 0.5 * (KNEEL_RUNOFF[0] + KNEEL_RUNOFF[1])   # the average kneel runoff (QA: 38 s undercounted it)
+        burn = k * self.kneel_dur + np.maximum(gaps - stops, 0) * gap + np.minimum(gaps, stops) * 1.0
         return np.asarray(t_half) <= burn + 1.0
 
     # --------------------------------------------------------------- run ---
@@ -406,7 +408,7 @@ class Simulator:
             if m.any():
                 runoff[m] = arr[(u[ix[m], 0] * len(arr)).astype(int)]
         mk = tempo == T_KNEEL
-        runoff[mk] = 38.0 + 2.0 * u[ix[mk], 0]
+        runoff[mk] = KNEEL_RUNOFF[0] + (KNEEL_RUNOFF[1] - KNEEL_RUNOFF[0]) * u[ix[mk], 0]
         mf = tempo == T_FIRE
         runoff[mf] = FIRE_DRILL[0] + (FIRE_DRILL[1] - FIRE_DRILL[0]) * u[ix[mf], 0]
         runoff = np.where(run_c, np.maximum(runoff - S.credit[ix], 0.0), 0.0)
