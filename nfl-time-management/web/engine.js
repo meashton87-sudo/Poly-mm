@@ -43,6 +43,11 @@
   const CLOCK_AWARE = [[20.0, 0.53], [35.0, 0.79]];  // [seconds left in the half at the snap, keep probability]
   const CLOCK_PASS_SHIFT = 1.5, CLOCK_PASS_WINDOW = 60.0;
   const LIVE_MASK = 1 | 4 | 8 | 16 | 32 | 64 | 128;  // penalty, incomplete, oob, td, td_def, turnover, safety
+  // Kick-to-win endgame: trailing by 1-2 or tied, a makeable kick in hand and a timeout to stop the clock
+  // for it. The offense runs the clock down (clock-killing plays, timeouts kept), takes a timeout with
+  // ~3 s left and kicks. The defense spends its timeouts to save time for a reply.
+  const CLOSE_FG_P = 0.5, CLOSE_WINDOW = 180.0, CLOSE_END = 45.0, CLOSE_KICK_AT = 3.0;
+  const CLOSE_SNAP_FLOOR = 12.0, CLOSE_DEF_WINDOW = 120.0;
   const TEMPO = { hurry: HURRY, normal: NORMAL, milk: MILK, urgent: URGENT };
   const SNAP = 0, PAT = 1, KICKOFF = 2, DONE = 3;
   const MODE_NORMAL = 0, MODE_HURRY = 1, MODE_KILL = 2;
@@ -511,13 +516,17 @@
       const tmwPending = S.t > g.tmw;
 
       // (1) timeouts right after the previous whistle
-      let kneelOk, defWants, offWants, attempt = true, runOut = false;
+      let kneelOk, defWants, offWants, attempt = true, runOut = false, closing = false;
       if (half === 2) {
         kneelOk = (margin > 0 || (margin === 0 && yl >= 70 && tHalf <= 40)) &&
           this.kneelOutPossible(tHalf, down, defTo, runC, tmwPending);
         defWants = margin > 0 && (tHalf <= 240 || (margin >= 9 && tHalf <= 420));
         offWants = margin <= 0 && (tHalf <= 60 || (margin <= -9 && tHalf <= 120));
         offWants = offWants || (fgRange && fgHelps && tHalf <= 25);
+        closing = margin >= -2 && margin <= 0 && tHalf <= CLOSE_WINDOW && offTo > 0 &&
+          this.fgProb(yl + FG_SNAP_YARDS, o) >= CLOSE_FG_P;
+        if (closing) offWants = false;                                   // timeouts are kept for the kick
+        defWants = defWants || (closing && tHalf <= CLOSE_DEF_WINDOW);   // the defense saves time for a reply
       } else {
         attempt = (yl - 35.0) <= 0.6 * (tHalf + 20.0 * offTo);
         if (S.stratActive && S.pos !== rootPos) S.stratActive = false;
@@ -528,7 +537,7 @@
         offWants = attempt && tHalf <= 30.0 + 15.0 * offTo && tHalf <= 75;
       }
       // offense that wants the clock stopped (for clock-aware play calls)
-      const aware = half === 2 ? (margin <= 0 && margin >= -16) : attempt;
+      const aware = (half === 2 ? (margin <= 0 && margin >= -16) : attempt) && !closing;
       let defCall = runC && defWants && defTo > 0;
       let offCall = runC && !defCall && offWants && offTo > 0 && !kneelOk;
       if (act && act.to_def !== undefined) defCall = runC && defTo > 0 && !!act.to_def;
@@ -538,13 +547,18 @@
       const called = defCall || offCall;
       if (called) S.t = Math.max(S.t - this.toReact, halfEnd);
       runC = runC && !called;
+      // kick to win: with the clock running and little left, let it run down, then timeout and kick
+      const free = !(act && (act.tempo !== undefined || act.play !== undefined || act.runoff !== undefined));
+      const endkick = closing && runC && tHalf <= CLOSE_END && S.to[o] > 0 && free;
+      if (endkick) { S.t = halfEnd + Math.min(tHalf, CLOSE_KICK_AT); S.to[o] -= 1; runC = false; }
 
       // (2) tempo and between-snap runoff
       let hurry, urgent, milk;
       if (half === 2) {
         hurry = (margin < 0 && tHalf <= 300) || (margin <= -9 && tHalf <= 600) || (margin === 0 && yl <= 80 && tHalf <= 75);
+        hurry = hurry && !closing;
         urgent = hurry && tHalf <= 120;
-        milk = (margin > 0 && tHalf <= 600) || (margin === 0 && tHalf <= 240 && !hurry);
+        milk = (margin > 0 && tHalf <= 600) || (margin === 0 && tHalf <= 240 && !hurry) || closing;
       } else {
         hurry = tHalf <= 120 && attempt; urgent = hurry && tHalf <= 60; milk = tHalf <= 120 && !attempt;
       }
@@ -567,6 +581,8 @@
       else if (tempo === T_FIRE) runoff = FIRE_DRILL[0] + (FIRE_DRILL[1] - FIRE_DRILL[0]) * u[0];
       else { const arr = this.e.tempo[tempo]; runoff = arr[Math.floor(u[0] * arr.length)]; }
       runoff = runC ? Math.max(runoff - S.credit, 0) : 0;
+      // running it down: never past the point where the kick is still safe
+      if (free && closing && runC && tempo === MILK) runoff = Math.min(runoff, Math.max(S.t - halfEnd - CLOSE_SNAP_FLOOR, 0));
       if (act && act.runoff !== undefined) runoff = runC ? act.runoff : 0;
       const t0 = S.t;
       let t1 = t0 - runoff;
@@ -592,12 +608,12 @@
       fgLast = fgLast || (tHalf <= snapBudget && pFg >= 0.3 && fgUseful && !runningAtSnap);
       if (kind < 0 && fgLast) kind = FG;
       if (kind === SPIKE && fgLast) kind = FG;
-      if (fire) kind = FG;
+      if (fire || endkick) kind = FG;
       if (kind < 0 && down === 4) kind = this._fourthDown(S, g, o, margin, tHalf, pFg, u[5]);
       if (kind < 0 && runOut && down < 4) kind = RUN;
       if (forced !== undefined && forced !== 'kneel' && forced !== 'spike') kind = forced === 'go' ? -1 : PLAY[forced];
       if (kind < 0) {
-        const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl);
+        const fk = fineKey(closing ? MODE_KILL : gameMode(half, tHalf, margin), down, S.ytg, yl);
         const pr = this.e.lib.passRate[fk];
         let lg = Math.log(pr / (1 - pr)) + ctx.proe[o] / Math.max(pr * (1 - pr), 0.1);
         if (aware && S.to[o] === 0 && tHalf <= CLOCK_PASS_WINDOW) lg += CLOCK_PASS_SHIFT;
@@ -607,7 +623,7 @@
       // (4) execute
       if (kind === FG) this._fieldGoal(S, g, u, o, fire);
       else if (kind === PUNT) this._punt(S, g, u, o);
-      else this._scrimmage(S, g, u, o, kind, margin, aware);
+      else this._scrimmage(S, g, u, o, kind, margin, aware, closing);
     }
 
     _coachChoice(S, g, o, margin, tHalf, pFg, u5, cm) {
@@ -691,13 +707,14 @@
       S.credit = S.running ? credit : 0;
     }
 
-    _scrimmage(S, g, u, o, kind, margin, aware) {
+    _scrimmage(S, g, u, o, kind, margin, aware, closing) {
       const d = 1 - o, L = this.e.lib;
       const yl0 = S.yl, ytg0 = S.ytg, down0 = S.down;
       let yards = 0, penalty = false, autoFd = false, incomplete = false, oob = false, tdOff = false, tdDef = false,
         turnover = false, toRel = 0, safety = false, dur = 0;
       if (kind === RUN || kind === PASS) {
-        const fk = fineKey(gameMode(g.half, S.t - g.halfEnd, margin), down0, ytg0, yl0);
+        // running the clock down for a kick: the clock-killing play mix
+        const fk = fineKey(closing ? MODE_KILL : gameMode(g.half, S.t - g.halfEnd, margin), down0, ytg0, yl0);
         let row = this.sampleLib(o, kind === PASS ? 1 : 0, fk, u[2]);
         if (aware && kind === PASS && S.to[o] === 0) {
           // no timeouts and the clock must stop: sideline throws and throw-aways replace some in-bounds gains

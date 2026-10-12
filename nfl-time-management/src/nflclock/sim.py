@@ -39,6 +39,16 @@ FIRE_DRILL_LOGIT = -0.3      # rushed kicks are a little less accurate
 CLOCK_AWARE = ((20.0, 0.53), (35.0, 0.79))   # (seconds left in the half at the snap, keep probability)
 CLOCK_PASS_SHIFT = 1.5                        # pass-rate logit shift in the final CLOCK_PASS_WINDOW seconds
 CLOCK_PASS_WINDOW = 60.0
+# Kick-to-win endgame: trailing by 1-2 or tied, a makeable kick in hand and a timeout to stop the clock
+# for it. The offense runs the clock down (clock-killing plays, timeouts kept), takes a timeout with
+# ~3 s left and kicks. The defense spends its timeouts to save time for a reply. (Without a timeout the
+# offense keeps hurrying and spikes for the kick: a rushed field-goal unit costs more than it saves.)
+CLOSE_FG_P = 0.5          # make probability that puts the offense in kick-to-win mode
+CLOSE_WINDOW = 180.0      # seconds left in the game
+CLOSE_END = 45.0          # clock running with this little left: run it down and kick
+CLOSE_KICK_AT = 3.0       # seconds left at the final timeout
+CLOSE_SNAP_FLOOR = 12.0   # latest snap while running it down, so the play ends with time to call timeout
+CLOSE_DEF_WINDOW = 120.0
 TEMPO_NAMES = {"hurry": HURRY, "normal": NORMAL, "milk": MILK, "urgent": URGENT}
 SNAP, PAT, KICKOFF, DONE = range(4)
 KICKOFF_START_YL = 70.0   # mean receiving-team start under 2024-25 kickoff rules
@@ -318,6 +328,10 @@ class Simulator:
             def_wants = (margin > 0) & ((t_half <= 240) | ((margin >= 9) & (t_half <= 420)))
             off_wants = (margin <= 0) & ((t_half <= 60) | ((margin <= -9) & (t_half <= 120)))
             off_wants |= fg_range & fg_helps & (t_half <= 25)
+            closing = (margin >= -2) & (margin <= 0) & (t_half <= CLOSE_WINDOW) & (off_to > 0) & (
+                self.fg_prob(yl + FG_SNAP_YARDS, o) >= CLOSE_FG_P)
+            off_wants &= ~closing                                 # timeouts are kept for the kick
+            def_wants |= closing & (t_half <= CLOSE_DEF_WINDOW)   # the defense saves time for a reply
             attempt = np.ones(ix.size, bool)
             run_out = np.zeros(ix.size, bool)
         else:
@@ -328,11 +342,12 @@ class Simulator:
             if forced_h1.any():
                 attempt = np.where(forced_h1, S.strategy == "attack", attempt)
             run_out = ~attempt & (t_half <= 120)
+            closing = np.zeros(ix.size, bool)
             kneel_ok = run_out & self.kneel_out_possible(t_half, down, def_to, run_c, tmw_pending)
             def_wants = run_out & ~kneel_ok & (t_half <= 100) & (down >= 2)
             off_wants = attempt & (t_half <= 30.0 + 15.0 * off_to) & (t_half <= 75)
         # offense that wants the clock stopped (for clock-aware play calls)
-        aware = ((margin <= 0) & (margin >= -16)) if half == 2 else attempt.copy()
+        aware = (((margin <= 0) & (margin >= -16)) if half == 2 else attempt.copy()) & ~closing
         def_call = run_c & def_wants & (def_to > 0)
         off_call = run_c & ~def_call & off_wants & (off_to > 0) & ~kneel_ok
         if "to_def" in act:
@@ -346,13 +361,21 @@ class Simulator:
         called = def_call | off_call
         S.t[ix[called]] = np.maximum(S.t[ix[called]] - self.to_react, half_end)
         run_c &= ~called
+        # kick to win: with the clock running and little left, let it run down, then timeout and kick
+        free = not any(k in act for k in ("tempo", "play", "runoff"))
+        endkick = closing & run_c & (t_half <= CLOSE_END) & (S.to[ix, o] > 0) & free
+        if endkick.any():
+            S.t[ix[endkick]] = half_end + np.minimum(t_half[endkick], CLOSE_KICK_AT)
+            S.to[ix[endkick], o[endkick]] -= 1
+            run_c &= ~endkick
 
         # (2) tempo and between-snap runoff
         if half == 2:
             hurry = ((margin < 0) & (t_half <= 300)) | ((margin <= -9) & (t_half <= 600)) | (
                 (margin == 0) & (yl <= 80) & (t_half <= 75))
+            hurry &= ~closing
             urgent = hurry & (t_half <= 120)
-            milk = ((margin > 0) & (t_half <= 600)) | ((margin == 0) & (t_half <= 240) & ~hurry)
+            milk = ((margin > 0) & (t_half <= 600)) | ((margin == 0) & (t_half <= 240) & ~hurry) | closing
         else:
             hurry = (t_half <= 120) & attempt
             urgent = hurry & (t_half <= 60)
@@ -387,6 +410,9 @@ class Simulator:
         mf = tempo == T_FIRE
         runoff[mf] = FIRE_DRILL[0] + (FIRE_DRILL[1] - FIRE_DRILL[0]) * u[ix[mf], 0]
         runoff = np.where(run_c, np.maximum(runoff - S.credit[ix], 0.0), 0.0)
+        if free and closing.any():   # running it down: never past the point where the kick is still safe
+            cap = closing & run_c & (tempo == MILK)
+            runoff = np.where(cap, np.minimum(runoff, np.maximum(S.t[ix] - half_end - CLOSE_SNAP_FLOOR, 0.0)), runoff)
         if "runoff" in act:
             runoff = np.where(run_c, float(act["runoff"]), 0.0)
         t0 = S.t[ix]
@@ -406,6 +432,7 @@ class Simulator:
         ix, o, d, margin = ix[keep], o[keep], d[keep], margin[keep]
         kneel_now, spike_now, run_out = kneel_now[keep], spike_now[keep], run_out[keep]
         aware = aware[keep]
+        closing, endkick = closing[keep], endkick[keep]
         running_at_snap = running_at_snap[keep]
         fire = fire[keep]
         t_half = S.t[ix] - half_end
@@ -424,7 +451,7 @@ class Simulator:
         fg_last |= (t_half <= snap_budget) & (p_fg >= 0.3) & fg_useful & ~running_at_snap
         kind[(kind < 0) & fg_last] = FG
         kind[(kind == SPIKE) & fg_last] = FG
-        kind[fire] = FG
+        kind[fire | endkick] = FG
         fourth = (kind < 0) & (down == 4)
         if fourth.any():
             kind[fourth] = self._fourth_down(S, ix[fourth], o[fourth], margin[fourth], t_half[fourth],
@@ -434,7 +461,8 @@ class Simulator:
             kind[:] = -1 if forced == "go" else PLAY_NAMES[forced]
         mix = kind < 0
         if mix.any():
-            fk = L.fine_key(L.game_mode(half, t_half[mix], margin[mix]), down[mix], S.ytg[ix[mix]], yl[mix])
+            mode = np.where(closing[mix], L.MODE_KILL, L.game_mode(half, t_half[mix], margin[mix]))
+            fk = L.fine_key(mode, down[mix], S.ytg[ix[mix]], yl[mix])
             pr = self.lib.pass_rate[fk]
             lg = np.log(pr / (1 - pr)) + self.ctx.proe[o[mix]] / np.maximum(pr * (1 - pr), 0.1)
             crit = aware[mix] & (S.to[ix[mix], o[mix]] == 0) & (t_half[mix] <= CLOCK_PASS_WINDOW)
@@ -444,7 +472,7 @@ class Simulator:
         # (4) execute
         scr = np.isin(kind, [RUN, PASS, KNEEL, SPIKE])
         if scr.any():
-            self._scrimmage(S, u, ix[scr], o[scr], kind[scr], margin[scr], aware[scr])
+            self._scrimmage(S, u, ix[scr], o[scr], kind[scr], margin[scr], aware[scr], closing[scr])
         m = kind == FG
         if m.any():
             self._field_goal(S, u, ix[m], o[m], fire[m])
@@ -552,7 +580,7 @@ class Simulator:
     def _in_window(self, S, ix):
         return (S.t[ix] - self.half_end) <= self.oob_window
 
-    def _scrimmage(self, S, u, ix, o, kind, margin, aware=None):
+    def _scrimmage(self, S, u, ix, o, kind, margin, aware=None, closing=None):
         d = 1 - o
         n = ix.size
         yl0 = S.yl[ix]
@@ -563,7 +591,10 @@ class Simulator:
         lib_play = (kind == RUN) | (kind == PASS)
         if lib_play.any():
             t_half = S.t[ix] - self.half_end
-            fk = L.fine_key(L.game_mode(self.half, t_half, margin), down0, ytg0, yl0)
+            mode = L.game_mode(self.half, t_half, margin)
+            if closing is not None:   # running the clock down for a kick: the clock-killing play mix
+                mode = np.where(closing, L.MODE_KILL, mode)
+            fk = L.fine_key(mode, down0, ytg0, yl0)
             for team in (0, 1):
                 m = lib_play & (o == team)
                 if m.any():

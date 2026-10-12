@@ -219,6 +219,7 @@ details summary { cursor: pointer; font-weight: 600; }
     normal: 'Normal tempo', milk: 'Milk the play clock', spike: 'Spike it', kneel: 'Kneel', run: 'Run', pass: 'Pass',
     go: 'Go for it', fg: 'Field goal', punt: 'Punt', attack: 'Attack before the half', runout: 'Run out the half',
     xp: 'Kick the PAT', two: 'Go for two', onside: 'Onside kick', deep: 'Kick deep',
+    rundown: 'Run the clock down, timeout late, kick',
   };
   let game = null, busy = false, reqId = 0;
   const st = { qtr: 4, clock: 151, score: [20, 24], pos: null, down: 2, ytg: 7, goal: false, side: null, yard: 41,
@@ -541,7 +542,7 @@ details summary { cursor: pointer; font-weight: 600; }
         if (!names.includes('hurry') || !names.includes('spike')) return;
         const n2 = Math.max(1500, Math.round(job.n / 2));   // same seed: rollout i shares its random numbers
         PACES.forEach((sec) => job.queue.push({ type: 'job', id: job.id, jobId: `${gi}:pace:${sec}`, st: job.st,
-          settings: job.settings, n: n2, action: { to_off: false, tempo: 'urgent', runoff: sec }, perspective: g.team, seed }));
+          settings: job.settings, n: n2, action: { to_off: false, to_def: false, tempo: 'urgent', runoff: sec }, perspective: g.team, seed }));
       });
       job.total = job.queue.length; job.done = 0; job.results = {};
     } else if (m.type === 'job') {

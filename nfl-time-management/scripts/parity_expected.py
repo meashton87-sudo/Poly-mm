@@ -34,6 +34,8 @@ SCENARIOS = [
     ("fire_drill_down2_4th_running", dict(t=16, pos=1, score=(20, 18), down=4, ytg=2, yl=20, to=(2, 0), clock_running=True), {}, 1),
     ("noTO_hurry_3rd5_opp42_27s", dict(t=26.6, pos=0, score=(11, 12), down=3, ytg=5, yl=42, to=(0, 1), clock_running=True), {"to_off": False, "tempo": "urgent"}, 0),
     ("noTO_spike_1st10_opp48_26s", dict(t=25.7, pos=0, score=(30, 32), down=1, ytg=10, yl=48, to=(0, 1), clock_running=True), {"to_off": False, "play": "spike"}, 0),
+    ("close_down1_opp30_75s_running", dict(t=75, pos=0, score=(20, 21), down=2, ytg=6, yl=30, to=(2, 2), clock_running=True), {}, 0),
+    ("close_tied_opp35_40s_no_def_TO", dict(t=40, pos=1, score=(17, 17), down=3, ytg=4, yl=35, to=(3, 1), clock_running=True), {"to_def": False}, 1),
     ("COACH q3_midfield_tied", dict(t=1500, pos=0, score=(14, 14), down=1, ytg=10, yl=50, to=(3, 3)), {}, 0),
     ("COACH 4th2_own45_q3", dict(t=1300, pos=1, score=(17, 14), down=4, ytg=2, yl=55, to=(3, 3)), {}, 1),
     ("COACH trail3_10min", dict(t=600, pos=1, score=(20, 17), down=1, ytg=10, yl=75, to=(3, 3)), {}, 1),

@@ -160,3 +160,15 @@ def test_pace_break_even():
     assert pace_break_even([0.03, 0.02, 0.01, -0.01, -0.03, -0.04, -0.05, -0.06]) == ("within", 11.0)
     assert pace_break_even([-0.01] * 8)[0] == "never"
     assert pace_break_even([0.01] * 8)[0] == "always"
+
+
+@needs_bundle
+def test_kick_to_win_runs_the_clock_down(sim):
+    """Down 1 in field-goal range with a timeout and the defense out of timeouts: kick at the end."""
+    from nflclock.sim import RootState
+    root = RootState(t=40, pos=0, score=(20, 21), down=2, ytg=8, yl=22, to=(1, 0), clock_running=True)
+    d = sim.run(root, n=2000, perspective=0, seed=5, drive_only=True)
+    scored = d.score[:, 0] - 20
+    assert (scored == 3).mean() > 0.6           # the kick happens and is usually good
+    assert d.t.mean() < 2.0                    # with essentially nothing left for the opponent
+    assert (d.to[:, 0] == 0).mean() > 0.9      # the timeout was spent stopping the clock for it

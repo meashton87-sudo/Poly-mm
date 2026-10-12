@@ -30,6 +30,7 @@ from .sim import FG_SNAP_YARDS, KICKOFF, PAT, SNAP, RootState, Simulator
 OPTION_HELP = {
     "timeout": "call timeout now", "no_timeout": "let the clock run", "hurry": "hurry to the line (no stop)",
     "normal": "normal tempo", "milk": "milk the play clock", "spike": "spike it", "kneel": "kneel",
+    "rundown": "run clock down, TO late, kick",
     "run": "run", "pass": "pass", "go": "go for it", "fg": "field goal", "punt": "punt",
     "attack": "attack before half", "runout": "run out the half", "xp": "kick PAT", "two": "go for two",
     "onside": "onside kick", "deep": "deep kick",
@@ -192,13 +193,18 @@ class LiveConsole:
         lead = root.score[o] - root.score[d]
         off = {}
         if st.running:
+            # the offense's clock choices assume the defense lets the clock run at this whistle
             if root.to[o] > 0:
-                off["timeout"] = {"to_off": True}
-            off["hurry"] = {"to_off": False, "tempo": "urgent"}
-            off["normal"] = {"to_off": False, "tempo": "normal"}
-            off["milk"] = {"to_off": False, "tempo": "milk"}
+                off["timeout"] = {"to_off": True, "to_def": False}
+            off["hurry"] = {"to_off": False, "to_def": False, "tempo": "urgent"}
+            off["normal"] = {"to_off": False, "to_def": False, "tempo": "normal"}
+            off["milk"] = {"to_off": False, "to_def": False, "tempo": "milk"}
             if st.down <= 3:
-                off["spike"] = {"to_off": False, "play": "spike"}
+                off["spike"] = {"to_off": False, "to_def": False, "play": "spike"}
+            # a makeable kick that wins or takes the lead late, with a timeout to stop the clock for it
+            if (not first_half and -2 <= lead <= 0 and root.t <= 180 and root.to[o] > 0
+                    and sim.fg_prob(np.array([root.yl + 17.0]), np.array([o]))[0] >= 0.5):
+                off["rundown"] = {"to_off": False, "to_def": False}
         if st.down == 4:
             off["go"] = {"play": "go", "to_off": False}
             if sim.fg_prob(np.array([root.yl + 17.0]), np.array([o]))[0] >= 0.02:
@@ -289,11 +295,13 @@ class LiveConsole:
             pace = df.attrs.get("pace")
             if pace:
                 kind, sec = pace
-                print("     hurry or spike: " + {
-                    "within": f"hurrying wins only if the next snap comes within {sec:.0f}s of the whistle "
-                              "(a typical hurry-up snap takes about 15s)",
-                    "always": "hurrying wins even at a slow 20-second pace",
-                    "never": "the spike wins even with a 6-second snap"}[kind])
+                if kind == "within":
+                    msg = (f"hurrying wins only if the next snap comes within {sec:.0f}s of the whistle "
+                           "(a typical hurry-up snap takes about 15s)")
+                else:
+                    msg = ("hurrying wins even at a slow 20-second pace" if kind == "always"
+                           else "the spike wins even with a 6-second snap")
+                print("     hurry or spike: " + msg)
 
     def header(self):
         r = self.rec
@@ -395,7 +403,7 @@ def _family(option: str, st: LiveState, offense: bool) -> str:
         return "onside"
     if not offense:
         return "def_timeout"
-    if option in ("timeout", "hurry", "spike", "normal", "milk"):
+    if option in ("timeout", "hurry", "spike", "normal", "milk", "rundown"):
         return "off_clock_stop"
     if option in ("go", "fg", "punt"):
         return "fourth_down"

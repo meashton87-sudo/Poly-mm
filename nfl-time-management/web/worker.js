@@ -36,11 +36,16 @@ function optionsFor(st, root, sim) {
   const lead = root.score[o] - root.score[d];
   const off = {};
   if (st.running) {
-    if (root.to[o] > 0) off.timeout = { to_off: true };
-    off.hurry = { to_off: false, tempo: 'urgent' };
-    off.normal = { to_off: false, tempo: 'normal' };
-    off.milk = { to_off: false, tempo: 'milk' };
-    if (st.down <= 3) off.spike = { to_off: false, play: 'spike' };
+    // the offense's clock choices assume the defense lets the clock run at this whistle (its own choice is
+    // shown separately)
+    if (root.to[o] > 0) off.timeout = { to_off: true, to_def: false };
+    off.hurry = { to_off: false, to_def: false, tempo: 'urgent' };
+    off.normal = { to_off: false, to_def: false, tempo: 'normal' };
+    off.milk = { to_off: false, to_def: false, tempo: 'milk' };
+    if (st.down <= 3) off.spike = { to_off: false, to_def: false, play: 'spike' };
+    // a makeable kick that wins or takes the lead late, with a timeout to stop the clock for it
+    const kickWins = !firstHalf && lead >= -2 && lead <= 0 && root.t <= 180 && root.to[o] > 0;
+    if (kickWins && sim.fgProb(root.yl + 17, o) >= 0.5) off.rundown = { to_off: false, to_def: false };
   }
   if (st.down === 4) {
     off.go = { play: 'go', to_off: false };
@@ -65,7 +70,7 @@ function optionsFor(st, root, sim) {
 
 function familyOf(option, group) {
   if (group.family) return group.family;
-  if (['timeout', 'hurry', 'spike', 'normal', 'milk'].includes(option)) return 'off_clock_stop';
+  if (['timeout', 'hurry', 'spike', 'normal', 'milk', 'rundown'].includes(option)) return 'off_clock_stop';
   if (['go', 'fg', 'punt'].includes(option)) return 'fourth_down';
   if (['attack', 'runout'].includes(option)) return 'h1_end';
   if (option === 'kneel') return 'kneel';

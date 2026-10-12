@@ -33,8 +33,10 @@ from .sim import KICKOFF, PAT, SNAP, RootState, Simulator
 
 OPTIONS = {
     "def_timeout": {"timeout": {"to_def": True}, "no_timeout": {"to_def": False}},
-    "off_clock_stop": {"timeout": {"to_off": True}, "hurry": {"to_off": False, "tempo": "urgent"},
-                       "spike": {"to_off": False, "play": "spike"}},
+    # the defense did not call timeout at this whistle, so every option holds it to that
+    "off_clock_stop": {"timeout": {"to_off": True, "to_def": False},
+                       "hurry": {"to_off": False, "to_def": False, "tempo": "urgent"},
+                       "spike": {"to_off": False, "to_def": False, "play": "spike"}},
     "lead_tempo": {},  # built per decision (exact runoff)
     "play_select": {"run": {"play": "run"}, "pass": {"play": "pass"}},
     "kneel": {"kneel": {"play": "kneel"}, "run_play": {"play": "run"}},
