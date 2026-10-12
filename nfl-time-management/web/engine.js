@@ -612,7 +612,9 @@
         const late = tHalf <= 40;
         if (late && margin < -3) choice = -1;
         if (late && margin >= -3 && margin <= 0 && pFg >= 0.3) choice = FG;
-        if (late && margin >= -3 && margin <= 0 && pFg < 0.3) choice = -1;
+        if (late && margin >= -3 && margin < 0 && pFg < 0.3) choice = -1;  // trailing: must go
+        // Tied and out of range: punt and play for overtime (the WP model overrates late possession here).
+        if (margin === 0 && pFg < 0.3 && yl >= 35 && (late || (tHalf <= 120 && yl >= 50))) choice = PUNT;
       } else {
         if (tHalf <= 20 && pFg >= 0.2) choice = FG;
         if (tHalf <= 20 && pFg < 0.2 && choice === PUNT && yl < 60) choice = -1;

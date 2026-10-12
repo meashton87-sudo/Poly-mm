@@ -15,6 +15,7 @@ if __name__ == "__main__":
     p.add_argument("--game", default="2026_05_BUF_LA")
     p.add_argument("--skip-card", action="store_true")
     p.add_argument("--skip-backtest", action="store_true")
+    p.add_argument("--reconfirm", action="store_true", help="recompute the confirmation pass")
     a = p.parse_args()
     t0 = time.time()
     graded = report.load_graded()
@@ -32,16 +33,22 @@ if __name__ == "__main__":
     print("confirmation pass on headline mistakes (fresh seeds, 4,000 sims per option) ...", flush=True)
     from nflclock import analyze
     import pandas as pd
-    top = report.summarize(graded)["top"]
-    keys = list(top["key"].head(40)) + [c["key"] for c in cards]
-    conf = analyze.confirm(graded, keys, n=4000)
-    conf["confirmed"] = (conf["confirm_rec"] != conf["actual"]) & (conf["confirm_gain"] > 2 * conf["confirm_se"])
-    conf.to_csv(config.REPORT_DIR / "confirmations.csv", index=False)
+    conf_path = config.REPORT_DIR / "confirmations.csv"
+    if conf_path.exists() and not a.reconfirm:
+        conf = pd.read_csv(conf_path)
+    else:
+        top = report.summarize(graded)["top"]
+        keys = list(top["key"].head(40)) + [c["key"] for c in cards]
+        conf = analyze.confirm(graded, keys, n=4000)
+        conf["confirmed"] = (conf["confirm_rec"] != conf["actual"]) & (conf["confirm_gain"] > 2 * conf["confirm_se"])
+        conf.to_csv(conf_path, index=False)
+    conf = conf.drop_duplicates(["key", "decision"])
     print(f"  confirmed {int(conf['confirmed'].sum())} of {len(conf)}")
-    cmap = conf.set_index("key")
+    cmap = conf.set_index(["key", "decision"])
     for c in cards:
-        if c["key"] in cmap.index:
-            r = cmap.loc[c["key"]]
+        k = (c["key"], c["decision"])
+        if k in cmap.index:
+            r = cmap.loc[k]
             c.update(confirmed=bool(r["confirmed"]), confirm_gain=float(r["confirm_gain"]), confirm_se=float(r["confirm_se"]))
     wk = config.REPORT_DIR / f"worst_decisions_{a.season}_wk{a.week:02d}.json"
     wk.write_text(json.dumps(cards, indent=1, default=float))

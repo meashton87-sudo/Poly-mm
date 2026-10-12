@@ -200,10 +200,14 @@ def export_dashboard_files(out: dict, dest=None):
         top_dec["grade"] = [f"{l} ({p:.1%})" if p < 0.999 else f"{l} (worst 0.1%)" for l, p in lp]
     conf_p = config.REPORT_DIR / "confirmations.csv"
     if conf_p.exists():
-        conf = pd.read_csv(conf_p).set_index("key")
-        top_dec["confirmed"] = top_dec["key"].map(lambda k: (
-            f"yes (+{conf.loc[k, 'confirm_gain'] * 100:.1f} ± {conf.loc[k, 'confirm_se'] * 100:.1f})"
-            if k in conf.index and conf.loc[k, "confirmed"] else ("no" if k in conf.index else "")))
+        conf = pd.read_csv(conf_p).drop_duplicates(["key", "decision"]).set_index(["key", "decision"])
+
+        def _conf(k, dcode):
+            if (k, dcode) not in conf.index:
+                return ""
+            r = conf.loc[(k, dcode)]
+            return f"yes (+{r['confirm_gain'] * 100:.1f} ± {r['confirm_se'] * 100:.1f})" if r["confirmed"] else "no"
+        top_dec["confirmed"] = [_conf(k, d) for k, d in zip(top_dec["key"], top_dec["decision"])]
     top_dec["decision"] = top_dec["decision"].map(FAMILY_LABEL)
     top_dec.round(5).to_csv(dest / "costliest.csv", index=False)
     for wk in sorted(config.REPORT_DIR.glob("worst_decisions_*_wk*.json"))[-1:]:

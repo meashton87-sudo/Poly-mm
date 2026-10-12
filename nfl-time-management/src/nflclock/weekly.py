@@ -76,7 +76,7 @@ def worst_of_week(graded: pd.DataFrame, season: int, week: int, scale: dict | No
                 hs, as_ = gm["home_score"].iloc[0], gm["away_score"].iloc[0]
                 final = f"{r['away_team']} {int(as_)}, {r['home_team']} {int(hs)}"
         cards.append({
-            "key": f"{r['game_id']}#{int(r['play_id'])}", "game_id": r["game_id"],
+            "key": f"{r['game_id']}#{int(r['play_id'])}", "game_id": r["game_id"], "decision": r["decision"],
             "matchup": f"{r['away_team']} at {r['home_team']}", "team": r["team"], "coach": r["coach"],
             "family": FAMILY_LABEL[r["decision"]], "situation": _situation(r), "chose": OPTION_LABEL[r["actual"]],
             "better": OPTION_LABEL[r["recommended"]], "cost": float(r["gain"]), "se": float(r["gain_se"]),

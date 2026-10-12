@@ -507,7 +507,10 @@ class Simulator:
             late = t_half <= 40
             choice = np.where(late & (margin < -3), -1, choice)
             choice = np.where(late & (margin >= -3) & (margin <= 0) & (p_fg >= 0.3), FG, choice)
-            choice = np.where(late & (margin >= -3) & (margin <= 0) & (p_fg < 0.3), -1, choice)
+            choice = np.where(late & (margin >= -3) & (margin < 0) & (p_fg < 0.3), -1, choice)  # trailing: must go
+            # Tied and out of range: punt and play for overtime (the WP model overrates late possession here).
+            tied_punt = (margin == 0) & (p_fg < 0.3) & (yl >= 35) & (late | ((t_half <= 120) & (yl >= 50)))
+            choice = np.where(tied_punt, PUNT, choice)
         else:
             choice = np.where((t_half <= 20) & (p_fg >= 0.2), FG, choice)
             choice = np.where((t_half <= 20) & (p_fg < 0.2) & (choice == PUNT) & (yl < 60), -1, choice)
