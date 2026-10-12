@@ -388,6 +388,12 @@ details summary { cursor: pointer; font-weight: 600; }
         if (i > 0) { const e = document.createElement('span'); e.className = 'edge'; e.textContent = `${(r.edge * 100).toFixed(1)} pts ± ${(r.se * 100).toFixed(1)}`; meta.appendChild(e); }
         const share = coachShare(r.family, r.option, grp.side, snapshot);
         if (share != null) { const c = document.createElement('span'); c.className = 'pill'; c.textContent = `NFL coaches choose this ${Math.round(share * 100)}%`; meta.appendChild(c); }
+        if (r.drive && snapshot.phase === 'snap') {
+          const dd = document.createElement('span');
+          const who = grp.side === 'defense' ? 'their drive' : 'this drive';
+          dd.textContent = `${who} ends with ${clockText(r.drive.endT)} left in the half · TD ${Math.round(r.drive.td * 100)}% · FG ${Math.round(r.drive.fg * 100)}%`;
+          meta.appendChild(dd);
+        }
         row.append(nm, wp, bb, meta);
         wrap.appendChild(row);
       });
@@ -484,7 +490,7 @@ details summary { cursor: pointer; font-weight: 600; }
         let ss = 0;
         for (let i = 0; i < a.length; i++) { const x = a[i] - b[i] - mean; ss += x * x; }
         const se = o.name === best ? 0 : Math.sqrt(ss / (a.length - 1) / a.length);
-        return { option: o.name, family: o.family, wp: vals[o.name].mean, edge: mean, se };
+        return { option: o.name, family: o.family, wp: vals[o.name].mean, edge: mean, se, drive: vals[o.name].drive };
       }).sort((x, y) => y.wp - x.wp);
       return { team: g.teamCode, side: g.side, rows };
     });

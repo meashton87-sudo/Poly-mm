@@ -97,8 +97,8 @@ self.onmessage = async (ev) => {
       const t0 = Date.now();
       const res = sim.run(root, { n: msg.n, action: msg.action || {}, perspective: msg.perspective, seed: msg.seed });
       const values = res.values;
-      self.postMessage({ type: 'job', id: msg.id, jobId: msg.jobId, mean: res.mean, values, ms: Date.now() - t0 },
-        [values.buffer]);
+      self.postMessage({ type: 'job', id: msg.id, jobId: msg.jobId, mean: res.mean, values, drive: res.drive,
+        ms: Date.now() - t0 }, [values.buffer]);
     }
   } catch (err) {
     self.postMessage({ type: 'error', id: msg.id, message: String(err && err.message || err) });

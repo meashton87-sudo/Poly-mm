@@ -378,24 +378,36 @@
         phase: SNAP, freeKick: false, stratActive: false, plays: 0 };
       const u = new Float64Array(8);
       let sum = 0;
+      // descriptive drive stats for the possession in progress (they do not affect the value)
+      let driveEndT = 0, driveTd = 0, driveFg = 0, driveCount = 0;
+      const startPhase = root.phase || SNAP;
       for (let r = 0; r < n; r++) {
         S.t = root.t; S.pos = root.pos; S.s[0] = root.score[0]; S.s[1] = root.score[1]; S.down = root.down;
         S.ytg = root.ytg; S.yl = root.yl; S.to[0] = root.to[0]; S.to[1] = root.to[1]; S.running = !!root.clock_running;
         S.credit = 0; S.phase = root.phase || SNAP; S.freeKick = false; S.stratActive = !!action.h1; S.plays = 0;
+        let driveOpen = startPhase === SNAP;
+        const pos0 = root.pos, pts0 = root.score[pos0];
         for (let step = 0; step < maxSteps && S.phase !== DONE; step++) {
           for (let c = 0; c < 8; c++) u[c] = uni(seed, r, step, c);
           const act = step === 0 ? action : null;
           if (S.phase === PAT) this._pat(S, g, u, act);
           if (S.phase === KICKOFF) this._kickoff(S, g, u, act);
           if (S.phase === SNAP) this._snap(S, g, u, act, action, root.pos);
+          if (driveOpen && (S.pos !== pos0 || S.phase !== SNAP)) {
+            const pts = S.s[pos0] - pts0;
+            driveEndT += Math.max(S.t - g.halfEnd, 0); driveTd += pts >= 6 ? 1 : 0; driveFg += pts === 3 ? 1 : 0;
+            driveCount++; driveOpen = false;
+          }
         }
+        if (driveOpen) { driveEndT += 0; driveCount++; }
         const v = this._value(S, g, persp);
         values[r] = v; sum += v;
       }
       let ss = 0;
       const mean = sum / n;
       for (let r = 0; r < n; r++) ss += (values[r] - mean) * (values[r] - mean);
-      return { mean, se: Math.sqrt(ss / (n - 1) / n), values };
+      const drive = driveCount ? { endT: driveEndT / driveCount, td: driveTd / driveCount, fg: driveFg / driveCount } : null;
+      return { mean, se: Math.sqrt(ss / (n - 1) / n), values, drive };
     }
 
     // ------------------------------------------------------------------ PAT ---
