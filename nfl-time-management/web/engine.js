@@ -394,6 +394,16 @@
       return L.items[lo];
     }
 
+    // The two numbers a coach asks for on 4th down: conversion chance and field-goal make chance.
+    fourthInfo(root) {
+      const o = root.pos, half = root.t > 1800 ? 1 : 2, tHalf = root.t - (half === 1 ? 1800 : 0);
+      const margin = root.score[o] - root.score[1 - o], yl = root.yl;
+      const mode = gameMode(half, tHalf, margin), zone = zoneOf(yl);
+      const dist = yl + FG_SNAP_YARDS;
+      return { fgDist: dist, pFg: this.fgProb(dist, o),
+        pConv: this.conv[o][(mode * N_ZONE + zone) * 21 + Math.trunc(clip(root.ytg, 1, 20))] };
+    }
+
     sampleStop(team, pool, u) {
       const E = this.e, cdf = this.stopCdf[team];
       let lo = E.stopOff[pool], hi = E.stopOff[pool + 1] - 1;

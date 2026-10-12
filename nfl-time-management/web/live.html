@@ -375,6 +375,14 @@ details summary { cursor: pointer; font-weight: 600; }
       verdict.textContent = `${OPTION_TEXT[best.option] || best.option}` + (second ? ` · +${margin.toFixed(1)} win-prob points over ${(OPTION_TEXT[second.option] || second.option).toLowerCase()}` : '') +
         (second && Math.abs(second.edge) < 2 * second.se ? ' (close call)' : '');
       wrap.appendChild(verdict);
+      if (msg.info && grp.side === 'offense') {
+        const side = game.home.team === grp.team ? game.home : game.away;
+        const kname = side.kicker && side.kicker.name ? ` (${side.kicker.name})` : '';
+        const fi = document.createElement('p'); fi.className = 'note pace';
+        const fgTxt = msg.info.fgDist <= 68 ? `field goal from ${Math.round(msg.info.fgDist)} yards ${Math.round(msg.info.pFg * 100)}%${kname}` : 'out of field-goal range';
+        fi.textContent = `4th & ${snapshot.goal ? 'goal' : Math.min(snapshot.ytg, ylToGoFor(snapshot))}: converts ${Math.round(msg.info.pConv * 100)}% · ${fgTxt}`;
+        wrap.appendChild(fi);
+      }
       if (grp.pace) {
         const pn = document.createElement('p'); pn.className = 'note pace';
         pn.textContent = grp.pace.kind === 'within'
@@ -470,6 +478,7 @@ details summary { cursor: pointer; font-weight: 600; }
     if (m.type === 'plan') {
       const seed = (Date.now() % 1000003) >>> 0;
       job.groups = m.groups;
+      job.info = m.info;
       const base = { type: 'job', id: job.id, jobId: 'base', st: job.st, settings: job.settings,
         n: Math.max(2000, Math.round(job.n / 2)), action: {}, perspective: 0, seed };
       job.queue = [base];
@@ -514,7 +523,7 @@ details summary { cursor: pointer; font-weight: 600; }
     });
     const ms = Date.now() - j.t0;
     $('status').textContent = `${j.n.toLocaleString()} simulations per option, common random numbers, ${POOL_SIZE} parallel worker${POOL_SIZE > 1 ? 's' : ''}.`;
-    showResults({ results, baseHomeWp: j.results.base.mean, ms }, j.snapshot);
+    showResults({ results, baseHomeWp: j.results.base.mean, ms, info: j.info }, j.snapshot);
     const rec = results.map((g) => `${g.team}: ${(OPTION_TEXT[g.rows[0].option] || g.rows[0].option).toLowerCase()}`).join(' · ') || 'no decision';
     const h = loadHist(); h.unshift({ text: situationText(), rec, state: j.snapshot }); saveHist(h); renderHist();
   }

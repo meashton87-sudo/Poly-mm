@@ -23,9 +23,9 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from . import live
+from . import library as L, live
 from .models import Bundle
-from .sim import KICKOFF, PAT, SNAP, RootState, Simulator
+from .sim import FG_SNAP_YARDS, KICKOFF, PAT, SNAP, RootState, Simulator
 
 OPTION_HELP = {
     "timeout": "call timeout now", "no_timeout": "let the clock run", "hurry": "hurry to the line (no stop)",
@@ -66,6 +66,19 @@ def pace_break_even(diffs) -> tuple[str, float | None]:
             a, b = PACES[k - 1], PACES[k]
             return "within", a + (b - a) * diffs[k - 1] / (diffs[k - 1] - diffs[k])
     return "always", None
+
+
+def fourth_info(sim: Simulator, root: RootState) -> dict:
+    """Conversion chance (from the matchup-tilted play pools) and field-goal make chance."""
+    o = root.pos
+    half_end = 1800.0 if root.t > 1800 else 0.0
+    half = 1 if half_end > 0 else 2
+    margin = root.score[o] - root.score[1 - o]
+    mode = int(L.game_mode(half, root.t - half_end, margin))
+    zone = int(L.zone_of(root.yl))
+    dist = root.yl + FG_SNAP_YARDS
+    return {"fg_dist": dist, "p_fg": float(sim.fg_prob(np.array([dist]), np.array([o]))[0]),
+            "p_conv": float(sim.conv[o][mode, zone, int(np.clip(root.ytg, 1, 20))])}
 
 
 def _clock(s: float) -> str:
@@ -236,6 +249,8 @@ class LiveConsole:
         if not opts:
             v = sim.run(root, n=self.sims, perspective=0, seed=seed)
             results[None] = float(v.mean())
+        if self.st.phase == "snap" and self.st.down == 4 and root.pos in results:
+            results[root.pos].attrs["fourth"] = fourth_info(sim, root)
         return results, ctx
 
     # ---------------------------------------------------------- display ---
@@ -264,6 +279,11 @@ class LiveConsole:
                       f"{r['se'] * 100:>6.1f}   {r['grade']:<22}{share:>11}")
             best = df.iloc[0]
             print(f"  -> {team_name[team_idx]}: {OPTION_HELP.get(best['option'], best['option']).upper()}")
+            fi = df.attrs.get("fourth")
+            if fi:
+                fg = (f"field goal from {fi['fg_dist']:.0f} yards {fi['p_fg']:.0%}" if fi["fg_dist"] <= 68
+                      else "out of field-goal range")
+                print(f"     4th down: converts {fi['p_conv']:.0%} | {fg}")
             pace = df.attrs.get("pace")
             if pace:
                 kind, sec = pace

@@ -88,7 +88,8 @@ self.onmessage = async (ev) => {
         team: g.team, teamCode: g.team === 0 ? game.home.team : game.away.team, side: g.side,
         options: Object.entries(g.opts).map(([name, action]) => ({ name, action, family: familyOf(name, g) })),
       }));
-      self.postMessage({ type: 'plan', id: msg.id, groups, root });
+      const info = msg.st.phase === 'snap' && msg.st.down === 4 ? sim.fourthInfo(root) : null;
+      self.postMessage({ type: 'plan', id: msg.id, groups, root, info });
       return;
     }
     if (msg.type === 'job') {
