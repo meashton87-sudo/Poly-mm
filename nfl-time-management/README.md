@@ -55,6 +55,11 @@ nflverse PBP ──► clock model (play durations, tempo runoff by situation)
   seconds left plays the snap out to zero. Fourth downs use a WP-model look-ahead, except that late in a
   tied game a team out of field-goal range punts and plays for overtime. The decision being evaluated is
   forced on the first snap, and everything after it follows that policy.
+* **Kick-to-win endgame**: down 1–2 or tied with a 50%+ field goal in hand, a timeout to spare and under
+  3:00 left, the offense runs the clock down with clock-killing plays, keeps its timeouts, and with 45
+  seconds or less on a running clock lets it run to 0:03, calls timeout and kicks. The defense spends its
+  timeouts to save time for a reply (worth 5–16 win-probability points from 0:50–1:50 in the simulator).
+  An offense without a timeout keeps hurrying and spikes for the kick instead.
 * **Clock-aware play calls**: with no timeouts and the clock needing to stop, real offenses complete
   passes in bounds 47% less often in the final 20 seconds (21% less at 20–35 s) and pass 95% of the time
   (2020–25 data). The simulator redraws that share of in-bounds gains from the same pool's incompletions
@@ -79,6 +84,9 @@ from that state, and the actual choice is compared with the best one.
 | Onside kicks | Trailing kicking team in the final 7:00 | Onside vs. deep |
 | Late PATs | 4th quarter | Kick vs. go for two |
 | Clock-critical run/pass | Final 5:00, non-tied, downs 1–3 | Run vs. pass |
+
+An offense's clock options hold the defense to what it did at that whistle (no timeout); the defense's
+timeout decisions are graded separately.
 
 When an offense hurried or spiked, the option it chose is played at the pace it actually achieved (the
 seconds from the whistle to its next snap), because hurry versus spike turns on that pace: about 10
