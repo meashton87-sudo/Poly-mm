@@ -38,6 +38,31 @@ def defensive_timeout_chart(bundle):
     return rows
 
 
+def leading_defense_timeout_chart(bundle):
+    """Defense leading by 1 or tied, opponent in field-goal range with a timeout, clock running after a
+    2nd-down run: spend timeouts to save time for a reply vs. let the clock run (the whole strategy)."""
+    from . import sim as S
+    sim = _sim(bundle)
+    rows = []
+    for lead in (1, 0):
+        for yl in (25, 35):   # 42- and 52-yard tries
+            for t in (120, 100, 80, 60, 45, 30):
+                root = RootState(t=t, pos=0, score=(20 - lead, 20), down=3, ytg=4, yl=yl, to=(2, 3),
+                                 clock_running=True)
+                save = sim.run(root, n=N, perspective=1, seed=13)
+                keep = S.CLOSE_DEF_WINDOW
+                S.CLOSE_DEF_WINDOW = -1.0   # never spend a timeout to save time
+                try:
+                    run = sim.run(root, n=N, perspective=1, seed=13)
+                finally:
+                    S.CLOSE_DEF_WINDOW = keep
+                d = save - run
+                rows.append({"def_lead": lead, "kick_yards": yl + 17, "t": t, "edge": float(d.mean()),
+                             "se": float(d.std(ddof=1) / np.sqrt(N)), "wp_save": float(save.mean()),
+                             "wp_run": float(run.mean())})
+    return rows
+
+
 def end_of_half_chart(bundle):
     """Tied game, 1st & 10: attack vs. run out the first half."""
     sim = _sim(bundle)
@@ -132,6 +157,7 @@ def build_all(bundle=None) -> dict:
     bundle = bundle or Bundle.load()
     out = {
         "defensive_timeouts": defensive_timeout_chart(bundle),
+        "leading_defense_timeouts": leading_defense_timeout_chart(bundle),
         "end_of_half": end_of_half_chart(bundle),
         "kicker_fourth_down": kicker_fourth_down_chart(bundle),
         "punter_fourth_down": punter_fourth_down_chart(bundle),
