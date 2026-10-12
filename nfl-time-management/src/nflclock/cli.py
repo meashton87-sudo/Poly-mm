@@ -89,6 +89,34 @@ def _grades(a):
                   f"(+{r['gain'] * 100:.1f} WP pts)")
 
 
+def _sync(a):
+    import json
+    from . import config, data, live
+    from .decide import PERSONNEL_PATH, build_personnel
+    from .models import build
+    games = pd.read_csv(config.RAW_DIR / "games.csv") if (config.RAW_DIR / "games.csv").exists() else None
+    season = a.season or (int(games["season"].max()) if games is not None else 2026)
+    if not a.no_refresh:
+        print(f"refreshing {season} schedule, play-by-play, depth charts, injuries, rosters ...")
+        live.refresh(season)
+        games = pd.read_csv(config.RAW_DIR / "games.csv")
+        print("rebuilding models and ratings with the latest games ...")
+        b = build(verbose=False)
+        b.save()
+        pbp = data.load(tuple(sorted(set(range(2016, season + 1)))))
+        PERSONNEL_PATH.write_text(json.dumps(build_personnel(b, pbp), indent=1))
+    ids = a.games
+    if not ids:
+        upcoming = games[(games["season"] == season) & games["result"].isna()]
+        wk = upcoming["week"].min()
+        ids = upcoming[upcoming["week"] == wk]["game_id"].tolist()
+    for gid in ids:
+        rec = live.build_game(gid)
+        print(f"  {gid}: {rec['away']['team']} QB {rec['away']['qb']['name']}, K {rec['away']['kicker']['name']}, "
+              f"P {rec['away']['punter']['name']} | {rec['home']['team']} QB {rec['home']['qb']['name']}, "
+              f"K {rec['home']['kicker']['name']}, P {rec['home']['punter']['name']}")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="nflclock", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -98,6 +126,13 @@ def main(argv=None):
     an.add_argument("--sims", type=int, default=600)
     an.add_argument("--games", type=int, default=None)
     sub.add_parser("report")
+    lv = sub.add_parser("live", help="live game console: type situations, get simulated options")
+    lv.add_argument("game_id", help="e.g. 2026_05_BUF_LA (run `nflclock sync` first)")
+    lv.add_argument("--sims", type=int, default=6000)
+    sy = sub.add_parser("sync", help="pull latest rosters/depth charts/injuries and build live game contexts")
+    sy.add_argument("--season", type=int, default=None)
+    sy.add_argument("--games", nargs="*", default=None, help="game ids (default: the next unplayed week)")
+    sy.add_argument("--no-refresh", action="store_true", help="use already-downloaded data")
     g = sub.add_parser("grades", help="a team's graded clock decisions (after the analysis has run)")
     g.add_argument("--team", required=True)
     g.add_argument("--season", type=int, default=None)
@@ -129,6 +164,11 @@ def main(argv=None):
         _decide(a)
     elif a.cmd == "grades":
         _grades(a)
+    elif a.cmd == "live":
+        from .console import main as live_main
+        live_main(a.game_id, sims=a.sims)
+    elif a.cmd == "sync":
+        _sync(a)
     elif a.cmd == "build":
         from . import data
         from .decide import PERSONNEL_PATH, build_personnel
