@@ -158,6 +158,39 @@ python -c "from nflclock import webexport as w; w.export_engine(); w.export_game
 node web/parity_test.js
 ```
 
+### 4. Two-Minute Drill: the daily play-calling game
+
+`web/game.html` is a Wordle-style daily game built on the same engine. Every day it serves three real
+late-game spots from 2023-26 (a two-minute drill, protecting a lead, a tied game or the end of a half),
+and the player calls every play for one team until the game ends: tempo, timeouts, spikes, kneels,
+field goals, punts, two-point tries and onside kicks, plus 23 play calls:
+
+* runs: outside, off-tackle and inside, each to the strong or weak side; up the middle; QB sneak; QB
+  designed run; RPO
+* passes: quick and deep to the strong side, weak side or middle; screen; play-action short and deep;
+  rollouts to either side; trick plays; the Hail Mary (as a half runs out)
+* a **Get out of bounds** toggle on any call, which raises the odds of stopping the clock by what NFL
+  ball carriers actually achieve when they need it (it never guarantees it)
+
+Each outcome is a real NFL snap of that call from 2022-26 (160,000 labeled from nflverse play-by-play and
+FTN charting), matched on down, distance, field position and game situation, and tilted toward these
+two teams' offense and defense on that call. Whatever happened on that snap happens to you: sacks,
+strip-sacks, interceptions and pick-sixes, fumbles, bad snaps, drops, throwaways, scrambles, flags by
+name, and runners who can't get out of bounds. Strong side is the wide side of the field and weak side
+the short side, from the hash the ball starts on (public charting does not record where the tight end
+lines up). Because calls are labeled by where the ball went, a covered deep shot is recorded as a
+checkdown or a sack, which flatters deep calls; each call's edge over a same-kind play in the same
+situation is halved to correct for it.
+
+Every call shows both teams' league percentile on that play, and every decision is graded in win
+probability against all the alternatives and against what a typical NFL play-caller does there. The
+day's score is a percentile against NFL play-callers in the same three spots.
+
+```bash
+python -c "from nflclock import dailygame as G; print(G.build())"   # writes web/playbook.json and web/scenarios.json
+node web/game_smoke.js
+```
+
 ### Percentiles everywhere
 
 * **Decision grades**: a decision's cost is ranked against every real NFL decision of the same type from

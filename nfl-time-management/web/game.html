@@ -1,0 +1,169 @@
+<title>Two-Minute Drill</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: one column, phone first. A stadium score bug on top, the field strip under it, then the
+   coordinator's laminated call sheet (plays blocked out in highlighter colors) as the control surface. */
+:root {
+  --paper: #eef2f5; --card: #ffffff; --ink: #13212e; --ink-2: #536374; --rule: #cfd8e1;
+  --turf: #2d7a4c; --turf-2: #276b43; --chalk: rgba(255,255,255,.55); --fd: #f5d000; --los: #2463d6;
+  --accent: #c8312b; --good: #1d7a4c; --ok: #a86d0c; --bad: #c8312b;
+  --hl-run: #dcefe2; --hl-quick: #dde8f8; --hl-shot: #f8dde6; --hl-move: #f8e7d3; --hl-clock: #f6efc8;
+  --chip: #e6ebf0; --shadow: 0 1px 2px rgba(19,33,46,.08), 0 4px 14px rgba(19,33,46,.06);
+  --bug: #13212e; --bug-2: #1e3042; --bug-fg: #f2f6f9;
+  --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "Archivo", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0d1319; --card: #151d25; --ink: #e5ecf2; --ink-2: #95a5b5; --rule: #283542;
+  --turf: #22603c; --turf-2: #1d5534; --chalk: rgba(255,255,255,.42); --fd: #f2cc0c; --los: #5d97ff;
+  --accent: #ff6c60; --good: #3fbf7f; --ok: #e3a63c; --bad: #ff6c60;
+  --hl-run: #173322; --hl-quick: #172840; --hl-shot: #3a1a29; --hl-move: #3a2a16; --hl-clock: #353016;
+  --chip: #1e2933; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.25); color-scheme: dark;
+  --bug: #070b0f; --bug-2: #121b24; --bug-fg: #eef3f7;
+} }
+:root[data-theme="dark"] {
+  --paper: #0d1319; --card: #151d25; --ink: #e5ecf2; --ink-2: #95a5b5; --rule: #283542;
+  --turf: #22603c; --turf-2: #1d5534; --chalk: rgba(255,255,255,.42); --fd: #f2cc0c; --los: #5d97ff;
+  --accent: #ff6c60; --good: #3fbf7f; --ok: #e3a63c; --bad: #ff6c60;
+  --hl-run: #173322; --hl-quick: #172840; --hl-shot: #3a1a29; --hl-move: #3a2a16; --hl-clock: #353016;
+  --chip: #1e2933; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.25); color-scheme: dark;
+  --bug: #070b0f; --bug-2: #121b24; --bug-fg: #eef3f7;
+}
+html, body { height: 100%; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.45 var(--body); }
+.wrap { max-width: 860px; margin: 0 auto; padding-inline: 16px; padding-block: 12px 40px; display: flex; flex-direction: column; gap: 14px; }
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--los); outline-offset: 2px; }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.brand { display: flex; align-items: baseline; gap: 10px; }
+.brand h1 { font: 800 2rem/1 var(--display); letter-spacing: .02em; text-transform: uppercase; margin: 0; }
+.brand .day { font: 500 .8rem var(--mono); color: var(--ink-2); }
+.pips { display: flex; gap: 6px; align-items: center; }
+.pip { width: 26px; height: 8px; border-radius: 4px; background: var(--rule); }
+.pip.on { background: var(--los); } .pip.done { background: var(--good); }
+.linkbtn { background: none; border: 0; color: var(--los); text-decoration: underline; padding: 0; }
+.card { background: var(--card); border-radius: 12px; box-shadow: var(--shadow); padding: 14px; }
+.note { color: var(--ink-2); font-size: .85rem; }
+h2 { font: 800 1.35rem/1.1 var(--display); text-transform: uppercase; letter-spacing: .03em; margin: 0 0 8px; text-wrap: balance; }
+h3 { font: 700 .78rem var(--body); text-transform: uppercase; letter-spacing: .08em; color: var(--ink-2); margin: 0 0 6px; }
+
+/* score bug */
+.bug { display: grid; grid-template-columns: 1fr auto 1fr; align-items: stretch; background: var(--bug); color: var(--bug-fg); border-radius: 12px; overflow: hidden; }
+.bug .tm { display: flex; align-items: center; gap: 10px; padding: 10px 12px; position: relative; }
+.bug .tm.home { justify-content: flex-end; flex-direction: row-reverse; }
+.bug .tm .stripe { position: absolute; inset: 0 auto 0 0; width: 6px; }
+.bug .tm.home .stripe { inset: 0 0 0 auto; }
+.bug .abbr { font: 800 1.5rem/1 var(--display); letter-spacing: .04em; }
+.bug .score { font: 800 2.4rem/1 var(--display); font-variant-numeric: tabular-nums; }
+.bug .you { font: 700 .62rem var(--body); text-transform: uppercase; letter-spacing: .1em; color: var(--fd); margin-top: 2px; }
+.bug .tos { display: flex; gap: 3px; margin-top: 4px; }
+.bug .tos i { width: 12px; height: 4px; border-radius: 2px; background: var(--fd); opacity: .95; }
+.bug .tos i.used { opacity: .18; }
+.bug .ball { width: 9px; height: 9px; border-radius: 50%; background: var(--fd); }
+.bug .mid { background: var(--bug-2); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 6px 14px; min-width: 120px; }
+.bug .clock { font: 800 1.8rem/1 var(--display); font-variant-numeric: tabular-nums; letter-spacing: .03em; }
+.bug .clock.run { color: var(--fd); }
+.bug .qtr { font: 500 .72rem var(--mono); opacity: .8; }
+.bug .dd { font: 600 .82rem var(--body); margin-top: 2px; }
+@media (max-width: 480px) { .bug .score { font-size: 2rem; } .bug .abbr { font-size: 1.2rem; } .bug .mid { min-width: 96px; padding: 6px 8px; } .bug .clock { font-size: 1.5rem; } }
+
+/* field strip */
+.field { position: relative; height: 54px; border-radius: 10px; overflow: hidden; background: repeating-linear-gradient(90deg, var(--turf) 0 10%, var(--turf-2) 10% 20%); }
+.field .ez { position: absolute; top: 0; bottom: 0; width: 8%; display: flex; align-items: center; justify-content: center; font: 800 .8rem var(--display); letter-spacing: .12em; color: rgba(255,255,255,.9); writing-mode: vertical-rl; text-transform: uppercase; }
+.field .ez.l { left: 0; transform: rotate(180deg); } .field .ez.r { right: 0; }
+.field .yd { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--chalk); }
+.field .num { position: absolute; bottom: 3px; transform: translateX(-50%); font: 600 .62rem var(--mono); color: var(--chalk); }
+.field .los, .field .fdl { position: absolute; top: 0; bottom: 0; width: 3px; transform: translateX(-50%); transition: left .5s ease; }
+.field .los { background: var(--los); } .field .fdl { background: var(--fd); }
+.field .fb { position: absolute; top: 50%; width: 16px; height: 10px; border-radius: 50%; background: #8a4b22; border: 1px solid rgba(255,255,255,.7); transform: translate(-50%, -50%); transition: left .5s ease; }
+@media (prefers-reduced-motion: reduce) { .field .los, .field .fdl, .field .fb { transition: none; } }
+
+/* feed */
+.feed { display: flex; flex-direction: column; gap: 8px; }
+.result { font: 600 1rem var(--body); }
+.result.big { font: 800 1.35rem/1.15 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.grade { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; font-size: .9rem; }
+.grade .mark { font-size: 1.2rem; line-height: 1; }
+.pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--chip); font: 600 .78rem var(--body); }
+.pill.good { color: var(--good); } .pill.ok { color: var(--ok); } .pill.bad { color: var(--bad); }
+
+/* decision panel */
+.ask { font: 800 1.15rem/1.2 var(--display); text-transform: uppercase; letter-spacing: .03em; margin: 0 0 10px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { border: 1.5px solid var(--rule); background: var(--card); border-radius: 999px; padding: 7px 14px; font-weight: 600; font-size: .9rem; }
+.chip[aria-pressed="true"] { border-color: var(--los); background: color-mix(in srgb, var(--los) 14%, var(--card)); }
+.chip.term { border-style: dashed; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.toggle { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: .9rem; }
+.toggle input { width: 18px; height: 18px; accent-color: var(--los); }
+.sheet { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+@media (max-width: 680px) { .sheet { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.fam { grid-column: 1 / -1; font: 700 .7rem var(--body); text-transform: uppercase; letter-spacing: .1em; color: var(--ink-2); margin-top: 4px; display: flex; gap: 8px; align-items: center; }
+.fam::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
+.play { text-align: left; border: 0; border-radius: 9px; padding: 9px 10px 8px; display: flex; flex-direction: column; gap: 4px; min-width: 0; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 10%, transparent); }
+.play:hover { box-shadow: inset 0 0 0 2px var(--los); }
+.play:disabled { opacity: .45; cursor: default; box-shadow: none; }
+.play .nm { font: 700 .92rem/1.15 var(--body); }
+.play .who { font: 500 .72rem var(--body); color: var(--ink-2); }
+.play .meta { display: flex; flex-wrap: wrap; gap: 4px 8px; font: 500 .7rem var(--mono); color: var(--ink-2); }
+.play .pct b { font-weight: 600; }
+.pct.hi b { color: var(--good); } .pct.lo b { color: var(--bad); }
+.f-run { background: var(--hl-run); } .f-quick { background: var(--hl-quick); } .f-shot { background: var(--hl-shot); }
+.f-move { background: var(--hl-move); } .f-clock { background: var(--hl-clock); }
+.busy { display: flex; align-items: center; gap: 10px; color: var(--ink-2); font-size: .9rem; }
+.spin { width: 16px; height: 16px; border: 2px solid var(--rule); border-top-color: var(--los); border-radius: 50%; animation: sp 0.8s linear infinite; }
+@keyframes sp { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+.btn { border: 0; background: var(--ink); color: var(--paper); border-radius: 10px; padding: 11px 18px; font: 700 1rem var(--body); }
+.btn.alt { background: var(--chip); color: var(--ink); }
+
+/* scouting + log + summary */
+.scout { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.scout ul { margin: 0; padding-left: 18px; }
+.pbp { font-size: .88rem; }
+.pbp ol { margin: 8px 0 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow: auto; }
+.pbp li { display: grid; grid-template-columns: 4.2em 1fr; gap: 8px; }
+.pbp .t { font: 500 .78rem var(--mono); color: var(--ink-2); }
+.pbp .me { font-weight: 600; }
+table.opts { border-collapse: collapse; width: 100%; font-size: .85rem; }
+table.opts td, table.opts th { padding: 4px 6px; border-bottom: 1px solid var(--rule); text-align: left; }
+table.opts td.n { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); }
+table.opts tr.chosen td { font-weight: 700; }
+.optwrap { overflow-x: auto; }
+.big { font: 800 3.4rem/1 var(--display); font-variant-numeric: tabular-nums; }
+.sumgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.share { white-space: pre-wrap; font: 500 .9rem var(--mono); background: var(--chip); border-radius: 8px; padding: 10px; }
+.err { color: var(--bad); font-weight: 600; }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><h1>Two-Minute Drill</h1><span class="day" id="dayLabel">Loading…</span></div>
+    <div class="row"><div class="pips" id="pips" aria-label="today's three spots"></div><button class="linkbtn" id="howBtn" type="button">How to play</button></div>
+  </header>
+
+  <section class="card" id="how" hidden>
+    <h2>How to play</h2>
+    <p>Three real late-game spots a day, from real NFL games. You call every play for one team until the game ends: the run or pass, where it goes, the tempo, timeouts, spikes, kneels, field goals and punts. Toggle <b>Get out of bounds</b> to try to stop the clock (it raises the odds; it never guarantees it).</p>
+    <p>Each play's outcome is drawn from the 160,000 real NFL snaps of 2022-26, labeled with the call behind them: outside, off-tackle and inside runs to the strong or weak side, QB sneaks and designed runs, RPOs, quick and deep passes to either side or the middle, screens, play-action, rollouts, trick plays and the Hail Mary. Anything that happened on those snaps can happen to you: sacks, strip-sacks, picks and pick-sixes, fumbles, bad snaps, drops, throwaways, scrambles, flags, and runners who can't get out of bounds. Outcomes match the down, distance, field position and game situation, adjusted for how good these two teams are at that play. The percentiles on each call rank your offense, and their defense, against the league on that exact play.</p>
+    <p>Strong side means the wide side of the field and weak side the short side: public charting doesn't record where the tight end lines up, but it does record which hash the ball is on, and offenses usually set their strength to the field.</p>
+    <p>After every decision the simulator plays the rest of the game thousands of times for each option. Your score is the win probability your calls add over a typical NFL play-caller in the same spots, and the percentile says how many play-callers you beat.</p>
+  </section>
+
+  <section class="card" id="intro" hidden></section>
+
+  <section id="play" hidden>
+    <div class="bug" id="bug" aria-live="polite"></div>
+    <div class="field" id="field" aria-hidden="true"></div>
+    <div class="card feed" id="feed" aria-live="polite"></div>
+    <div class="card" id="decide"></div>
+    <details class="card pbp" id="pbpBox"><summary><b>Play-by-play</b></summary><ol id="pbp"></ol></details>
+  </section>
+
+  <section class="card" id="summary" hidden></section>
+  <p class="note" id="foot">Data: nflverse play-by-play and FTN charting, 2022–2026. Simulations run in your browser.</p>
+</div>
+<script src="game.js"></script>

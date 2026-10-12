@@ -1,0 +1,428 @@
+"""Playbook for the daily play-calling game: every real snap since 2022, labeled with the call behind it.
+
+Calls come from nflverse play-by-play (run gap and direction, pass depth and side) and FTN charting
+(ball spot on the hashes, play action, screens, RPOs, trick plays, QB out of the pocket, QB sneaks).
+Strong side means the wide side of the field and weak side the short side: public charting does not
+record where the tight end lines up, but FTN does chart which hash the ball starts on, and offenses
+usually set their strength to the field. (Checked in the data: from the left hash, outside runs and
+completions to the left go out of bounds 27% of the time against 23% to the right.)
+
+For each call this module builds
+
+  * an outcome library by situation (game mode x down x distance x field zone, merged when sparse),
+    with the same fields the simulator uses (yards, clock flags, turnovers, duration, EPA), plus what
+    happened on the real play: sacks, strip-sacks, interceptions, pick-sixes, fumbles (lost or not),
+    bad snaps, scrambles, throwaways, drops, near-interceptions, the penalty called, and the look
+    (formation, motion, men in the box, blitz);
+  * team ratings by call, offense and defense, as of any week (shrunk EPA per play over league
+    average for that call) and their league percentiles;
+  * how often NFL play-callers choose each call in each situation (the "typical play-caller");
+  * how much trying to get out of bounds raises the odds of stopping the clock on that call, measured
+    on snaps where the offense needed the clock stopped.
+
+Sacks, scrambles and throwaways have no target, and penalties and bad snaps have no call; they are
+spread over the matching calls in proportion to how often each call is made, so every pass call
+carries real sack and interception risk and any call can be wrecked by a bad snap.
+"""
+from __future__ import annotations
+
+import base64
+import json
+import urllib.request
+
+import numpy as np
+import pandas as pd
+
+from . import config, data
+from .library import (N_DOWN, N_FINE, N_MODE, N_YTG, N_ZONE, _duration, decode_fine, down_bucket, fine_key,
+                      game_mode, zone_of)
+
+SEASONS = (2022, 2023, 2024, 2025, 2026)
+CALLS = [   # id, call-sheet label, engine kind, what the play-by-play says
+    ("rb_out_strong", "RB outside, strong side", "run", "runs outside to the strong side"),
+    ("rb_out_weak", "RB outside, weak side", "run", "runs outside to the weak side"),
+    ("rb_tackle_strong", "RB off tackle, strong side", "run", "runs off tackle to the strong side"),
+    ("rb_tackle_weak", "RB off tackle, weak side", "run", "runs off tackle to the weak side"),
+    ("rb_inside_strong", "RB inside, strong side", "run", "runs inside to the strong side"),
+    ("rb_inside_weak", "RB inside, weak side", "run", "runs inside to the weak side"),
+    ("rb_middle", "RB up the middle", "run", "runs up the middle"),
+    ("qb_sneak", "QB sneak", "run", "sneaks"),
+    ("qb_run", "QB designed run", "run", "keeps it on a designed run"),
+    ("rpo", "RPO (run-pass option)", "pass", "runs the RPO"),
+    ("quick_strong", "Quick pass, strong side", "pass", "throws quick to the strong side"),
+    ("quick_weak", "Quick pass, weak side", "pass", "throws quick to the weak side"),
+    ("quick_middle", "Quick pass, middle", "pass", "throws quick over the middle"),
+    ("screen", "Screen pass", "pass", "throws the screen"),
+    ("deep_strong", "Deep shot, strong side", "pass", "goes deep to the strong side"),
+    ("deep_weak", "Deep shot, weak side", "pass", "goes deep to the weak side"),
+    ("deep_middle", "Deep shot, middle", "pass", "goes deep over the middle"),
+    ("pa_short", "Play-action short", "pass", "fakes the handoff and throws short"),
+    ("pa_deep", "Play-action deep", "pass", "fakes the handoff and goes deep"),
+    ("roll_strong", "QB rollout, strong side", "pass", "rolls out to the strong side"),
+    ("roll_weak", "QB rollout, weak side", "pass", "rolls out to the weak side"),
+    ("hail_mary", "Hail Mary", "pass", "heaves a Hail Mary"),
+    ("trick", "Trick play (reverse, flea-flicker)", "pass", "dials up a trick play"),
+]
+CALL_IDS = [c[0] for c in CALLS]
+CALL_INDEX = {c: i for i, c in enumerate(CALL_IDS)}
+RUN_CALLS = [i for i, c in enumerate(CALLS) if c[2] == "run"]
+PASS_CALLS = [i for i, c in enumerate(CALLS) if c[2] == "pass"]
+RB_RUNS = [CALL_INDEX[c] for c in CALL_IDS if c.startswith("rb_")]
+STANDARD_PASSES = [CALL_INDEX[c] for c in ("quick_strong", "quick_weak", "quick_middle",
+                                           "deep_strong", "deep_weak", "deep_middle")]
+GAP = {"end": "out", "tackle": "tackle", "guard": "inside"}
+FTN_URL = "https://github.com/nflverse/nflverse-data/releases/download/ftn_charting/ftn_charting_{season}.parquet"
+FTN_FLAGS = ["is_play_action", "is_screen_pass", "is_qb_out_of_pocket", "is_qb_sneak", "is_throw_away", "is_rpo",
+             "is_trick_play", "is_motion", "is_drop", "is_interception_worthy"]
+FTN_LOOK = ["starting_hash", "qb_location", "n_defense_box", "n_blitzers"]
+MIN_POOL = 40
+QB_MIN_ATTEMPTS = 30         # passers with fewer attempts in a season are trick-play throwers, not QBs
+HAIL_MARY_SECONDS = 12       # a deep heave (or the sack / scramble of one) this late in a half, 38-70 yards out
+INTENT_SHRINK = 0.5          # calls are labeled by where the ball went (a covered deep shot is logged as a checkdown
+                             # or a sack), which flatters deep and bounced-outside calls: halve each call's EPA over
+                             # a same-kind play in the same situation
+RATING_PRIOR = 80.0          # plays of league-average performance added to each team's rating on a call
+PRIOR_SEASON_WEIGHT = 0.35   # last season's plays count this much next to this season's
+OOB_FAMILIES = {             # calls that share an out-of-bounds effect (pooled for sample size)
+    "outside_run": ["rb_out_strong", "rb_out_weak", "rb_tackle_strong", "rb_tackle_weak"],
+    "inside_run": ["rb_inside_strong", "rb_inside_weak", "rb_middle", "qb_sneak", "qb_run", "rpo"],
+    "outside_short": ["quick_strong", "quick_weak", "roll_strong", "roll_weak", "screen", "pa_short", "trick"],
+    "middle_short": ["quick_middle"], "deep_outside": ["deep_strong", "deep_weak", "pa_deep"],
+    "deep_middle": ["deep_middle", "hail_mary"],
+}
+FLAG_BITS = ["penalty", "auto_fd", "incomplete", "oob", "td_off", "td_def", "turnover", "safety"]
+# what happened on the real play (first match wins; the browser game narrates these)
+EVENTS = ["", "bad_snap", "strip_sack", "sack_fumble", "sack", "pick_six", "interception", "scoop_score",
+          "fumble_lost", "fumble_kept", "scramble", "throwaway", "drop", "near_pick", "safety"]
+N_PENALTY_NAMES = 30
+FORMATIONS = {"S": 1, "U": 2, "P": 3}   # shotgun, under center, pistol (0 = not charted)
+
+
+# ----------------------------------------------------------------- data ---
+def _ftn(seasons=SEASONS) -> pd.DataFrame:
+    frames = []
+    for s in seasons:
+        p = config.RAW_DIR / f"ftn_charting_{s}.parquet"
+        if not p.exists():
+            urllib.request.urlretrieve(FTN_URL.format(season=s), p)
+        f = pd.read_parquet(p, columns=["nflverse_game_id", "nflverse_play_id"] + FTN_FLAGS + FTN_LOOK)
+        frames.append(f.rename(columns={"nflverse_game_id": "game_id", "nflverse_play_id": "play_id"}))
+    f = pd.concat(frames, ignore_index=True)
+    f["play_id"] = pd.to_numeric(f["play_id"], errors="coerce")
+    for c in FTN_FLAGS:
+        f[c] = f[c].fillna(False).astype(bool)
+    return f.drop_duplicates(["game_id", "play_id"])
+
+
+def _extras(seasons=SEASONS) -> pd.DataFrame:
+    cols = ["game_id", "play_id", "run_location", "run_gap", "rusher_player_id", "passer_player_id", "fumble"]
+    return pd.concat([pd.read_parquet(config.RAW_DIR / f"play_by_play_{s}.parquet", columns=cols) for s in seasons],
+                     ignore_index=True)
+
+
+def strong_side(direction: np.ndarray, hash_: np.ndarray, rng) -> np.ndarray:
+    """True where a play to `direction` (left / right, offense's view) went to the wide side of the field.
+    Ball on the left hash: the right side is wide. Middle of the field or not charted: a coin flip."""
+    d, h = np.asarray(direction, dtype=object), np.asarray(hash_, dtype=object)
+    field = ((h == "L") & (d == "right")) | ((h == "R") & (d == "left"))
+    boundary = ((h == "L") & (d == "left")) | ((h == "R") & (d == "right"))
+    return field | (~field & ~boundary & (rng.random(len(d)) < 0.5))
+
+
+def labeled_plays(seasons=SEASONS, seed: int = 11) -> pd.DataFrame:
+    """Every run/pass snap (and penalty snap) of `seasons` as a library row with its call."""
+    pbp = data.load(tuple(range(2016, max(seasons) + 1)))
+    s = pbp[pbp["is_snap"] & pbp["season"].isin(seasons) & pbp["down"].notna() & pbp["epa"].notna()].copy()
+    s = s[s["play_type"].isin(["run", "pass"]) | ((s["play_type"] == "no_play") & s["penalty"].fillna(0).eq(1))]
+    s = s[s["two_point_attempt"].fillna(0) == 0]
+    s = s.merge(_extras(seasons), on=["game_id", "play_id"], how="left")
+    s = s.merge(_ftn(seasons), on=["game_id", "play_id"], how="left")
+    for c in FTN_FLAGS:
+        s[c] = s[c].fillna(False).astype(bool)
+    pen = (s["play_type"] == "no_play").to_numpy()
+    drop = s["qb_dropback"].fillna(0).eq(1).to_numpy()
+
+    # quarterbacks: passers with real volume that season (not running backs who threw one trick pass)
+    att = s[drop & ~pen].groupby(["season", "passer_player_id"]).size()
+    qbs = set(att[att >= QB_MIN_ATTEMPTS].index)
+    is_qb_rusher = np.array([(se, r) in qbs for se, r in zip(s["season"], s["rusher_player_id"])])
+
+    rng = np.random.default_rng(seed)
+    loc, length = s["pass_location"].to_numpy(), s["pass_length"].to_numpy()
+    run_loc, run_gap = s["run_location"].to_numpy(), s["run_gap"].to_numpy()
+    sneak, pa, screen = s["is_qb_sneak"].to_numpy(), s["is_play_action"].to_numpy(), s["is_screen_pass"].to_numpy()
+    oop, rpo, trick = s["is_qb_out_of_pocket"].to_numpy(), s["is_rpo"].to_numpy(), s["is_trick_play"].to_numpy()
+    kneel = s["qb_kneel"].fillna(0).eq(1).to_numpy()
+    aborted = s["desc"].str.contains("Aborted", case=False, na=False).to_numpy()   # bad snaps: any call
+    run = ~drop & ~pen & ~kneel & ~aborted
+    drop = drop & ~aborted
+    hs, yl_ = s["half_seconds_remaining"].to_numpy(), s["yardline_100"].to_numpy()
+    targeted = pd.notna(loc)
+    heave = (length == "deep") | ~targeted | (s["air_yards"].fillna(0).to_numpy() >= 30)
+    hail = drop & ~pen & (hs <= HAIL_MARY_SECONDS) & (yl_ >= 38) & (yl_ <= 70) & heave
+    strong = np.where(strong_side(np.where(targeted, loc, run_loc), s["starting_hash"].to_numpy(), rng),
+                      "strong", "weak")
+    call = np.full(len(s), -1)
+    known = lambda m: m & (call < 0)
+    C = CALL_INDEX
+    call[known(run & sneak)] = C["qb_sneak"]
+    call[known((run | drop) & ~pen & trick)] = C["trick"]
+    call[known(hail)] = C["hail_mary"]
+    call[known((run | drop) & ~pen & rpo)] = C["rpo"]
+    call[known(run & is_qb_rusher)] = C["qb_run"]
+    side_run = run & np.isin(run_loc, ["left", "right"])
+    for gap, name in GAP.items():
+        for st in ("strong", "weak"):
+            call[known(side_run & (run_gap == gap) & (strong == st))] = C[f"rb_{name}_{st}"]
+    for st in ("strong", "weak"):   # a side but no gap charted: off tackle
+        call[known(side_run & (strong == st))] = C[f"rb_tackle_{st}"]
+    call[known(run & (run_loc == "middle"))] = C["rb_middle"]
+    target = drop & ~pen & targeted
+    call[known(target & screen)] = C["screen"]
+    call[known(target & pa & (length == "deep"))] = C["pa_deep"]
+    call[known(target & pa)] = C["pa_short"]
+    for st in ("strong", "weak"):
+        call[known(target & oop & (loc != "middle") & (strong == st))] = C[f"roll_{st}"]
+    for depth, name in (("short", "quick"), ("deep", "deep")):
+        call[known(target & (length == depth) & (loc == "middle"))] = C[f"{name}_middle"]
+        for st in ("strong", "weak"):
+            call[known(target & (length == depth) & (loc != "middle") & (strong == st))] = C[f"{name}_{st}"]
+
+    # spread sacks / scrambles / throwaways / penalties / bad snaps over the calls they could have come from
+    freq = np.bincount(call[call >= 0], minlength=len(CALLS)).astype(float)
+
+    def spread(mask, choices):
+        idx = np.flatnonzero(mask & (call < 0))
+        if idx.size:
+            p = freq[choices] / freq[choices].sum()
+            call[idx] = rng.choice(choices, size=idx.size, p=p)
+
+    spread(drop & ~pen & oop, [C["roll_strong"], C["roll_weak"]])
+    spread(drop & ~pen & pa, [C["pa_short"], C["pa_deep"]])
+    spread(drop & ~pen & screen, [C["screen"]])
+    spread(drop & ~pen, STANDARD_PASSES)
+    spread(run & ~kneel, RB_RUNS)
+    pen_pass = pen & s["pass"].fillna(0).eq(1).to_numpy()
+    pen_run = pen & s["rush"].fillna(0).eq(1).to_numpy()
+    spread(pen_pass, [c for c in PASS_CALLS if c != C["hail_mary"]])
+    spread(pen_run, RUN_CALLS)
+    spread(pen | aborted, [c for c in range(len(CALLS)) if c != C["hail_mary"]])
+    keep = call >= 0
+    s, call, pen, aborted = s[keep].copy(), call[keep], pen[keep], aborted[keep]
+
+    off_pen_sign = np.where(s["penalty_team"] == s["posteam"], -1.0, 1.0)
+    yards = np.where(pen, off_pen_sign * s["penalty_yards"].fillna(0), s["yards_gained"].fillna(0))
+    td_off = (s["touchdown"].fillna(0).eq(1) & (s["td_team"] == s["posteam"])).to_numpy() & ~pen
+    td_def = (s["touchdown"].fillna(0).eq(1) & (s["td_team"] == s["defteam"])).to_numpy() & ~pen
+    turnover = (s["turnover"].to_numpy() == 1) & ~pen
+    to_rel = s["yardline_100"].to_numpy() + s["next_yardline_100"].to_numpy() - 100.0
+    valid_to = turnover & ((s["next_posteam"].to_numpy() == s["defteam"].to_numpy()) | td_def)
+    # interceptions as a half ends have no next possession: place them where the pass was caught and returned
+    last_pick = turnover & ~valid_to & (s["interception"].fillna(0).to_numpy() == 1)
+    to_rel = np.where(last_pick, s["air_yards"].fillna(0).to_numpy() - s["return_yards"].fillna(0).to_numpy(), to_rel)
+    valid_to |= last_pick
+    presnap = pen & s["pass"].fillna(0).eq(0).to_numpy() & s["rush"].fillna(0).eq(0).to_numpy()
+    half = s["half"].to_numpy()
+    hs = s["half_seconds_remaining"].to_numpy()
+    margin = s["margin"].to_numpy()
+    out = pd.DataFrame({
+        "game_id": s["game_id"].to_numpy(), "play_id": s["play_id"].to_numpy(),
+        "call": call,
+        "yards": yards.astype(float),
+        "auto_fd": s["first_down_penalty"].fillna(0).to_numpy().astype(bool) & pen,
+        "penalty": pen,
+        "incomplete": (s["incomplete_pass"].fillna(0).to_numpy() == 1) & ~pen,
+        "oob": (s["out_of_bounds"].fillna(0).to_numpy() == 1) & ~pen,
+        "td_off": td_off, "td_def": td_def, "turnover": turnover,
+        "to_rel": np.where(valid_to, np.nan_to_num(to_rel, nan=0.0), 0.0),
+        "safety": (s["safety"].fillna(0).to_numpy() == 1) & ~pen,
+        "duration": _duration(s["play_type"].to_numpy(), s["yards_gained"].fillna(0).to_numpy(),
+                              s["incomplete_pass"].fillna(0).to_numpy(), s["sack"].fillna(0).to_numpy(),
+                              presnap, s["turnover"].to_numpy()),
+        "epa": s["epa"].to_numpy(),
+        "mode": game_mode(half, hs, margin),
+        "down": s["down"].to_numpy().astype(int), "ytg": s["ydstogo"].to_numpy(), "yl": s["yardline_100"].to_numpy(),
+        "season": s["season"].to_numpy(), "week": s["week"].to_numpy(),
+        "posteam": s["posteam"].to_numpy(), "defteam": s["defteam"].to_numpy(),
+        # ball carriers trying to get out of bounds (trailing late) vs. staying in bounds (leading late)
+        "want_oob": (half == 2) & (hs <= 300) & (margin < 0),
+        "stay_in": (half == 2) & (hs <= 300) & (margin > 0),
+        "event": _events(s, pen, aborted, td_def),
+        "pen_name": np.where(pen, s["penalty_type"].fillna("Penalty").to_numpy(), ""),
+        "look": _look(s),
+    })
+    out = out[~(turnover & ~valid_to)].reset_index(drop=True)
+    out["fine"] = fine_key(out["mode"], out["down"], out["ytg"], out["yl"])
+    return out
+
+
+def _events(s: pd.DataFrame, pen: np.ndarray, aborted: np.ndarray, td_def: np.ndarray) -> np.ndarray:
+    """EVENTS index of what happened on each real play (0 = nothing special)."""
+    f = lambda c: s[c].fillna(0).to_numpy() == 1
+    sack, fum, lost, inter = f("sack"), f("fumble"), f("fumble_lost"), f("interception")
+    conds = {
+        "bad_snap": aborted, "strip_sack": sack & lost, "sack_fumble": sack & fum, "sack": sack,
+        "pick_six": inter & td_def, "interception": inter, "scoop_score": lost & td_def, "fumble_lost": lost,
+        "fumble_kept": fum, "scramble": f("qb_scramble"), "throwaway": s["is_throw_away"].to_numpy(),
+        "drop": s["is_drop"].to_numpy(),
+        "near_pick": s["is_interception_worthy"].to_numpy() & ~inter & (s["incomplete_pass"].fillna(0).to_numpy() == 1),
+        "safety": f("safety"),
+    }
+    ev = np.zeros(len(s), np.uint8)
+    for name, m in reversed(list(conds.items())):   # first match wins: assign in reverse priority
+        ev[np.asarray(m, bool) & (~pen | aborted)] = EVENTS.index(name)
+    return ev
+
+
+def _look(s: pd.DataFrame) -> np.ndarray:
+    """The pre-snap look, packed: formation (bits 0-1), motion (2), blitz (3), men in the box (4-7)."""
+    form = s["qb_location"].map(FORMATIONS).fillna(0).to_numpy().astype(np.uint8)
+    motion = s["is_motion"].to_numpy().astype(np.uint8)
+    blitz = (pd.to_numeric(s["n_blitzers"], errors="coerce").fillna(0).to_numpy() > 0).astype(np.uint8)
+    box = np.clip(pd.to_numeric(s["n_defense_box"], errors="coerce").fillna(0).to_numpy(), 0, 15).astype(np.uint8)
+    return form | (motion << 2) | (blitz << 3) | (box << 4)
+
+
+# ---------------------------------------------------------------- pools ---
+def pools(lib: pd.DataFrame):
+    """Pool index for every (call, situation): fine situation, then coarser, until MIN_POOL plays."""
+    mode, db, yb, zone = decode_fine(np.arange(N_FINE))
+    items, offsets, pool_of, index = [], [0], np.zeros((len(CALLS), N_FINE), dtype=np.int64), {}
+    for c in range(len(CALLS)):
+        sub = lib[lib["call"] == c]
+        keys = {0: sub["fine"].to_numpy(),
+                1: ((sub["mode"] * N_DOWN + down_bucket(sub["down"])) * N_ZONE + zone_of(sub["yl"])).to_numpy(),
+                2: (sub["mode"] * N_ZONE + zone_of(sub["yl"])).to_numpy(),
+                3: zone_of(sub["yl"]), 4: np.zeros(len(sub), dtype=np.int64)}
+        counts = {lvl: pd.Series(k).value_counts() for lvl, k in keys.items()}
+        idx = sub.index.to_numpy()
+        for fk in range(N_FINE):
+            cand = {0: fk, 1: (mode[fk] * N_DOWN + db[fk]) * N_ZONE + zone[fk], 2: mode[fk] * N_ZONE + zone[fk],
+                    3: zone[fk], 4: 0}
+            for lvl in range(5):
+                if counts[lvl].get(cand[lvl], 0) >= MIN_POOL or lvl == 4:
+                    break
+            key = (c, lvl, int(cand[lvl]))
+            if key not in index:
+                index[key] = len(offsets) - 1
+                members = idx[keys[lvl] == cand[lvl]]
+                items.append(members)
+                offsets.append(offsets[-1] + len(members))
+            pool_of[c, fk] = index[key]
+    return np.concatenate(items), np.array(offsets), pool_of
+
+
+def pool_shifts(lib: pd.DataFrame, items: np.ndarray, offsets: np.ndarray, shrink: float = INTENT_SHRINK) -> np.ndarray:
+    """EPA shift per pool that removes `shrink` of the call's edge over a typical run (or pass) in the same
+    situations: the browser tilts each pool's sampling weights to its mean EPA plus this shift."""
+    kind = np.array([CALLS[c][2] for c in lib["call"]])
+    d = pd.DataFrame({"kind": kind, "fine": lib["fine"].to_numpy(), "mode": lib["mode"].to_numpy(),
+                      "epa": lib["epa"].to_numpy()})
+    cell = d.groupby(["kind", "fine"])["epa"].agg(["mean", "size"])
+    by_mode = d.groupby(["kind", "mode"])["epa"].mean()
+    exp_cell = pd.MultiIndex.from_arrays([d["kind"], d["fine"]])
+    exp = np.where(cell["size"].reindex(exp_cell).to_numpy() >= 30, cell["mean"].reindex(exp_cell).to_numpy(),
+                   by_mode.reindex(pd.MultiIndex.from_arrays([d["kind"], d["mode"]])).to_numpy())
+    resid = d["epa"].to_numpy() - exp
+    sums = np.add.reduceat(resid[items], offsets[:-1]) if len(items) else np.zeros(0)
+    n = np.diff(offsets)
+    return np.where(n > 0, -shrink * sums / np.maximum(n, 1), 0.0)
+
+
+def call_frequencies(lib: pd.DataFrame, prior: float = 20.0) -> np.ndarray:
+    """P(call | situation) for NFL play-callers, smoothed toward the call mix of the same game mode."""
+    cnt = np.zeros((N_FINE, len(CALLS)))
+    np.add.at(cnt, (lib["fine"].to_numpy(), lib["call"].to_numpy()), 1.0)
+    mode_of = decode_fine(np.arange(N_FINE))[0]
+    by_mode = np.stack([cnt[mode_of == m].sum(0) for m in range(N_MODE)])
+    by_mode /= by_mode.sum(1, keepdims=True)
+    f = cnt + prior * by_mode[mode_of]
+    return f / f.sum(1, keepdims=True)
+
+
+def oob_odds(lib: pd.DataFrame) -> np.ndarray:
+    """Odds multiplier on getting out of bounds when the ball carrier is trying to, by call: plays where
+    the offense trailed late (wanted the clock stopped) against plays with no clock motive."""
+    out = np.ones(len(CALLS))
+    ok = ~lib["penalty"] & (lib["yards"] >= 0)
+    for fam, members in OOB_FAMILIES.items():
+        m = lib["call"].isin([CALL_INDEX[c] for c in members]) & ok
+        base = lib.loc[m & ~lib["want_oob"] & ~lib["stay_in"], "oob"]
+        want = lib.loc[m & lib["want_oob"], "oob"]
+        if len(want) < 50 or base.mean() <= 0:
+            continue
+        p0, p1 = base.mean(), (want.sum() + 10 * base.mean()) / (len(want) + 10)   # light shrinkage
+        out[[CALL_INDEX[c] for c in members]] = float(np.clip((p1 / (1 - p1)) / (p0 / (1 - p0)), 1.0, 3.0))
+    return out
+
+
+# -------------------------------------------------------------- ratings ---
+def call_ratings(lib: pd.DataFrame, season: int, week: int) -> pd.DataFrame:
+    """Offense and defense EPA per play over league average, by call, as of (season, week)."""
+    w = np.where(lib["season"] == season, (lib["week"] < week).astype(float),
+                 np.where(lib["season"] == season - 1, PRIOR_SEASON_WEIGHT, 0.0))
+    d = lib.assign(w=w)
+    d = d[(d["w"] > 0) & ~d["penalty"]]
+    lg = (d["w"] * d["epa"]).groupby(d["call"]).sum() / d["w"].groupby(d["call"]).sum()
+    d["resid"] = d["epa"] - d["call"].map(lg)
+    d["wr"] = d["w"] * d["resid"]
+    off = d.groupby(["posteam", "call"])[["wr", "w"]].sum()
+    dfn = d.groupby(["defteam", "call"])[["wr", "w"]].sum()
+    off = (off["wr"] / (off["w"] + RATING_PRIOR)).rename("off").rename_axis(["team", "call"])
+    dfn = (dfn["wr"] / (dfn["w"] + RATING_PRIOR)).rename("def").rename_axis(["team", "call"])
+    out = pd.concat([off, dfn], axis=1).fillna(0.0).reset_index()
+    # percentiles among teams: offense higher is better, defense lower EPA allowed is better
+    out["off_pct"] = out.groupby("call")["off"].rank(pct=True)
+    out["def_pct"] = out.groupby("call")["def"].rank(pct=True, ascending=False)
+    out["call"] = out["call"].map(lambda i: CALL_IDS[int(i)])
+    return out
+
+
+UNRATED = {"hail_mary", "trick"}   # a team runs a handful a season: too few to rate teams on
+
+
+def team_card(ratings: pd.DataFrame, team: str) -> dict:
+    t = ratings[(ratings["team"] == team) & ~ratings["call"].isin(UNRATED)].set_index("call")
+    return {c: {"off": round(float(t.loc[c, "off"]), 4), "def": round(float(t.loc[c, "def"]), 4),
+                "off_pct": round(float(t.loc[c, "off_pct"]), 3), "def_pct": round(float(t.loc[c, "def_pct"]), 3)}
+            for c in CALL_IDS if c in t.index}
+
+
+# ---------------------------------------------------------------- export ---
+def _b64(arr: np.ndarray) -> dict:
+    arr = np.ascontiguousarray(arr)
+    return {"dtype": arr.dtype.name, "n": int(arr.size), "b64": base64.b64encode(arr.tobytes()).decode("ascii")}
+
+
+def export(lib: pd.DataFrame, path) -> dict:
+    items, offsets, pool_of = pools(lib)
+    flags = np.zeros(len(lib), np.uint8)
+    for bit, name in enumerate(FLAG_BITS):
+        flags |= (lib[name].to_numpy().astype(bool).astype(np.uint8) << np.uint8(bit))
+    named = lib.loc[lib["pen_name"] != "", "pen_name"].value_counts()
+    pen_names = [""] + list(named.index[:N_PENALTY_NAMES]) + ["Penalty"]
+    pen_code = lib["pen_name"].map({n: i for i, n in enumerate(pen_names)}).fillna(len(pen_names) - 1).to_numpy()
+    out = {
+        "version": 2,
+        "calls": [{"id": c, "label": label, "kind": kind, "say": say} for c, label, kind, say in CALLS],
+        "n_fine": N_FINE,
+        "rows": {
+            "yards": _b64(np.clip(lib["yards"], -127, 127).astype(np.int8)),
+            "flags": _b64(flags),
+            "to_rel": _b64(np.clip(lib["to_rel"], -127, 127).astype(np.int8)),
+            "dur10": _b64(np.clip(np.round(lib["duration"] * 10), 0, 255).astype(np.uint8)),
+            "epa": _b64(lib["epa"].astype(np.float32)),
+            "event": _b64(lib["event"].to_numpy().astype(np.uint8)),
+            "pen": _b64(pen_code.astype(np.uint8)),
+            "look": _b64(lib["look"].to_numpy().astype(np.uint8)),
+        },
+        "events": EVENTS, "penalties": pen_names,
+        "items": _b64(items.astype(np.int32)), "offsets": _b64(offsets.astype(np.int32)),
+        "pool_of": _b64(pool_of.astype(np.int32).ravel()),
+        "pool_shift": _b64(pool_shifts(lib, items, offsets).astype(np.float32)),
+        "freq": _b64(call_frequencies(lib).astype(np.float32).ravel()),
+        "oob_odds": oob_odds(lib).round(3).tolist(),
+        "seasons": list(SEASONS),
+    }
+    path.write_text(json.dumps(out, separators=(",", ":")))
+    return out

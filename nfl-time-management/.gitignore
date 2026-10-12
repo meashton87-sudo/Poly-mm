@@ -6,3 +6,6 @@ __pycache__/
 web/engine_data.json
 web/parity_expected.json
 web/_test_index.html
+web/playbook.json
+web/scenarios.json
+web/_test_game.html

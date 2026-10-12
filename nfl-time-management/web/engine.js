@@ -228,6 +228,10 @@
         calls: pb.calls, yards: decode(R.yards), flags: decode(R.flags), toRel: decode(R.to_rel),
         dur10: decode(R.dur10), epa: decode(R.epa), items: decode(pb.items), offsets: decode(pb.offsets),
         poolOf: decode(pb.pool_of), freq: decode(pb.freq), oobOdds: pb.oob_odds, nFine: pb.n_fine,
+        // what happened on each real play (narration only): event, penalty called, pre-snap look
+        event: R.event ? decode(R.event) : null, pen: R.pen ? decode(R.pen) : null, look: R.look ? decode(R.look) : null,
+        eventNames: pb.events || [], penNames: pb.penalties || [],
+        shift: pb.pool_shift ? decode(pb.pool_shift) : null,   // intent correction per pool (playbook.py pool_shifts)
       };
       P.callIndex = {};
       pb.calls.forEach((c, i) => { P.callIndex[c.id] = i; });
@@ -251,7 +255,7 @@
         const c = P.poolCall[p], lo = off[p], hi = off[p + 1];
         let base = 0; for (let i = lo; i < hi; i++) base += e[i];
         base /= Math.max(hi - lo, 1);
-        const target = base + (delta ? delta[c] : 0);
+        const target = base + (P.shift ? P.shift[p] : 0) + (delta ? delta[c] : 0);
         let th = 0;
         for (let it = 0; it < 4; it++) {
           let mx = -Infinity; for (let i = lo; i < hi; i++) mx = Math.max(mx, th * e[i]);
@@ -883,7 +887,7 @@
       if (S.log) {
         S.log.push({ ev: 'play', team: o, kind, call: callIdx === undefined ? -1 : callIdx, yards, down: down0, ytg: ytg0,
           yl: yl0, oob: oob && !penalty, incomplete, penalty, td: tdOff, tdDef, turnover, safety, fd: fd && !change,
-          onDowns, dur, t: S.t, running: S.running });
+          onDowns, dur, t: S.t, running: S.running, row: pbRow === undefined ? -1 : pbRow });
       }
       this._endHalfCheck(S, g);
     }

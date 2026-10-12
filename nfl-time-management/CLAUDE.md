@@ -12,6 +12,7 @@ pip install -e ".[dev]"
 python -m nflclock.cli build          # downloads nflverse play-by-play to data/raw, fits artifacts/bundle.pkl (~3-5 min)
 python -m nflclock.cli sync --no-refresh --games 2026_05_BUF_LA        # live game file (Bills at Rams)
 python -c "from nflclock import webexport as w; w.export_engine(); w.export_game('2026_05_BUF_LA')"
+python -c "from nflclock import dailygame as G; print(G.build())"   # daily game data (web/playbook.json, web/scenarios.json)
 ```
 
 ## Checks
@@ -19,6 +20,7 @@ python -c "from nflclock import webexport as w; w.export_engine(); w.export_game
 ```bash
 python -m pytest -q
 python scripts/parity_expected.py 2026_05_BUF_LA 8000 && node web/parity_test.js 8000
+node web/game_smoke.js                # daily game: playbook sampling, call ranking, play-by-play log
 ```
 
 ## Rules
@@ -30,5 +32,6 @@ python scripts/parity_expected.py 2026_05_BUF_LA 8000 && node web/parity_test.js
   timeouts). Keep a one-line rationale next to every policy constant at the top of `sim.py`.
 - The full grading pipeline (`scripts/run_analysis.py`, `validate_sim.py`, `make_report.py`,
   `finalize.py`) takes about 1.5 hours on 4 cores. Do not run it casually.
-- `data/`, `artifacts/`, `web/engine_data.json` and `web/parity_expected.json` are generated; never commit them.
+- `data/`, `artifacts/`, `web/engine_data.json`, `web/parity_expected.json`, `web/playbook.json` and
+  `web/scenarios.json` are generated; never commit them.
 - Decisions are graded "as of" the week of the game: no ratings may use later games.
