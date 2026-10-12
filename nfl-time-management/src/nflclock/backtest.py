@@ -44,6 +44,17 @@ def decision_outcome_calibration(graded: pd.DataFrame, pbp: pd.DataFrame) -> dic
         yy = np.where(sub["team"] == sub["home"], sub["result"] > 0, sub["result"] < 0).astype(float)
         by[fam] = {"n": int(len(sub)), "mean_predicted": float(sub["wp_actual"].mean()), "actual_win_rate": float(yy.mean())}
     out["by_family"] = by
+    # by the option actually chosen: a biased valuation of, say, punting would show up here
+    gk = g[keep].assign(y=y[keep])
+    rows = []
+    for (fam, act), sub in gk.groupby(["decision", "actual"]):
+        if len(sub) < 40 or fam == "kneel":
+            continue
+        pp = sub["wp_actual"].to_numpy()
+        se = float(np.sqrt(np.sum(pp * (1 - pp))) / len(sub))
+        rows.append({"family": fam, "choice": act, "n": int(len(sub)), "mean_predicted": float(pp.mean()),
+                     "actual_win_rate": float(sub["y"].mean()), "z": float((sub["y"].mean() - pp.mean()) / max(se, 1e-9))})
+    out["by_choice"] = rows
     return out
 
 

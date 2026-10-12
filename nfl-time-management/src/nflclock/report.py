@@ -241,6 +241,10 @@ def export_dashboard_files(out: dict, dest=None):
         tab = pd.DataFrame(b["decision_outcome"]["table"])
         tab["label"] = [f"{p:.0%}" for p in tab["predicted"]]
         tab.round(5).to_csv(dest / "backtest_decisions.csv", index=False)
+        if b["decision_outcome"].get("by_choice"):
+            bc = pd.DataFrame(b["decision_outcome"]["by_choice"])
+            bc["label"] = [f"{FAMILY_LABEL.get(f, f)}: {OPTION_LABEL.get(c, c)}" for f, c in zip(bc["family"], bc["choice"])]
+            bc.round(5).to_csv(dest / "backtest_by_choice.csv", index=False)
     if "sensitivity" in out:
         s = out["sensitivity"].copy()
         s["label"] = s["decision"].map(FAMILY_LABEL)
