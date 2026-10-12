@@ -41,17 +41,24 @@ nflverse PBP ──► clock model (play durations, tempo runoff by situation)
 * **Simulator** (`sim.py`): thousands of rollouts advance in lock-step as numpy arrays. Clock rules are
   modelled explicitly. The clock stops on incompletions, scores, changes of possession, timeouts, the
   two-minute warning and quarter ends. Out-of-bounds stops it only inside 2:00 of the first half and 5:00 of
-  the second. Runoff between snaps is drawn from measured tempo distributions: two-minute urgency ~14 s,
-  hurry ~19 s, normal ~33 s, milk ~38 s, spike ~8.5 s. A half can end on a play (the untimed PAT still
-  happens) or between snaps (kneel-outs).
+  the second. Runoff between snaps is drawn from measured tempo distributions (medians): no-huddle
+  two-minute drill ~15.6 s, hurry-up ~17 s, normal ~34 s, milking the play clock ~38 s, spike ~8.4 s,
+  rushing the field-goal unit on 7–12 s. A half can end on a play (the untimed PAT still happens) or
+  between snaps (kneel-outs).
 * **Matchups**: each play is drawn from real plays in the same situation pool, reweighted by
   `w ∝ exp(θ·EPA)` with θ solved so the pool's mean EPA moves by the offense-vs-defense gap. This is the
   minimum-KL change that hits the target, so a strong pass offense against a weak pass defense keeps the
   real shape of outcomes (sacks, explosives, interceptions) while playing to its level.
 * **Policy**: in every rollout both teams play situationally sound football. They use timeouts when
-  trailing, milk the clock when leading, spike with no timeouts, kneel when the game can be iced, and kick
-  the field goal before time runs out. Fourth downs use a WP-model look-ahead. The decision being evaluated
-  is forced on the first snap, and everything after it follows that policy.
+  trailing, milk the clock when leading, spike with no timeouts, kneel when the game can be iced, rush the
+  field-goal unit on with the clock running, and kick before time runs out. A leading offense with
+  seconds left plays the snap out to zero. Fourth downs use a WP-model look-ahead, except that late in a
+  tied game a team out of field-goal range punts and plays for overtime. The decision being evaluated is
+  forced on the first snap, and everything after it follows that policy.
+* **Clock-aware play calls**: with no timeouts and the clock needing to stop, real offenses complete
+  passes in bounds 47% less often in the final 20 seconds (21% less at 20–35 s) and pass 95% of the time
+  (2020–25 data). The simulator redraws that share of in-bounds gains from the same pool's incompletions
+  and catches out of bounds, and shifts the run/pass mix to match.
 * **Variance control**: common random numbers and Latin-hypercube uniforms. Grading is cross-fitted, so the
   recommended option is chosen on one seed set and its edge is measured on an independent one, which
   removes the "max of noisy estimates" bias.
@@ -72,6 +79,10 @@ from that state, and the actual choice is compared with the best one.
 | Onside kicks | Trailing kicking team in the final 7:00 | Onside vs. deep |
 | Late PATs | 4th quarter | Kick vs. go for two |
 | Clock-critical run/pass | Final 5:00, non-tied, downs 1–3 | Run vs. pass |
+
+When an offense hurried or spiked, the option it chose is played at the pace it actually achieved (the
+seconds from the whistle to its next snap), because hurry versus spike turns on that pace: about 10
+seconds is the break-even in a typical no-timeout finish. The alternatives use league pace.
 
 "Expected wins lost" is the summed, cross-fitted win-probability gap between the chosen and the best
 option. A "clear mistake" is a choice that loses by more than 2 standard errors and more than 0.5 WP
@@ -123,7 +134,9 @@ nflclock> qb BUF backup                            # in-game QB change
 Scoreboard order is always AWAY then HOME. For every situation the console simulates every option for
 the team with the ball, and the timeout decision for the defense when the clock is running. Each option
 shows its win probability, its edge over the best option ± standard error, a **percentile grade** and
-**how often NFL coaches make that call**.
+**how often NFL coaches make that call**. On 4th down it also prints the conversion chance and the
+field-goal make chance from that spot. When the offense could either spike or hurry, it prints the
+**break-even snap time**: "hurrying wins only if the next snap comes within 10 s of the whistle".
 
 ### 3. Or use the browser version on a phone
 
@@ -195,11 +208,17 @@ pytest                              # unit tests (clock rules, kneel-out math, i
 | `decide.py`, `cli.py` | Live decision engine and command line |
 | `charts.py`, `report.py` | Decision charts and report tables |
 | `validate.py` | Out-of-sample calibration and drive replay |
+| `backtest.py` | Current-season holdout, calibration of the chosen options against real results |
+| `tendency.py` | Percentile grade scales, models of what coaches choose, coach aggressiveness and clock percentiles |
+| `weekly.py` | Scenario cards for the worst decisions of a week |
+| `live.py`, `console.py` | Roster/injury sync for upcoming games; the in-game terminal console |
+| `gamecard.py` | Pre-game 4th-down and two-point cards for one matchup |
+| `webexport.py`, `web/` | Data export and the browser engine (`engine.js`), worker pool, live page and parity test |
 
 ## Limitations
 
-* Play calling inside a play type is not modelled: "pass" means the situational pass distribution, not a
-  specific concept (a sideline route versus a seam).
+* Play calling inside a play type is modelled only where the data are clear (clock-stopping throws with
+  no timeouts late). Otherwise "pass" means the situational pass distribution, not a specific concept.
 * Penalties are sampled from real penalty plays. The 10-second runoff and untimed downs after defensive
   fouls are not modelled.
 * Overtime is valued as a strength-adjusted coin flip rather than simulated.
