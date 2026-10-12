@@ -56,6 +56,27 @@ nflverse PBP ──► clock model (play durations, tempo runoff by situation)
   recommended option is chosen on one seed set and its edge is measured on an independent one, which
   removes the "max of noisy estimates" bias.
 
+## What gets graded
+
+Every decision is rebuilt from play-by-play at the moment it was made. All legal options are simulated
+from that state, and the actual choice is compared with the best one.
+
+| Family | Situation | Options compared |
+|---|---|---|
+| Defensive timeouts | Clock running after an in-bounds play; defense trailing or tied in the final 5:00, or any score in the final 2:00 of the 1st half | Timeout now vs. let it run |
+| Offense stopping the clock | Clock running; offense trailing or tied in the final 2:00, or driving in the final 1:00 of the 1st half | Timeout vs. spike vs. hurry to the line |
+| Leading offense tempo | Leading in the final 5:00 and snapped with ≥ 10 s on the play clock | As snapped vs. milking to ~3 s |
+| Kneel-downs | Leading in the final 2:40 and the game can be iced with kneels | Kneel vs. run a play |
+| End of 1st half | Ball in own territory with 0:20–2:00 left | Attack vs. run out the half |
+| Late 4th downs | Final 10:00 of the game or final 2:00 of the half, within 16 points | Go vs. field goal vs. punt |
+| Onside kicks | Trailing kicking team in the final 7:00 | Onside vs. deep |
+| Late PATs | 4th quarter | Kick vs. go for two |
+| Clock-critical run/pass | Final 5:00, non-tied, downs 1–3 | Run vs. pass |
+
+"Expected wins lost" is the summed, cross-fitted win-probability gap between the chosen and the best
+option. A "clear mistake" is a choice that loses by more than 2 standard errors and more than 0.5 WP
+points. Decisions by a team playing without a healthy kicker are excluded.
+
 ## Validation (out of sample, 2023–2025)
 
 Run `python scripts/validate_sim.py`. Results live in `reports/validation_*.{csv,json}`.

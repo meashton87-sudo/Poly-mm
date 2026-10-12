@@ -173,7 +173,7 @@ def export_dashboard_files(out: dict, dest=None):
     dest = dest or config.REPORT_DIR / "dashboard_data"
     dest.mkdir(parents=True, exist_ok=True)
     fam = out["families"].copy()
-    top = fam.iloc[0]
+    top = fam[fam["decision"].isin(CLOCK_FAMILIES)].sort_values("wins_lost", ascending=False).iloc[0]
     h = dict(out["headline"])
     h.update(top_family=top["label"], top_family_wins=float(top["wins_lost"]))
     (dest / "headline.json").write_text(json.dumps([h], indent=1))

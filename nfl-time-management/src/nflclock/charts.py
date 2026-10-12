@@ -95,6 +95,20 @@ def matchup_run_pass_chart(bundle):
     return rows
 
 
+def two_point_chart(bundle):
+    """4th quarter: go for two minus kick, by the scoring team's margin after the touchdown and time left."""
+    from .sim import PAT
+    sim = _sim(bundle)
+    rows = []
+    for t in (720, 480, 300, 180, 90):
+        for m in range(-16, 9):
+            score = (20 + m, 20) if m >= 0 else (20, 20 - m)
+            root = RootState(t=t, pos=0, score=score, down=1, ytg=10, yl=2, to=(2, 2), phase=PAT)
+            e, se, a, b = _edge(sim, root, {"pat": "two"}, {"pat": "xp"}, persp=0, n=4000)
+            rows.append({"chart": "two_point", "t": t, "margin": m, "edge": e, "se": se, "wp_two": a, "wp_xp": b})
+    return rows
+
+
 def kneel_table(bundle) -> list:
     """Most game clock a leading offense can kneel away (after the two-minute warning)."""
     sim = _sim(bundle)
@@ -123,6 +137,7 @@ def build_all(bundle=None) -> dict:
         "punter_fourth_down": punter_fourth_down_chart(bundle),
         "matchup_run_pass": matchup_run_pass_chart(bundle),
         "kneel": kneel_table(bundle),
+        "two_point": two_point_chart(bundle),
     }
     config.REPORT_DIR.mkdir(exist_ok=True)
     (config.REPORT_DIR / "decision_charts.json").write_text(json.dumps(out, indent=1))
