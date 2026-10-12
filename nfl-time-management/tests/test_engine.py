@@ -119,3 +119,44 @@ def test_forced_tempo_runs_a_real_play(sim):
     assert spike_like.mean() < 0.6
     _, S = sim.run(root, n=1000, perspective=0, seed=6, action={"play": "spike"}, max_steps=1, return_state=True)
     assert ((S.down == 2) & (S.yl == 40) & ~S.running).all()
+
+
+@needs_bundle
+def test_clock_stop_subset_only_stops_the_clock(sim):
+    lib = sim.lib
+    pos, off = lib.clock_stop_subset()
+    rows = lib.items[pos]
+    a = lib.arr
+    stops = a["incomplete"][rows].astype(bool) | a["oob"][rows].astype(bool)
+    assert stops.all()
+    assert not (a["penalty"][rows].astype(bool) | a["turnover"][rows].astype(bool) | a["td_off"][rows].astype(bool)).any()
+    # every drawn row belongs to the pool it was drawn for
+    pool = lib.pool_id[pos[0]]
+    u = np.linspace(0.001, 0.999, 50)
+    drawn = lib.sample_subset(sim.stop_cdf[0], pos, off, np.full(50, pool), u)
+    members = set(lib.items[pos[off[pool]:off[pool + 1]]])
+    assert set(drawn) <= members
+
+
+@needs_bundle
+def test_no_timeout_offense_stops_the_clock_more(sim):
+    """Clock-aware calls trade in-bounds gains for stopped clocks: more snaps fit in the time left."""
+    from nflclock.sim import RootState
+    import nflclock.sim as S
+    root = RootState(t=30, pos=0, score=(20, 22), down=1, ytg=10, yl=55, to=(0, 2), clock_running=False)
+    aware = sim.run(root, n=3000, perspective=0, seed=3, drive_only=True)
+    keep = S.CLOCK_AWARE
+    try:
+        S.CLOCK_AWARE = ((20.0, 1.0), (35.0, 1.0))
+        plain = sim.run(root, n=3000, perspective=0, seed=3, drive_only=True)
+    finally:
+        S.CLOCK_AWARE = keep
+    assert aware.plays.mean() > plain.plays.mean()
+    assert aware.t.mean() > plain.t.mean()   # drives end with more time on the clock
+
+
+def test_pace_break_even():
+    from nflclock.console import pace_break_even
+    assert pace_break_even([0.03, 0.02, 0.01, -0.01, -0.03, -0.04, -0.05, -0.06]) == ("within", 11.0)
+    assert pace_break_even([-0.01] * 8)[0] == "never"
+    assert pace_break_even([0.01] * 8)[0] == "always"
