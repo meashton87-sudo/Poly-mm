@@ -251,11 +251,12 @@ def extract_decisions(pbp: pd.DataFrame, seasons) -> pd.DataFrame:
 _G = {}
 
 
-def _init(pbp_games, n, neutral=False):
+def _init(pbp_games, n, neutral=False, salt=0):
     _G["bundle"] = Bundle.load()
     _G["factory"] = GameContextFactory(_G["bundle"], pbp_games)
     _G["n"] = n
     _G["neutral"] = neutral
+    _G["salt"] = salt
 
 
 def _options_for(r, root: RootState, sim: Simulator):
@@ -319,7 +320,7 @@ def _eval_game(args):
         if len(opts) < 2 or r["actual"] not in opts:
             continue
         persp = 0 if r["team"] == ctx.home else 1
-        seed = int(r["play_id"]) * 7 + 13
+        seed = int(r["play_id"]) * 7 + 13 + 1_000_003 * _G.get("salt", 0)
         vals_a, vals_b = {}, {}
         for name, act in opts.items():
             vals_a[name] = sim.run(root, n=n, action=act, perspective=persp, seed=seed)
@@ -345,12 +346,12 @@ def _eval_game(args):
 
 
 def evaluate(dec: pd.DataFrame, pbp: pd.DataFrame, n: int = 600, workers: int = 4, progress=True,
-             neutral: bool = False) -> pd.DataFrame:
+             neutral: bool = False, salt: int = 0) -> pd.DataFrame:
     tasks = [(gid, g.to_dict("records")) for gid, g in dec.groupby("game_id")]
     games = pbp[pbp["game_id"].isin(dec["game_id"].unique())]
     out = []
     t0 = time.time()
-    with mp.get_context("fork").Pool(workers, initializer=_init, initargs=(games, n, neutral)) as pool:
+    with mp.get_context("fork").Pool(workers, initializer=_init, initargs=(games, n, neutral, salt)) as pool:
         for i, r in enumerate(pool.imap_unordered(_eval_game, tasks, chunksize=1)):
             out.extend(r)
             if progress and (i + 1) % 50 == 0:
@@ -392,3 +393,18 @@ def sensitivity(graded: pd.DataFrame, decisions=("fourth_down", "play_select"), 
     wp_neu = out.apply(lambda r: r[f"wp_{r['rec_neutral']}"], axis=1)
     out["value_of_team_info"] = wp_rec - wp_neu
     return out
+
+
+def confirm(graded: pd.DataFrame, keys: list, n: int = 4000, workers: int = 4) -> pd.DataFrame:
+    """Re-grade selected decisions with fresh seeds and many more simulations (confirmation pass)."""
+    pbp = data.load(tuple(range(2016, 2027)))
+    k = pd.Series([f"{g}#{int(p)}" for g, p in zip(graded["game_id"], graded["play_id"])], index=graded.index)
+    sub = graded[k.isin(keys)]
+    base_cols = [c for c in sub.columns if not c.startswith("wp_") and c not in (
+        "recommended", "gain", "gain_se", "kicker", "kicker_rating", "punter", "punter_rating", "off_pass",
+        "off_rush", "opp_def_pass", "opp_def_rush", "is_rec", "sig_error", "wp_cost", "opp")]
+    res = evaluate(sub[base_cols], pbp[pbp["game_id"].isin(sub["game_id"].unique())], n=n, workers=workers,
+                   progress=False, salt=7)
+    res["key"] = [f"{g}#{int(p)}" for g, p in zip(res["game_id"], res["play_id"])]
+    return res[["key", "decision", "actual", "recommended", "gain", "gain_se"]].rename(
+        columns={"recommended": "confirm_rec", "gain": "confirm_gain", "gain_se": "confirm_se"})

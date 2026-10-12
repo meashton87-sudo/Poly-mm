@@ -29,6 +29,22 @@ if __name__ == "__main__":
     cards = weekly.write_week(a.season, a.week)
     for c in cards[:8]:
         print(f"  {c['team']:>3} {c['grade']} +{c['cost'] * 100:4.1f}  {c['matchup']}: {c['situation']} -- chose {c['chose']}, better {c['better']}")
+    print("confirmation pass on headline mistakes (fresh seeds, 4,000 sims per option) ...", flush=True)
+    from nflclock import analyze
+    import pandas as pd
+    top = report.summarize(graded)["top"]
+    keys = list(top["key"].head(40)) + [c["key"] for c in cards]
+    conf = analyze.confirm(graded, keys, n=4000)
+    conf["confirmed"] = (conf["confirm_rec"] != conf["actual"]) & (conf["confirm_gain"] > 2 * conf["confirm_se"])
+    conf.to_csv(config.REPORT_DIR / "confirmations.csv", index=False)
+    print(f"  confirmed {int(conf['confirmed'].sum())} of {len(conf)}")
+    cmap = conf.set_index("key")
+    for c in cards:
+        if c["key"] in cmap.index:
+            r = cmap.loc[c["key"]]
+            c.update(confirmed=bool(r["confirmed"]), confirm_gain=float(r["confirm_gain"]), confirm_se=float(r["confirm_se"]))
+    wk = config.REPORT_DIR / f"worst_decisions_{a.season}_wk{a.week:02d}.json"
+    wk.write_text(json.dumps(cards, indent=1, default=float))
     if not a.skip_backtest:
         print("backtests ...", flush=True)
         bt = backtest.run_all(core.assign(sig_error=core["sig_error"]), pbp)

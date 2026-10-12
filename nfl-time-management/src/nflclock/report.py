@@ -198,14 +198,24 @@ def export_dashboard_files(out: dict, dest=None):
         scale = json.loads(scale_p.read_text())
         lp = [letter_for(scale, d, float(c)) for d, c in zip(top_dec["decision"], top_dec["gain"])]
         top_dec["grade"] = [f"{l} ({p:.1%})" if p < 0.999 else f"{l} (worst 0.1%)" for l, p in lp]
+    conf_p = config.REPORT_DIR / "confirmations.csv"
+    if conf_p.exists():
+        conf = pd.read_csv(conf_p).set_index("key")
+        top_dec["confirmed"] = top_dec["key"].map(lambda k: (
+            f"yes (+{conf.loc[k, 'confirm_gain'] * 100:.1f} ± {conf.loc[k, 'confirm_se'] * 100:.1f})"
+            if k in conf.index and conf.loc[k, "confirmed"] else ("no" if k in conf.index else "")))
     top_dec["decision"] = top_dec["decision"].map(FAMILY_LABEL)
     top_dec.round(5).to_csv(dest / "costliest.csv", index=False)
     for wk in sorted(config.REPORT_DIR.glob("worst_decisions_*_wk*.json"))[-1:]:
         cards = json.loads(wk.read_text())
         rows = []
         for c in cards:
+            conf_txt = ""
+            if "confirmed" in c:
+                conf_txt = (f"yes (+{c['confirm_gain'] * 100:.1f} ± {c['confirm_se'] * 100:.1f})" if c["confirmed"] else "no")
             rows.append({**{k: c[k] for k in ("key", "matchup", "team", "coach", "family", "situation", "chose",
                                               "better", "cost", "se", "grade", "percentile", "why", "play", "final")},
+                         "confirmed": conf_txt,
                          "options": " · ".join(f"{k} {v:.1%}" for k, v in sorted(c["options"].items(), key=lambda kv: -kv[1]))})
         pd.DataFrame(rows).round(5).to_csv(dest / "week_worst.csv", index=False)
     bk = config.REPORT_DIR / "backtests.json"
