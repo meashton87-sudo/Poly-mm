@@ -65,6 +65,8 @@ h2 { font-size: 1.15rem; text-transform: uppercase; letter-spacing: .06em; color
 .rows { display: flex; flex-direction: column; gap: 10px; }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .row > label, .row > .lab { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); min-width: 4.8rem; }
+.quick-in { flex: 1 1 22rem; min-width: 0; font: 500 1rem ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
+.quick-help { flex-basis: 100%; margin: 0; }
 .num { width: 4.2ch; font: 600 1.05rem var(--body); padding: 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); text-align: center; }
 .go { appearance: none; border: 0; border-radius: var(--radius); background: var(--accent); color: var(--accent-ink); font: 700 1.25rem var(--display); letter-spacing: .05em; text-transform: uppercase; padding: 14px; cursor: pointer; width: 100%; }
 .go[disabled] { opacity: .55; cursor: progress; }
@@ -150,6 +152,10 @@ details summary { cursor: pointer; font-weight: 600; }
     </div>
 
     <div class="rows">
+      <div class="row"><label for="quick">Type it</label>
+        <input id="quick" class="quick-in" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go"
+          placeholder="q4 2:31 BUF 20 LA 24 ball BUF 2&amp;7 LA41 to 2-3 run" aria-describedby="quick-help">
+        <p class="note quick-help" id="quick-help">Enter simulates. Any order; anything left out keeps its value. Score and timeouts are away-home (20-24, to 2-3). Spots: LA41, own25, opp35, 50. <code>try BUF</code> for a PAT, <code>kick BUF</code> for a kickoff, <code>run</code> / <code>stop</code> for the clock.</p></div>
       <div class="row"><span class="lab">Ball</span><div class="seg" id="pos" role="group" aria-label="possession"></div>
         <div class="seg" id="phase" role="group" aria-label="moment">
           <button data-v="snap">Next snap</button><button data-v="pat">Try after TD</button><button data-v="kickoff">Kickoff</button></div></div>
@@ -249,6 +255,51 @@ details summary { cursor: pointer; font-weight: 600; }
     return s.side === s.pos ? 100 - s.yard : s.yard;
   }
   const ylToGo = () => ylToGoFor(st);
+
+  // One line in the console's syntax: "q4 2:31 BUF 20 LA 24 ball BUF 2&7 LA41 to 2-3 run"
+  function parseLine(line) {
+    const toks = line.replace(/,/g, ' ').trim().split(/\s+/).filter(Boolean);
+    const [A, H] = teams();
+    const T = { [A.toLowerCase()]: A, [H.toLowerCase()]: H };
+    const nx = Object.assign({}, st, { score: st.score.slice(), to: st.to.slice() });
+    let spot = null;
+    const unknown = [];
+    for (let i = 0; i < toks.length; i++) {
+      const t = toks[i].toLowerCase(), n = (toks[i + 1] || '').toLowerCase(), prev = i > 0 ? toks[i - 1].toLowerCase() : '';
+      let m;
+      if (/^(q[1-5]|ot)$/.test(t)) nx.qtr = t === 'ot' ? 5 : Number(t[1]);
+      else if ((m = t.match(/^(\d{1,2}):(\d{2})$/))) nx.clock = Math.min(900, Number(m[1]) * 60 + Number(m[2]));
+      else if ((m = t.match(/^(\d{1,2})-(\d{1,2})$/)) && prev !== 'to') nx.score = [Number(m[1]), Number(m[2])];
+      else if (t === 'to' && (m = n.match(/^([0-3])-([0-3])$/))) { nx.to = [Number(m[1]), Number(m[2])]; i++; }
+      else if (['ball', 'poss', 'try', 'pat', 'kick', 'kickoff', 'ko'].includes(t) && T[n]) {
+        nx.pos = T[n];
+        nx.phase = ['try', 'pat'].includes(t) ? 'pat' : ['kick', 'kickoff', 'ko'].includes(t) ? 'kickoff' : 'snap';
+        if (nx.phase === 'snap' && st.phase !== 'snap') nx.running = false;
+        i++;
+      } else if (T[t] && /^\d{1,2}$/.test(n)) {
+        if (prev === 'at' || prev === '@') spot = { side: T[t], yard: Number(n) };
+        else nx.score[T[t] === A ? 0 : 1] = Number(n);
+        i++;
+      } else if ((m = t.match(/^@?([a-z]{2,3})(\d{1,2})$/)) && T[m[1]]) spot = { side: T[m[1]], yard: Number(m[2]) };
+      else if ((m = t.match(/^(own|opp)(\d{1,2})$/))) spot = { rel: m[1], yard: Number(m[2]) };
+      else if ((t === 'own' || t === 'opp') && /^\d{1,2}$/.test(n)) { spot = { rel: t, yard: Number(n) }; i++; }
+      else if (t === '50' || t === 'midfield') spot = { side: null, yard: 50 };
+      else if ((m = t.match(/^([1-4])(st|nd|rd|th)?&(\d{1,2}|g|goal)$/))) {
+        nx.down = Number(m[1]);
+        if (m[3] === 'g' || m[3] === 'goal') nx.goal = true; else { nx.goal = false; nx.ytg = Math.max(1, Number(m[3])); }
+      } else if (['run', 'running', 'r'].includes(t)) nx.running = true;
+      else if (['stop', 'stopped', 's'].includes(t)) nx.running = false;
+      else if (t !== 'at' && t !== '@') unknown.push(toks[i]);
+    }
+    if (spot) {
+      if (spot.rel && !nx.pos) unknown.push('own/opp needs "ball TEAM"');
+      else {
+        nx.side = spot.rel ? (spot.rel === 'own' ? nx.pos : (nx.pos === A ? H : A)) : (spot.side || nx.side || nx.pos);
+        nx.yard = Math.min(50, Math.max(1, spot.yard));
+      }
+    }
+    return { nx, unknown };
+  }
 
   // -------------------------------------------------------------- render ---
   function render() {
@@ -600,6 +651,19 @@ details summary { cursor: pointer; font-weight: 600; }
     $('ytg').addEventListener('change', (e) => { st.ytg = Math.max(1, Math.min(99, parseInt(e.target.value, 10) || 10)); render(); });
     $('yard').addEventListener('change', (e) => { st.yard = Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 25)); render(); });
     $('go').addEventListener('click', simulate);
+    $('quick').addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const { nx, unknown } = parseLine(e.target.value);
+      Object.assign(st, nx);
+      render();
+      if (unknown.length) {
+        $('status').textContent = `Did not understand: ${unknown.join(' ')}. Check the board, then simulate.`;
+        return;
+      }
+      e.target.value = '';
+      simulate();
+    });
     // example situation so the first view shows the tool working
     st.pos = A; st.side = H; st.r2h = H;
     renderRoster();
