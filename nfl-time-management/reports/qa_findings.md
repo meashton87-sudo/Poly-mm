@@ -175,7 +175,8 @@ The opp-1 milk result is plausible: it drains time before a likely TD. It is a j
 
 Web-only checks that passed:
 - Backup QB toggles and undoes cleanly. BUF pass O goes +0.115 → −0.037 → +0.115.
-- The kicker override feeds the sim. With K −0.5, the 47-yard FG dropped to 29.8% WP.
+- The kicker override shows in the roster and is sent to the workers. With K −0.5, the 47-yard spot was
+  still a field goal, at 29.8% WP. I did not run a before/after comparison.
 - "Typical coach" mode works.
 - History lists up to 12 situations and clicking one restores the board.
 - The hurry-vs-spike break-even pairing is valid in JS, because uniforms are hashed per rollout and don't
