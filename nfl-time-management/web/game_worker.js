@@ -1,6 +1,7 @@
 /* Web Worker for the daily game: hosts the nflclock engine plus the call-level playbook.
  *   init  -> loads engine_data.json and playbook.json
- *   info  -> per-call facts for the current spot (NFL call mix, out-of-bounds rates, FG / conversion odds)
+ *   info  -> per-call facts for the current spot (NFL call mix, out-of-bounds rates, FG / conversion odds,
+ *            the usual tempo and seconds between snaps by tempo)
  *   eval  -> win probability of a list of options (same seed for all: common random numbers)
  *   step  -> plays one real snap / try / kickoff and returns the new state and a play-by-play log */
 importScripts('engine.js');
@@ -55,7 +56,7 @@ function info(sim, root) {
       conv: w ? conv / w : 0, inc: w ? inc / w : 0, n };
   });
   const fi = sim.fourthInfo(root);
-  return { calls, fgDist: fi.fgDist, pFg: fi.pFg, pConv: fi.pConv };
+  return { calls, fgDist: fi.fgDist, pFg: fi.pFg, pConv: fi.pConv, tempo: sim.defaultTempo(root), tempoSecs: sim.tempoSeconds() };
 }
 
 // what happened on the real play behind an outcome: event, penalty called, the pre-snap look, and for the

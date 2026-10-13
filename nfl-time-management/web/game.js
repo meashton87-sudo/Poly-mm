@@ -28,8 +28,12 @@
     SEA: ['Seahawks', '#69BE28'], TB: ['Buccaneers', '#D50A0A'], TEN: ['Titans', '#4B92DB'], WAS: ['Commanders', '#5A1414'],
   };
   const FAM = { run: 'Run', pass: 'Pass', rpo: 'RPO' };
+  const TEMPOS = ['nohuddle', 'huddle', 'milk'];
+  // with the clock running: the tempo of the next snap (the engine's typical seconds between snaps), or stop it
   const CLOCK = {
-    play: { label: 'Run a play', act: { to_off: false } },
+    nohuddle: { label: 'No-huddle', short: 'No-huddle' },
+    huddle: { label: 'Huddle', short: 'Huddle' },
+    milk: { label: 'Milk the clock', short: 'Milk it' },
     timeout: { label: 'Timeout', act: { to_off: true } },
     spike: { label: 'Spike', act: { to_off: false, play: 'spike' } },
     kneel: { label: 'Kneel', act: { to_off: false, play: 'kneel' } },
@@ -134,6 +138,17 @@
     return { q, s, text: `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` };
   }
   const halfLeft = (t) => t - (t > 1800 ? 1800 : 0);
+  // a tempo key (nohuddle, huddle, milk) as the engine's tempo; no-huddle is the engine's own hurry-up when
+  // that is the usual tempo here, else 'urgent' inside two minutes of the half and 'hurry' before
+  function engineTempo(k, r) {
+    if (k === 'huddle') return 'normal';
+    if (k === 'milk') return 'milk';
+    const usual = G.info && G.info.tempo;
+    return usual === 'urgent' || usual === 'hurry' ? usual : halfLeft(r.t) <= 120 ? 'urgent' : 'hurry';
+  }
+  const tempoKeyOf = (t) => (t === 'urgent' || t === 'hurry' ? 'nohuddle' : t === 'normal' ? 'huddle' : 'milk');
+  const clockAct = (k, r) => (TEMPOS.includes(k) ? { to_off: false, tempo: engineTempo(k, r) } : CLOCK[k].act);
+  const tempoSecs = (k, r) => { const S_ = (G.info && G.info.tempoSecs) || {}; return S_[engineTempo(k, r)]; };
   function spotText(r) {
     if (Math.round(r.yl) === 50) return 'midfield';
     const own = r.pos === G.me;
@@ -313,7 +328,12 @@
   let scene = null, fadeNext = false;
   const lerp = (a, b, u) => a + (b - a) * u;
   const EASE = { lin: (u) => u, io: (u) => (u < 0.5 ? 2 * u * u : 1 - ((-2 * u + 2) ** 2) / 2),
-    in: (u) => u * u, out: (u) => 1 - (1 - u) * (1 - u) };
+    in: (u) => u * u, out: (u) => 1 - (1 - u) * (1 - u), run: trapezoid(0.2, 0.15), dash: trapezoid(0.2, 0) };
+  // speed ramps up over the first `a` of the move, holds, and ramps down over the last `d` (peak 1.2x the average)
+  function trapezoid(a, d) {
+    const v = 1 / (1 - a / 2 - d / 2);
+    return (u) => (u < a ? (v * u * u) / (2 * a) : u <= 1 - d ? v * (a / 2 + u - a) : 1 - (v * (1 - u) ** 2) / (2 * d));
+  }
 
   function spotGeom(r) {
     const mine = r.pos === G.me;
@@ -395,6 +415,7 @@
       f.def.forEach((o) => add(o, 1 - offI, false));
       f.off.forEach((o) => add(o, offI, true));
     }
+    if (mode === 'kick') kickoffUnits(sc, r, L, dir);
     const ball = S('g', {}), inner = S('g', { class: 'ballmove' });
     inner.append(S('ellipse', { cx: 0, cy: 0, rx: 3.4, ry: 5.2, fill: 'var(--ball)', stroke: 'rgba(255,255,255,.75)', 'stroke-width': 0.8 }));
     ball.append(inner);
@@ -405,13 +426,34 @@
     place(sc);
     return sc;
   }
+  // Kickoff alignment (the 2024 rules): the kicker at the ball, his ten teammates at the receiving 40 (25 yards
+  // ahead of the ball), nine of the receiving team in the setup zone 30-35 yards ahead, and two returners deep.
+  // Special-teams units are drawn in team colors: who covers kicks is not in the lineups.
+  function kickoffUnits(sc, r, L, dir) {
+    const kt = r.pos, goal = dir > 0 ? 100 : 0;
+    const row = (n, pad) => Array.from({ length: n }, (_, i) => SX0 + pad + (i * (SX1 - SX0 - 2 * pad)) / (n - 1));
+    const add = (teamI, x, Lp, label) => {
+      const off = teamI === kt, g = S('g', { class: `dot st ${teamI === G.me ? 'me' : 'them'}`, 'aria-hidden': 'true' });
+      g.append(S('circle', { class: 'c', r: 5.6, fill: color(code(teamI)) }));
+      sc.layer.append(g);
+      const a = { g, p: null, label, team: code(teamI), teamI, off, x0: x, L0: Lp, side: off ? -dir : dir, w0: 0 };
+      Object.assign(a, { x: a.x0, L: a.L0, w: 0 });
+      sc.actors.push(a);
+    };
+    add(kt, 180, L - dir * 6, 'K');
+    row(10, 26).forEach((x) => add(kt, x, L + dir * 25, 'KC'));
+    row(9, 34).forEach((x, i) => add(1 - kt, x, L + dir * (i % 2 ? 31 : 34), 'SZ'));
+    add(1 - kt, 138, goal - dir * 4, 'KR');
+    add(1 - kt, 222, goal - dir * 9, 'KR');
+  }
+
   function place(sc) {
     const Y = camY(sc);
     sc.parts.forEach((f) => f(Y));
     sc.actors.forEach((a) => a.g.setAttribute('transform', `translate(${a.x.toFixed(1)},${(Y(a.L) + a.side * GAP * a.w).toFixed(1)})`));
     const b = sc.ball;
     if (b) {
-      b.g.setAttribute('transform', `translate(${b.x.toFixed(1)},${Y(b.L).toFixed(1)}) scale(${(1 + b.z).toFixed(2)})`);
+      b.g.setAttribute('transform', `translate(${b.x.toFixed(1)},${Y(b.L).toFixed(1)}) scale(${(1 + 0.35 * b.z).toFixed(2)})`);
       b.g.style.opacity = b.show ? 1 : 0;
     }
     sc.calls.forEach((c) => {
@@ -465,12 +507,20 @@
   const RUN_GAP = { 'Outside run': 92, 'Off-tackle run': 58, 'Inside run': 26, 'Up the middle': 0, 'QB sneak': 0, 'QB keeper': 60, RPO: 30 };
   const AIR = { quick_strong: 5, quick_weak: 5, quick_middle: 7, screen: -2, deep_strong: 24, deep_weak: 24, deep_middle: 22,
     pa_short: 9, pa_deep: 27, roll_strong: 8, roll_weak: 8, hail_mary: 48, rpo_strong: 4, rpo_weak: 4, trick: 30 };
-  const RELEASE = { quick: 0.8, screen: 0.75, deep: 1.3, pa: 1.4, roll: 1.25, hail: 1.6, rpo: 0.7, trick: 1.75 };
-  const PLAY_SPEED = 0.85;     // playback speed (1 = the pace the plays are drawn at); your snaps, theirs 1.25x this
+  // Real NFL timing, in seconds after the snap (Next Gen Stats averages): the snap reaches the QB in a quarter of a
+  // second; passes come out 1.35 s (RPO) to 4.3 s (Hail Mary) after the snap; the ball flies about 24 yards a second
+  // (deep balls are lofted, a little slower); ball carriers average about 4.5 yards a second in traffic and 8 in the
+  // open, topping out near 10; sacks land about 3.2 s after the snap; punts and kickoffs hang about 4 s.
+  const T_SNAP = 0.25, CONTACT = 0.35;
+  const RELEASE = { quick: 2.3, screen: 1.9, deep: 3.1, pa: 3.0, roll: 3.0, hail: 4.3, rpo: 1.35, trick: 3.6 };
+  const SET = { quick: 1.0, screen: 1.0, rpo: 0.9, deep: 1.6, pa: 1.7, roll: 1.4, hail: 1.9, trick: 1.7 };   // QB at the top of his drop
+  const flight = (air) => (Math.abs(air) + 7) / (25 - 0.09 * clip(air, 0, 60));              // seconds the ball is in the air
+  const runTime = (yd) => { const y = Math.abs(yd); return y < 0.5 ? 0.3 : y / (4.5 + 3.8 * (1 - Math.exp(-y / 15))); };
+  const PLAY_SPEED = 1;        // real time, your snaps and theirs
 
   function kf(a, t, x, L, w, e) {
     if (!a) return;
-    if (!a.kf) a.kf = [[0, a.x0, a.L0, 1, 'io']];
+    if (!a.kf) a.kf = [[0, a.x0, a.L0, a.w0 ?? 1, 'io']];
     const last = a.kf[a.kf.length - 1];
     a.kf.push([Math.max(t, last[0]), x, L, w === undefined ? 0 : w, e || 'io']);
   }
@@ -514,7 +564,7 @@
   };
 
   function choreograph(sc, e, res, two) {
-    const P = { T: 1, hold: 0.95, segs: [], calls: [], fx: [] };
+    const P = { T: 1, hold: 1.0, segs: [], calls: [], fx: [] };
     const dir = sc.dir, L0 = sc.losL, bx = sc.bx;
     const fwd = (L, y) => L + dir * y;
     const R = rng(hash('anim', e.row, e.t, e.yards, e.ev));
@@ -571,15 +621,15 @@
         const lost = e.evt !== 'fumble_kept';
         say(t1, 'Fumble!', 'hit', { follow: car });
         const fx = clampX(xEnd + jit(14)), fL = Lend + dir * 1.2;
-        fly(t1, t1 + 0.35, xEnd, Lend, fx, fL, 0.3);
+        fly(t1, t1 + 0.55, xEnd, Lend, fx, fL, 0.3);
         const rec = lost ? near(K.def, fx, fL) : car;
-        if (rec && rec !== car) kf(rec, t1 + 0.4, fx, fL, 0, 'io');
-        hold(t1 + 0.42, rec);
-        t = t1 + 0.42;
+        if (rec && rec !== car) kf(rec, t1 + 0.65, fx, fL, 0, 'io');
+        hold(t1 + 0.67, rec);
+        t = t1 + 0.67;
         if (e.evt === 'scoop_score' && rec) {
           const Lz = dir > 0 ? -3 : 103;
-          t = t + 0.25 + Math.abs(Lz - fL) * 0.035;
-          kf(rec, t, clampX(fx + jit(30)), Lz, 0, 'lin');
+          t = t + 0.3 + runTime(Lz - fL);
+          kf(rec, t, clampX(fx + jit(30)), Lz, 0, 'dash');
           say(t, 'Scoop and score!', 'hit', { follow: rec });
         } else say(t, lost ? `${defName} ball` : 'Recovered', lost ? 'hit' : 'info', { slot: 1, follow: rec || car });
         t += 0.2;
@@ -594,8 +644,8 @@
     }
     function snapToQb() {
       if (!qb) return;
-      fly(0, 0.22, bx, L0, qb.x0, qb.L0, 0.15);
-      hold(0.22, qb);
+      fly(0, T_SNAP, bx, L0, qb.x0, qb.L0, 0.15);
+      hold(T_SNAP, qb);
     }
     function pickTarget(id, sign) {
       if (e.who === 'RB' || id === 'screen') return K.rb || K.recv[0];
@@ -617,8 +667,9 @@
       const sg = sign || (id === 'qb_run' ? sc.s * dir : 0);
       const holeX = clampX(bx + sg * gap);
       const Lend = endL(e.yards, e.td);
-      const tH = carrier === qb ? 0.3 : 0.5, tHole = tH + 0.3;
-      const t1 = tHole + clip(0.3 + Math.abs(Lend - L0) * 0.05, 0.35, 2.8);
+      const tH = carrier === qb ? T_SNAP + 0.05 : carrier.label === 'WR' ? 1.4 : 0.75;
+      const tHole = id === 'qb_sneak' ? 0.65 : tH + (carrier === qb ? 0.9 : 0.6);
+      const t1 = tHole + runTime(Lend - fwd(L0, 0.4)) + (e.td || e.oob ? 0 : CONTACT);
       const xEnd = e.oob ? sideline(sg ? (sg > 0 ? 300 : 60) : holeX) : clampX(holeX + sg * Math.min(26, Math.abs(e.yards) * 1.6) + jit(10));
       snapToQb();
       if (carrier !== qb) {
@@ -630,7 +681,7 @@
       }
       ring(tH, carrier);
       kf(carrier, tHole, holeX, fwd(L0, 0.4), 0, 'in');
-      kf(carrier, t1, xEnd, Lend, 0, 'out');
+      kf(carrier, t1, xEnd, Lend, 0, e.td ? 'dash' : 'run');
       used.add(qb);
       K.ol.forEach((a) => { kf(a, 0.55, a.x0 + sg * 4, fwd(L0, -0.3), 0); kf(a, t1, a.x0 + sg * 9, fwd(L0, 1.4), 0, 'out'); used.add(a); });
       K.rush.forEach((a) => kf(a, 0.55, a.x0 + sg * 3, fwd(L0, 0.5), 0));
@@ -649,13 +700,13 @@
       snapToQb();
       used.add(qb);
       if ((kind === 'pa' || kind === 'trick') && K.rb) {
-        kf(K.rb, 0.55, bx + 9, fwd(L0, -4.6), 0);
-        if (kind === 'trick') { hold(0.55, K.rb); fly(1.0, 1.25, bx + 14, fwd(L0, -3), qx, qL, 0.4); hold(1.25, qb); kf(K.rb, 1.0, bx + 14, fwd(L0, -3), 0); }
+        kf(K.rb, 0.75, bx + 9, fwd(L0, -4.6), 0);
+        if (kind === 'trick') { hold(0.75, K.rb); fly(1.5, 1.85, bx + 14, fwd(L0, -3), qx, qL, 0.4); hold(1.85, qb); kf(K.rb, 1.5, bx + 14, fwd(L0, -3), 0); }
         kf(K.rb, tRel, bx + 26, fwd(L0, 1.5), 0, 'io');
       }
-      kf(qb, kind === 'quick' || kind === 'rpo' || kind === 'screen' ? 0.55 : 0.85, qx, qL, 0, 'io');
+      kf(qb, SET[kind], qx, qL, 0, 'io');
       const tgt = pickTarget(id, sign) || K.rb;
-      const tArr = tRel + 0.22 + Math.abs(air) * 0.017;
+      const tArr = tRel + flight(air);
       let cL = fwd(L0, air), cx;
       if (!tgt) return;
       if (kind === 'screen' || tgt === K.rb) cx = clampX(bx + (sign || (tgt.x0 > bx ? 1 : -1)) * 62);
@@ -683,8 +734,8 @@
         const p = r ? at(r, tArr) : { x: d.x0, L: fwd(d.L0, 3) };
         kf(d, tArr, p.x + (d.x0 < p.x ? -6 : 6), p.L + dir * 1.6, 0, 'io');
       });
-      if (kind !== 'trick') hold(0.22, qb);
-      ring(0.22, qb);
+      if (kind !== 'trick') hold(T_SNAP, qb);
+      ring(T_SNAP, qb);
       fly(tRel, tArr, qx + 4, qL, cx, cL, Math.min(2.2, 0.35 + Math.abs(air) * 0.05));
       ring(tRel, qb, false);
       if (e.evt === 'interception' || e.evt === 'pick_six') {
@@ -694,8 +745,8 @@
         ring(tArr, pick);
         say(tArr, 'Intercepted!', 'hit', { follow: pick });
         const Lret = e.evt === 'pick_six' ? (dir > 0 ? -3 : 103) : clip(losOf(res.root), -9, 109);
-        const t1 = tArr + 0.3 + Math.abs(Lret - cL) * 0.045;
-        kf(pick, t1, clampX(cx + jit(40)), Lret, 0, 'out');
+        const t1 = tArr + 0.3 + runTime(Lret - cL) + (e.evt === 'pick_six' ? 0 : CONTACT);
+        kf(pick, t1, clampX(cx + jit(40)), Lret, 0, e.evt === 'pick_six' ? 'dash' : 'run');
         const ch = near(K.recv.concat([qb]), cx, cL, new Set([tgt]));
         if (ch) kf(ch, t1, clampX(cx + jit(40)), Lret + dir * 1.5, 0, 'io');
         if (e.evt === 'pick_six') say(t1, 'Pick-six!', 'hit', { follow: pick });
@@ -723,9 +774,9 @@
       hold(tArr, tgt);
       ring(tArr, tgt);
       const Lend = endL(e.yards, e.td);
-      const t1 = tArr + 0.2 + Math.abs(Lend - cL) * 0.05;
+      const t1 = tArr + 0.15 + runTime(Lend - cL) + (e.td || e.oob ? 0 : CONTACT);
       const xEnd = e.oob ? sideline(cx) : clampX(cx + jit(12));
-      kf(tgt, t1, xEnd, Lend, 0, 'out');
+      kf(tgt, t1, xEnd, Lend, 0, e.td ? 'dash' : 'run');
       if (Math.abs(Lend - cL) > 4 && !e.bt) say(tArr, 'Caught', 'boom', { follow: tgt });
       finish(tgt, tArr, t1, xEnd, Lend);
     }
@@ -733,8 +784,9 @@
     function sack() {
       if (!qb) return;
       snapToQb();
-      const qL = fwd(L0, -7), tS = 1.15 + R() * 0.35;
-      kf(qb, 0.7, qb.x0, qL, 0, 'io');
+      const qL = fwd(L0, -7), tS = 2.7 + R() * 1.0;
+      kf(qb, 1.0, qb.x0, qL, 0, 'io');
+      kf(qb, tS - 0.45, qb.x0 + jit(9), fwd(L0, -6.2), 0, 'io');
       const pool = e.look && e.look.blitz ? K.rush.concat(K.cover.filter((d) => d.label === 'LB')) : K.rush;
       const rusher = near(pool, qb.x0, qL) || K.def[0];
       kf(rusher, tS, qb.x0 + (rusher.x0 < qb.x0 ? -6 : 6), fwd(L0, -6.4), 0, 'in');
@@ -745,18 +797,18 @@
       [qb, rusher].forEach((a) => used.add(a));
       K.recv.forEach((a) => { kf(a, tS, clampX(a.x0 + jit(10)), fwd(L0, 8 + Math.abs(jit(8))), 0, 'io'); used.add(a); });
       K.ol.forEach((a) => { kf(a, 0.6, a.x0, fwd(L0, -1.6), 0, 'out'); used.add(a); });
-      hold(0.22, qb);
-      ring(0.22, qb);
+      hold(T_SNAP, qb);
+      ring(T_SNAP, qb);
       say(tS, e.evt === 'strip_sack' ? 'Strip-sack!' : 'Sacked!', 'hit', { follow: qb });
       down(tS + 0.3, qb);
       let t = tS + 0.3;
       if (e.evt === 'strip_sack' || e.evt === 'sack_fumble') {
         const fx = clampX(qb.x0 + jit(14)), fL = Lend - dir * 1.4;
-        fly(tS, tS + 0.35, qb.x0, qL, fx, fL, 0.2);
+        fly(tS, tS + 0.55, qb.x0, qL, fx, fL, 0.2);
         const rec = e.evt === 'strip_sack' ? near(K.rush, fx, fL, new Set([rusher])) || rusher : near(K.ol, fx, fL);
-        if (rec) { kf(rec, tS + 0.45, fx, fL, 0, 'io'); hold(tS + 0.47, rec); }
-        say(tS + 0.45, e.evt === 'strip_sack' ? `${defName} ball` : 'Fumble: recovered', e.evt === 'strip_sack' ? 'hit' : 'info', { slot: 1, follow: rec || qb });
-        t = tS + 0.55;
+        if (rec) { kf(rec, tS + 0.7, fx, fL, 0, 'io'); hold(tS + 0.72, rec); }
+        say(tS + 0.7, e.evt === 'strip_sack' ? `${defName} ball` : 'Fumble: recovered', e.evt === 'strip_sack' ? 'hit' : 'info', { slot: 1, follow: rec || qb });
+        t = tS + 0.85;
       }
       if (e.safety) say(tS + 0.35, 'Safety!', 'hit', { slot: 1, follow: qb });
       ambient(t, qb.x0, Lend);
@@ -766,18 +818,18 @@
     function scramble() {
       if (!qb) return;
       snapToQb();
-      const qL = fwd(L0, -7), tE = 1.15;
+      const qL = fwd(L0, -7), tE = 2.4 + R() * 0.6;
       const sg = R() < 0.5 ? -1 : 1;
-      kf(qb, 0.7, qb.x0, qL, 0, 'io');
+      kf(qb, 1.0, qb.x0, qL, 0, 'io');
       kf(qb, tE, clampX(qb.x0 + sg * 30), fwd(L0, -6), 0, 'io');
       const Lend = endL(e.yards, e.td);
-      const t1 = tE + 0.2 + Math.abs(Lend - fwd(L0, -6)) * 0.05;
+      const t1 = tE + runTime(Lend - fwd(L0, -6)) + (e.td || e.oob ? 0 : CONTACT);
       const xEnd = e.oob ? sideline(qb.x0 + sg * 60) : clampX(qb.x0 + sg * 60 + jit(20));
-      kf(qb, t1, xEnd, Lend, 0, 'out');
+      kf(qb, t1, xEnd, Lend, 0, e.td ? 'dash' : 'run');
       K.recv.forEach((a) => { kf(a, t1, clampX(a.x0 + jit(14)), fwd(L0, 9 + Math.abs(jit(9))), 0, 'io'); used.add(a); });
       K.ol.forEach((a) => { kf(a, 0.6, a.x0, fwd(L0, -1.5), 0, 'out'); used.add(a); });
       K.rush.forEach((a) => { kf(a, tE, lerp(a.x0, qb.x0, 0.3), fwd(L0, -3.5), 0, 'io'); });
-      ring(0.22, qb);
+      ring(T_SNAP, qb);
       say(tE, 'Scramble!', 'boom', { follow: qb });
       finish(qb, tE, t1, xEnd, Lend);
     }
@@ -800,36 +852,36 @@
         const jumper = /Offside|Encroachment|Neutral Zone/.test(e.pen || '') ? near(K.rush, bx, L0) : near(K.ol, bx, L0);
         if (jumper) { kf(jumper, 0.2, jumper.x0, fwd(jumper.L0, jumper.off ? 1 : -1), 0.3); kf(jumper, 0.6, jumper.x0, jumper.L0, 1); }
         flag(0.3, `Flag: ${e.pen || 'penalty'}`);
-        P.T = 0.9;
+        P.T = 1.3;
       } else if (e.evt === 'bad_snap') {
         const lx = bx + 9, lL = fwd(L0, -9);
-        fly(0, 0.4, bx, L0, lx, lL, 0.05);
-        rest(0.4, lx, lL);
-        say(0.35, 'Bad snap!', 'hit', { x: lx, L: lL });
+        fly(0, 0.55, bx, L0, lx, lL, 0.05);
+        rest(0.55, lx, lL);
+        say(0.5, 'Bad snap!', 'hit', { x: lx, L: lL });
         const rec = e.turnover ? near(K.rush, lx, lL) : qb;
-        if (rec) { kf(rec, 0.7, lx, lL + (rec.off ? 0 : dir * 0.5), 0, 'io'); hold(0.72, rec); used.add(rec); }
-        if (rec === qb && qb) kf(qb, 1.3, lx + jit(10), endL(e.yards, false), 0, 'out');
-        say(0.8, e.turnover ? `${defName} ball` : 'Recovered', e.turnover ? 'hit' : 'info', { slot: 1, follow: rec || qb });
-        ambient(1.2, lx, lL);
-        P.T = 1.5;
+        if (rec) { kf(rec, 1.05, lx, lL + (rec.off ? 0 : dir * 0.5), 0, 'io'); hold(1.07, rec); used.add(rec); }
+        if (rec === qb && qb) kf(qb, 1.9, lx + jit(10), endL(e.yards, false), 0, 'run');
+        say(1.2, e.turnover ? `${defName} ball` : 'Recovered', e.turnover ? 'hit' : 'info', { slot: 1, follow: rec || qb });
+        ambient(1.7, lx, lL);
+        P.T = 2.2;
       } else if (e.kind === SPIKE) {
         snapToQb();
         if (qb) {
-          fly(0.45, 0.58, qb.x0 + 4, qb.L0, qb.x0 + 4, fwd(qb.L0, 1.3), 0.05);
-          rest(0.58, qb.x0 + 4, fwd(qb.L0, 1.3));
-          say(0.5, 'Spike', 'info', { follow: qb });
+          fly(0.7, 0.85, qb.x0 + 4, qb.L0, qb.x0 + 4, fwd(qb.L0, 1.3), 0.05);
+          rest(0.85, qb.x0 + 4, fwd(qb.L0, 1.3));
+          say(0.75, 'Spike', 'info', { follow: qb });
         }
-        P.T = 0.95;
+        P.T = 1.4;
       } else if (e.kind === KNEEL) {
         snapToQb();
-        if (qb) { kf(qb, 0.55, qb.x0, fwd(qb.L0, -1), 0, 'out'); down(0.55, qb); say(0.55, 'Kneel', 'info', { follow: qb }); }
-        P.T = 0.95;
+        if (qb) { kf(qb, 0.85, qb.x0, fwd(qb.L0, -1), 0, 'out'); down(0.85, qb); say(0.85, 'Kneel', 'info', { follow: qb }); }
+        P.T = 1.5;
       } else if (e.penalty) {                                    // a flag during the play: it is called back
         snapToQb();
-        if (qb) { kf(qb, 0.7, qb.x0, fwd(L0, -6.5), 0, 'io'); used.add(qb); }
-        ambient(1.0, bx, fwd(L0, 3));
-        flag(0.85, `Flag: ${e.pen || 'penalty'}`);
-        P.T = 1.45;
+        if (qb) { kf(qb, 1.0, qb.x0, fwd(L0, -6.5), 0, 'io'); used.add(qb); }
+        ambient(2.2, bx, fwd(L0, 3));
+        flag(1.9, `Flag: ${e.pen || 'penalty'}`);
+        P.T = 2.8;
       } else if (['sack', 'strip_sack', 'sack_fumble'].includes(e.evt)) sack();
       else if (e.evt === 'scramble') scramble();
       else {
@@ -838,61 +890,127 @@
         else run(c, id, sign);
       }
     } else if (e.ev === 'fg' || (e.ev === 'pat' && !two)) {
-      const hL = fwd(L0, -7), Ly = dir > 0 ? 110 : -10;
-      fly(0, 0.3, bx, L0, bx, hL, 0.1);
-      rest(0.3, bx, hL);
+      // field-goal formation: holder 7 yards deep, kicker behind him, nine shoulder to shoulder; the snap at T0
+      const T0 = 0.8, hL = fwd(L0, -7), Ly = dir > 0 ? 110 : -10;
+      const holder = qb || K.off[0], kicker = K.rb || K.off.find((a) => a !== holder);
+      const line = K.off.filter((a) => a !== holder && a !== kicker);
+      line.forEach((a, i) => kf(a, T0, clampX(bx + (i - (line.length - 1) / 2) * 15), fwd(L0, -0.3), 1, 'io'));
+      kf(holder, T0, bx, hL, 1, 'io');
+      if (kicker) kf(kicker, T0, bx - 10, fwd(L0, -9.5), 1, 'io');
+      const deepD = K.def.filter((a) => a.label === 'S').slice(0, 1), front = K.def.filter((a) => !deepD.includes(a));
+      front.forEach((a, i) => kf(a, T0, clampX(bx + (i - (front.length - 1) / 2) * 15), fwd(L0, 0.3), 1, 'io'));
+      deepD.forEach((a) => kf(a, T0, bx, fwd(L0, 12), 1, 'io'));
+      fly(T0, T0 + 0.4, bx, L0, bx, hL, 0.1);
+      rest(T0 + 0.4, bx, hL);
+      if (kicker) kf(kicker, T0 + 1.25, bx - 2, fwd(L0, -7.6), 0, 'in');
       const good = e.ev === 'fg' ? e.made : e.good;
       const miss = good ? 0 : (R() < 0.5 ? -1 : 1);
-      const t1 = 0.6 + 0.35 + Math.abs(Ly - hL) * 0.011;
-      fly(0.6, t1, bx, hL, 180 + miss * 34, Ly, 2.4);
+      const tK = T0 + 1.3, t1 = tK + 0.25 + Math.abs(Ly - hL) / 24;
+      fly(tK, t1, bx, hL, 180 + miss * 34, Ly, 2.4);
       rest(t1, 180 + miss * 38, Ly + dir * 1.5);
-      K.rush.forEach((a) => kf(a, 0.65, a.x0, fwd(L0, 0.2), 0));
-      K.ol.forEach((a) => kf(a, 0.65, a.x0, fwd(L0, -0.6), 0));
+      front.forEach((a) => kf(a, tK, a.x0 + jit(4), fwd(L0, -0.4), 0, 'io'));
+      line.forEach((a, i) => kf(a, tK, clampX(bx + (i - (line.length - 1) / 2) * 15), fwd(L0, -1.0), 0, 'out'));
+      kf(holder, tK + 0.3, bx, hL, 0);
       say(t1, good ? "It's good!" : 'No good', good ? 'good' : 'hit', { x: 180, L: Ly - dir * 6 });
-      P.T = t1 + 0.35;
+      P.T = t1 + 0.5;
     } else if (e.ev === 'punt') {
-      const pL = fwd(L0, -14);
-      fly(0, 0.35, bx, L0, bx, pL, 0.1);
-      rest(0.35, bx, pL);
-      const Lnew = clip(losOf(res.root), -9, 109);
+      // punt formation: seven on the line, gunners split wide, an up-back, the punter 14 yards deep;
+      // the return team: two jammers on the gunners, a returner deep, the rest at the line
+      const T0 = 0.8, pL = fwd(L0, -14), Lnew = clip(losOf(res.root), -9, 109);
+      const punter = qb || K.off[0], upback = K.rb && K.rb !== punter ? K.rb : null;
+      const gunners = K.recv.filter((a) => a.label === 'WR').slice(0, 2);
+      const line = K.off.filter((a) => a !== punter && a !== upback && !gunners.includes(a));
+      const lineX = [0, -15, 15, -30, 30, -45, 45, -60, 60];
+      line.forEach((a, i) => kf(a, T0, clampX(bx + lineX[i % lineX.length]), fwd(L0, -0.4), 1, 'io'));
+      gunners.forEach((a, i) => kf(a, T0, i ? SX1 - 20 : SX0 + 20, fwd(L0, -0.4), 1, 'io'));
+      kf(punter, T0, bx, pL, 1, 'io');
+      if (upback) kf(upback, T0, bx + 6, fwd(L0, -5), 1, 'io');
+      const land = e.touchback ? (dir > 0 ? 104 : -4) : e.retTd ? fwd(pL, 52) : clip(Lnew + dir * 6, -8, 108);
+      const lx = clampX(bx + jit(40));
+      const ret = K.def.find((a) => a.label === 'S') || K.def.find((a) => a.label === 'CB') || K.def[0];
+      const jam = K.def.filter((a) => a.label === 'CB' && a !== ret).slice(0, 2);
+      const box = K.def.filter((a) => a !== ret && !jam.includes(a));
+      kf(ret, T0, clampX(lx + jit(12)), clip(land + dir * 4, -8, 108), 1, 'io');
+      jam.forEach((a, i) => kf(a, T0, i ? SX1 - 22 : SX0 + 22, fwd(L0, 1.2), 1, 'io'));
+      box.forEach((a, i) => kf(a, T0, clampX(bx + lineX[i % lineX.length]), fwd(L0, 0.8), 1, 'io'));
+      fly(T0, T0 + 0.75, bx, L0, bx, pL, 0.1);
+      hold(T0 + 0.75, punter);
+      const tK = T0 + 2.0;
       if (e.blocked) {
-        fly(0.6, 0.95, bx, pL, bx + jit(20), fwd(pL, -4), 0.2);
-        rest(0.95, bx + jit(20), fwd(pL, -4));
-        say(0.7, 'Blocked!', 'hit', { x: bx, L: pL });
-        P.T = 1.4;
+        const blocker = near(box, bx, pL) || box[0];
+        if (blocker) kf(blocker, tK, bx + 4, fwd(pL, 1), 0, 'in');
+        line.forEach((a) => kf(a, tK, a.x0 + jit(3), fwd(L0, -1.2), 0, 'out'));
+        fly(tK, tK + 0.35, bx, pL, bx + jit(20), fwd(pL, -4), 0.2);
+        rest(tK + 0.35, bx + jit(20), fwd(pL, -4));
+        say(tK + 0.05, 'Blocked!', 'hit', { x: bx, L: pL });
+        P.T = tK + 1.0;
       } else {
-        const land = e.touchback ? (dir > 0 ? 104 : -4) : e.retTd ? fwd(pL, 52) : Lnew + dir * 6;
-        const lx = clampX(bx + jit(40));
-        fly(0.6, 1.75, bx, pL, lx, land, 2.8);
-        let t = 1.75;
+        const tL = tK + 4.3;
+        fly(tK, tL, bx, pL, lx, land, 2.8);
+        kf(ret, tL, lx, land, 0, 'io');
+        gunners.forEach((a, i) => kf(a, tL, clampX(lx + (i ? 18 : -18)), land - dir * 7, 0, 'run'));
+        jam.forEach((a, i) => kf(a, tL, clampX(lx + (i ? 30 : -30)), land - dir * 9, 0, 'run'));
+        line.forEach((a, i) => { kf(a, T0 + 1.4, a.x0, fwd(L0, -0.8), 0, 'out'); kf(a, tL + 0.6, clampX(lx + (i - 3) * 14), lerp(L0, land, 0.62), 0, 'run'); });
+        box.forEach((a) => { kf(a, T0 + 1.4, a.x0, fwd(L0, -0.4), 0, 'out'); kf(a, tL + 0.6, clampX(a.x0 * 0.5 + lx * 0.5), lerp(L0, land, 0.75), 0, 'run'); });
+        kf(punter, tK + 0.6, bx, fwd(pL, 3), 0, 'out');
+        let t = tL;
         if (!e.touchback) {
-          const Lr = e.retTd ? (dir > 0 ? -3 : 103) : Lnew;
-          const t2 = t + 0.2 + Math.abs(land - Lr) * 0.03;
-          fly(t, t2, lx, land, clampX(lx + jit(30)), Lr, 0.05);
+          hold(tL, ret);
+          const Lr = e.retTd ? (dir > 0 ? -3 : 103) : Lnew, xr = clampX(lx + jit(30));
+          const t2 = tL + 0.3 + runTime(land - Lr) + (e.retTd ? 0 : CONTACT);
+          kf(ret, t2, xr, Lr, 0, e.retTd ? 'dash' : 'run');
+          if (!e.retTd) {
+            [...gunners, ...jam].slice(0, 2).forEach((a, i) => kf(a, t2, xr + (i ? -7 : 7), Lr + dir * 0.6, 0, 'io'));
+            down(t2 + 0.08, ret);
+          }
           t = t2;
-        }
+        } else rest(tL, lx, land);
         say(t, e.retTd ? 'Punt return touchdown!' : e.touchback ? 'Touchback' : `Punt · net ${Math.round(e.net || 0)}`, e.retTd ? 'hit' : 'info',
           { x: 180, L: e.retTd ? (dir > 0 ? 4 : 96) : Lnew });
-        P.T = t + 0.4;
+        P.T = t + 0.5;
       }
     } else if (e.ev === 'kickoff') {
       const Lnew = clip(losOf(res.root), -9, 109);
+      const kick = sc.actors.filter((a) => a.off), recv = sc.actors.filter((a) => !a.off);
+      const kicker = kick.find((a) => a.label === 'K'), cover = kick.filter((a) => a !== kicker);
+      const deep = recv.filter((a) => a.label === 'KR'), front = recv.filter((a) => a.label !== 'KR');
       if (e.onside) {
+        // an onside kick: everyone bunches at the ball, the hands team 10-12 yards away
+        cover.forEach((a, i) => kf(a, 0.8, clampX(bx + (i - 4.5) * 26), fwd(L0, -1), 0, 'io'));
+        recv.forEach((a, i) => kf(a, 0.8, clampX(bx + (i - 5) * 26), fwd(L0, 12 + (i % 2) * 4), 0, 'io'));
+        if (kicker) kf(kicker, 1.1, bx, fwd(L0, -0.5), 0, 'in');
         const lx = clampX(bx + jit(30)), lL = fwd(L0, 11);
-        fly(0.3, 0.95, bx, L0, lx, lL, 0.25);
-        rest(0.95, lx, lL);
-        say(0.95, e.recovered ? 'Onside kick recovered!' : 'Onside kick: they recover', e.recovered === (e.team === G.me) ? 'good' : 'hit', { x: lx, L: lL });
-        P.T = 1.4;
+        fly(1.15, 2.4, bx, L0, lx, lL, 0.25);
+        rest(2.4, lx, lL);
+        const ours = e.recovered;
+        const rec = near(ours ? cover : recv, lx, lL);
+        cover.forEach((a) => kf(a, 2.5, lerp(a.x0, lx, 0.6), lerp(fwd(L0, -1), lL, 0.8), 0, 'run'));
+        front.forEach((a) => kf(a, 2.5, lerp(lastKf(a)[1], lx, 0.5), lerp(lastKf(a)[2], lL, 0.6), 0, 'run'));
+        if (rec) { kf(rec, 2.55, lx, lL, 0, 'io'); hold(2.6, rec); }
+        say(2.6, ours ? 'Onside kick recovered!' : 'Onside kick: they recover', ours === (e.team === G.me) ? 'good' : 'hit', { x: lx, L: lL });
+        P.T = 3.3;
       } else {
-        const land = dir > 0 ? 97 : 3, lx = clampX(180 + jit(40));
-        fly(0.3, 1.55, bx, L0, lx, land, 3);
-        const Lr = e.retTd ? (dir > 0 ? -3 : 103) : Lnew;
-        const t2 = 1.55 + 0.25 + Math.abs(land - Lr) * 0.025;
-        fly(1.55, t2, lx, land, clampX(lx + jit(40)), Lr, 0.05);
-        rest(t2, clampX(lx + jit(40)), Lr);
+        // the kick hangs about four seconds; nobody but the returners moves until it is caught (2024 rules)
+        if (kicker) kf(kicker, 0.7, bx, fwd(L0, -0.3), 0, 'in');
+        const land = dir > 0 ? 97 : 3, lx = clampX(180 + jit(40)), tL = 4.6;
+        fly(0.7, tL, bx, L0, lx, land, 3);
+        const ret = near(deep, lx, land) || deep[0];
+        const lead = deep.find((a) => a !== ret);
+        if (ret) kf(ret, tL, lx, land, 0, 'io');
+        const Lr = e.retTd ? (dir > 0 ? -3 : 103) : Lnew, xr = clampX(lx + jit(40));
+        const t2 = tL + 0.3 + runTime(land - Lr) + (e.retTd ? 0 : CONTACT);
+        if (ret) { hold(tL, ret); kf(ret, t2, xr, Lr, 0, e.retTd ? 'dash' : 'run'); }
+        if (lead) kf(lead, t2, clampX(xr + 20), lerp(land, Lr, 0.9) - dir * 3, 0, 'run');
+        cover.forEach((a) => kf(a, tL, a.x0, a.L0, 0));
+        front.forEach((a) => kf(a, tL, a.x0, a.L0, 0));
+        const tacklers = new Set(e.retTd ? [] : cover.slice().sort((a, b) => Math.abs(a.x0 - xr) - Math.abs(b.x0 - xr)).slice(0, 2));
+        cover.forEach((a, i) => kf(a, t2, tacklers.has(a) ? xr + (i % 2 ? -7 : 7) : clampX(lerp(a.x0, xr, 0.6)),
+          tacklers.has(a) ? Lr + dir * 0.6 : lerp(a.L0, Lr, 0.8), 0, 'run'));
+        front.forEach((a) => kf(a, t2, clampX(lerp(a.x0, xr, 0.4)), lerp(a.L0, Lr, 0.7) - dir * 2, 0, 'run'));
+        if (!e.retTd && ret) down(t2 + 0.08, ret);
         say(t2, e.retTd ? 'Kick return touchdown!' : `${teamName(code(res.root.pos))} ball at ${spotText(res.root)}`,
           e.retTd ? (e.team === G.me ? 'hit' : 'good') : 'info', { x: 180, L: Lr });
-        P.T = t2 + 0.4;
+        P.T = t2 + 0.5;
       }
     } else return null;
 
@@ -910,19 +1028,31 @@
     return P;
   }
 
-  function runPlan(sc, P, speed) {
-    const ZI = 0.45, ZO = 0.4, total = ZI + P.T + P.hold + ZO;
+  // clk: the game clock before the step (t0), at the snap and after the play; the time that runs off before
+  // the snap ticks away first (fast, while the players set), then the play's own time as it is run
+  function runPlan(sc, P, speed, clk) {
+    const runoff = clk ? Math.max(0, clk.t0 - clk.snap) : 0;
+    const PRE = runoff >= 1 ? clip(0.4 + runoff / 30, 0.55, 1.5) : 0;
+    const ZI = 0.6, ZO = 0.5, total = PRE + ZI + P.T + P.hold + ZO;
+    const ck = clk ? document.querySelector('#bar .clk') : null;
     return new Promise((resolve) => {
       let start = null, skip = false;
       const onTap = () => { skip = true; };
+      sc.calls.forEach((c) => c.g.remove());        // a pre-play label ("Kickoff") gives way to the play's own call-outs
+      sc.calls = [];
       sc.svg.classList.add('playing');
       sc.svg.addEventListener('click', onTap);
       const frame = (now) => {
         if (start === null) start = now;
-        const t = skip ? total : ((now - start) / 1000) * speed;
-        const k = EASE.io(clip(t / ZI, 0, 1)) * (1 - EASE.io(clip((t - ZI - P.T - P.hold) / ZO, 0, 1)));
+        const t = skip ? total : ((now - start) / 1000) * speed, tt = t - PRE;
+        const k = EASE.io(clip(tt / ZI, 0, 1)) * (1 - EASE.io(clip((tt - ZI - P.T - P.hold) / ZO, 0, 1)));
         sc.cam = { lo: lerp(FULL.lo, P.cam.lo, k), hi: lerp(FULL.hi, P.cam.hi, k) };
-        const tp = clip(t - ZI, 0, P.T);
+        const tp = clip(tt - ZI, 0, P.T);
+        if (ck) {
+          const gt = t < PRE ? lerp(clk.t0, clk.snap, EASE.io(t / PRE)) : lerp(clk.snap, clk.end, clip((tt - ZI) / (P.T + P.hold), 0, 1));
+          ck.textContent = clockOf(Math.max(gt, clk.end)).text;
+          ck.classList.toggle('tick', t < PRE);
+        }
         sc.actors.forEach((a) => { const p = at(a, tp); a.x = p.x; a.L = p.L; a.w = p.w; });
         Object.assign(sc.ball, ballAt(sc, P, tp));
         P.calls.forEach((c) => { if (!c.shown && tp >= c.t) { c.shown = true; showCall(sc, c); } });
@@ -931,6 +1061,7 @@
         if (t >= total) {
           sc.svg.removeEventListener('click', onTap);
           sc.svg.classList.remove('playing');
+          if (ck) ck.classList.remove('tick');
           resolve();
         } else requestAnimationFrame(frame);
       };
@@ -958,7 +1089,9 @@
     } catch (err) { console.warn('animation skipped:', err); P = null; }
     scene = sc;
     if (!P) return false;
-    await runPlan(sc, P, PLAY_SPEED * (e.team === G.me ? 1 : 1.25));
+    const ro = res.log.find((x) => x.ev === 'runoff');
+    const clk = { t0: before.t, snap: ro ? ro.t : before.t, end: Math.min(res.root.t, ro ? ro.t : before.t) };
+    await runPlan(sc, P, PLAY_SPEED, clk);
     fadeNext = true;
     lastBall = null;
     return true;
@@ -1154,7 +1287,7 @@
       const actor = c.id.startsWith('rb_') ? nm.rb : nm.qb;
       what = `${c.id === 'trick' ? `The ${who} run a trick play` : `${actor || `The ${who}`} ${c.say}`}${mine ? lookText(e.look) : ''}`;
     } else what = `${nm.qb || who} ${e.kind === RUN ? 'hands off' : 'drops back'}`;
-    const y = Math.round(e.yards);
+    const y = Math.round(e.td && !e.turnover ? e.yl : e.yards);      // a touchdown gains the distance to the goal line
     const gain = y > 0 ? `${y} yard${y === 1 ? '' : 's'}` : y < 0 ? `loss of ${-y}` : 'no gain';
     let res;
     if (e.penalty) res = `flag, ${e.pen || 'penalty'}: ${y >= 0 ? `+${y}` : y} yards`;
@@ -1340,7 +1473,7 @@
     const lp = G.lastPlay;
     if (busy || !lp) return;
     busy = true;
-    try { await animatePlay(lp.before, lp.res, lp.side, true); } finally { busy = false; drawField(); }
+    try { await animatePlay(lp.before, lp.res, lp.side, true); } finally { busy = false; drawBar(); drawField(); }
   }
 
   // your ball: Run / Pass / RPO, plus a timeout, spike, kneel or kick when it matters
@@ -1349,7 +1482,7 @@
     status('Breaking the huddle…');
     G.info = (await send({ type: 'info', scen: simScen(), root: r })).info;
     G.fast = false;
-    ui = { step: 'family', fam: null, oob: false };
+    ui = { step: 'family', fam: null, oob: false, tempo: tempoKeyOf(G.info.tempo) };
     drawDock();
   }
   // kneel: ahead late, or ending the first half; timeout and spike: when you need the time
@@ -1364,7 +1497,7 @@
   function clockOptions(r) {      // with the clock running
     const me = G.me, lead = r.score[me] - r.score[1 - me];
     const needTime = r.t > 1800 || lead <= 0;
-    const keys = ['play'];
+    const keys = TEMPOS.slice();
     if (r.to[me] > 0 && needTime) keys.push('timeout');
     if (r.down <= 3 && needTime && halfLeft(r.t) <= 180) keys.push('spike');
     if (canKneel(r)) keys.push('kneel');
@@ -1392,6 +1525,7 @@
     d.append(head);
     if (ui.step === 'family') {
       head.append(el('h2', '', 'Your call'), el('span', 'sub', `${ddText(r)} · ${spotText(r)}`));
+      if (r.clock_running) d.append(tempoPicker(r));
       const fam = el('div', 'keys');
       fam.style.setProperty('--cols', 3);
       Object.entries(FAM).forEach(([f, label], i) => {
@@ -1402,7 +1536,7 @@
       d.append(fam);
       const extra = [];
       if (r.clock_running) {
-        clockOptions(r).filter((k) => k !== 'play').forEach((k) => extra.push([k, CLOCK[k].label, k === 'timeout' ? `${r.to[me]} left` : null]));
+        clockOptions(r).filter((k) => !TEMPOS.includes(k)).forEach((k) => extra.push([k, CLOCK[k].label, k === 'timeout' ? `${r.to[me]} left` : null]));
       }
       const { specials } = callOptions(r);
       specials.forEach((k) => extra.push([k, specialLabel(k), k === 'fg' ? `${Math.round(G.info.fgDist)} yards` : null]));
@@ -1425,6 +1559,7 @@
     }
     // the plays in the chosen family: one row per play, a key per side (arrows match the field)
     head.append(el('h2', '', FAM[ui.fam]));
+    if (r.clock_running) head.append(el('span', 'sub', CLOCK[ui.tempo].short));
     const back = el('button', 'chip', '◀ Back');
     back.type = 'button';
     back.addEventListener('click', () => { ui.step = 'family'; drawDock(); });
@@ -1470,16 +1605,42 @@
     requestAnimationFrame(() => tg.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' }));
   }
 
+  // how fast to get to the next snap while the clock runs: no-huddle, huddle or milk it
+  function tempoPicker(r) {
+    const w = el('div', 'tempo');
+    w.append(el('span', 'lab', 'Tempo'));
+    const seg = el('div', 'seg');
+    seg.setAttribute('role', 'radiogroup');
+    seg.setAttribute('aria-label', 'Tempo: how much clock runs before the snap');
+    TEMPOS.forEach((k) => {
+      const b = el('button', 'segb');
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      const secs = tempoSecs(k, r);
+      b.append(el('b', '', CLOCK[k].short), el('small', '', secs ? `about ${Math.round(secs)} s` : ''));
+      const mark = () => seg.querySelectorAll('.segb').forEach((x, i) => {
+        x.classList.toggle('on', TEMPOS[i] === ui.tempo); x.setAttribute('aria-checked', String(TEMPOS[i] === ui.tempo));
+      });
+      b.addEventListener('click', () => { if (!busy) { ui.tempo = k; mark(); } });
+      seg.append(b);
+      if (k === TEMPOS[TEMPOS.length - 1]) requestAnimationFrame(mark);
+    });
+    w.append(seg);
+    return w;
+  }
+
   function situation(r) { return `${clockOf(r.t).text} Q${clockOf(r.t).q}, ${ddText(r)} ${onSpot(r)}`; }
   async function clockDecision(r, chosen) {
     const me = G.me, lead = r.score[me] - r.score[1 - me];
-    const opts = clockOptions(r).map((k) => ({ key: k, label: CLOCK[k].label, action: CLOCK[k].act }));
+    const opts = clockOptions(r).map((k) => ({ key: k, label: CLOCK[k].label, action: clockAct(k, r) }));
     status('Simulating every clock option 600 times…');
     const vals = await evaluate(r, opts, hash('clock', dayN, G.si, G.seq));
     let q = coachProbs('off_clock_stop', r, me);
     if (lead > 0 && r.t <= 1800) q = { play: 0.9, timeout: 0.03, kneel: 0.07 };
-    else if (q) q = { play: (q.hurry || 0) + (q.normal || 0) + (q.milk || 0) + (q.huddle || 0) + (q.rundown || 0), timeout: q.timeout || 0, spike: q.spike || 0 };
+    else if (q) q = { play: q.hurry || 0, timeout: q.timeout || 0, spike: q.spike || 0 };
     else q = { play: 0.8, timeout: 0.14, spike: 0.06 };
+    q[tempoKeyOf(G.info.tempo)] = q.play;          // snapping it, a typical play-caller goes at the usual tempo here
+    delete q.play;
     return decisionFrom('clock', 'off_clock_stop', opts, vals, chosen, q, situation(r));
   }
   async function decideTimeout() {
@@ -1513,18 +1674,19 @@
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
     busy = false;
   }
-  function callAction(id, oob) { return { to_off: false, play: CALL[id].kind, call: id, oob: !!oob }; }
+  const withTempo = (a) => (G.root.clock_running && ui && ui.tempo ? { ...a, tempo: engineTempo(ui.tempo, G.root) } : a);
+  function callAction(id, oob) { return withTempo({ to_off: false, play: CALL[id].kind, call: id, oob: !!oob }); }
   async function decideCall(pick) {
     if (busy) return;
     busy = true;
     const r = G.root, me = G.me;
     try {
       const decisions = [];
-      if (r.clock_running) decisions.push(await clockDecision(r, 'play'));
+      if (r.clock_running) decisions.push(await clockDecision(r, ui.tempo));
       const { calls, specials } = callOptions(r);
       const opts = calls.map((id) => ({ key: id, label: CALL[id].label, action: callAction(id, false) }));
       if (pick.call && ui.oob) opts.push({ key: `${pick.call}+oob`, label: `${CALL[pick.call].label}, get out of bounds`, action: callAction(pick.call, true) });
-      specials.forEach((k) => opts.push({ key: k, label: specialLabel(k), action: { to_off: false, play: k } }));
+      specials.forEach((k) => opts.push({ key: k, label: specialLabel(k), action: withTempo({ to_off: false, play: k }) }));
       status(`Simulating all ${opts.length} calls 600 times each…`);
       const vals = await evaluate(r, opts, hash('call', dayN, G.si, G.seq));
       const q = {};
@@ -1876,7 +2038,7 @@
     [
       'Read the situation, tap Next, and the field opens: their end zone at the top, yours at the bottom.',
       'Every dot is a player on today\'s roster, everyone healthy: green is good, red is not. Tap one to see what kind of player he is (mobile QB, blocking tight end…) and his numbers.',
-      'Call Run, Pass or RPO, then the play. Timeout, spike, kneel and kicks pop up when they matter.',
+      'Call Run, Pass or RPO, then the play. With the clock running, pick the tempo too: no-huddle, huddle, or milk it. Timeout, spike, kneel and kicks pop up when they matter.',
       'Every snap is a real NFL play, run out on the field: broken tackles, sacks, picks, fumbles and flags all happen. Tap the field to skip ahead.',
     ].forEach((t) => ul.append(el('li', '', t)));
     openModal('How to play', [
@@ -1920,6 +2082,8 @@
 
   // ----------------------------------------------------------------- boot ---
   async function boot() {
+    const topH = () => document.documentElement.style.setProperty('--top-h', `${document.querySelector('.top').offsetHeight}px`);
+    topH(); addEventListener('resize', topH);
     $('helpBtn').addEventListener('click', openHelp);
     $('statsBtn').addEventListener('click', openStats);
     $('bar').addEventListener('click', () => { if (G) spotInfo(); });

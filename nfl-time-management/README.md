@@ -284,13 +284,32 @@ see below), where it ranks among today's starters at his position, his stat line
 or pocket quarterback, a blocking, possession or vertical-threat tight end, a power, elusive or receiving
 back, and so on), each type assigned by a rule on the stat that defines it (`archetypes.py`).
 Play-calling is a pop-up of **Run**, **Pass** and **RPO**, then the play and its side; a timeout,
-spike, kneel, field goal or punt only appears when it matters. Every snap is then run out on the field:
-the camera zooms in like a broadcast, the dots move (the handoff or the drop, the routes, the rush, the
-throw at the real play's air yards, the run after the catch, the pursuit and the tackle), and what
-happened is called out where it happened: broken tackle, tackled, out of bounds, sacked, strip-sack,
-intercepted, pick-six, fumble, dropped, thrown away, flag, touchdown, first down, field goal good or
-no good. Play-by-play does not chart broken tackles, so Pro Football Reference's per-game count for a
-player is credited to his longest carries or catches of that game. Nothing says which call is best until
+spike, kneel, field goal or punt only appears when it matters. With the clock running you also pick the
+**tempo**: no-huddle (about 16 s between snaps), huddle (about 34 s) or milk it (about 38 s), the engine's
+measured gaps between snaps; the usual tempo for the spot is preselected, and the tempo is graded with
+the timeout, spike and kneel options. Every snap is then run out on the field in real time: the
+scoreboard clock ticks off the time before the snap, the camera zooms in like a broadcast, and the dots
+move at NFL speed (the snap reaches the QB in a quarter second, passes come out 1.35 s after an RPO
+snap to 4.3 s for a Hail Mary, the ball flies about 24 yards a second, ball carriers average 4.5 yards a
+second in traffic and 8 in the open with a top speed near 10, sacks land about 3.2 s after the snap,
+punts and kickoffs hang about 4 s). Punts, field goals and extra points shift into their formations
+before the snap, and kickoffs line up the 2024 way (the kicking team at the receiving 40, nine in the
+setup zone, two returners deep, nobody moving until the catch); special-teams units are drawn in team
+colors. What happened is called out where it happened: broken tackle, tackled, out of bounds, sacked,
+strip-sack, intercepted, pick-six, fumble, dropped, thrown away, flag, touchdown, first down, field goal
+good or no good. Play-by-play does not chart broken tackles, so Pro Football Reference's per-game count
+for a player is credited to his longest carries or catches of that game.
+
+Real plays are pooled by situation, and a rare call's pool can span the field, so a play keeps only what
+still fits where it is drawn: a touchdown if it covered at least 60% of the way, a safety only if the
+loss reaches the end zone (in both engines: the 80-99 field zone used to turn a goal-line safety into
+two points from the 20 on about 1 snap in 500). Snaps that are not offensive calls are left out of the
+playbook: fakes and punter runs from punt or field-goal formation, intentional safeties (Philadelphia's
+punter running 34 yards back into his end zone to burn the clock in 2025) and lateral chains. An engine
+sweep over every spot, call and tempo (`node web/game_sweep.js`: about 290,000 snaps and 1,450 whole
+games) checks the football on every step: the clock never runs up, scores move by 1, 2, 3, 6, 7 or 8,
+no touchdown without the distance, no safety without the end zone, downs, distances and yard lines in
+range. Nothing says which call is best until
 after the snap; then every decision is graded in win probability against all the alternatives and
 against what a typical NFL play-caller does there. Each spot and the day end with the head coach whose
 late-game calls look most like yours ("You called this one like Nick Sirianni"), from 59 coaches'

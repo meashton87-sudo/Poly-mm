@@ -625,7 +625,6 @@ class Simulator:
         td_def = g("td_def").astype(bool)
         turnover = g("turnover").astype(bool)
         to_rel = g("to_rel").astype(float)
-        safety = g("safety").astype(bool)
         dur = g("duration").astype(float)
         kn = kind == KNEEL
         sp = kind == SPIKE
@@ -644,7 +643,8 @@ class Simulator:
 
         new_yl = yl0 - yards
         td_off = td_off | (~turnover & ~penalty & (new_yl <= 0))
-        safety = safety | (~turnover & ~td_off & (new_yl >= 100))
+        # a safety is where the play ends: a library safety from the 1 drawn at the 11 is a loss of a yard
+        safety = ~turnover & ~td_off & (new_yl >= 100)
         # turnover spots, in the new offense's frame
         to_yl = 100 - (yl0 - to_rel)
         td_def = td_def | (turnover & (to_yl <= 0))

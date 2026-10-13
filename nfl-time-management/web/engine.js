@@ -50,6 +50,7 @@
   // ~3 s left and kicks. The defense spends its timeouts to save time for a reply.
   const CLOSE_FG_P = 0.5, CLOSE_WINDOW = 180.0, CLOSE_END = 45.0, CLOSE_KICK_AT = 3.0;
   const CLOSE_SNAP_FLOOR = 12.0, CLOSE_DEF_WINDOW = 120.0;
+  const PB_TD_SHARE = 0.6;            // daily game: a playbook touchdown drawn farther out scores only if it covered 60% of the way
   const TEMPO = { hurry: HURRY, normal: NORMAL, milk: MILK, urgent: URGENT };
   const SNAP = 0, PAT = 1, KICKOFF = 2, DONE = 3;
   const MODE_NORMAL = 0, MODE_HURRY = 1, MODE_KILL = 2;
@@ -471,6 +472,32 @@
     }
 
     // The two numbers a coach asks for on 4th down: conversion chance and field-goal make chance.
+    // Daily game: the tempo the offense would use on its next snap with the clock running ('urgent',
+    // 'hurry', 'normal' or 'milk'); mirrors steps (1)-(2) of _snap without the live tool's first-half strategy
+    defaultTempo(root) {
+      const o = root.pos, half = root.t > 1800 ? 1 : 2, tHalf = root.t - (half === 1 ? 1800 : 0);
+      const margin = root.score[o] - root.score[1 - o], yl = root.yl, offTo = root.to[o];
+      let hurry, urgent, milk;
+      if (half === 2) {
+        const closing = margin >= -2 && margin <= 0 && tHalf <= CLOSE_WINDOW && offTo > 0 &&
+          this.fgProb(yl + FG_SNAP_YARDS, o) >= CLOSE_FG_P;
+        hurry = ((margin < 0 && tHalf <= 300) || (margin <= -9 && tHalf <= 600) || (margin === 0 && yl <= 80 && tHalf <= 75)) && !closing;
+        urgent = hurry && tHalf <= 120;
+        milk = (margin > 0 && tHalf <= 600) || (margin === 0 && tHalf <= 240 && !hurry) || closing;
+      } else {
+        const attempt = (yl - 35.0) <= 0.6 * (tHalf + 20.0 * offTo);
+        hurry = tHalf <= 120 && attempt; urgent = hurry && tHalf <= 60; milk = tHalf <= 120 && !attempt;
+      }
+      return urgent ? 'urgent' : hurry ? 'hurry' : milk ? 'milk' : 'normal';
+    }
+
+    // Daily game: typical seconds between snaps with the clock running, by tempo
+    tempoSeconds() {
+      const med = (f) => { const a = Array.from(f).sort((x, y) => x - y); return a[a.length >> 1]; };
+      return { urgent: med(this.e.tempo[URGENT]), hurry: med(this.e.tempo[HURRY]), normal: med(this.e.tempo[NORMAL]),
+        milk: med(this.e.tempo[MILK]) };
+    }
+
     fourthInfo(root) {
       const o = root.pos, half = root.t > 1800 ? 1 : 2, tHalf = root.t - (half === 1 ? 1800 : 0);
       const margin = root.score[o] - root.score[1 - o], yl = root.yl;
@@ -838,7 +865,9 @@
       if (pbRow >= 0) {   // a specific call from the playbook (daily game)
         const P = this.e.pb, f = P.flags[pbRow];
         yards = P.yards[pbRow]; penalty = !!(f & 1); autoFd = !!(f & 2); incomplete = !!(f & 4); oob = !!(f & 8);
-        tdOff = !!(f & 16); tdDef = !!(f & 32); turnover = !!(f & 64); safety = !!(f & 128);
+        // a real play drawn away from its own spot keeps only what still fits here: a touchdown if it covered most
+        // of the way (PB_TD_SHARE), a safety only if the loss reaches the end zone (from the spot, below)
+        tdOff = !!(f & 16) && yards >= PB_TD_SHARE * yl0; tdDef = !!(f & 32); turnover = !!(f & 64);
         toRel = P.toRel[pbRow]; dur = P.dur10[pbRow] / 10;
       } else if (kind === RUN || kind === PASS) {
         // running the clock down for a kick: the clock-killing play mix
@@ -855,7 +884,7 @@
         }
         const f = L.flags[row];
         yards = L.yards[row]; penalty = !!(f & 1); autoFd = !!(f & 2); incomplete = !!(f & 4); oob = !!(f & 8);
-        tdOff = !!(f & 16); tdDef = !!(f & 32); turnover = !!(f & 64); safety = !!(f & 128);
+        tdOff = !!(f & 16); tdDef = !!(f & 32); turnover = !!(f & 64);
         toRel = L.toRel[row]; dur = L.dur10[row] / 10;
       }
       if (kind === KNEEL) { yards = -Math.min(1.0, 99.0 - yl0); dur = this.kneelDur; }
@@ -867,7 +896,8 @@
       if (penalty && yards < 0) yards = -Math.min(-yards, (100 - yl0) / 2);
       const newYl = yl0 - yards;
       tdOff = tdOff || (!turnover && !penalty && newYl <= 0);
-      safety = safety || (!turnover && !tdOff && newYl >= 100);
+      // a safety is where the play ends: a library safety from the 1 drawn at the 11 is a loss of a yard
+      safety = !turnover && !tdOff && newYl >= 100;
       let toYl = 100 - (yl0 - toRel);
       tdDef = tdDef || (turnover && toYl <= 0);
       toYl = toYl >= 100 ? 80 : clip(toYl, 1, 99);

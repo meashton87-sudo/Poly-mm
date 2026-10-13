@@ -152,6 +152,13 @@ def labeled_plays(seasons=SEASONS, seed: int = 11) -> pd.DataFrame:
     s = pbp[pbp["is_snap"] & pbp["season"].isin(seasons) & pbp["down"].notna() & pbp["epa"].notna()].copy()
     s = s[s["play_type"].isin(["run", "pass"]) | ((s["play_type"] == "no_play") & s["penalty"].fillna(0).eq(1))]
     s = s[s["two_point_attempt"].fillna(0) == 0]
+    # not offensive calls: fakes and punter runs from punt or field-goal formation, intentional safeties (a
+    # runner taking it out the back of the end zone to burn the clock: PHI's punter for -34 yards in 2025)
+    # and lateral chains, which would otherwise be drawn as an ordinary run or pass
+    desc = s["desc"].fillna("")
+    special = desc.str.contains(r"\((?:Punt|Field Goal) formation\)", case=False, regex=True)
+    intentional = (s["safety"].fillna(0) == 1) & (s["play_type"] == "run") & (s["yards_gained"].fillna(0) <= -8)
+    s = s[~(special | desc.str.contains("Lateral", case=False) | intentional)]
     s = s.merge(_extras(seasons), on=["game_id", "play_id"], how="left")
     s = s.merge(_ftn(seasons), on=["game_id", "play_id"], how="left")
     for c in FTN_FLAGS:

@@ -199,3 +199,13 @@ def test_out_of_bounds_window_judged_at_the_end_of_the_play(sim):
     inside = (S.pos == 0) & (S.t < 300)
     assert inside.sum() > 1000
     assert not (S.running & (S.credit == sim.oob_credit) & inside).any()
+
+
+@needs_bundle
+def test_no_safety_unless_the_play_ends_in_the_end_zone(sim):
+    """Library plays are pooled by field zone (the 80-99 zone mixes the 1-yard line with the 20): a real safety
+    drawn at the 20 is a short loss, not two points. Before this rule 85 of 40,000 snaps from the 20 were safeties."""
+    from nflclock.sim import RootState
+    root = RootState(t=1500, pos=0, score=(10, 10), down=1, ytg=10, yl=80, to=(3, 3))
+    _, S = sim.run(root, n=40000, perspective=0, seed=4, max_steps=1, return_state=True)
+    assert int(((S.score[:, 1] - 10) == 2).sum()) <= 2      # only a 20-yard loss could do it
