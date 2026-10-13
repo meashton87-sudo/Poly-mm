@@ -2484,11 +2484,13 @@
   }
 
   async function finishSpot() {
-    if (!G.result) {
+    if (!G.result || (G.result.half === 1 && G.result.v !== 2)) {      // v2: halftime valued at halftime
       status('Final whistle…');
       const r = G.root;
-      const v = await evaluate(r, [{ key: 'end', action: {} }], 1);
-      G.result = { wp: v.end, mine: r.score[G.me], theirs: r.score[1 - G.me], half: r.t >= 1800 ? 1 : 2 };
+      // the end of the first half is t = 1800, which the engine reads as the second half (a finished game: any lead
+      // a sure win); a hair earlier it values halftime with its win model: score, spread, who gets the ball
+      const v = await evaluate(r.t >= 1800 ? { ...r, t: 1800.01 } : r, [{ key: 'end', action: {} }], 1);
+      G.result = { wp: v.end, mine: r.score[G.me], theirs: r.score[1 - G.me], half: r.t >= 1800 ? 1 : 2, v: 2 };
       G.over = true;
       persist();
     }
