@@ -37,6 +37,7 @@
   const BURN_SECONDS = 8.0;            // leading in the last seconds: any snap is played to run out the clock
   const FIRE_DRILL = [7.0, 12.0];      // seconds to rush the field-goal unit on with the clock running
   const FIRE_DRILL_LOGIT = -0.3;       // rushed kicks are a little less accurate
+  const FIRE_WINDOW = 25.0;            // seconds left in the half below which a kick with the clock running is a fire drill
   // Clock-aware play calls when the offense needs the clock stopped and has no timeouts (2020-25 data):
   // a pass that would end in bounds with a gain is kept with this probability, otherwise redrawn from the
   // same pool's incompletions / catches out of bounds; and the pass rate rises from ~81% to ~95%.
@@ -572,9 +573,10 @@
       if (forced !== undefined) { kneelNow = forced === 'kneel'; spikeNow = forced === 'spike' && runC; }
       // 4th down with the clock running and a kick that ties or wins: rush the field-goal unit on
       const fgUseful0 = half === 1 || (margin >= -3 && margin <= 0);
-      let fire = runC && down === 4 && fgUseful0 && this.fgProb(yl + FG_SNAP_YARDS, o) >= 0.3 && tHalf <= 25;
+      let fire = runC && down === 4 && fgUseful0 && this.fgProb(yl + FG_SNAP_YARDS, o) >= 0.3 && tHalf <= FIRE_WINDOW;
       fire = fire && !kneelNow && !spikeNow;
-      if (forced !== undefined) fire = runC && forced === 'fg';
+      // with time to spare a forced kick is set up normally, not rushed
+      if (forced !== undefined) fire = runC && forced === 'fg' && tHalf <= FIRE_WINDOW;
       tempo = kneelNow ? T_KNEEL : spikeNow ? T_SPIKE : fire ? T_FIRE : tempo;
       let runoff;
       if (tempo === T_KNEEL) runoff = 38.0 + 2.0 * u[0];
@@ -749,7 +751,8 @@
       const onDowns = !fd && newDown > 4 && !turnover && !tdOff && !safety && !tdDef;
       const change = turnover || onDowns;
       const scorePlay = tdOff || tdDef || safety;
-      const inWin = (S.t - g.halfEnd) <= g.oobWindow;
+      // the out-of-bounds window is judged where the play ends, not at the snap
+      const inWin = (S.t - dur - g.halfEnd) <= g.oobWindow;
       const stop = incomplete || (oob && inWin) || (penalty && inWin) || change || scorePlay;
       const credit = oob ? this.oobCredit : (penalty ? this.penCredit : 0);
       this._clockAfterPlay(S, g, dur, stop, credit);
