@@ -172,3 +172,30 @@ def test_kick_to_win_runs_the_clock_down(sim):
     assert (scored == 3).mean() > 0.6           # the kick happens and is usually good
     assert d.t.mean() < 2.0                    # with essentially nothing left for the opponent
     assert (d.to[:, 0] == 0).mean() > 0.9      # the timeout was spent stopping the clock for it
+
+
+@needs_bundle
+def test_forced_kick_with_time_to_spare_is_not_a_fire_drill(sim):
+    """4th down at 8:00 with the clock running: a forced field goal is kicked as accurately as from a stopped clock."""
+    from nflclock.sim import RootState
+    made = {}
+    for running in (False, True):
+        root = RootState(t=480, pos=0, score=(17, 17), down=4, ytg=5, yl=27, to=(3, 3), clock_running=running)
+        d = sim.run(root, n=4000, action={"play": "fg", "to_off": False}, perspective=0, seed=3, drive_only=True)
+        made[running] = (d.score[:, 0] == 20).mean()
+    assert made[True] == pytest.approx(made[False])
+    # inside the fire-drill window the rushed kick is still a little less accurate
+    root = RootState(t=20, pos=0, score=(17, 17), down=4, ytg=5, yl=27, to=(0, 0), clock_running=True)
+    rushed = sim.run(root, n=4000, action={"play": "fg"}, perspective=0, seed=3, drive_only=True)
+    assert (rushed.score[:, 0] == 20).mean() < made[False]
+
+
+@needs_bundle
+def test_out_of_bounds_window_judged_at_the_end_of_the_play(sim):
+    """Snap at 5:03 of the 4th quarter: a play that goes out of bounds inside 5:00 stops the clock until the snap."""
+    from nflclock.sim import RootState
+    root = RootState(t=303, pos=0, score=(17, 20), down=1, ytg=10, yl=60, to=(3, 3))
+    _, S = sim.run(root, n=4000, action={"play": "pass"}, perspective=0, seed=1, max_steps=1, return_state=True)
+    inside = (S.pos == 0) & (S.t < 300)
+    assert inside.sum() > 1000
+    assert not (S.running & (S.credit == sim.oob_credit) & inside).any()

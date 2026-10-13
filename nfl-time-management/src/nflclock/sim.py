@@ -34,6 +34,7 @@ BURN_SECONDS = 8.0           # leading in the last seconds: any snap is played t
 FIRE_DRILL = (7.0, 12.0)     # seconds to rush the field-goal unit on with the clock running
 KNEEL_RUNOFF = (38.0, 40.0)  # seconds run off between kneels (40 s play clock, snapped with 0-2 s left)
 FIRE_DRILL_LOGIT = -0.3      # rushed kicks are a little less accurate
+FIRE_WINDOW = 25.0           # seconds left in the half below which a kick with the clock running is a fire drill
 # Clock-aware play calls when the offense needs the clock stopped and has no timeouts (2020-25 data):
 # a pass that would end in bounds with a gain is kept with this probability, otherwise redrawn from the
 # same pool's incompletions / catches out of bounds; and the pass rate rises from ~81% to ~95%.
@@ -397,10 +398,10 @@ class Simulator:
             spike_now[:] = (forced == "spike") & run_c
         # 4th down with the clock running and a kick that ties or wins: rush the field-goal unit on
         fg_useful0 = (half == 1) | ((margin >= -3) & (margin <= 0))
-        fire = run_c & (down == 4) & fg_useful0 & (self.fg_prob(yl + FG_SNAP_YARDS, o) >= 0.3) & (t_half <= 25)
+        fire = run_c & (down == 4) & fg_useful0 & (self.fg_prob(yl + FG_SNAP_YARDS, o) >= 0.3) & (t_half <= FIRE_WINDOW)
         fire &= ~kneel_now & ~spike_now
-        if forced is not None:
-            fire = run_c & (forced == "fg")
+        if forced is not None:   # with time to spare a forced kick is set up normally, not rushed
+            fire = run_c & (forced == "fg") & (t_half <= FIRE_WINDOW)
         tempo = np.where(kneel_now, T_KNEEL, np.where(spike_now, T_SPIKE, np.where(fire, T_FIRE, tempo)))
         runoff = np.zeros(ix.size)
         for tm, arr in self.tempo.items():
@@ -579,9 +580,6 @@ class Simulator:
         S.running[ix] = ~(stop_flags | cross_tmw | cross_q)
         S.credit[ix] = np.where(S.running[ix], credit, 0.0)
 
-    def _in_window(self, S, ix):
-        return (S.t[ix] - self.half_end) <= self.oob_window
-
     def _scrimmage(self, S, u, ix, o, kind, margin, aware=None, closing=None):
         d = 1 - o
         n = ix.size
@@ -657,8 +655,9 @@ class Simulator:
         on_downs = ~fd & (new_down > 4) & ~turnover & ~td_off & ~safety & ~td_def
         change = turnover | on_downs
         score_play = td_off | td_def | safety
-        in_win_before = self._in_window(S, ix)
-        stop = incomplete | (oob & in_win_before) | (penalty & in_win_before) | change | score_play
+        # the out-of-bounds window is judged where the play ends, not at the snap
+        in_win = (S.t[ix] - dur - self.half_end) <= self.oob_window
+        stop = incomplete | (oob & in_win) | (penalty & in_win) | change | score_play
         credit = np.where(oob, self.oob_credit, np.where(penalty, self.pen_credit, 0.0))
         self._clock_after_play(S, ix, dur, stop, credit)
 
