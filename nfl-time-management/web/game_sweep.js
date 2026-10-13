@@ -53,6 +53,24 @@ function check(before, r, tag) {
     if (e.incomplete && y !== 0 && !e.penalty) flag('incomplete with yards', `${tag} ${y}`);
   }
 }
+// a play drawn against a look (a mask of lookBucket values) should have been run against it, unless the call has too
+// few such plays here and the engine falls back to all of them
+function lookHit(r, mask) {
+  if (!mask || !P.lookB) return;
+  const e = r.log.find((x) => x.ev === 'play' && x.row >= 0);
+  if (!e) return;
+  count(`look asked`);
+  if ((mask >> P.lookB[e.row]) & 1) count('look matched');
+}
+// kickoffs: through the end zone is a touchback at the 35; to the returner is never one
+function kickCheck(r, kick, tag, free) {
+  const e = r.log.find((x) => x.ev === 'kickoff');
+  if (!e || e.onside) return;
+  count(`kick ${kick}`);
+  if (kick === 'touchback' && !free && !(e.tb && Math.round(e.yl) === 65)) flag('touchback not at the 35', `${tag} ${JSON.stringify(e)}`);
+  if (kick === 'return' && e.tb && Math.round(e.yl) === 65) flag('return kick came out a touchback', `${tag} ${JSON.stringify(e)}`);
+  if (e.retTd) count('kick return TDs');
+}
 let steps = 0, t0 = Date.now();
 // 1) every spot x every call x seeds, from the spot's start (our ball spots) and from a few synthetic states
 idx.spots.forEach((sp, si) => {
@@ -65,9 +83,11 @@ idx.spots.forEach((sp, si) => {
       for (let s = 0; s < SEEDS; s++) {
         const before = JSON.parse(JSON.stringify(rt));
         const tempo = ['urgent', 'hurry', 'normal', 'milk'][s % 4];
-        const r = sim.step(rt, { action: { to_off: false, play: P.calls[ci].kind, call: id, oob: s % 3 === 0, tempo: rt.clock_running ? tempo : undefined }, seed: si * 1000 + ci * 37 + s * 7919 + vi });
+        const looks = s % 2 ? 1 << ((s >> 1) % 4) : 0;     // half the snaps against one defensive look
+        const r = sim.step(rt, { action: { to_off: false, play: P.calls[ci].kind, call: id, oob: s % 3 === 0, tempo: rt.clock_running ? tempo : undefined, looks }, seed: si * 1000 + ci * 37 + s * 7919 + vi });
         steps++;
         check(before, r, `spot ${si} v${vi} ${id} s${s}`);
+        lookHit(r, looks);
       }
     });
   });
@@ -86,13 +106,15 @@ idx.spots.forEach((sp, si) => {
         const pick = (si + g + n) % 11;
         action = pick === 0 && cur.clock_running ? { to_off: true } : pick === 1 ? { to_off: false, play: 'spike' } : pick === 2 && cur.down === 4 && sim.fourthInfo(cur).pFg >= 0.05 ? { to_off: false, play: 'fg' }
           : { to_off: false, play: P.calls[ci].kind, call: calls[ci], oob: n % 2 === 0, tempo: cur.clock_running ? ['urgent', 'hurry', 'normal', 'milk'][n % 4] : undefined };
-      } else if (cur.phase === 0) action = { to_def: n % 5 === 0 };
+      } else if (cur.phase === 0) action = { to_def: n % 5 === 0, def: n % 4 ? ['blitz', 'load', 'soft'][n % 3] : undefined };
       else if (cur.phase === 1 && cur.pos === me) action = { pat: n % 3 ? 'xp' : 'two' };
-      else if (cur.phase === 2 && cur.pos === me) action = { kick: n % 4 ? 'deep' : 'onside' };
+      else if (cur.phase === 2 && cur.pos === me) action = { kick: ['return', 'touchback', 'onside', 'deep'][(n + g) % 4] };
       const before = JSON.parse(JSON.stringify(cur));
       const r = sim.step(cur, { action, seed: 77 + si * 31 + g * 101 + n });
       steps++;
       check(before, r, `game ${si}.${g} step ${n}`);
+      if (action.kick) kickCheck(r, action.kick, `game ${si}.${g} step ${n}`, before.free_kick);
+      if (action.def) lookHit(r, { blitz: 10, load: 4, soft: 1 }[action.def]);
       cur = r.root;
       if (r.done) break;
     }

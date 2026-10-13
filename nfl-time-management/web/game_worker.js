@@ -55,8 +55,20 @@ function info(sim, root) {
     return { id: c.id, freq: P.freq[fk * P.calls.length + ci], avg: w ? yds / w : 0, oob: pOob, oobTry: pTry,
       conv: w ? conv / w : 0, inc: w ? inc / w : 0, n };
   });
+  // the defense's looks here (light or loaded box, blitz or not), over all calls as often as play-callers make them,
+  // and each call's own mix (how often it meets each look)
+  const lookByCall = !P.lookB ? null : P.calls.map((c, ci) => {
+    const pool = P.poolOf[ci * P.nFine + fk], lo = P.offsets[pool], hi = P.offsets[pool + 1], d = [0, 0, 0, 0];
+    let n = 0;
+    for (let i = lo; i < hi; i++) { const b = P.lookB[P.items[i]]; if (b < 4) { d[b]++; n++; } }
+    return d.map((x) => (n ? x / n : 0.25));
+  });
+  const looks = [0, 0, 0, 0];
+  if (lookByCall) lookByCall.forEach((d, ci) => d.forEach((x, b) => { looks[b] += P.freq[fk * P.calls.length + ci] * x; }));
+  const lt = looks.reduce((a, x) => a + x, 0) || 1;
   const fi = sim.fourthInfo(root);
-  return { calls, fgDist: fi.fgDist, pFg: fi.pFg, pConv: fi.pConv, tempo: sim.defaultTempo(root), tempoSecs: sim.tempoSeconds() };
+  return { calls, fgDist: fi.fgDist, pFg: fi.pFg, pConv: fi.pConv, tempo: sim.defaultTempo(root), tempoSecs: sim.tempoSeconds(),
+    looks: lookByCall ? looks.map((x) => x / lt) : null, lookByCall };
 }
 
 // what happened on the real play behind an outcome: event, penalty called, the pre-snap look, and for the
@@ -71,6 +83,14 @@ function describe(row) {
   }
   if (P.air && P.air[row] !== -128) out.air = P.air[row];
   if (P.carry) { const c = P.carry[row]; out.who = ['', 'QB', 'RB', 'WR', 'TE'][c & 7] || ''; out.bt = !!(c & 8); }
+  if (P.ngs) {        // Next Gen Stats charting: the target's route, the coverage, the rush, the time to throw
+    const g = P.ngs, rt = g.route[row], cv = g.cover[row], ru = g.rush[row], tt = g.ttt[row];
+    if (rt) out.route = P.routeNames[rt];
+    if (cv & 15) out.shell = P.shellNames[cv & 15];
+    if (cv >> 4) out.man = (cv >> 4) === 1;
+    if (ru & 32) { out.rushers = ru & 15; out.pressure = !!(ru & 16); }
+    if (tt) out.ttt = tt / 10;
+  }
   return out;
 }
 

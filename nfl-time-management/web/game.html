@@ -151,6 +151,8 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .key:hover { background: var(--key-hi); }
 .key small { font: 600 10.5px var(--body); letter-spacing: .03em; text-transform: none; color: var(--muted); }
 .key.big { min-height: 70px; font: 900 30px/1 var(--display); letter-spacing: .06em; background: var(--ink); color: var(--paper); }
+.key.big.def { font-size: 21px; line-height: 1.02; padding-inline: 6px; text-wrap: balance; }
+.key.big.def small { color: var(--paper); opacity: .72; font-size: 11px; }
 .key.big:hover { opacity: .9; }
 .key.alt { background: var(--chain); color: var(--chain-ink); }
 .key.alt small { color: var(--chain-ink); }
@@ -164,6 +166,13 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .prow .lab { font-weight: 700; font-size: 15px; min-width: 0; }
 .prow .sides { display: flex; gap: 5px; }
 .prow .key { min-height: 40px; min-width: 64px; padding-inline: 8px; font-size: 12.5px; }
+/* the defense's pre-snap look, above the keys */
+.read { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; }
+.read .lab { font: 800 11px var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.read .v { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
+.read .v b { font: 800 14px var(--body); }
+.read .v b.blitz { color: var(--sq-r); }
+.read .v small { color: var(--muted); font-size: 12px; }
 /* tempo: a three-way switch above the play keys while the clock runs */
 .tempo { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; }
 .tempo .lab { font: 800 11px var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }

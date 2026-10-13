@@ -287,7 +287,22 @@ Play-calling is a pop-up of **Run**, **Pass** and **RPO**, then the play and its
 spike, kneel, field goal or punt only appears when it matters. With the clock running you also pick the
 **tempo**: no-huddle (about 16 s between snaps), huddle (about 34 s) or milk it (about 38 s), the engine's
 measured gaps between snaps; the usual tempo for the spot is preselected, and the tempo is graded with
-the timeout, spike and kneel options. Every snap is then run out on the field in real time: the
+the timeout, spike and kneel options. In a kick-to-win spot, milking it stops running the clock while
+there is still time to kick, as the engine's own end-game policy does (before, a "milk it" field goal
+from 0:36 never got off three times in four).
+
+Before each call the defense shows its **look**: a light box (six or fewer near the line) or a loaded
+one (seven or more), with or without a blitz, as often as defenses show each in that spot. The snap is
+then drawn from real plays of your call run against that look. When the exact situation has fewer than
+15 such plays, the pool widens to coarser situations (down and field zone, then zone) until it has
+them, so a blitz look matters even on rarer calls: 95% of reads change the draw, and 61-71% of blitz
+reads (28-43% without the widening). When they have the ball you **call the defense**: blitz, load the box
+or play it soft (with a timeout first when it matters), and their play is drawn from real plays against
+that look; or let the coordinator call the drive. Your **kickoffs** go to the returner (a real kick
+into the landing zone: returned, short at the 40 or bounced in to the 20), through the end zone for a
+touchback at their 35, or onside, which the 2025 rules allow only to a team that is behind.
+
+Every snap is then run out on the field in real time: the
 scoreboard clock ticks off the time before the snap, the camera zooms in like a broadcast, and the dots
 move at NFL speed (the snap reaches the QB in a quarter second, passes come out 1.35 s after an RPO
 snap to 4.3 s for a Hail Mary, the ball flies about 24 yards a second, ball carriers average 4.5 yards a

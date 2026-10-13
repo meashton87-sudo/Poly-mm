@@ -50,7 +50,15 @@
   // ~3 s left and kicks. The defense spends its timeouts to save time for a reply.
   const CLOSE_FG_P = 0.5, CLOSE_WINDOW = 180.0, CLOSE_END = 45.0, CLOSE_KICK_AT = 3.0;
   const CLOSE_SNAP_FLOOR = 12.0, CLOSE_DEF_WINDOW = 120.0;
+  const KO_TOUCHBACK = 65;             // daily game: a kickoff through the end zone starts the receivers at their 35 (2025 rule)
   const PB_TD_SHARE = 0.6;            // daily game: a playbook touchdown drawn farther out scores only if it covered 60% of the way
+  const PB_LOOK_MIN = 15;             // daily game: a call's plays against one defensive look are used when at least this many
+                                      // (playbook.py LOOK_MIN)
+  // daily game: a defensive look as a bucket: 0 light box (6 or fewer), 1 light with a blitz, 2 loaded box (7 or more),
+  // 3 loaded with a blitz; 255 when the charting has no box count
+  const lookBucket = (k) => ((k >> 4) === 0 ? 255 : ((k >> 4) >= 7 ? 2 : 0) + ((k >> 3) & 1));
+  // daily game: the defense's call on its snap, as the looks it may show (lookBucket masks)
+  const DEF_LOOKS = { blitz: (1 << 1) | (1 << 3), load: 1 << 2, soft: 1 << 0 };
   const TEMPO = { hurry: HURRY, normal: NORMAL, milk: MILK, urgent: URGENT };
   const SNAP = 0, PAT = 1, KICKOFF = 2, DONE = 3;
   const MODE_NORMAL = 0, MODE_HURRY = 1, MODE_KILL = 2;
@@ -180,6 +188,8 @@
       }
       const K = data.kickoffs;
       this.ko = { start: decode(K.start_yl), dur10: decode(K.dur10), retTd: decode(K.ret_td) };
+      // daily game: kicks into the landing zone, everything but a touchback at the 35 (returned, short, or bounced in)
+      this.ko.ret = Int32Array.from(Array.from(this.ko.start.keys()).filter((i) => !(this.ko.start[i] === KO_TOUCHBACK && this.ko.dur10[i] === 0)));
       this.fg = data.fg;
       const W = data.wp;
       this.trees = { feature: decode(W.feature), threshold: decode(W.threshold), left: decode(W.left), right: decode(W.right),
@@ -233,15 +243,24 @@
         // what happened on each real play (narration only): event, penalty called, pre-snap look
         event: R.event ? decode(R.event) : null, pen: R.pen ? decode(R.pen) : null, look: R.look ? decode(R.look) : null,
         air: R.air ? decode(R.air) : null, carry: R.carry ? decode(R.carry) : null,    // the animation: air yards, carrier, broken tackle
+        // the animation: NGS route, coverage, pass rush, time to throw (playbook.py _charting)
+        ngs: R.route ? { route: decode(R.route), cover: decode(R.cover), rush: decode(R.rush), ttt: decode(R.ttt) } : null,
+        routeNames: pb.routes || [], shellNames: pb.shells || [],
         eventNames: pb.events || [], penNames: pb.penalties || [],
         shift: pb.pool_shift ? decode(pb.pool_shift) : null,   // intent correction per pool (playbook.py pool_shifts)
+        // daily game: per (call, situation, look) the pool to draw that look from (playbook.py pools)
+        lookPool: pb.look_pool ? decode(pb.look_pool) : null,
       };
       P.callIndex = {};
       pb.calls.forEach((c, i) => { P.callIndex[c.id] = i; });
+      P.lookB = P.look ? Uint8Array.from(P.look, lookBucket) : null;
       P.nPools = P.offsets.length - 1;
       P.poolCall = new Int32Array(P.nPools);
       for (let c = 0; c < pb.calls.length; c++) {
-        for (let f = 0; f < P.nFine; f++) P.poolCall[P.poolOf[c * P.nFine + f]] = c;
+        for (let f = 0; f < P.nFine; f++) {
+          P.poolCall[P.poolOf[c * P.nFine + f]] = c;
+          if (P.lookPool) for (let b = 0; b < 4; b++) P.poolCall[P.lookPool[(c * P.nFine + f) * 4 + b]] = c;
+        }
       }
       P.itemEpa = new Float64Array(P.items.length);
       for (let i = 0; i < P.items.length; i++) P.itemEpa[i] = P.epa[P.items[i]];
@@ -471,7 +490,6 @@
       return L.items[lo];
     }
 
-    // The two numbers a coach asks for on 4th down: conversion chance and field-goal make chance.
     // Daily game: the tempo the offense would use on its next snap with the clock running ('urgent',
     // 'hurry', 'normal' or 'milk'); mirrors steps (1)-(2) of _snap without the live tool's first-half strategy
     defaultTempo(root) {
@@ -498,6 +516,7 @@
         milk: med(this.e.tempo[MILK]) };
     }
 
+    // The two numbers a coach asks for on 4th down: conversion chance and field-goal make chance.
     fourthInfo(root) {
       const o = root.pos, half = root.t > 1800 ? 1 : 2, tHalf = root.t - (half === 1 ? 1800 : 0);
       const margin = root.score[o] - root.score[1 - o], yl = root.yl;
@@ -507,14 +526,61 @@
         pConv: this.conv[o][(mode * N_ZONE + zone) * 21 + Math.trunc(clip(root.ytg, 1, 20))] };
     }
 
-    // a play of the chosen call from the playbook (daily game); oob = the ball carrier tries to get out
-    samplePlaybook(team, callIdx, fk, u, oob) {
+    // a play of the chosen call from the playbook (daily game); oob = the ball carrier tries to get out; looks = a
+    // bit mask of defensive looks (lookBucket): only plays run against those, from the situation's pool when it has
+    // PB_LOOK_MIN of them, else from the coarser pool built for that look; else any look
+    samplePlaybook(team, callIdx, fk, u, oob, looks) {
       const P = this.e.pb, cdf = oob ? this.pbCdf[team].cdfOob : this.pbCdf[team].cdf;
       const pool = P.poolOf[callIdx * P.nFine + fk];
+      if (looks && P.lookB) {
+        let r = this._sampleLook(cdf, pool, u, looks);
+        for (let b = 0; r < 0 && P.lookPool && b < 4; b++) {
+          const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b];
+          if ((looks >> b) & 1 && lp !== pool) r = this._sampleLook(cdf, lp, u, looks);
+        }
+        if (r >= 0) return r;
+      }
       let lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
       const target = pool + u;
       while (lo < hi) { const mid = (lo + hi) >> 1; if (cdf[mid] < target) lo = mid + 1; else hi = mid; }
       return P.items[lo];
+    }
+
+    // daily game: a call of this kind ('run' or 'pass'), as often as NFL play-callers make each in situation fk
+    pickCall(kind, fk, u) {
+      const P = this.e.pb, nC = P.calls.length;
+      let tot = 0;
+      for (let c = 0; c < nC; c++) if (P.calls[c].kind === kind) tot += P.freq[fk * nC + c];
+      if (!(tot > 0)) return -1;
+      let acc = 0, last = -1;
+      for (let c = 0; c < nC; c++) {
+        if (P.calls[c].kind !== kind) continue;
+        acc += P.freq[fk * nC + c]; last = c;
+        if (acc >= u * tot) return c;
+      }
+      return last;
+    }
+
+    // a play of pool `pool` run against one of the looks in mask `looks`, by the pool's weights; -1 when fewer than
+    // PB_LOOK_MIN of its plays were
+    _sampleLook(cdf, pool, u, looks) {
+      const P = this.e.pb, lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
+      let tot = 0, m = 0;
+      for (let i = lo; i <= hi; i++) {
+        const b = P.lookB[P.items[i]];
+        if (b < 8 && (looks >> b) & 1) { tot += cdf[i] - (i > lo ? cdf[i - 1] : pool); m++; }
+      }
+      if (m < PB_LOOK_MIN || !(tot > 0)) return -1;
+      const target = u * tot;
+      let acc = 0, last = -1;
+      for (let i = lo; i <= hi; i++) {
+        const b = P.lookB[P.items[i]];
+        if (!(b < 8 && (looks >> b) & 1)) continue;
+        acc += cdf[i] - (i > lo ? cdf[i - 1] : pool);
+        last = i;
+        if (acc >= target) return P.items[i];
+      }
+      return P.items[last];
     }
 
     sampleStop(team, pool, u) {
@@ -620,10 +686,13 @@
       onside = onside && !S.freeKick;
       if (act && act.kick) onside = act.kick === 'onside';
       const K = this.e.ko;
-      const j = Math.floor(u[4] * K.start.length);
+      let j = Math.floor(u[4] * K.start.length);
+      // daily game: kicked to the returner (a real landing-zone kick) or through the end zone (a touchback)
+      if (act && act.kick === 'return' && K.ret.length) j = K.ret[Math.floor(u[4] * K.ret.length)];
       let start = K.start[j];
-      const dur = K.dur10[j] / 10;
-      const retTd = K.retTd[j] && !onside;
+      let dur = K.dur10[j] / 10;
+      let retTd = K.retTd[j] && !onside;
+      if (act && act.kick === 'touchback' && !S.freeKick) { start = KO_TOUCHBACK; dur = 0; retTd = false; }
       if (S.freeKick) start = clip(start - 8, 40, 75);
       const rec = onside && u[3] < this.onsideP;
       S.pos = rec ? kt : rt;
@@ -631,7 +700,7 @@
       S.t = Math.max(S.t - (onside ? 3 : dur), g.halfEnd);
       S.down = 1; S.ytg = Math.min(10, S.yl); S.running = false; S.credit = 0; S.freeKick = false; S.phase = SNAP;
       if (retTd) { S.s[S.pos] += 6; S.phase = PAT; }
-      if (S.log) S.log.push({ ev: 'kickoff', team: kt, onside, recovered: rec, retTd, yl: S.yl });
+      if (S.log) S.log.push({ ev: 'kickoff', team: kt, onside, recovered: rec, retTd, yl: S.yl, tb: !onside && dur === 0, kick: act && act.kick || null });
       if (S.t <= g.halfEnd && S.phase === SNAP) S.phase = DONE;
     }
 
@@ -720,8 +789,9 @@
       else if (tempo === T_FIRE) runoff = FIRE_DRILL[0] + (FIRE_DRILL[1] - FIRE_DRILL[0]) * u[0];
       else { const arr = this.e.tempo[tempo]; runoff = arr[Math.floor(u[0] * arr.length)]; }
       runoff = runC ? Math.max(runoff - S.credit, 0) : 0;
-      // running it down: never past the point where the kick is still safe
-      if (free && closing && runC && tempo === MILK) runoff = Math.min(runoff, Math.max(S.t - halfEnd - CLOSE_SNAP_FLOOR, 0));
+      // running it down: never past the point where the kick is still safe (daily game: a milk call does the same)
+      const runDown = free || (!!this.pbCdf && !!act && act.tempo === 'milk');
+      if (runDown && closing && runC && tempo === MILK) runoff = Math.min(runoff, Math.max(S.t - halfEnd - CLOSE_SNAP_FLOOR, 0));
       if (act && act.runoff !== undefined) runoff = runC ? act.runoff : 0;
       const t0 = S.t;
       let t1 = t0 - runoff;
@@ -770,7 +840,13 @@
         let pbRow = -1, callIdx = -1;
         if (act && act.call !== undefined && this.pbCdf && (kind === RUN || kind === PASS)) {
           callIdx = this.e.pb.callIndex[act.call];
-          pbRow = this.samplePlaybook(o, callIdx, fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl), u[2], !!act.oob);
+          pbRow = this.samplePlaybook(o, callIdx, fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl), u[2], !!act.oob, act.looks);
+        } else if (act && act.def && DEF_LOOKS[act.def] && this.pbCdf && (kind === RUN || kind === PASS)) {
+          // daily game: you called the defense; the offense runs a play of the kind it chose, a call as often as
+          // play-callers make it here, drawn from real plays of that call against the look you called
+          const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl);
+          callIdx = this.pickCall(kind === PASS ? 'pass' : 'run', fk, u[4]);
+          if (callIdx >= 0) pbRow = this.samplePlaybook(o, callIdx, fk, u[2], false, DEF_LOOKS[act.def]);
         }
         this._scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx);
       }

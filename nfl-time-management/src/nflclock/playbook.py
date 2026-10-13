@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import base64
 import json
+import urllib.error
 import urllib.request
 
 import numpy as np
@@ -92,6 +93,22 @@ FTN_URL = "https://github.com/nflverse/nflverse-data/releases/download/ftn_chart
 FTN_FLAGS = ["is_play_action", "is_screen_pass", "is_qb_out_of_pocket", "is_qb_sneak", "is_throw_away", "is_rpo",
              "is_trick_play", "is_motion", "is_drop", "is_interception_worthy"]
 FTN_LOOK = ["starting_hash", "qb_location", "n_defense_box", "n_blitzers"]
+# Next Gen Stats charting per play (nflverse pbp_participation): the animation runs the targeted receiver's real
+# route against the real coverage, with the real number of pass rushers, pressure and time to throw
+PART_URL = ("https://github.com/nflverse/nflverse-data/releases/download/pbp_participation/"
+            "pbp_participation_{season}.parquet")
+PART_COLS = ["route", "defense_man_zone_type", "defense_coverage_type", "number_of_pass_rushers", "was_pressure",
+             "time_to_throw"]
+ROUTES = ["", "go", "post", "corner", "out", "deep_out", "in", "slant", "cross", "hitch", "screen", "flat", "wheel",
+          "angle"]
+ROUTE_CODE = {"GO": 1, "POST": 2, "CORNER": 3, "QUICK OUT": 4, "OUT": 4, "DEEP OUT": 5, "IN/DIG": 6, "IN": 6,
+              "SLANT": 7, "SHALLOW CROSS/DRAG": 8, "CROSS": 8, "HITCH/CURL": 9, "HITCH": 9, "SCREEN": 10,
+              "SWING": 11, "FLAT": 11, "WHEEL": 12, "TEXAS/ANGLE": 13, "ANGLE": 13}   # 2022 labels, then 2023 on
+SHELLS = ["", "cover0", "cover1", "cover2", "2man", "cover3", "cover4", "cover6", "cover9", "prevent"]
+SHELL_CODE = {"COVER_0": 1, "COVER_1": 2, "COVER_2": 3, "2_MAN": 4, "COVER_3": 5, "COVER_4": 6, "COVER_6": 7,
+              "COVER_9": 8, "PREVENT": 9}
+LOOK_MIN = 15                # plays of a call against one defensive look before the browser draws from them alone
+                             # (engine.js PB_LOOK_MIN); coarser situations are pooled until a look has this many
 MIN_POOL = 40
 QB_MIN_ATTEMPTS = 30         # passers with fewer attempts in a season are trick-play throwers, not QBs
 HAIL_MARY_SECONDS = 12       # a deep heave (or the sack / scramble of one) this late in a half, 38-70 yards out
@@ -131,6 +148,44 @@ def _ftn(seasons=SEASONS) -> pd.DataFrame:
     return f.drop_duplicates(["game_id", "play_id"])
 
 
+def _participation(seasons=SEASONS) -> pd.DataFrame:
+    """NGS charting per play; a season not published yet (the current one, early on) is skipped."""
+    frames = []
+    for s in seasons:
+        p = config.RAW_DIR / f"pbp_participation_{s}.parquet"
+        if not p.exists():
+            tmp = p.with_suffix(".part")
+            try:
+                urllib.request.urlretrieve(PART_URL.format(season=s), tmp)
+            except urllib.error.HTTPError:
+                continue
+            tmp.replace(p)
+        f = pd.read_parquet(p)
+        frames.append(f[["nflverse_game_id", "play_id"] + [c for c in PART_COLS if c in f]]
+                      .rename(columns={"nflverse_game_id": "game_id"}))
+    if not frames:
+        return pd.DataFrame(columns=["game_id", "play_id"] + PART_COLS)
+    f = pd.concat(frames, ignore_index=True)
+    f["play_id"] = pd.to_numeric(f["play_id"], errors="coerce")
+    return f.drop_duplicates(["game_id", "play_id"])
+
+
+def _charting(s: pd.DataFrame) -> dict:
+    """The NGS charting packed for the browser (0 = not charted): route code; coverage shell (bits 0-3) with man (1)
+    or zone (2) in bits 4-5; pass rushers (bits 0-3), pressure (4) and charted (5); time to throw in tenths."""
+    col = lambda c: s[c] if c in s else pd.Series(np.nan, index=s.index)
+    route = col("route").map(ROUTE_CODE).fillna(0).to_numpy().astype(np.uint8)
+    shell = col("defense_coverage_type").map(SHELL_CODE).fillna(0).to_numpy().astype(np.uint8)
+    mz = col("defense_man_zone_type").map({"MAN_COVERAGE": 1, "ZONE_COVERAGE": 2}).fillna(0).to_numpy().astype(np.uint8)
+    n = pd.to_numeric(col("number_of_pass_rushers"), errors="coerce")
+    rushers = np.clip(n.fillna(0).to_numpy(), 0, 15).astype(np.uint8)
+    pressure = col("was_pressure").map({True: 1, False: 0, "TRUE": 1, "FALSE": 0}).fillna(0).to_numpy().astype(np.uint8)
+    charted = n.notna().to_numpy().astype(np.uint8)
+    ttt = pd.to_numeric(col("time_to_throw"), errors="coerce")
+    ttt = np.clip(np.round(ttt.fillna(0).to_numpy() * 10), 0, 255).astype(np.uint8)
+    return {"route": route, "cover": shell | (mz << 4), "rush": rushers | (pressure << 4) | (charted << 5), "ttt": ttt}
+
+
 def _extras(seasons=SEASONS) -> pd.DataFrame:
     cols = ["game_id", "play_id", "run_location", "run_gap", "rusher_player_id", "passer_player_id", "receiver_player_id", "fumble"]
     return pd.concat([pd.read_parquet(config.RAW_DIR / f"play_by_play_{s}.parquet", columns=cols) for s in seasons],
@@ -161,6 +216,7 @@ def labeled_plays(seasons=SEASONS, seed: int = 11) -> pd.DataFrame:
     s = s[~(special | desc.str.contains("Lateral", case=False) | intentional)]
     s = s.merge(_extras(seasons), on=["game_id", "play_id"], how="left")
     s = s.merge(_ftn(seasons), on=["game_id", "play_id"], how="left")
+    s = s.merge(_participation(seasons), on=["game_id", "play_id"], how="left")
     for c in FTN_FLAGS:
         s[c] = s[c].fillna(False).astype(bool)
     pen = (s["play_type"] == "no_play").to_numpy()
@@ -282,6 +338,7 @@ def labeled_plays(seasons=SEASONS, seed: int = 11) -> pd.DataFrame:
         "pen_name": np.where(pen, s["penalty_type"].fillna("Penalty").to_numpy(), ""),
         "look": _look(s),
         "air": air, "carrier": carrier, "caught": caught,
+        **{f"ngs_{k}": v for k, v in _charting(s).items()},
     })
     out = out[~(turnover & ~valid_to)].reset_index(drop=True)
     out["who"], out["bt"] = _carry(out)
@@ -350,10 +407,31 @@ def _look(s: pd.DataFrame) -> np.ndarray:
 
 
 # ---------------------------------------------------------------- pools ---
+def look_bucket(look) -> np.ndarray:
+    """A pre-snap look as the browser buckets it (engine.js lookBucket): 0 light box (6 or fewer), 1 light with a
+    blitz, 2 loaded box (7 or more), 3 loaded with a blitz; 255 when the box was not charted."""
+    look = np.asarray(look).astype(np.int64)
+    box, blitz = look >> 4, (look >> 3) & 1
+    return np.where(box == 0, 255, np.where(box >= 7, 2, 0) + blitz).astype(np.uint8)
+
+
 def pools(lib: pd.DataFrame):
-    """Pool index for every (call, situation): fine situation, then coarser, until MIN_POOL plays."""
+    """Pool index for every (call, situation): fine situation, then coarser, until MIN_POOL plays. And for every
+    (call, situation, look) the pool to draw that look from: the situation's own pool when the call was run against
+    that look LOOK_MIN times in it, else the plays against that look in the finest coarser situation that has them."""
     mode, db, yb, zone = decode_fine(np.arange(N_FINE))
     items, offsets, pool_of, index = [], [0], np.zeros((len(CALLS), N_FINE), dtype=np.int64), {}
+    look_pool = np.zeros((len(CALLS), N_FINE, 4), dtype=np.int64)
+    bucket = look_bucket(lib["look"].to_numpy())
+
+    def pool_index(k, members):
+        if k not in index:
+            index[k] = len(offsets) - 1
+            members = members()
+            items.append(members)
+            offsets.append(offsets[-1] + len(members))
+        return index[k]
+
     for c in range(len(CALLS)):
         sub = lib[lib["call"] == c]
         keys = {0: sub["fine"].to_numpy(),
@@ -361,6 +439,8 @@ def pools(lib: pd.DataFrame):
                 2: (sub["mode"] * N_ZONE + zone_of(sub["yl"])).to_numpy(),
                 3: zone_of(sub["yl"]), 4: np.zeros(len(sub), dtype=np.int64)}
         counts = {lvl: pd.Series(k).value_counts() for lvl, k in keys.items()}
+        sb = bucket[sub.index.to_numpy()].astype(np.int64)
+        look_counts = {lvl: pd.Series(np.asarray(k, dtype=np.int64) * 256 + sb).value_counts() for lvl, k in keys.items()}
         idx = sub.index.to_numpy()
         for fk in range(N_FINE):
             cand = {0: fk, 1: (mode[fk] * N_DOWN + db[fk]) * N_ZONE + zone[fk], 2: mode[fk] * N_ZONE + zone[fk],
@@ -368,14 +448,14 @@ def pools(lib: pd.DataFrame):
             for lvl in range(5):
                 if counts[lvl].get(cand[lvl], 0) >= MIN_POOL or lvl == 4:
                     break
-            key = (c, lvl, int(cand[lvl]))
-            if key not in index:
-                index[key] = len(offsets) - 1
-                members = idx[keys[lvl] == cand[lvl]]
-                items.append(members)
-                offsets.append(offsets[-1] + len(members))
-            pool_of[c, fk] = index[key]
-    return np.concatenate(items), np.array(offsets), pool_of
+            pool_of[c, fk] = pool_index((c, lvl, int(cand[lvl])), lambda: idx[keys[lvl] == cand[lvl]])
+            for b in range(4):
+                lb = lvl
+                while lb < 4 and look_counts[lb].get(int(cand[lb]) * 256 + b, 0) < LOOK_MIN:
+                    lb += 1
+                look_pool[c, fk, b] = pool_of[c, fk] if lb == lvl else pool_index(
+                    (c, lb, int(cand[lb]), b), lambda: idx[(keys[lb] == cand[lb]) & (sb == b)])
+    return np.concatenate(items), np.array(offsets), pool_of, look_pool
 
 
 def pool_shifts(lib: pd.DataFrame, items: np.ndarray, offsets: np.ndarray, shrink: float = INTENT_SHRINK) -> np.ndarray:
@@ -461,7 +541,8 @@ def _b64(arr: np.ndarray) -> dict:
 
 
 def export(lib: pd.DataFrame, path) -> dict:
-    items, offsets, pool_of = pools(lib)
+    items, offsets, pool_of, look_pool = pools(lib)
+    assert len(offsets) < 32767, "look pools are exported as int16"
     flags = np.zeros(len(lib), np.uint8)
     for bit, name in enumerate(FLAG_BITS):
         flags |= (lib[name].to_numpy().astype(bool).astype(np.uint8) << np.uint8(bit))
@@ -485,10 +566,14 @@ def export(lib: pd.DataFrame, path) -> dict:
             # for the animation only: air yards (-128 = not thrown), carrier group (bits 0-2) and broken tackle (bit 3)
             "air": _b64(np.where(lib["air"].isna(), -128, np.clip(lib["air"].fillna(0), -20, 100)).astype(np.int8)),
             "carry": _b64((lib["who"].to_numpy().astype(np.uint8) | (lib["bt"].to_numpy().astype(np.uint8) << np.uint8(3)))),
+            # the animation: NGS route, coverage, pass rush and time to throw (_charting)
+            **{k: _b64(lib[f"ngs_{k}"].to_numpy().astype(np.uint8)) for k in ("route", "cover", "rush", "ttt")},
         },
+        "routes": ROUTES, "shells": SHELLS,
         "events": EVENTS, "penalties": pen_names,
         "items": _b64(items.astype(np.int32)), "offsets": _b64(offsets.astype(np.int32)),
         "pool_of": _b64(pool_of.astype(np.int32).ravel()),
+        "look_pool": _b64(look_pool.astype(np.int16).ravel()),
         "pool_shift": _b64(pool_shifts(lib, items, offsets).astype(np.float32)),
         "freq": _b64(call_frequencies(lib).astype(np.float32).ravel()),
         "oob_odds": oob_odds(lib).round(3).tolist(),

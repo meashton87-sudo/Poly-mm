@@ -29,6 +29,13 @@
   };
   const FAM = { run: 'Run', pass: 'Pass', rpo: 'RPO' };
   const TEMPOS = ['nohuddle', 'huddle', 'milk'];
+  // your defense on their snaps: the looks it shows (the engine draws their play from real plays against it)
+  const DEFS = ['blitz', 'load', 'soft'];
+  const DEF = { blitz: { label: 'Blitz', sub: 'Send extra rushers' }, load: { label: 'Load the box', sub: 'Stop the run' },
+    soft: { label: 'Play it soft', sub: 'Keep it in front' } };
+  // the defense's pre-snap look, as the engine buckets real plays: a light box (6 or fewer near the line) or a loaded
+  // one (7 or more), with or without a blitz
+  const LOOKS = [{ loaded: false, blitz: false }, { loaded: false, blitz: true }, { loaded: true, blitz: false }, { loaded: true, blitz: true }];
   // with the clock running: the tempo of the next snap (the engine's typical seconds between snaps), or stop it
   const CLOCK = {
     nohuddle: { label: 'No-huddle', short: 'No-huddle' },
@@ -132,8 +139,9 @@
     const parts = String(n || '').replace(/\s+(Jr\.?|Sr\.?|II|III|IV|V)$/, '').split(/\s+/);
     return parts.length > 1 ? `${parts[0][0]}.${parts.slice(1).join(' ')}` : (n || '');
   }
+  // the end of the first half (t = 1800) reads 0:00 of the 2nd quarter: every spot is late in Q2 or Q4
   function clockOf(t) {
-    const q = t > 2700 ? 1 : t > 1800 ? 2 : t > 900 ? 3 : 4;
+    const q = t > 2700 ? 1 : t >= 1800 ? 2 : t > 900 ? 3 : 4;
     const s = Math.max(0, t - (4 - q) * 900);
     return { q, s, text: `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` };
   }
@@ -320,6 +328,23 @@
     g.X.forEach((p, i) => put(def, p, bx + (i - (g.X.length - 1) / 2) * 40, 8));
     return { off, def };
   }
+  // the defense shows its look: a safety walks down into a loaded box, a linebacker widens out of a light one,
+  // and a blitz look brings two of them up to the line
+  function showLook(def, L, s, bx) {
+    const lbs = def.filter((o) => o.label === 'LB'), safeties = def.filter((o) => o.label === 'S');
+    if (L.loaded) {
+      const sd = safeties[safeties.length - 1];
+      if (sd) { sd.x = clampX(bx + s * 30); sd.d = 7.5; }
+      lbs.forEach((o) => { o.d = 4.5; o.x = bx + (o.x - bx) * 0.8; });
+    } else if (lbs.length) {
+      const wide = lbs.slice().sort((a, b) => Math.abs(b.x - bx) - Math.abs(a.x - bx))[0];
+      wide.x = clampX(bx - s * 70); wide.d = 6.2;
+    }
+    if (L.blitz) {
+      const up = lbs.length ? lbs.slice(0, 2) : safeties.slice(0, 1);
+      up.forEach((o, i) => { o.d = 1.9; o.x = clampX(bx + (i ? -1 : 1) * s * (18 + 22 * i)); });
+    }
+  }
   // ------------------------------------------------------------ the field ---
   // The whole field, your end zone at the bottom of the screen. L counts yards from your goal line (0) to
   // theirs (100); a camera shows yards lo..hi: the whole field, or close up while a play runs.
@@ -354,7 +379,7 @@
   const camY = (sc) => { const { lo, hi } = sc.cam, k = (sc.H - 6) / (hi - lo); return (L) => sc.H - 3 - (L - lo) * k; };
 
   // the field and the 22 for state r (side: the strong side of this snap); place() draws them for the camera
-  function makeScene(r, side) {
+  function makeScene(r, side, look = r.pos === G.me ? G.look : null) {
     const svg = $('field'), H = fieldHeight();
     svg.setAttribute('viewBox', `0 0 360 ${H}`);
     svg.textContent = '';
@@ -399,6 +424,7 @@
     sc.layer = put(S('g', {}));
     if (mode === 'snap' || mode === 'pat') {
       const offI = r.pos, f = formation(lineup(offI).off.slice(), lineup(1 - offI).def.slice(), s, fxBall);
+      if (mode === 'snap' && look != null) showLook(f.def, LOOKS[look], s, fxBall);
       const add = (o, teamI, off) => {
         const team = code(teamI), mine = teamI === G.me;
         const g = S('g', { class: `dot ${mine ? 'me' : 'them'}`, tabindex: 0, role: 'button',
@@ -707,7 +733,7 @@
       kf(qb, SET[kind], qx, qL, 0, 'io');
       const tgt = pickTarget(id, sign) || K.rb;
       const tArr = tRel + flight(air);
-      let cL = fwd(L0, air), cx;
+      let cL = clip(fwd(L0, air), -9, 109), cx;
       if (!tgt) return;
       if (kind === 'screen' || tgt === K.rb) cx = clampX(bx + (sign || (tgt.x0 > bx ? 1 : -1)) * 62);
       else if (id.endsWith('middle')) cx = lerp(tgt.x0, bx, 0.6);
@@ -908,7 +934,7 @@
       const tK = T0 + 1.3, t1 = tK + 0.25 + Math.abs(Ly - hL) / 24;
       fly(tK, t1, bx, hL, 180 + miss * 34, Ly, 2.4);
       rest(t1, 180 + miss * 38, Ly + dir * 1.5);
-      front.forEach((a) => kf(a, tK, a.x0 + jit(4), fwd(L0, -0.4), 0, 'io'));
+      front.forEach((a) => kf(a, tK, lastKf(a)[1] + jit(4), fwd(L0, -0.4), 0, 'io'));
       line.forEach((a, i) => kf(a, tK, clampX(bx + (i - (line.length - 1) / 2) * 15), fwd(L0, -1.0), 0, 'out'));
       kf(holder, tK + 0.3, bx, hL, 0);
       say(t1, good ? "It's good!" : 'No good', good ? 'good' : 'hit', { x: 180, L: Ly - dir * 6 });
@@ -935,24 +961,26 @@
       box.forEach((a, i) => kf(a, T0, clampX(bx + lineX[i % lineX.length]), fwd(L0, 0.8), 1, 'io'));
       fly(T0, T0 + 0.75, bx, L0, bx, pL, 0.1);
       hold(T0 + 0.75, punter);
-      const tK = T0 + 2.0;
+      const tK = T0 + 2.0, kL = fwd(pL, 2);       // two steps into the kick
+      kf(punter, T0 + 0.9, bx, pL, 0);
+      kf(punter, tK, bx, kL, 0, 'in');
       if (e.blocked) {
         const blocker = near(box, bx, pL) || box[0];
         if (blocker) kf(blocker, tK, bx + 4, fwd(pL, 1), 0, 'in');
-        line.forEach((a) => kf(a, tK, a.x0 + jit(3), fwd(L0, -1.2), 0, 'out'));
-        fly(tK, tK + 0.35, bx, pL, bx + jit(20), fwd(pL, -4), 0.2);
+        line.forEach((a) => kf(a, tK, lastKf(a)[1] + jit(3), fwd(L0, -1.2), 0, 'out'));
+        fly(tK, tK + 0.35, bx, kL, bx + jit(20), fwd(pL, -4), 0.2);
         rest(tK + 0.35, bx + jit(20), fwd(pL, -4));
         say(tK + 0.05, 'Blocked!', 'hit', { x: bx, L: pL });
         P.T = tK + 1.0;
       } else {
         const tL = tK + 4.3;
-        fly(tK, tL, bx, pL, lx, land, 2.8);
+        fly(tK, tL, bx, kL, lx, land, 2.8);
         kf(ret, tL, lx, land, 0, 'io');
         gunners.forEach((a, i) => kf(a, tL, clampX(lx + (i ? 18 : -18)), land - dir * 7, 0, 'run'));
         jam.forEach((a, i) => kf(a, tL, clampX(lx + (i ? 30 : -30)), land - dir * 9, 0, 'run'));
-        line.forEach((a, i) => { kf(a, T0 + 1.4, a.x0, fwd(L0, -0.8), 0, 'out'); kf(a, tL + 0.6, clampX(lx + (i - 3) * 14), lerp(L0, land, 0.62), 0, 'run'); });
-        box.forEach((a) => { kf(a, T0 + 1.4, a.x0, fwd(L0, -0.4), 0, 'out'); kf(a, tL + 0.6, clampX(a.x0 * 0.5 + lx * 0.5), lerp(L0, land, 0.75), 0, 'run'); });
-        kf(punter, tK + 0.6, bx, fwd(pL, 3), 0, 'out');
+        line.forEach((a, i) => { kf(a, T0 + 1.4, lastKf(a)[1], fwd(L0, -0.8), 0, 'out'); kf(a, tL + 0.6, clampX(lx + (i - 3) * 14), lerp(L0, land, 0.62), 0, 'run'); });
+        box.forEach((a) => { const x = lastKf(a)[1]; kf(a, T0 + 1.4, x, fwd(L0, -0.4), 0, 'out'); kf(a, tL + 0.6, clampX(x * 0.5 + lx * 0.5), lerp(L0, land, 0.75), 0, 'run'); });
+        kf(punter, tK + 0.6, bx, fwd(pL, 4), 0, 'out');
         let t = tL;
         if (!e.touchback) {
           hold(tL, ret);
@@ -984,7 +1012,7 @@
         rest(2.4, lx, lL);
         const ours = e.recovered;
         const rec = near(ours ? cover : recv, lx, lL);
-        cover.forEach((a) => kf(a, 2.5, lerp(a.x0, lx, 0.6), lerp(fwd(L0, -1), lL, 0.8), 0, 'run'));
+        cover.forEach((a) => kf(a, 2.5, lerp(lastKf(a)[1], lx, 0.6), lerp(fwd(L0, -1), lL, 0.8), 0, 'run'));
         front.forEach((a) => kf(a, 2.5, lerp(lastKf(a)[1], lx, 0.5), lerp(lastKf(a)[2], lL, 0.6), 0, 'run'));
         if (rec) { kf(rec, 2.55, lx, lL, 0, 'io'); hold(2.6, rec); }
         say(2.6, ours ? 'Onside kick recovered!' : 'Onside kick: they recover', ours === (e.team === G.me) ? 'good' : 'hit', { x: lx, L: lL });
@@ -992,6 +1020,22 @@
       } else {
         // the kick hangs about four seconds; nobody but the returners moves until it is caught (2024 rules)
         if (kicker) kf(kicker, 0.7, bx, fwd(L0, -0.3), 0, 'in');
+        if (e.tb) {          // no return: through the end zone, bounced in from the landing zone, or short of it
+          const short = Math.round(res.root.yl) === 60 && res.root.pos !== e.team;
+          const through = e.kick === 'touchback' || Math.round(res.root.yl) === 65;
+          const goal = dir > 0 ? 100 : 0, lx = clampX(180 + jit(30));
+          const land = short ? goal - dir * 24 : through ? goal + dir * 7 : goal - dir * 6;
+          const tL = through ? 4.2 : 4.4;
+          fly(0.7, tL, bx, L0, lx, land, through ? 3.2 : 3);
+          if (!through && !short) { fly(tL, tL + 1.2, lx, land, clampX(lx + jit(16)), goal + dir * 4, 0.15); }
+          rest(through ? tL : tL + (short ? 0 : 1.2), lx, short ? land : goal + dir * (through ? 7 : 4));
+          const ret = near(deep, lx, land) || deep[0];
+          if (ret) kf(ret, tL, clampX(lx + jit(10)), goal - dir * 2, 0, 'io');
+          cover.forEach((a) => kf(a, tL + 0.8, a.x0, a.L0 + dir * 4, 0, 'io'));
+          say(tL + (through || short ? 0.2 : 1.3), short ? 'Short of the landing zone' : 'Touchback', 'info', { x: 180, L: goal - dir * 10 });
+          P.T = tL + (through || short ? 1.0 : 2.0);
+          return finishCamera();
+        }
         const land = dir > 0 ? 97 : 3, lx = clampX(180 + jit(40)), tL = 4.6;
         fly(0.7, tL, bx, L0, lx, land, 3);
         const ret = near(deep, lx, land) || deep[0];
@@ -1014,7 +1058,10 @@
       }
     } else return null;
 
+    return finishCamera();
+
     // the camera: everything that moves, with room around it
+    function finishCamera() {
     const Ls = [L0];
     sc.actors.forEach((a) => (a.kf || []).forEach((k) => Ls.push(k[2])));
     P.segs.forEach((s) => { if (s.kind === 'fly') Ls.push(s.L0, s.L1); else if (s.kind === 'rest') Ls.push(s.L); });
@@ -1026,6 +1073,7 @@
     P.cam = { lo: Math.max(lo, -10), hi: Math.min(hi, 110) };
     P.segs.sort((a, b) => a.t0 - b.t0);
     return P;
+    }
   }
 
   // clk: the game clock before the step (t0), at the snap and after the play; the time that runs off before
@@ -1070,7 +1118,7 @@
   }
 
   // play one snap on the field: `before` is the state it was snapped from, `side` its strong side
-  async function animatePlay(before, res, side, replay) {
+  async function animatePlay(before, res, side, replay, look) {
     if (reduced() || (G.fast && !replay) || $('play').hidden) return false;
     const e = res.log.find((x) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(x.ev));
     if (!e) return false;
@@ -1083,14 +1131,17 @@
           air: 4, incomplete: !e.good, td: e.good, row: -1, t: before.t };
         P = choreograph(sc, q, res, true);
       } else {
-        sc = makeScene(before, side);
+        sc = makeScene(before, side, look);
         P = choreograph(sc, e, res, false);
       }
     } catch (err) { console.warn('animation skipped:', err); P = null; }
     scene = sc;
     if (!P) return false;
-    const ro = res.log.find((x) => x.ev === 'runoff');
-    const clk = { t0: before.t, snap: ro ? ro.t : before.t, end: Math.min(res.root.t, ro ? ro.t : before.t) };
+    // the clock at the snap: after the runoff, or after a timeout called before it (a kick to win), else as it was
+    const k0 = res.log.findIndex((x) => x.ev !== 'runoff' && x.ev !== 'timeout');
+    const pre = k0 < 0 ? res.log : res.log.slice(0, k0), ro = pre.find((x) => x.ev === 'runoff');
+    const tos = pre.filter((x) => x.ev === 'timeout'), snapT = ro ? ro.t : tos.length ? tos[tos.length - 1].t : before.t;
+    const clk = { t0: before.t, snap: snapT, end: Math.min(res.root.t, snapT) };
     await runPlan(sc, P, PLAY_SPEED, clk);
     fadeNext = true;
     lastBall = null;
@@ -1285,7 +1336,7 @@
     if (e.call >= 0) {
       const c = idx.calls[e.call];
       const actor = c.id.startsWith('rb_') ? nm.rb : nm.qb;
-      what = `${c.id === 'trick' ? `The ${who} run a trick play` : `${actor || `The ${who}`} ${c.say}`}${mine ? lookText(e.look) : ''}`;
+      what = `${c.id === 'trick' ? `The ${who} run a trick play` : `${actor || `The ${who}`} ${c.say}`}${e.row >= 0 ? lookText(e.look) : ''}`;
     } else what = `${nm.qb || who} ${e.kind === RUN ? 'hands off' : 'drops back'}`;
     const y = Math.round(e.td && !e.turnover ? e.yl : e.yards);      // a touchdown gains the distance to the goal line
     const gain = y > 0 ? `${y} yard${y === 1 ? '' : 's'}` : y < 0 ? `loss of ${-y}` : 'no gain';
@@ -1333,7 +1384,7 @@
           `${teamName(code(e.team))} punt${e.touchback ? ', touchback' : `, net ${Math.round(e.net)} yards`}`; t = null; break;
         case 'pat': text = e.two ? `Two-point try ${e.good ? 'good' : 'fails'}` : `Extra point ${e.good ? 'good' : 'no good'}`; break;
         case 'kickoff': text = e.onside ? `Onside kick, recovered by the ${teamName(code(e.recovered ? e.team : 1 - e.team))}` :
-          e.retTd ? 'Kickoff returned for a touchdown' : `Kickoff, ${teamName(code(1 - e.team))} start at their own ${Math.round(100 - e.yl)}`; break;
+          e.retTd ? 'Kickoff returned for a touchdown' : `Kickoff${e.tb ? (Math.round(e.yl) === 60 ? ', short of the landing zone' : ', touchback') : ''}: the ${teamName(code(1 - e.team))} start at their own ${Math.round(100 - e.yl)}`; break;
         case 'end': text = (e.t ?? G.root.t) >= 1800 ? 'Halftime' : 'End of regulation'; break;
         default: break;
       }
@@ -1346,7 +1397,8 @@
     if (e.ev === 'fg') return e.made ? `${Math.round(e.dist)}-yard field goal is good` : 'Field goal: no good';
     if (e.ev === 'punt') return e.retTd ? 'Punt return touchdown' : e.blocked ? 'Punt blocked' : `Punt, net ${Math.round(e.net || 0)}`;
     if (e.ev === 'pat') return e.two ? (e.good ? 'Two-point try good' : 'Two-point try fails') : (e.good ? 'Extra point good' : 'Extra point missed');
-    if (e.ev === 'kickoff') return e.onside ? (e.recovered ? 'Onside kick recovered' : 'Onside kick: they recover') : e.retTd ? 'Returned for a touchdown' : 'Kickoff';
+    if (e.ev === 'kickoff') return e.onside ? (e.recovered ? 'Onside kick recovered' : 'Onside kick: they recover') : e.retTd ? 'Returned for a touchdown'
+      : e.tb ? (Math.round(e.yl) === 60 ? 'Short kick: ball at the 40' : 'Touchback') : 'Kickoff';
     if (e.kind === SPIKE) return 'Spiked';
     if (e.kind === KNEEL) return 'Kneel';
     const y = Math.round(e.yards);
@@ -1437,9 +1489,12 @@
       G.side = sideFor(G.seq);
       drawAll();
       if (r.phase === DONE) return finishSpot();
+      if (r.pos === G.me) G.autoDef = false;
       if (r.phase === SNAP && r.pos === G.me) return promptOffense();
+      if (r.phase === SNAP && !G.autoDef) return promptDefense();
       if (r.phase === PAT && r.pos === G.me) return promptChoice('pat');
-      if (r.phase === KICKOFF && r.pos === G.me && !r.free_kick && kickChoice(r)) return promptChoice('kick');
+      if (r.phase === KICKOFF && r.pos === G.me && !r.free_kick) return promptChoice('kick');
+      if (r.phase === KICKOFF && r.pos === G.me && r.free_kick && kickChoice(r)) return promptChoice('freekick');
       if (r.phase === SNAP && r.pos !== G.me && r.clock_running && r.to[G.me] > 0 && defChoice(r)) return promptChoice('deftime');
       const action = r.phase === SNAP ? { to_def: false } : (r.phase === KICKOFF && r.pos === G.me ? { kick: 'deep' } : {});
       const label = r.phase === KICKOFF ? (r.pos === G.me ? 'You kick off' : `The ${teamName(code(r.pos))} kick off`) :
@@ -1465,15 +1520,18 @@
     G.root = res.root;
     if (res.done) G.root.phase = DONE;
     persist();
-    G.lastPlay = { before, res, side };
-    res.animated = await animatePlay(before, res, side, false);
+    const pe = res.log.find((x) => x.ev === 'play');
+    const look = before.pos === G.me ? G.look : action && action.def && pe && pe.look && pe.look.box ? (pe.look.box >= 7 ? 2 : 0) + (pe.look.blitz ? 1 : 0) : null;
+    G.lastPlay = { before, res, side, look };
+    res.animated = await animatePlay(before, res, side, false, look);
+    G.look = null;
     return res;
   }
   async function replay() {
     const lp = G.lastPlay;
     if (busy || !lp) return;
     busy = true;
-    try { await animatePlay(lp.before, lp.res, lp.side, true); } finally { busy = false; drawBar(); drawField(); }
+    try { await animatePlay(lp.before, lp.res, lp.side, true, lp.look); } finally { busy = false; drawBar(); drawField(); }
   }
 
   // your ball: Run / Pass / RPO, plus a timeout, spike, kneel or kick when it matters
@@ -1482,7 +1540,9 @@
     status('Breaking the huddle…');
     G.info = (await send({ type: 'info', scen: simScen(), root: r })).info;
     G.fast = false;
+    G.look = pickLook(G.info.looks, hash('look', dayN, G.si, G.seq));
     ui = { step: 'family', fam: null, oob: false, tempo: tempoKeyOf(G.info.tempo) };
+    drawField();
     drawDock();
   }
   // kneel: ahead late, or ending the first half; timeout and spike: when you need the time
@@ -1525,6 +1585,7 @@
     d.append(head);
     if (ui.step === 'family') {
       head.append(el('h2', '', 'Your call'), el('span', 'sub', `${ddText(r)} · ${spotText(r)}`));
+      if (G.look != null) d.append(readLine(G.look));
       if (r.clock_running) d.append(tempoPicker(r));
       const fam = el('div', 'keys');
       fam.style.setProperty('--cols', 3);
@@ -1606,6 +1667,24 @@
   }
 
   // how fast to get to the next snap while the clock runs: no-huddle, huddle or milk it
+  // the defense's look before your call: real plays of your call against this look decide the snap
+  function pickLook(p, seed) {
+    if (!p) return null;
+    const u = rng(seed)();
+    let acc = 0;
+    for (let b = 0; b < p.length; b++) { acc += p[b]; if (u <= acc) return b; }
+    return p.length - 1;
+  }
+  function readLine(b) {
+    const L = LOOKS[b], w = el('div', 'read');
+    w.append(el('span', 'lab', 'Defense'));
+    const v = el('div', 'v');
+    v.append(el('b', '', L.loaded ? 'Loaded box' : 'Light box'));
+    if (L.blitz) v.append(el('b', 'blitz', 'Showing blitz'));
+    v.append(el('small', '', L.loaded ? '7 or more near the line' : '6 or fewer near the line'));
+    w.append(v);
+    return w;
+  }
   function tempoPicker(r) {
     const w = el('div', 'tempo');
     w.append(el('span', 'lab', 'Tempo'));
@@ -1675,7 +1754,9 @@
     busy = false;
   }
   const withTempo = (a) => (G.root.clock_running && ui && ui.tempo ? { ...a, tempo: engineTempo(ui.tempo, G.root) } : a);
-  function callAction(id, oob) { return withTempo({ to_off: false, play: CALL[id].kind, call: id, oob: !!oob }); }
+  function callAction(id, oob) {
+    return withTempo({ to_off: false, play: CALL[id].kind, call: id, oob: !!oob, looks: G.look != null ? 1 << G.look : 0 });
+  }
   async function decideCall(pick) {
     if (busy) return;
     busy = true;
@@ -1690,7 +1771,8 @@
       status(`Simulating all ${opts.length} calls 600 times each…`);
       const vals = await evaluate(r, opts, hash('call', dayN, G.si, G.seq));
       const q = {};
-      const freq = {}; G.info.calls.forEach((c) => { freq[c.id] = c.freq; });
+      const freq = {}, byLook = G.info.lookByCall;
+      G.info.calls.forEach((c, ci) => { freq[c.id] = c.freq * (G.look != null && byLook ? byLook[ci][G.look] : 1); });
       let goShare = 1;
       if (r.down === 4) {
         const f4 = coachProbs('fourth_down', r, me) || { go: r.yl <= 40 ? 0.35 : 0.15, fg: r.yl <= 40 ? 0.55 : 0.05, punt: r.yl <= 40 ? 0.1 : 0.8 };
@@ -1710,9 +1792,76 @@
     busy = false;
   }
 
+  // their ball: you call the defense (a timeout first, when it matters); the coordinator can take the drive
+  const defTimeoutOk = (r) => r.clock_running && r.to[G.me] > 0 && defChoice(r);
+  async function promptDefense() {
+    const r = G.root;
+    status('Their huddle…');
+    G.dinfo = (await send({ type: 'info', scen: simScen(), root: r })).info;
+    G.fast = false;
+    ui = { step: 'defense', to: false };
+    drawDefDock();
+  }
+  function drawDefDock() {
+    const r = G.root, d = $('dock');
+    d.textContent = '';
+    const head = el('div', 'ask');
+    head.append(el('h2', '', 'Your defense'), el('span', 'sub', `${teamName(code(r.pos))} ball · ${ddText(r)} · ${spotText(r)}`));
+    d.append(head);
+    const keys = el('div', 'keys');
+    keys.style.setProperty('--cols', 3);
+    DEFS.forEach((k, i) => {
+      const b = key(DEF[k].label, DEF[k].sub, 'big def', i);
+      b.addEventListener('click', () => { if (!busy) decideDefense(k); });
+      keys.append(b);
+    });
+    d.append(keys);
+    if (defTimeoutOk(r)) {
+      const tg = el('div', 'toggle');
+      const lab = el('div', 'lab', 'Timeout first');
+      lab.append(el('small', '', `Stop the clock before their snap · ${r.to[G.me]} left`));
+      const sw = el('button', 'sw2');
+      sw.type = 'button'; sw.id = 'toSwitch';
+      sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(ui.to)); sw.setAttribute('aria-label', 'Timeout first');
+      sw.addEventListener('click', () => { ui.to = !ui.to; sw.setAttribute('aria-checked', String(ui.to)); });
+      tg.append(lab, sw);
+      d.append(tg);
+    }
+    const auto = el('button', 'chip', 'Let the coordinator call this drive');
+    auto.type = 'button';
+    auto.addEventListener('click', () => { if (busy) return; G.autoDef = true; advance(); });
+    d.append(auto);
+  }
+  async function decideDefense(k) {
+    if (busy) return;
+    busy = true;
+    const r = G.root, me = G.me;
+    try {
+      const decisions = [], useTo = !!(ui.to && defTimeoutOk(r));
+      if (defTimeoutOk(r)) {
+        const to = [{ key: 'timeout', label: 'Timeout', action: { to_def: true, def: k } }, { key: 'no_timeout', label: 'Let it run', action: { to_def: false, def: k } }];
+        status('Simulating both clock options 600 times…');
+        const tv = await evaluate(r, to, hash('deftime', dayN, G.si, G.seq));
+        decisions.push(decisionFrom('deftime', 'def_timeout', to, tv, useTo ? 'timeout' : 'no_timeout',
+          coachProbs('def_timeout', r, me) || { timeout: 0.15, no_timeout: 0.85 }, situation(r)));
+      }
+      const opts = DEFS.map((x) => ({ key: x, label: DEF[x].label, action: { to_def: useTo, def: x } }));
+      status('Simulating all three defensive calls 600 times each…');
+      const vals = await evaluate(r, opts, hash('def', dayN, G.si, G.seq));
+      const L = (G.dinfo && G.dinfo.looks) || [0.25, 0.25, 0.25, 0.25];
+      decisions.push(decisionFrom('defcall', 'def_call', opts, vals, k, { blitz: L[1] + L[3], load: L[2], soft: L[0] }, situation(r)));
+      decisions.forEach((x) => G.decisions.push(x));
+      G.snapN += 1;
+      status('Snap…', reduced() ? null : 'Tap the field to skip');
+      const res = await stepWith(opts.find((o) => o.key === k).action);
+      showResult(decisions, res);
+    } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
+    busy = false;
+  }
+
   // their ball late, your touchdown, your kickoff
   function promptChoice(kind) {
-    const r = G.root, me = G.me, d = $('dock');
+    const r = G.root, me = G.me, d = $('dock'), behind = r.score[me] < r.score[1 - me];
     const spec = {
       deftime: { ask: 'Clock is running', sub: `${teamName(code(r.pos))} ball, ${ddText(r)}`, family: 'def_timeout',
         opts: [{ key: 'timeout', label: 'Timeout', sub: `${r.to[me]} left`, action: { to_def: true } }, { key: 'no_timeout', label: 'Let it run', action: { to_def: false } }],
@@ -1720,7 +1869,17 @@
       pat: { ask: 'Touchdown!', sub: 'Kick it or go for two?', family: 'pat',
         opts: [{ key: 'xp', label: 'Kick it', action: { pat: 'xp' } }, { key: 'two', label: 'Go for two', action: { pat: 'two' } }],
         q: () => coachProbs('pat', r, me) || { xp: 0.9, two: 0.1 } },
-      kick: { ask: 'Kickoff', sub: 'Deep or onside?', family: 'onside',
+      // 2025 rules: a touchback off a kickoff comes out to the 35, and only a team that is behind may declare an onside
+      // kick; in 2025, 18% of kickoffs were kicked through for the touchback (q)
+      kick: { ask: 'Kickoff', sub: behind ? 'Where do you kick it?' : 'Where do you kick it? (Onside only when behind)', family: 'onside',
+        opts: [{ key: 'return', label: 'To the returner', sub: 'Make them run it back', action: { kick: 'return' } },
+          { key: 'touchback', label: 'Through the end zone', sub: 'Touchback: their 35', action: { kick: 'touchback' } },
+          ...(behind ? [{ key: 'onside', label: 'Onside', sub: 'Try to get it back', action: { kick: 'onside' } }] : [])],
+        q: () => {
+          const on = behind ? (coachProbs('onside', r, me) || { onside: 0.01 }).onside || 0.01 : 0;
+          return { ...(behind ? { onside: on } : {}), return: (1 - on) * 0.82, touchback: (1 - on) * 0.18 };
+        } },
+      freekick: { ask: 'Free kick', sub: 'After the safety: deep or onside?', family: 'onside',
         opts: [{ key: 'deep', label: 'Kick deep', action: { kick: 'deep' } }, { key: 'onside', label: 'Onside', action: { kick: 'onside' } }],
         q: () => coachProbs('onside', r, me) || { deep: 0.85, onside: 0.15 } },
     }[kind];
@@ -1729,14 +1888,14 @@
     head.append(el('h2', '', spec.ask), el('span', 'sub', spec.sub));
     d.append(head);
     const keys = el('div', 'keys');
-    keys.style.setProperty('--cols', 2);
+    keys.style.setProperty('--cols', spec.opts.length);
     spec.opts.forEach((o, i) => {
-      const b = key(o.label, o.sub || null, 'big', i);
+      const b = key(o.label, o.sub || null, spec.opts.length > 2 || spec.opts.some((x) => x.label.length > 10) ? 'big def' : 'big', i);
       b.addEventListener('click', async () => {
         if (busy) return;
         busy = true;
         try {
-          status('Simulating both options 600 times…');
+          status(`Simulating ${spec.opts.length > 2 ? 'every option' : 'both options'} 600 times…`);
           const vals = await evaluate(r, spec.opts, hash(kind, dayN, G.si, G.seq));
           const x = decisionFrom(kind, spec.family, spec.opts, vals, o.key, spec.q(), `${clockOf(r.t).text} Q${clockOf(r.t).q}`);
           G.decisions.push(x);
@@ -1752,7 +1911,7 @@
   }
 
   // ------------------------------------------------------- after the snap ---
-  const KIND_NAME = { clock: 'Clock', call: 'Play call', deftime: 'Timeout', pat: 'Try', kick: 'Kickoff' };
+  const KIND_NAME = { clock: 'Clock', call: 'Play call', deftime: 'Timeout', defcall: 'Defense', pat: 'Try', kick: 'Kickoff', freekick: 'Free kick' };
   function optionTable(x) {
     const t = el('table', 'opts');
     t.append(el('caption', '', KIND_NAME[x.kind] || 'Call'));
@@ -2039,6 +2198,9 @@
       'Read the situation, tap Next, and the field opens: their end zone at the top, yours at the bottom.',
       'Every dot is a player on today\'s roster, everyone healthy: green is good, red is not. Tap one to see what kind of player he is (mobile QB, blocking tight end…) and his numbers.',
       'Call Run, Pass or RPO, then the play. With the clock running, pick the tempo too: no-huddle, huddle, or milk it. Timeout, spike, kneel and kicks pop up when they matter.',
+      'Before your call the defense shows its look: a light or loaded box, maybe a blitz. Real plays of your call against that look decide the snap.',
+      'When they have the ball, you call the defense: blitz, load the box or play it soft. Their play comes from real plays against that look.',
+      'Your kickoffs: kick it to the returner or through the end zone for a touchback at their 35. When you are behind, you can also try an onside kick.',
       'Every snap is a real NFL play, run out on the field: broken tackles, sacks, picks, fumbles and flags all happen. Tap the field to skip ahead.',
     ].forEach((t) => ul.append(el('li', '', t)));
     openModal('How to play', [
