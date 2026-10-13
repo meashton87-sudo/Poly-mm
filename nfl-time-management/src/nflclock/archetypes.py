@@ -1,8 +1,7 @@
-"""Player archetypes for the daily game, named the way Madden names them.
+"""Player types for the daily game: a mobile or pocket quarterback, a blocking or vertical-threat tight end...
 
-EA's own ratings are not open data, so each archetype is assigned by a rule on the public stat that
-defines it (nflverse play-by-play, PFR advanced stats, snap counts and the roster's height and weight),
-last season counting half as much as this one:
+Each type is assigned by a rule on the public stat that defines it (nflverse play-by-play, PFR advanced
+stats, snap counts and the roster's height and weight), last season counting half as much as this one:
 
   QB    Scrambler / Improviser (mobile) by rushing yards per game; Strong Arm / Field General (pocket)
         by average depth of throw
@@ -30,7 +29,7 @@ PRIOR_WEIGHT = 0.5      # last season's plays count half
 OLD_WEIGHT = 0.3        # a defender with little recent play (back from injury or retirement) also uses the 3 seasons before
 FEW_SNAPS = 150
 
-# (archetype, plain-English type, what it means on the field)
+# (rule name, plain-English type, what it means on the field)
 QB = {"Scrambler": ("Mobile QB", "A threat to take off and run on any snap."),
       "Improviser": ("Mobile QB", "Extends plays with his legs and throws on the move."),
       "Strong Arm": ("Pocket passer", "Stands in the pocket and pushes the ball downfield."),
@@ -213,7 +212,8 @@ def assign(group: str, m: dict, height: float | None, weight: float | None, slot
 
 
 def describe(group: str, arch: str | None) -> dict:
+    """What the game shows: the plain-English type and what it means on the field."""
     if not arch or group not in TABLES:
         return {}
     kind, why = TABLES[group][arch]
-    return {"arch": arch, "kind": kind, "why": why}
+    return {"kind": kind, "why": why}

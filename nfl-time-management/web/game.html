@@ -255,7 +255,6 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
 .unit .nm small { display: block; font-weight: 500; font-size: 12px; color: var(--muted); }
 .arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 6px; }
 .arch .tag { background: var(--ink); color: var(--paper); border-radius: 999px; padding: 4px 11px; font: 800 12px var(--body); letter-spacing: .08em; text-transform: uppercase; }
-.arch .mad { font-size: 12px; color: var(--muted); font-weight: 600; }
 .pinfo { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center; margin-bottom: 12px; }
 .pinfo .chip-big { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; font: 900 28px var(--display); color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,.35); }
 .pinfo .nm { font-weight: 800; font-size: 18px; }
@@ -296,7 +295,7 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
     <div style="display:grid;gap:6px">
       <button id="bar" class="bar" type="button" aria-label="Game details"></button>
       <div id="dd" class="dd"></div>
-      <div class="fieldbox"><svg id="field" role="group" aria-label="The whole field, every player shown red to green by his percentile"></svg></div>
+      <div class="fieldbox"><svg id="field" role="group" aria-label="The whole field, every player shown red to green by his rating"></svg></div>
       <div class="legend">
         <span class="ramp">worse <i></i> better</span>
         <button id="deepBtn" class="ghost" type="button">
@@ -319,7 +318,7 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
       </button>
     </div>
     <p class="note" id="deepNote"></p>
-    <div class="zoom"><svg id="zoom" viewBox="0 0 360 336" role="group" aria-label="Every player's percentile"></svg></div>
+    <div class="zoom"><svg id="zoom" viewBox="0 0 360 336" role="group" aria-label="Every player's rating"></svg></div>
     <div id="units" class="units"></div>
   </div>
 </div>

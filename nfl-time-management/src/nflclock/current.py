@@ -16,11 +16,14 @@ any two teams can be matched with a realistic spread.
 """
 from __future__ import annotations
 
+from itertools import permutations
+
 import numpy as np
 import pandas as pd
 
 from . import archetypes as AR
 from . import config, live
+from . import overall as O
 from . import players as PL
 
 RECENCY = 0.5            # each earlier game counts this much of the next one
@@ -29,18 +32,14 @@ PRIOR_SEASON_SPREADS = 0.35   # last season's spreads weigh this much when fitti
 HFA = 1.5                # home-field points in the spread fit when it cannot be estimated
 
 
-def pctile(p: float) -> int:
-    """A share of the league beaten, shown as a percentile from 1st to 99th."""
-    return int(min(99, max(1, round(float(p) * 100))))
-
-
 ROSTER_OK = {"ACT", "INA"}
 HURT_LISTS = {"R01", "R04", "R05", "R40", "R48"}   # injured reserve, PUP, non-football injury or illness, IR to return
 ROLE_RECENCY = 0.75      # a player's role: each earlier week counts this much of the next one
 PRIOR_ROLE = 0.9         # a player with no healthy snaps this season keeps this much of last season's role
 PLAYED_HURT = 0.8        # a game on the injury report below this share of his usual role was played hurt
 LEFT_HURT = 0.6          # the latest game below this share of his usual role: he probably left it hurt
-QUALITY = 0.25           # better players start: score weight on (percentile - 0.5)
+QUALITY = 0.25           # better players start: score weight on (overall rating - 77) / 40 ...
+QUALITY_OUT = 0.5        # ... plus this on how far above 77 a player who is out is (his injury cut his role short)
 DC_FROM = "08-01"        # a hurt player keeps his best depth-chart rank since this date (month-day) ...
 HURT_RANK = 0.8          # ... counted at this share of a current listing (fill-in starts should not beat starters)
 
@@ -51,15 +50,28 @@ def _on_team(rows: pd.DataFrame) -> pd.Series:
 
 
 def _available(S: dict) -> tuple[dict, pd.DataFrame, set]:
-    """gsis ids each team has (injuries ignored), the roster rows behind them, and who is hurt now."""
+    """gsis ids each team has (injuries ignored), the roster rows behind them, and who is out now: on a
+    reserve list, ruled out or doubtful, or inactive for the latest game (a starter is rarely a healthy
+    scratch, and the injury report can miss him: PHI's Lane Johnson in October 2026)."""
     ros, inj = S["rosters"], S["injuries"]
     wk = ros.groupby("team")["week"].transform("max")
     last = ros[(ros["week"] == wk)]
     ok = last[_on_team(last)]
     iwk = inj.groupby("team")["week"].transform("max")
     rep = inj[(inj["week"] == iwk) & inj["report_status"].isin(["Out", "Doubtful"])]
-    hurt = set(ok.loc[ok["status"] == "RES", "gsis_id"]) | set(rep["gsis_id"])
+    hurt = set(ok.loc[ok["status"].isin(["RES", "INA"]), "gsis_id"]) | set(rep["gsis_id"])
     return {t: set(g["gsis_id"]) for t, g in ok.groupby("team")}, ok, hurt
+
+
+def _fix_ids(dc: pd.DataFrame, rows: pd.DataFrame) -> pd.DataFrame:
+    """ESPN's id crosswalk now and then points a listing at a namesake (DET's starting right tackle Blake
+    Miller at a Blake Miller from the 2000s): a listed player who is not on his team's roster is matched
+    by full name on it instead, when exactly one player there has that name."""
+    one = rows.drop_duplicates(["team", "gsis_id"]).groupby(["team", "full_name"])["gsis_id"].agg(lambda g: g.iloc[0] if len(g) == 1 else None)
+    on = set(zip(rows["team"], rows["gsis_id"]))
+    swap = pd.Series([None if (t, g) in on else one.get((t, n)) for t, g, n in zip(dc["team"], dc["gsis_id"], dc["player_name"])],
+                     index=dc.index, dtype=object)
+    return dc.assign(gsis_id=swap.fillna(dc["gsis_id"]))
 
 
 def roles(S: dict, R: PL.Ratings, season: int) -> pd.DataFrame:
@@ -145,32 +157,6 @@ OL_SLOTS = ["LT", "LG", "C", "RG", "RT"]
 OL_GUESS = {"T": ["LT", "RT"], "G": ["LG", "RG"], "C": ["C"], "OL": OL_SLOTS}
 
 
-def _ol_slots(players: list, dc_team: pd.DataFrame, pfr_to_gsis: dict) -> list:
-    """Put the five linemen in their depth-chart spots (LT, LG, C, RG, RT): each slot's highest-ranked
-    listed player among the five, then anyone left where he is listed, then by his position."""
-    dcol = dc_team[dc_team["pos_abb"].isin(OL_SLOTS)].sort_values("pos_rank")
-    gs = {pfr_to_gsis.get(x["pfr"]): x for x in players}
-    slot_of = {}
-    for slot in OL_SLOTS:
-        for gid in dcol[dcol["pos_abb"] == slot]["gsis_id"]:
-            if gid in gs and gid not in slot_of and slot not in slot_of.values():
-                slot_of[gid] = slot
-                break
-    for x in players:
-        gid = pfr_to_gsis.get(x["pfr"])
-        if gid in slot_of:
-            continue
-        free = [sl for sl in OL_SLOTS if sl not in slot_of.values()]
-        listed = [sl for sl in dcol[dcol["gsis_id"] == gid]["pos_abb"] if sl in free]
-        guess = [sl for sl in OL_GUESS.get(x["pfr_pos"], OL_SLOTS) if sl in free]
-        slot_of[gid if gid else x["pfr"]] = (listed or guess or free)[0]
-    out = []
-    for x in players:
-        gid = pfr_to_gsis.get(x["pfr"])
-        out.append({**{k: v for k, v in x.items() if k not in ("pfr", "pfr_pos")}, "pos": slot_of.get(gid if gid else x["pfr"])})
-    return sorted(out, key=lambda x: OL_SLOTS.index(x["pos"]))
-
-
 POS_NORM = {"HB": "RB", "FB": "FB", "RB": "RB", "WR": "WR", "TE": "TE", "QB": "QB", "T": "T", "OT": "T", "G": "G", "OG": "G",
             "C": "C", "OL": "OL", "DE": "DE", "DT": "DT", "NT": "NT", "DL": "DL", "LB": "LB", "ILB": "LB", "MLB": "LB",
             "OLB": "OLB", "CB": "CB", "DB": "CB", "S": "S", "FS": "S", "SS": "S", "SAF": "S"}
@@ -182,14 +168,45 @@ def _def_group(R, rt, pfr, pos):
             else "LB" if pos == "LB" else "CB" if pos == "CB" else "S" if pos == "S" else None))
 
 
+def _line(ol: pd.DataFrame, dc: pd.DataFrame, dc_since: pd.DataFrame | None) -> list:
+    """The five linemen and their slots, LT to RT, as [(gsis id, slot)]. They are the five best (`ol`,
+    sorted best first) when each can take a different slot he is listed at; when they cannot (a hurt
+    starter and the man filling in for him, both listed only at the same spot), one of them gives way to
+    the best lineman listed at the open slot, keeping the five's score highest. A listing is any spot on
+    today's chart (the higher, the likelier) or a starting spot since the preseason; a lineman listed
+    nowhere can play his position's slots."""
+    was = dc_since[dc_since["pos_rank"] == 1] if dc_since is not None else dc.iloc[0:0]
+    pref = {}
+    for g in ol.index:
+        p_ = {sl: 2.5 for sl in was.loc[was["gsis_id"] == g, "pos_abb"] if sl in OL_SLOTS}
+        for sl, r in dc.loc[dc["gsis_id"] == g, ["pos_abb", "pos_rank"]].itertuples(index=False):
+            if sl in OL_SLOTS:
+                p_[sl] = max(p_.get(sl, 0.0), {1: 3.0, 2: 2.0}.get(r, 1.0))
+        pref[g] = p_ or {sl: 0.5 for sl in OL_GUESS.get(ol.at[g, "pos"], OL_SLOTS)}
+
+    def place(five):          # the likeliest slots for these five, and whether each is at one of his
+        n, _, perm = max((sum(sl in pref[g] for g, sl in zip(five, pm)), sum(pref[g].get(sl, 0.0) for g, sl in zip(five, pm)), pm)
+                         for pm in permutations(OL_SLOTS, len(five)))
+        return perm, n == len(five)
+
+    five = list(ol.index[:5])
+    if len(five) == 5 and not place(five)[1]:
+        swaps = sorted(((ol.at[c, "sc"] - ol.at[m, "sc"], [c if g == m else g for g in five]) for m in five for c in ol.index[5:]),
+                       key=lambda x: -x[0])
+        five = next((f for _, f in swaps if place(f)[1]), five)
+    return sorted(zip(five, place(five)[0]), key=lambda x: OL_SLOTS.index(x[1]))
+
+
 def lineup_now(R: PL.Ratings, team: str, season: int, avail_gsis: set, role: pd.DataFrame, hurt: set,
-               dc_team: pd.DataFrame | None, roster: pd.DataFrame, dc_best: pd.Series | None = None) -> dict:
+               dc_team: pd.DataFrame | None, roster: pd.DataFrame, dc_since: pd.DataFrame | None = None,
+               ovr: pd.Series | None = None) -> dict:
     """The 22 who play for `team`, injuries ignored. Candidates are the players on the team (see
     `_available`), each scored by his usual role (`roles`), a bonus for his depth-chart rank and a little
-    for how good he is (better players start). A hurt player keeps the bigger of this season's and last
-    season's role and his best depth-chart rank since the preseason (`dc_best`), since ESPN moves injured
-    players down the chart. The personnel (how many backs, receivers, tight ends, linebackers, corners,
-    safeties) is what the team has used most lately."""
+    for how good he is (better players start). A player who is out keeps the bigger of this season's and
+    last season's role and his best depth-chart rank since the preseason (`dc_since`, the team's chart
+    since then), since ESPN moves injured players down the chart, and his rating counts more. The line
+    has one man per slot (`_line`). The personnel (how many backs, receivers, tight ends,
+    linebackers, corners, safeties) is what the team has used most lately."""
     sn_all = R.T["snaps"]
     sn = sn_all[(sn_all["season"] == season) & (sn_all["team"] == team)].copy()
     sn["pos"] = sn["position"].map(POS_NORM).fillna(sn["position"])
@@ -227,20 +244,20 @@ def lineup_now(R: PL.Ratings, team: str, season: int, avail_gsis: set, role: pd.
     rank = dc.groupby("gsis_id")["pos_rank"].min()
     cand["dc"] = cand.index.map(rank)
     dc_bonus = cand["dc"].map(DC_BONUS).fillna(0.0)
-    if dc_best is not None:      # a hurt player's best listing since the preseason, counted a little less
+    if dc_since is not None:     # a hurt player's best listing since the preseason, counted a little less
+        dc_best = dc_since.groupby("gsis_id")["pos_rank"].min()
         was = pd.Series(cand.index.map(dc_best), index=cand.index).map(DC_BONUS).fillna(0.0) * HURT_RANK
         dc_bonus = pd.Series(np.where(is_hurt, np.fmax(dc_bonus, was), dc_bonus), index=cand.index)
         cand.loc[is_hurt & (was > 0), "dc"] = cand["dc"].fillna(99)
-    pct_of = lambda pf: rt["player"].get(pf, (0.5, None))[0] if isinstance(pf, str) else 0.5
-    cand["bonus"] = dc_bonus + QUALITY * (cand["pfr"].map(pct_of) - 0.5)
+    ovr = ovr if ovr is not None else pd.Series(dtype=float)
+    rating = pd.Series(cand.index.map(ovr), index=cand.index).fillna(O.CENTER - 12)
+    cand["bonus"] = dc_bonus + (QUALITY * (rating - O.CENTER) + is_hurt * QUALITY_OUT * (rating - O.CENTER).clip(lower=0)) / 40
     cand["ok"] = (cand["o"] > 0) | (cand["d"] > 0) | (cand["dc"] == 1)
 
     def rec(gid, label):
         r = cand.loc[gid]
-        pct, stat = rt["player"].get(r["pfr"], (None, None)) if isinstance(r["pfr"], str) else (None, None)
-        if pct is None:
-            pct, stat = 0.5, "Not enough snaps in the data yet: shown at the league median"
-        return {"pos": label, "name": r["full_name"], "pct": pctile(pct), "stat": stat, "id": gid}
+        _, stat = rt["player"].get(r["pfr"], (None, None)) if isinstance(r["pfr"], str) else (None, None)
+        return {"pos": label, "name": r["full_name"], "ovr": int(rating[gid]), "stat": stat or "Little NFL playing time yet", "id": gid}
 
     offense, used = [], set()
     q = cand[(cand["pos"] == "QB") & cand["ok"]].assign(sc=lambda d: d["o"] + d["bonus"]).sort_values("sc", ascending=False)
@@ -249,12 +266,12 @@ def lineup_now(R: PL.Ratings, team: str, season: int, avail_gsis: set, role: pd.
         offense.append(rec(qb_id, "QB"))
         used.add(qb_id)
     ol = cand[cand["pos"].isin(["T", "G", "C", "OL"]) & cand["ok"] & ~cand.index.isin(used)]
-    ol = ol.assign(sc=ol["o"] + ol["bonus"]).sort_values("sc", ascending=False).head(5)
-    pct, stat = rt["ol"].get(team, (0.5, "Graded as a unit: no data yet"))
-    line = [{"pfr": r.pfr, "pfr_pos": r.pos, "name": r.full_name, "pct": pctile(pct), "stat": stat, "id": r.Index}
-            for r in ol.itertuples()]
-    used |= set(ol.index)
-    offense.extend(_ol_slots(line, dc, pfr_to_gsis))
+    ol = ol.assign(sc=ol["o"] + ol["bonus"]).sort_values("sc", ascending=False)
+    _, stat = rt["ol"].get(team, (0.5, "No line data yet"))
+    stat = stat.replace("Graded as a unit: ", "His line this season: ")
+    for gid, slot in _line(ol, dc, dc_since):
+        offense.append({"pos": slot, "name": cand.at[gid, "full_name"], "ovr": int(rating[gid]), "stat": stat, "id": gid})
+        used.add(gid)
     skill = cand[cand["pos"].isin(["RB", "FB", "WR", "TE"]) & cand["ok"] & ~cand.index.isin(used)].copy()
     skill["grp"] = skill["pos"].replace({"FB": "RB"})
     skill["sc"] = skill["o"] + skill["bonus"]
@@ -306,6 +323,7 @@ def teams_now(bundle, season: int) -> dict:
     S = live.load_sources(season)
     avail, ok_rows, hurt = _available(S)
     dc = S["depth_charts"]
+    dc = _fix_ids(dc[dc["dt"].astype(str) >= f"{season}-{DC_FROM}"], ok_rows)
     latest = dc[dc["dt"] == dc["dt"].max()]
     all_ok = set().union(*avail.values())
     latest = latest[latest["gsis_id"].isin(all_ok)]                 # drop retired / cut / suspended listings
@@ -319,8 +337,9 @@ def teams_now(bundle, season: int) -> dict:
     week_now = int(pd.read_csv(config.RAW_DIR / "games.csv").query("season == @season and home_score == home_score")["week"].max()) + 1
     no_injuries = S["injuries"].iloc[0:0]
     espn = {"starters": 0, "on_chart_now": 0, "on_chart_since_aug": 0}     # cross-check against ESPN's depth charts
-    since = dc[(dc["dt"].astype(str) >= f"{season}-{DC_FROM}") & (dc["pos_grp"] != "Special Teams")]
+    since = dc[dc["pos_grp"] != "Special Teams"]
     meas = AR.measures(R, season)
+    ov = O.ratings(season, role)["ovr"]
     body = ok_rows.drop_duplicates("gsis_id").set_index("gsis_id")[["height", "weight"]]
 
     def styled(players: list) -> list:
@@ -335,8 +354,9 @@ def teams_now(bundle, season: int) -> dict:
     out = {}
     for team in sorted(avail):
         dct = latest[latest["team"] == team]
-        dc_best = since[since["team"] == team].groupby("gsis_id")["pos_rank"].min()
-        lu = lineup_now(R, team, season, avail[team], role, hurt, dct, ok_rows, dc_best)
+        dcs = since[since["team"] == team]
+        dc_best = dcs.groupby("gsis_id")["pos_rank"].min()
+        lu = lineup_now(R, team, season, avail[team], role, hurt, dct, ok_rows, dcs, ov)
         ids = [x["id"] for x in lu["off"] + lu["def"]]
         espn["starters"] += len(ids)
         espn["on_chart_now"] += sum(i in set(dct["gsis_id"]) for i in ids)
@@ -351,9 +371,9 @@ def teams_now(bundle, season: int) -> dict:
             "qb": {"name": rec["qb"]["name"], "adjustment": round(rec["qb"]["adjustment"], 5)},
             "injury_adjustment": {k: round(v, 5) for k, v in rec["injury_adjustment"].items()},
             "kicker": {"name": rec["kicker"]["name"], "rating": round(rec["kicker"]["rating"], 4),
-                       "pct": pctile(kp["k"].get(rec["kicker"]["id"], 0.5))},
+                       "ovr": O.specialist_ovr(kp["k"].get(rec["kicker"]["id"], 0.5))},
             "punter": {"name": rec["punter"]["name"], "rating": round(rec["punter"]["rating"], 3),
-                       "pct": pctile(kp["p"].get(rec["punter"]["id"], 0.5))},
+                       "ovr": O.specialist_ovr(kp["p"].get(rec["punter"]["id"], 0.5))},
             "lineup": {"off": styled(lu["off"]), "def": styled(lu["def"])},
             "recent_games": lu["games"],
         }

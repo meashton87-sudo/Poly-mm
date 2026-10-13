@@ -128,7 +128,7 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
            "schedule": schedule, "spots": spots, "teams": teams, "league": league, "hfa": now["hfa"],
            "coaches": CO.fingerprints(),
            "asof": {"season": season, "through_week": now["week"] - 1, "depth_chart": now["depth_chart"],
-                    "ratings": f"{season - 1} season (counted less) and {season} through week {now['week'] - 1}"},
+                    "ratings": f"our own, 40-99: {season - 4}-{season} play (the latest seasons count most) through {season} week {now['week'] - 1}"},
            "built": pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds")}
     (WEB / "game.json").write_text(json.dumps(out, separators=(",", ":"), default=float))
     for stale in list((WEB / "spots").glob("*.json")) if (WEB / "spots").exists() else []:

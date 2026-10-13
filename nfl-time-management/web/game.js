@@ -2,7 +2,7 @@
  *
  * Three real late-game spots a day, played with today's rosters. Each spot opens on a scenario card;
  * Next shows the whole field (their end zone at the top, yours at the bottom) with every player as a dot
- * from red to green by his percentile. Call Run, Pass or RPO (or a timeout, spike, kneel or kick when it
+ * from red to green by his overall rating. Call Run, Pass or RPO (or a timeout, spike, kneel or kick when it
  * matters), then the play. The nflclock engine (engine.js, in Web Workers) plays the snap from real NFL
  * plays of that call and values every option by simulating the rest of the game. Nothing says which call
  * is best until after the snap. The day ends with a percentile against NFL play-callers and the head
@@ -37,20 +37,21 @@
   const POS_NAME = { QB: 'Quarterback', RB: 'Running back', WR: 'Wide receiver', TE: 'Tight end', LT: 'Left tackle',
     LG: 'Left guard', C: 'Center', RG: 'Right guard', RT: 'Right tackle', EDGE: 'Edge rusher', DL: 'Defensive tackle',
     LB: 'Linebacker', CB: 'Cornerback', S: 'Safety', K: 'Kicker', P: 'Punter' };
+  // our overall rating (40-99) is how he has played, on these measures, blended with how the league values him
   const POS_METHOD = {
-    QB: 'Ranked among quarterbacks on EPA per dropback and completion percentage over expected.',
-    RB: 'Ranked among running backs on rush yards over expected, rushing EPA and scrimmage yards per game.',
-    WR: 'Ranked among wide receivers on target and air-yards share, receiving yards per game and EPA per target.',
-    TE: 'Ranked among tight ends on target and air-yards share, receiving yards per game and EPA per target.',
-    OL: 'No public stat grades linemen one at a time, so all five share their line\'s grade: pressure allowed and yards before contact, ranked among the 32 lines.',
-    EDGE: 'Ranked among edge rushers on pressures per snap, sacks and tackles for loss.',
-    DL: 'Ranked among interior linemen on pressures per snap, sacks and tackles for loss.',
-    LB: 'Ranked among off-ball linebackers on tackles, tackles for loss, missed tackles and coverage.',
-    CB: 'Ranked among cornerbacks on passer rating allowed and passes defended per target.',
-    S: 'Ranked among safeties on passer rating allowed, missed tackles and passes defended.',
-    K: 'Ranked among kickers on field goals made over expected.',
-    P: 'Ranked among punters on net punting over expected.',
+    QB: 'EPA per play and completion % over expected',
+    RB: 'rush yards over expected, rushing EPA, scrimmage yards per game and receiving EPA',
+    WR: 'receiving yards per game, target and air-yards share, EPA per target and yards after the catch over expected',
+    TE: 'receiving yards per game, target and air-yards share, EPA per target and yards after the catch over expected',
+    OL: 'his line\'s pressure rate allowed and yards before contact, since no public stat grades linemen one at a time',
+    EDGE: 'pressure rate, sacks, tackles for loss and QB hits',
+    DL: 'pressure rate, sacks, tackles for loss and QB hits',
+    LB: 'tackling, tackles for loss, missed-tackle rate, coverage and pressures',
+    CB: 'passer rating allowed, interceptions and passes defended per target, yards per target and missed tackles',
+    S: 'passer rating allowed, passes defended, missed-tackle rate, tackles and tackles for loss',
   };
+  const POS_PLURAL = { QB: 'quarterbacks', RB: 'running backs', WR: 'wide receivers', TE: 'tight ends', OL: 'offensive linemen',
+    EDGE: 'edge rushers', DL: 'interior linemen', LB: 'linebackers', CB: 'cornerbacks', S: 'safeties', K: 'kickers', P: 'punters' };
   const OL = ['LT', 'LG', 'C', 'RG', 'RT'];
   const DEEP = new Set(['deep_strong', 'deep_weak', 'deep_middle', 'pa_deep', 'hail_mary']);
   const SQ = { g: '🟩', y: '🟨', o: '🟧', r: '🟥' };
@@ -108,10 +109,20 @@
   const code = (i) => (i === 0 ? G.scen.home : G.scen.away);
   const teamOf = (i) => (i === 0 ? G.scen.game.home : G.scen.game.away);
   const markOf = (cost) => (cost < 0.005 ? 'g' : cost < 0.02 ? 'y' : cost < 0.05 ? 'o' : 'r');
-  function rate(p) {          // red (worse) -> yellow -> green (better)
-    const h = p < 50 ? 2 + (p / 50) * 43 : 45 + ((p - 50) / 50) * 90;
-    const l = p < 50 ? 52 : 50 - ((p - 50) / 50) * 4;
-    return `hsl(${h.toFixed(0)} ${p > 40 && p < 60 ? 88 : 80}% ${l.toFixed(0)}%)`;
+  function rate(o) {          // an overall rating as a color: red (below a starter) -> yellow (typical, 77) -> green (elite)
+    const v = clip(o, 55, 95);
+    const h = v < 77 ? 2 + ((v - 55) / 22) * 43 : 45 + ((v - 77) / 18) * 90;
+    const l = v < 77 ? 52 : 50 - ((v - 77) / 18) * 4;
+    return `hsl(${h.toFixed(0)} ${v > 72 && v < 82 ? 88 : 80}% ${l.toFixed(0)}%)`;
+  }
+  const groupOf = (label) => (OL.includes(label) || label === 'T' || label === 'G' ? 'OL' : label);
+  function rankOf(p, label) {  // where his rating sits among the league's starters at his position
+    const g = groupOf(label), all = [];
+    Object.values(idx.teams).forEach((t) => {
+      if (g === 'K' || g === 'P') all.push((g === 'K' ? t.kicker : t.punter).ovr);
+      else [...t.lineup.off, ...t.lineup.def].forEach((q) => { if (groupOf(q.pos) === g) all.push(q.ovr); });
+    });
+    return { rank: all.filter((v) => v > p.ovr).length + 1, of: all.length, g };
   }
   function shortName(n) {
     const parts = String(n || '').replace(/\s+(Jr\.?|Sr\.?|II|III|IV|V)$/, '').split(/\s+/);
@@ -371,8 +382,8 @@
       const add = (o, teamI, off) => {
         const team = code(teamI), mine = teamI === G.me;
         const g = S('g', { class: `dot ${mine ? 'me' : 'them'}`, tabindex: 0, role: 'button',
-          'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${o.p.name}, ${ordinal(o.p.pct)} percentile` });
-        g.append(S('circle', { class: 'hit', r: 11 }), S('circle', { class: 'c', r: 6.2, fill: rate(o.p.pct) }));
+          'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${o.p.name}, rated ${o.p.ovr}` });
+        g.append(S('circle', { class: 'hit', r: 11 }), S('circle', { class: 'c', r: 6.2, fill: rate(o.p.ovr) }));
         const open = () => playerInfo(o.p, o.label, team);
         g.addEventListener('click', open);
         g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } });
@@ -455,6 +466,7 @@
   const AIR = { quick_strong: 5, quick_weak: 5, quick_middle: 7, screen: -2, deep_strong: 24, deep_weak: 24, deep_middle: 22,
     pa_short: 9, pa_deep: 27, roll_strong: 8, roll_weak: 8, hail_mary: 48, rpo_strong: 4, rpo_weak: 4, trick: 30 };
   const RELEASE = { quick: 0.8, screen: 0.75, deep: 1.3, pa: 1.4, roll: 1.25, hail: 1.6, rpo: 0.7, trick: 1.75 };
+  const PLAY_SPEED = 0.85;     // playback speed (1 = the pace the plays are drawn at); your snaps, theirs 1.25x this
 
   function kf(a, t, x, L, w, e) {
     if (!a) return;
@@ -946,13 +958,13 @@
     } catch (err) { console.warn('animation skipped:', err); P = null; }
     scene = sc;
     if (!P) return false;
-    await runPlan(sc, P, e.team === G.me ? 1 : 1.25);
+    await runPlan(sc, P, PLAY_SPEED * (e.team === G.me ? 1 : 1.25));
     fadeNext = true;
     lastBall = null;
     return true;
   }
 
-  // the in-depth view: the 22 up close with every percentile, and every player listed
+  // the in-depth view: the 22 up close with every rating, and every player listed
   function drawZoom(svg) {
     const r = G.root;
     svg.textContent = '';
@@ -981,9 +993,9 @@
     const put = (o, isOff, team, mine) => {
       const y = isOff ? LOS_Y + o.d * PPY : LOS_Y - o.d * PPY;
       const g = S('g', { class: `pl${mine ? ' me' : ''}`, transform: `translate(${o.x.toFixed(1)},${y.toFixed(1)})`, tabindex: 0, role: 'button',
-        'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${o.p.name}, ${ordinal(o.p.pct)} percentile` });
-      g.append(S('circle', { r: PR, fill: rate(o.p.pct) }),
-        S('text', { class: 'n', 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#fff', style: 'paint-order:stroke;stroke:rgba(0,0,0,.35);stroke-width:2px' }, String(o.p.pct)),
+        'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${o.p.name}, rated ${o.p.ovr}` });
+      g.append(S('circle', { r: PR, fill: rate(o.p.ovr) }),
+        S('text', { class: 'n', 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#fff', style: 'paint-order:stroke;stroke:rgba(0,0,0,.35);stroke-width:2px' }, String(o.p.ovr)),
         S('text', { class: 'pos', 'text-anchor': 'middle', y: isOff ? PR + 9 : -PR - 4 }, o.label));
       const open = () => playerInfo(o.p, o.label, team);
       g.addEventListener('click', open);
@@ -996,7 +1008,7 @@
   const offenseOf = (r) => (r.phase === KICKOFF ? 1 - r.pos : r.pos);     // at a kickoff, the team about to get the ball
   function openDeep() {
     const r = G.root, offI = offenseOf(r);
-    $('deepNote').textContent = `${teamName(code(offI))} ball${r.phase === KICKOFF ? ' after the kickoff' : ''}. Every player's league percentile at his position (2025 counts less, 2026 through week ${idx.asof.through_week}) and his type. Tap anyone for more.`;
+    $('deepNote').textContent = `${teamName(code(offI))} ball${r.phase === KICKOFF ? ' after the kickoff' : ''}. Every player's overall rating, 40 to 99 (a typical starter is 77), and his type. Tap anyone for more.`;
     drawZoom($('zoom'));
     const u = $('units');
     u.textContent = '';
@@ -1007,7 +1019,7 @@
       list.forEach((p) => {
         const li = el('li'), b = el('button');
         b.type = 'button';
-        const ch = el('span', 'chipn', String(p.pct)); ch.style.background = rate(p.pct);
+        const ch = el('span', 'chipn', String(p.ovr)); ch.style.background = rate(p.ovr);
         const nm = el('span', 'nm', p.name);
         if (p.kind) nm.append(el('small', '', p.kind));
         b.append(ch, el('span', 'ps', p.pos), nm);
@@ -1018,8 +1030,8 @@
       return d;
     };
     const t = (i) => teamOf(i);
-    const spec = (i) => [{ ...t(i).kicker, pos: 'K', pct: t(i).kicker.pct ?? 50, stat: 'Field goals over expected' },
-      { ...t(i).punter, pos: 'P', pct: t(i).punter.pct ?? 50, stat: 'Net punting over expected' }];
+    const spec = (i) => [{ ...t(i).kicker, pos: 'K', ovr: t(i).kicker.ovr ?? 77, stat: 'Rated on field goals made over expected' },
+      { ...t(i).punter, pos: 'P', ovr: t(i).punter.ovr ?? 77, stat: 'Rated on net punting over expected' }];
     u.append(unit(`${teamName(code(offI))} offense`, lineup(offI).off, code(offI)),
       unit(`${teamName(code(1 - offI))} defense`, lineup(1 - offI).def, code(1 - offI)),
       unit('Kickers and punters', [...spec(G.me).map((p) => ({ ...p, name: `${p.name} (${code(G.me)})` })),
@@ -1825,20 +1837,22 @@
   function playerInfo(p, label, team) {
     const ol = OL.includes(label) || label === 'T' || label === 'G';
     const top = el('div', 'pinfo');
-    const ch = el('div', 'chip-big', String(p.pct)); ch.style.background = rate(p.pct);
+    const ch = el('div', 'chip-big', String(p.ovr)); ch.style.background = rate(p.ovr);
     top.append(ch);
-    const nm = el('div');
-    nm.append(el('div', 'nm', p.name), el('div', 'ps', `${team ? teamName(team) + ' · ' : ''}${POS_NAME[label] || label} · ${ordinal(p.pct)} percentile`));
+    const nm = el('div'), rk = rankOf(p, label);
+    nm.append(el('div', 'nm', p.name), el('div', 'ps', `${team ? teamName(team) + ' · ' : ''}${POS_NAME[label] || label}`),
+      el('div', 'ps', `${ordinal(rk.rank)} of ${rk.of} starting ${POS_PLURAL[rk.g] || 'players'}`));
     top.append(nm);
     const nodes = [top];
     if (p.kind) {
       const a = el('div', 'arch');
       a.append(el('span', 'tag', p.kind));
-      if (p.arch.toLowerCase() !== p.kind.toLowerCase()) a.append(el('span', 'mad', `Madden type: ${p.arch}`));
       nodes.push(a, el('p', 'lead', p.why));
     }
+    const how = POS_METHOD[groupOf(label)];
     nodes.push(el('p', p.kind ? '' : 'lead', p.stat || ''),
-      el('p', 'note', `${POS_METHOD[ol ? 'OL' : label] || ''} Stats from ${idx.asof.ratings}; small samples are pulled toward average.${p.kind ? ' Types use Madden\'s archetype names, assigned from the same stats.' : ''}`));
+      el('p', 'note', how ? `Our rating, 40 to 99: how he has played (${how}) over the last five seasons, the latest counting most, blended with how the league values him: his contract, Pro Bowls and All-Pros, draft slot and playing time. A typical starter is 77.`
+        : 'Our rating, 40 to 99, from his kicking over the last seasons. A typical starter is 77.'));
     openModal(POS_NAME[label] || label, nodes);
   }
   function spotInfo() {
@@ -1850,10 +1864,10 @@
     add('Line today', Math.abs(line) < 0.5 ? 'Pick’em' : `${teamName(line > 0 ? sc.home : sc.away)} by ${Math.abs(line).toFixed(1)}`);
     [A, H].forEach((t) => {
       add(`${teamName(t.team)}`, `${t.coach || ''}${t.qb && t.qb.name ? ` · QB ${t.qb.name}` : ''}`);
-      add('Kicker', `${t.kicker.name || '—'} · ${ordinal(t.kicker.pct ?? 50)} percentile`);
-      add('Punter', `${t.punter.name || '—'} · ${ordinal(t.punter.pct ?? 50)} percentile`);
+      add('Kicker', `${t.kicker.name || '—'} · rated ${t.kicker.ovr ?? '—'}`);
+      add('Punter', `${t.punter.name || '—'} · rated ${t.punter.ovr ?? '—'}`);
     });
-    openModal('This game', [dl, el('p', 'note', `Today's rosters with everyone healthy; ratings from ${idx.asof.ratings}. The situation is from a real ${sc.real.season} game.`)]);
+    openModal('This game', [dl, el('p', 'note', `Today's rosters with everyone healthy, and our player ratings through ${idx.asof.season} week ${idx.asof.through_week}. The situation is from a real ${sc.real.season} game.`)]);
   }
   function openHelp() {
     const ex = el('div', 'ex');

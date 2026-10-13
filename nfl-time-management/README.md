@@ -279,10 +279,10 @@ situation is halved to correct for it.
 Each spot opens on a scenario card (score, clock, down and distance, timeouts, whose call it is);
 **Next** opens the whole field top to bottom, their end zone at the top of the phone and yours at the
 bottom, with all 22 players as dots from red (worse) to green (better). There are no numbers on the
-field: **Player ratings** (or a tap on any dot) shows each player's league percentile at his position,
-his stat line and his type, using Madden's archetype names (a mobile or pocket quarterback, a blocking,
-possession or vertical-threat tight end, a power, elusive or receiving back, and so on), each assigned
-by a rule on the stat that defines it (`archetypes.py`; EA's own ratings are not open data).
+field: **Player ratings** (or a tap on any dot) shows each player's overall rating (our own, 40 to 99;
+see below), where it ranks among today's starters at his position, his stat line and his type (a mobile
+or pocket quarterback, a blocking, possession or vertical-threat tight end, a power, elusive or receiving
+back, and so on), each type assigned by a rule on the stat that defines it (`archetypes.py`).
 Play-calling is a pop-up of **Run**, **Pass** and **RPO**, then the play and its side; a timeout,
 spike, kneel, field goal or punt only appears when it matters. Every snap is then run out on the field:
 the camera zooms in like a broadcast, the dots move (the handoff or the drop, the routes, the rush, the
@@ -301,13 +301,42 @@ in the same three spots, with a share grid of one square per snap.
 The spots are real situations; the teams are today's (`current.py`). Rosters are nflverse's weekly
 rosters (the NFL's own transactions: trades, signings, releases), with injuries ignored so every team
 plays its healthy lineup: the 22 are picked by each player's usual share of snaps in the weeks he was
-healthy, his best depth-chart listing (ESPN) and his rating, in the personnel the team uses most. The
-build cross-checks every starter against ESPN's depth charts (703 of 704 on ESPN's current chart for
-his team as of October 12, 2026; all 704 listed since August).
-Player ratings blend 2025 (counted less) with 2026 to date: EPA per dropback and completion over
-expected for quarterbacks, rush yards over expected for backs, target share and yards per game for
-receivers, pressures for pass rushers, tackling and coverage for linebackers, passer rating allowed for
-corners and safeties, and the offensive line as a unit (no public data grades linemen one at a time).
+healthy, his best depth-chart listing (ESPN) and his rating, in the personnel the team uses most. A
+player who is out (on a reserve list, ruled out or doubtful, or inactive for the latest game) keeps his
+role and listing from before he got hurt, and his rating counts for more, since his injury cut his role
+short: PHI's Lane Johnson, inactive in October with nothing on the injury report, and DET's Kerby
+Joseph, on reserve all season, both start. The five linemen each take a different slot they are listed
+at, so a hurt starter and the man filling in for him are not both on the line. ESPN's id crosswalk now
+and then points a listing at a namesake (DET's rookie right tackle Blake Miller at a Blake Miller from
+the 2000s); such listings are matched by name on the team's roster. The build cross-checks every
+starter against ESPN's depth charts (703 of 704 on ESPN's current chart for his team as of
+October 12, 2026; all 704 listed since August).
+Player ratings are our own (`overall.py`), on a 40 to 99 scale where the average starter at a position
+is 77, one standard deviation better is 86, and the scale bends above 88 so the very best land between
+93 and 99. Each rating blends two parts, both scored within the position group:
+
+* **How he has played**, 2022 to 2026 with every game weighted by season (last season and this one count
+  fully, 2024 0.4, 2023 0.15, 2022 0.05), each measure shrunk toward the league for small samples: EPA per
+  play and completion over expected for quarterbacks; rush yards over expected, rushing EPA, scrimmage
+  yards per game and receiving EPA for backs; yards per game, target and air-yards share (WOPR), EPA per
+  target and yards after the catch over expected for receivers and tight ends; pressure rate, sacks,
+  tackles for loss and hits for edge rushers and interior linemen (PFR charting and box scores); tackling,
+  missed-tackle rate and coverage for linebackers and safeties; passer rating allowed, ball production
+  and yards per target for corners. No public data grades linemen one at a time, so a lineman's play is
+  his line's pressure rate allowed and yards before contact, and it counts for little.
+* **How the league values him**: his contract as a share of the cap (OverTheCap), Pro Bowls and
+  first-team All-Pros (fading a little past 34), his draft slot, and how much his team plays him.
+  Quarterbacks lean more on honors, since a passer's numbers lean on his supporting cast.
+
+Play counts for more the more he has played (up to 35% for linemen and 55-70% elsewhere), so a rookie
+leans on his standing and a veteran on his play. As a check against an outside view, the 24 first-team
+AP All-Pros for 2025 (the fullback aside) all rate 85 or better, 21 of them 90 or better, with a median
+rank of 3rd at their position. The three below 90 are Matthew Stafford (86, 9th among quarterbacks: his
+EPA per dropback this season is 13th after 3rd in 2025), Christian McCaffrey (87) and Kevin Byard (85).
+
+```bash
+python -c "from nflclock import overall as O; O.check()"   # best at each position, and where the 2025 All-Pros rate
+```
 
 ```bash
 python -c "from nflclock import dailygame as G; print(G.build())"   # writes web/playbook.json and web/game.json
@@ -395,7 +424,8 @@ pytest                              # unit tests (clock rules, kneel-out math, i
 | `playbook.py` | The daily game's 24 play calls, labeled from play-by-play and FTN charting, and each team's call ratings |
 | `players.py` | Player percentiles at every position (EPA, Next Gen Stats, PFR advanced stats), personnel allocation |
 | `current.py` | Every team today: healthy lineups from weekly rosters and snaps, QB, kicker, punter, coach, power rating |
-| `archetypes.py` | Madden-style player types (mobile or pocket QB, blocking or vertical-threat TE, ...) from the stats |
+| `overall.py` | Our overall player ratings, 40 to 99: play over five seasons blended with contract, honors, draft slot and snaps; checked against the All-Pros |
+| `archetypes.py` | Player types (mobile or pocket QB, blocking or vertical-threat TE, ...) from the stats |
 | `coaches.py` | Head coaches' late-game fingerprints (pass, deep, fourth down, two-point) for "you coached like" |
 | `dailygame.py`, `web/game.html` | Two-Minute Drill: spots, daily schedule, `web/game.json`, and the game page |
 

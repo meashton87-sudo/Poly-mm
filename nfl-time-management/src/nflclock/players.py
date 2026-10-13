@@ -190,12 +190,13 @@ class Ratings:
             (ru["w"] * ru["carries"]).groupby(ru["team"]).sum()
         p_pass, p_run = _pct(rate, rate, higher_better=False), _pct(ybc, ybc)
         pp_pass, pp_run = dict(zip(rate.index, p_pass)), dict(zip(ybc.index, p_run))
+        k_pass, k_run = rate.rank(method="min"), ybc.rank(ascending=False, method="min")
         for team in set(pp_pass) | set(pp_run):
             a, b = pp_pass.get(team, 0.5), pp_run.get(team, 0.5)
-            out["ol"][team] = ((a + b) / 2, f"Graded as a unit: pressure allowed on {rate.get(team, np.nan):.0%} of "
-                                             f"dropbacks ({ordinal(round(a * 100))} percentile), "
-                                             f"{ybc.get(team, np.nan):.1f} yards before contact per carry "
-                                             f"({ordinal(round(b * 100))} percentile)")
+            pas = f"pressure allowed on {rate[team]:.0%} of dropbacks ({ordinal(int(k_pass[team]))} best of {len(rate)} lines)" \
+                if team in rate else "no pass-blocking data yet"
+            run = f"{ybc[team]:.1f} yards before contact per carry ({ordinal(int(k_run[team]))} best)" if team in ybc else "no run data yet"
+            out["ol"][team] = ((a + b) / 2, f"Graded as a unit: {pas}, {run}")
 
         # defense: PFR stats on top of snap counts
         de = T["def"].assign(w=lambda d: _w(d, season, week))

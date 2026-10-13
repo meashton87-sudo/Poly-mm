@@ -12,13 +12,13 @@ const idx = JSON.parse(fs.readFileSync(path.join(dir, 'game.json'), 'utf8'));
 console.log(`engine + playbook in ${Date.now() - t0} ms; ${idx.spots.length} spots, ${idx.schedule.length} days, ` +
   `${Object.keys(idx.teams).length} teams, ${idx.coaches.coaches.length} coaches; ratings: ${idx.asof.ratings}`);
 
-// every team: a full 22 with percentiles, a starting QB, a kicker and a punter
+// every team: a full 22 with overall ratings (40-99), a starting QB, a kicker and a punter
 for (const [code, T] of Object.entries(idx.teams)) {
   assert.strictEqual(T.lineup.off.length, 11, `${code} offense`);
   assert.strictEqual(T.lineup.def.length, 11, `${code} defense`);
   assert.ok(T.lineup.off.some((p) => p.pos === 'QB'), `${code} QB`);
-  assert.ok(T.kicker.name && T.punter.name, `${code} specialists`);
-  [...T.lineup.off, ...T.lineup.def].forEach((p) => assert.ok(Number.isInteger(p.pct) && p.pct >= 0 && p.pct <= 100 && p.name, `${code} ${p.name}`));
+  assert.ok(T.kicker.name && T.punter.name && T.kicker.ovr >= 40 && T.punter.ovr >= 40, `${code} specialists`);
+  [...T.lineup.off, ...T.lineup.def].forEach((p) => assert.ok(Number.isInteger(p.ovr) && p.ovr >= 40 && p.ovr <= 99 && p.name, `${code} ${p.name}`));
 }
 // the schedule points at real spots; every spot builds a game against today's teams (as game.js does)
 idx.schedule.forEach((day) => day.forEach((i) => assert.ok(idx.spots[i], `spot ${i}`)));
@@ -32,7 +32,7 @@ idx.spots.forEach((sp) => eng.makeContext(scen(sp).game, { receive2h: sp.start.r
 const S = scen(idx.spots[idx.schedule[0][0]]);
 const lu = idx.teams[S.player].lineup;
 console.log(S.category, S.id, 'you:', S.player, idx.teams[S.player].coach, '| line', S.game.home_spread.toFixed(1));
-console.log('  offense', lu.off.map((p) => `${p.pos} ${p.name} ${p.pct}`).join(', '));
+console.log('  offense', lu.off.map((p) => `${p.pos} ${p.name} ${p.ovr}`).join(', '));
 console.log('  start', JSON.stringify(S.start), '| real:', S.real.coach, S.real.call, '->', S.real.drive);
 const sim = eng.simulator(eng.makeContext(S.game, { receive2h: S.start.receive2h }));
 const st = S.start;
