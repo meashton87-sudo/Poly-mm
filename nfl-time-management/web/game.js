@@ -1,10 +1,12 @@
 /* Two-Minute Drill: the daily NFL play-calling game.
  *
- * Three real late-game spots a day. The player calls every play for one team until the game ends: the
- * tempo when the clock is running, then Run / Pass / RPO, then the play. The nflclock engine (engine.js,
- * in Web Workers) plays each snap from real NFL plays of that call and values every option by simulating
- * the rest of the game. Nothing says which call is best until the ball is snapped. The score compares
- * each call with the best one and with what a typical NFL play-caller does in the same spot. */
+ * Three real late-game spots a day, played with today's rosters. Each spot opens on a scenario card;
+ * Next shows the whole field (their end zone at the top, yours at the bottom) with every player as a dot
+ * from red to green by his percentile. Call Run, Pass or RPO (or a timeout, spike, kneel or kick when it
+ * matters), then the play. The nflclock engine (engine.js, in Web Workers) plays the snap from real NFL
+ * plays of that call and values every option by simulating the rest of the game. Nothing says which call
+ * is best until after the snap. The day ends with a percentile against NFL play-callers and the head
+ * coach whose late-game calls look most like yours. */
 (function () {
   'use strict';
   const $ = (id) => document.getElementById(id);
@@ -12,7 +14,7 @@
   const SNAP = 0, PAT = 1, KICKOFF = 2, DONE = 3;
   const N_EVAL = 600;
   const POOL = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 2) - 1));
-  const STORE = 'tmd:v2';
+  const STORE = 'tmd:v3';
   const SVGNS = 'http://www.w3.org/2000/svg';
 
   const TEAMS = {
@@ -26,39 +28,47 @@
     SEA: ['Seahawks', '#69BE28'], TB: ['Buccaneers', '#D50A0A'], TEN: ['Titans', '#4B92DB'], WAS: ['Commanders', '#5A1414'],
   };
   const FAM = { run: 'Run', pass: 'Pass', rpo: 'RPO' };
-  const TEMPO = {
-    hurry: { label: 'Hurry up', act: { to_off: false, tempo: 'urgent' } },
-    huddle: { label: 'Huddle', act: { to_off: false, tempo: 'normal' } },
-    milk: { label: 'Milk it', act: { to_off: false, tempo: 'milk' } },
+  const CLOCK = {
+    play: { label: 'Run a play', act: { to_off: false } },
     timeout: { label: 'Timeout', act: { to_off: true } },
-    spike: { label: 'Spike', act: { to_off: false, play: 'spike' }, terminal: true },
-    kneel: { label: 'Kneel', act: { to_off: false, play: 'kneel' }, terminal: true },
-    rundown: { label: 'Run it down', sub: 'timeout at 0:03, kick', act: { to_off: false }, terminal: true },
+    spike: { label: 'Spike', act: { to_off: false, play: 'spike' } },
+    kneel: { label: 'Kneel', act: { to_off: false, play: 'kneel' } },
   };
-  const POS_NAME = { QB: 'Quarterback', RB: 'Running back', WR: 'Wide receiver', TE: 'Tight end', T: 'Offensive tackle',
-    G: 'Guard', C: 'Center', EDGE: 'Edge rusher', DL: 'Defensive tackle', LB: 'Linebacker', CB: 'Cornerback', S: 'Safety' };
+  const POS_NAME = { QB: 'Quarterback', RB: 'Running back', WR: 'Wide receiver', TE: 'Tight end', LT: 'Left tackle',
+    LG: 'Left guard', C: 'Center', RG: 'Right guard', RT: 'Right tackle', EDGE: 'Edge rusher', DL: 'Defensive tackle',
+    LB: 'Linebacker', CB: 'Cornerback', S: 'Safety', K: 'Kicker', P: 'Punter' };
   const POS_METHOD = {
-    QB: 'Ranked among quarterbacks on EPA per dropback.',
-    RB: 'Ranked among running backs on yards after contact per carry.',
-    WR: 'Ranked among wide receivers on EPA per target.',
-    TE: 'Ranked among tight ends on EPA per target.',
+    QB: 'Ranked among quarterbacks on EPA per dropback and completion percentage over expected.',
+    RB: 'Ranked among running backs on rush yards over expected, rushing EPA and scrimmage yards per game.',
+    WR: 'Ranked among wide receivers on target and air-yards share, receiving yards per game and EPA per target.',
+    TE: 'Ranked among tight ends on target and air-yards share, receiving yards per game and EPA per target.',
     OL: 'No public stat grades linemen one at a time, so all five share their line\'s grade: pressure allowed and yards before contact, ranked among the 32 lines.',
-    EDGE: 'Ranked among edge rushers on pressures per snap.',
-    DL: 'Ranked among interior linemen on pressures per snap.',
-    LB: 'Ranked among off-ball linebackers on tackles per snap, missed tackles and passer rating allowed in coverage.',
-    CB: 'Ranked among cornerbacks on passer rating allowed when targeted.',
-    S: 'Ranked among safeties on passer rating allowed and missed tackles.',
+    EDGE: 'Ranked among edge rushers on pressures per snap, sacks and tackles for loss.',
+    DL: 'Ranked among interior linemen on pressures per snap, sacks and tackles for loss.',
+    LB: 'Ranked among off-ball linebackers on tackles, tackles for loss, missed tackles and coverage.',
+    CB: 'Ranked among cornerbacks on passer rating allowed and passes defended per target.',
+    S: 'Ranked among safeties on passer rating allowed, missed tackles and passes defended.',
+    K: 'Ranked among kickers on field goals made over expected.',
+    P: 'Ranked among punters on net punting over expected.',
   };
+  const OL = ['LT', 'LG', 'C', 'RG', 'RT'];
+  const DEEP = new Set(['deep_strong', 'deep_weak', 'deep_middle', 'pa_deep', 'hail_mary']);
   const SQ = { g: '🟩', y: '🟨', o: '🟧', r: '🟥' };
   const GLYPH = { g: '✓', y: '≈', o: '!', r: '✗' };
+  const WHY = {
+    pass: ['throw it more than most in these spots', 'lean on the run late'],
+    deep: ['take your deep shots', 'keep the ball short'],
+    go: ['go for it on fourth down', 'kick it away on fourth down'],
+    two: ['go for two', 'take the extra point'],
+  };
 
   let idx = null;                 // game.json
   let dayN = 1, today = [];
   let state = null;               // saved progress for today
   let G = null;                   // the spot being played
-  let ui = { step: null, tempo: null, fam: null, oob: false };
-  let busy = false, lastFocus = null, tick = null;
-  const CALL = {};                // id -> call metadata
+  let ui = { step: null, fam: null, oob: false };
+  let busy = false, lastFocus = null, tick = null, lastBall = null;
+  const CALL = {};
 
   // ------------------------------------------------------------- helpers ---
   const clip = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
@@ -66,6 +76,7 @@
   const pts = (x) => `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(1)}`;
   const ordinal = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th')}`;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const reduced = () => window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   function hash(...parts) {
     let h = 2166136261 >>> 0;
     for (const ch of parts.join('|')) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; }
@@ -84,18 +95,28 @@
     if (text != null) e.textContent = text;
     return e;
   }
-  function key(label, sub, cls) {
+  function key(label, sub, cls, i) {
     const b = el('button', `key${cls ? ' ' + cls : ''}`);
     b.type = 'button';
     b.append(document.createTextNode(label));
     if (sub) b.append(el('small', '', sub));
+    if (i != null) { b.classList.add('pop'); b.style.setProperty('--i', i); }
     return b;
   }
-  const code = (i) => (i === 0 ? G.scen.game.home.team : G.scen.game.away.team);
   const teamName = (c) => (TEAMS[c] ? TEAMS[c][0] : c);
   const color = (c) => (TEAMS[c] ? TEAMS[c][1] : '#556');
-  const tierOf = (p) => (p >= 80 ? 'e' : p >= 60 ? 'g' : p >= 40 ? 'a' : p >= 20 ? 'b' : 'p');
+  const code = (i) => (i === 0 ? G.scen.home : G.scen.away);
+  const teamOf = (i) => (i === 0 ? G.scen.game.home : G.scen.game.away);
   const markOf = (cost) => (cost < 0.005 ? 'g' : cost < 0.02 ? 'y' : cost < 0.05 ? 'o' : 'r');
+  function rate(p) {          // red (worse) -> yellow -> green (better)
+    const h = p < 50 ? 2 + (p / 50) * 43 : 45 + ((p - 50) / 50) * 90;
+    const l = p < 50 ? 52 : 50 - ((p - 50) / 50) * 4;
+    return `hsl(${h.toFixed(0)} ${p > 40 && p < 60 ? 88 : 80}% ${l.toFixed(0)}%)`;
+  }
+  function shortName(n) {
+    const parts = String(n || '').replace(/\s+(Jr\.?|Sr\.?|II|III|IV|V)$/, '').split(/\s+/);
+    return parts.length > 1 ? `${parts[0][0]}.${parts.slice(1).join(' ')}` : (n || '');
+  }
   function clockOf(t) {
     const q = t > 2700 ? 1 : t > 1800 ? 2 : t > 900 ? 3 : 4;
     const s = Math.max(0, t - (4 - q) * 900);
@@ -104,23 +125,38 @@
   const halfLeft = (t) => t - (t > 1800 ? 1800 : 0);
   function spotText(r) {
     if (Math.round(r.yl) === 50) return 'midfield';
-    return r.yl > 50 ? `${code(r.pos)} ${Math.round(100 - r.yl)}` : `${code(1 - r.pos)} ${Math.round(r.yl)}`;
+    const own = r.pos === G.me;
+    if (r.yl > 50) return own ? `your ${Math.round(100 - r.yl)}` : `their ${Math.round(100 - r.yl)}`;
+    return own ? `their ${Math.round(r.yl)}` : `your ${Math.round(r.yl)}`;
   }
+  const onSpot = (r) => { const t = spotText(r); return t === 'midfield' ? 'at midfield' : `on ${t}`; };
   function ddText(r) {
     const goal = r.ytg >= r.yl;
     return `${ordinal(r.down)} & ${goal ? 'Goal' : Math.max(1, Math.round(r.ytg))}`;
   }
   function startRoot(sc) {
-    const st = sc.start, home = sc.game.home.team;
-    return { t: st.qtr <= 4 ? (4 - st.qtr) * 900 + st.clock : st.clock, pos: st.pos === home ? 0 : 1,
+    const st = sc.start;
+    return { t: st.qtr <= 4 ? (4 - st.qtr) * 900 + st.clock : st.clock, pos: st.pos === sc.home ? 0 : 1,
       score: [st.score[1], st.score[0]], down: st.down, ytg: Math.min(st.ytg, st.yl), yl: st.yl,
       to: [st.to[1], st.to[0]], clock_running: !!st.running, phase: SNAP, credit: 0, free_kick: false };
   }
-  const sideFor = (seq) => (hash('side', dayN, G.si, seq) % 2 ? 1 : -1);   // +1: strong side on the right
+  function buildScen(sp) {
+    const H = idx.teams[sp.home], A = idx.teams[sp.away];
+    const game = { home: H, away: A, home_spread: (idx.hfa || 1.5) + (H.power || 0) - (A.power || 0), indoor: sp.indoor,
+      wind: sp.wind, temp: sp.temp, league: idx.league, home_coach: H.coach, away_coach: A.coach, season: idx.asof.season };
+    return { ...sp, game };
+  }
+  const sideFor = (seq) => (hash('side', dayN, G.si, seq) % 2 ? 1 : -1);   // +1: strong side on the offense's right
+  const lineup = (i) => (teamOf(i).lineup || { off: [], def: [] });
+  function names(i) {
+    const off = lineup(i).off;
+    const qb = off.find((p) => p.pos === 'QB'), rb = off.find((p) => p.pos === 'RB');
+    return { qb: qb ? shortName(qb.name) : null, rb: rb ? shortName(rb.name) : null };
+  }
 
   // -------------------------------------------------------- worker pool ---
   const pool = [], queue = [], pending = new Map();
-  let reqId = 0, readyCount = 0, onReady = null;
+  let reqId = 0, readyCount = 0;
   function startWorkers() {
     for (let i = 0; i < POOL; i++) {
       const w = new Worker('game_worker.js');
@@ -141,7 +177,8 @@
     }
   }
   function onMsg(slot, m) {
-    if (m.type === 'ready') { slot.ready = true; readyCount++; if (readyCount === 1 && onReady) onReady(); pump(); return; }
+    if (m.type === 'ready') { slot.ready = true; readyCount++; pump(); return; }
+    if (m.type === 'error' && m.id == null) { fatal('The simulator could not load (' + m.message + '). Check your connection and reload.'); return; }
     slot.busy = false;
     const p = pending.get(m.id);
     pending.delete(m.id);
@@ -151,11 +188,13 @@
   function send(msg) {
     return new Promise((resolve, reject) => { msg.id = ++reqId; pending.set(msg.id, { resolve, reject }); queue.push(msg); pump(); });
   }
+  const simScen = () => ({ id: G.scen.id, game: G.scen.game, start: { receive2h: G.scen.start.receive2h } });
   async function evaluate(root, options, seed) {
     const k = Math.min(Math.max(1, readyCount), options.length);
     const chunks = Array.from({ length: k }, () => []);
     options.forEach((o, i) => chunks[i % k].push({ key: o.key, action: o.action }));
-    const res = await Promise.all(chunks.map((c) => send({ type: 'eval', scen: G.scen, root, options: c, n: N_EVAL, persp: G.me, seed })));
+    const sc = simScen();
+    const res = await Promise.all(chunks.map((c) => send({ type: 'eval', scen: sc, root, options: c, n: N_EVAL, persp: G.me, seed })));
     const out = {};
     res.forEach((r) => r.out.forEach((o) => { out[o.key] = o.mean; }));
     return out;
@@ -180,7 +219,6 @@
       case 'fourth_down': return ((q === 4 && th <= 600) || (q === 2 && th <= 120)) && Math.abs(margin) <= 16;
       case 'pat': return q === 4;
       case 'onside': return q === 4 && th <= 420 && margin < 0 && margin >= -16;
-      case 'kneel': return q === 4 && th <= 160 && margin > 0;
       default: return false;
     }
   }
@@ -215,141 +253,204 @@
       bestWp: best.wp, wp: mine.wp, cost, q: qq, typical, wpa: mine.wp - typical, snap: G.snapN };
   }
 
-  // ------------------------------------------------------------ the field ---
-  // A portrait window around the line of scrimmage: the offense drives up the screen.
-  const FW = 360, FH = 336, SX0 = 10, SX1 = 350, PPY = 12.2, LOS_Y = 212, PR = 11.5;
-  const XYD = (SX1 - SX0) / 53.333;                         // px per yard across the field
-  const HASH_L = SX0 + 23.58 * XYD, HASH_R = SX1 - 23.58 * XYD;   // NFL hashes: 70'9" from each sideline
-  const clampX = (x) => clip(x, SX0 + 14, SX1 - 14);
-
-  function offenseSpots(list, s, bx) {
+  // ---------------------------------------------------------- formations ---
+  // x in the offense's own frame (its right is +), depth in yards behind (offense) or off (defense) the ball
+  const SX0 = 8, SX1 = 352, XYD = (SX1 - SX0) / 53.333;
+  const HASH_L = SX0 + 23.58 * XYD, HASH_R = SX1 - 23.58 * XYD;
+  const clampX = (x) => clip(x, SX0 + 12, SX1 - 12);
+  function formation(offL, defL, s, bx) {
     const by = {};
-    list.forEach((p) => { (by[p.pos] = by[p.pos] || []).push(p); });
+    offL.forEach((p) => { (by[p.pos] = by[p.pos] || []).push(p); });
     const take = (pos) => (by[pos] && by[pos].length ? by[pos].shift() : null);
-    const out = [];
-    const put = (p, x, d, label) => { if (p) out.push({ p, x: clampX(x), d, label: label || p.pos }); };
-    const ol = [['C', bx], ['G', bx - s * 26], ['G', bx + s * 26], ['T', bx - s * 52], ['T', bx + s * 52]];
-    ol.forEach(([lab, x]) => put(take(lab) || take('G') || take('T') || take('C'), x, 1.0, lab));
+    const off = [], def = [];
+    const put = (arr, p, x, d, label) => { if (p) arr.push({ p, x: clampX(x), d, label: label || p.pos }); };
+    const olX = { LT: -52, LG: -26, C: 0, RG: 26, RT: 52 };
+    OL.forEach((lab) => put(off, take(lab), bx + olX[lab], 1.0, lab));
+    ['T', 'G'].forEach((lab) => { let p; while ((p = take(lab))) put(off, p, bx, 1.0, lab); });
     const teX = bx + s * 78;
-    const xX = s > 0 ? SX0 + 24 : SX1 - 24, zX = s > 0 ? SX1 - 28 : SX0 + 28;
-    const slotX = (teX + zX) / 2;
-    put(take('TE'), teX, 1.15, 'TE');
-    put(take('WR'), xX, 1.0, 'WR');
-    put(take('WR'), zX, 1.5, 'WR');
-    put(take('WR'), slotX, 1.7, 'WR');
-    put(take('QB'), bx, 5.0, 'QB');
-    put(take('RB'), bx - s * 25, 5.2, 'RB');
+    const xX = s > 0 ? SX0 + 22 : SX1 - 22, zX = s > 0 ? SX1 - 26 : SX0 + 26, slotX = (teX + zX) / 2;
+    put(off, take('TE'), teX, 1.15, 'TE');
+    put(off, take('WR'), xX, 1.0, 'WR');
+    put(off, take('WR'), zX, 1.5, 'WR');
+    put(off, take('WR'), slotX, 1.7, 'WR');
+    put(off, take('QB'), bx, 5.0, 'QB');
+    put(off, take('RB'), bx - s * 25, 5.2, 'RB');
     const spare = [[bx - s * 78, 1.15], [bx + s * 25, 5.2], [(xX + bx - s * 52) / 2, 1.7]];
-    Object.values(by).flat().forEach((p, i) => { const sp = spare[i % spare.length]; put(p, sp[0], sp[1]); });
-    return { pts: out, xX: clampX(xX), zX: clampX(zX), slotX: clampX(slotX), teX: clampX(teX) };
-  }
-  function defenseSpots(list, s, bx, o) {
+    Object.values(by).flat().forEach((p, i) => { const sp = spare[i % spare.length]; put(off, p, sp[0], sp[1]); });
     const g = { EDGE: [], DL: [], LB: [], CB: [], S: [], X: [] };
-    list.forEach((p) => (g[p.pos] || g.X).push(p));
-    const out = [];
-    const put = (p, x, d) => out.push({ p, x: clampX(x), d, label: p.pos });
-    const edges = g.EDGE.slice();
-    const line = [];
-    if (edges.length) line.push(edges.shift());     // weak-side end first, strong-side end last
+    defL.forEach((p) => (g[p.pos] || g.X).push(p));
+    const edges = g.EDGE.slice(), line = [];
+    if (edges.length) line.push(edges.shift());
     line.push(...g.DL, ...edges);
     const n = line.length, sp = n <= 4 ? 34 : n === 5 ? 29 : 25;
-    line.forEach((p, i) => put(p, bx + s * (i - (n - 1) / 2) * sp, 1.0));
+    line.forEach((p, i) => put(def, p, bx + s * (i - (n - 1) / 2) * sp, 1.0));
     const nl = g.LB.length, lsp = nl >= 3 ? 40 : 46;
-    g.LB.forEach((p, i) => put(p, bx + s * 8 + (i - (nl - 1) / 2) * lsp, 5.0));
-    const cbSpots = [[o.zX, 6.5], [o.xX, 6.5], [o.slotX, 5.5], [bx + s * 34, 9.0]];
-    g.CB.forEach((p, i) => { const c = cbSpots[Math.min(i, 3)]; put(p, c[0] + (i > 3 ? (i - 3) * 30 : 0), c[1]); });
-    const ns = g.S.length;
-    const third = g.CB.length < 3 ? [o.slotX, 5.6] : [o.teX, 7.6];       // two corners: the third safety covers the slot
-    const sSpots = ns === 1 ? [[bx + s * 12, 13]] : [[bx - s * 62, 12.5], [bx + s * 62, 12.5], third, [bx, 10]];
-    g.S.forEach((p, i) => { const c = sSpots[Math.min(i, sSpots.length - 1)]; put(p, c[0], c[1]); });
-    g.X.forEach((p, i) => put(p, bx + (i - (g.X.length - 1) / 2) * 40, 8));
-    return out;
+    g.LB.forEach((p, i) => put(def, p, bx + s * 8 + (i - (nl - 1) / 2) * lsp, 5.0));
+    const cbs = [[clampX(zX), 6.5], [clampX(xX), 6.5], [clampX(slotX), 5.5], [bx + s * 34, 9.0]];
+    g.CB.forEach((p, i) => { const c = cbs[Math.min(i, 3)]; put(def, p, c[0] + (i > 3 ? (i - 3) * 30 : 0), c[1]); });
+    const ns = g.S.length, third = g.CB.length < 3 ? [clampX(slotX), 5.6] : [teX, 7.6];
+    const ss = ns === 1 ? [[bx + s * 12, 13]] : [[bx - s * 62, 12.5], [bx + s * 62, 12.5], third, [bx, 10]];
+    g.S.forEach((p, i) => { const c = ss[Math.min(i, ss.length - 1)]; put(def, p, c[0], c[1]); });
+    g.X.forEach((p, i) => put(def, p, bx + (i - (g.X.length - 1) / 2) * 40, 8));
+    return { off, def };
   }
+  // vertical spacing on the full field is drawn, not to scale, so the 22 never overlap
+  const OFF_PX = (d) => 6 + d * 4.2, DEF_PX = (d) => 6 + d * 3.6;
 
+  // ------------------------------------------------------------ the field ---
+  // the whole field, your end zone at the bottom; L counts yards from your goal line (0) to theirs (100)
+  function spotGeom(r) {
+    const mine = r.pos === G.me;
+    let L, dir = mine ? 1 : -1, mode = 'snap';
+    if (r.phase === KICKOFF) { mode = 'kick'; const own = r.free_kick ? 20 : 35; L = mine ? own : 100 - own; }
+    else if (r.phase === PAT) { mode = 'pat'; L = mine ? 85 : 15; }
+    else if (r.phase === DONE) { mode = 'done'; L = mine ? 100 - r.yl : r.yl; }
+    else L = mine ? 100 - r.yl : r.yl;
+    return { L, dir, mode };
+  }
   function drawField() {
     const svg = $('field'), r = G.root;
+    const wpx = svg.parentElement.clientWidth || 360;
+    const target = clip(window.innerHeight - 380, 360, 720);
+    const H = Math.round((360 * target) / wpx);
+    svg.setAttribute('viewBox', `0 0 360 ${H}`);
     svg.textContent = '';
-    const offI = r.pos, offC = code(offI), defC = code(1 - offI);
-    let own = 100 - r.yl, mode = 'snap';
-    if (r.phase === KICKOFF) { mode = 'kick'; own = r.free_kick ? 20 : 35; }
-    else if (r.phase === PAT) { mode = 'pat'; own = 85; }
-    else if (r.phase === DONE) mode = 'done';
-    const yOf = (L) => LOS_Y - (L - own) * PPY;
-    svg.append(S('rect', { x: 0, y: 0, width: FW, height: FH, fill: 'var(--turf)' }));
-    for (let L = 0; L < 100; L += 10) {                  // mowing bands, 5 yards each
-      const y1 = yOf(L + 5), y2 = yOf(L);
-      if (y2 < 0 || y1 > FH) continue;
-      svg.append(S('rect', { x: 0, y: y1, width: FW, height: y2 - y1, fill: 'var(--turf-2)' }));
-    }
-    const endZone = (L0, L1, team) => {
-      const y1 = Math.max(yOf(L1), -2), y2 = Math.min(yOf(L0), FH + 2);
-      if (y2 <= 0 || y1 >= FH) return;
-      svg.append(S('rect', { x: 0, y: y1, width: FW, height: y2 - y1, fill: color(team), opacity: 0.9 }));
-      const yc = (yOf(L1) + yOf(L0)) / 2;
-      if (yc > 14 && yc < FH - 14) {
-        svg.append(S('text', { x: FW / 2, y: yc, class: 'ez', 'text-anchor': 'middle', 'dominant-baseline': 'central' },
-          teamName(team).toUpperCase()));
-      }
+    const M = 3, ppy = (H - 2 * M) / 120;
+    const yOf = (L) => H - M - (L + 10) * ppy;
+    const meC = code(G.me), themC = code(1 - G.me);
+    svg.append(S('rect', { x: 0, y: 0, width: 360, height: H, fill: 'var(--turf)' }));
+    for (let L = 0; L < 100; L += 10) svg.append(S('rect', { x: 0, y: yOf(L + 5), width: 360, height: 5 * ppy, fill: 'var(--turf-2)' }));
+    const ez = (L0, L1, c) => {
+      svg.append(S('rect', { x: 0, y: yOf(L1), width: 360, height: (L1 - L0) * ppy, fill: color(c), opacity: 0.92 }));
+      svg.append(S('text', { x: 180, y: (yOf(L1) + yOf(L0)) / 2, class: 'ez', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, teamName(c).toUpperCase()));
     };
-    endZone(100, 110, mode === 'kick' ? code(1 - offI) : defC);
-    endZone(-10, 0, offC);
-    svg.append(S('line', { x1: SX0, y1: 0, x2: SX0, y2: FH, stroke: 'var(--chalk)', 'stroke-width': 2 }),
-      S('line', { x1: SX1, y1: 0, x2: SX1, y2: FH, stroke: 'var(--chalk)', 'stroke-width': 2 }));
-    for (let L = 0; L <= 100; L++) {
-      const y = yOf(L);
-      if (y < -2 || y > FH + 2) continue;
-      if (L % 5 === 0) {
-        svg.append(S('line', { x1: SX0, y1: y, x2: SX1, y2: y, stroke: 'var(--chalk)', 'stroke-width': L === 0 || L === 100 ? 3 : 1.3 }));
-      } else {
-        [[SX0, SX0 + 6], [SX1 - 6, SX1], [HASH_L - 3.5, HASH_L + 3.5], [HASH_R - 3.5, HASH_R + 3.5]].forEach(([a, b]) =>
-          svg.append(S('line', { x1: a, y1: y, x2: b, y2: y, stroke: 'var(--chalk-soft)', 'stroke-width': 1 })));
-      }
-      if (L % 10 === 0 && L > 0 && L < 100 && y > 12 && y < FH - 12) {
-        const n = String(L <= 50 ? L : 100 - L), xl = SX0 + 8.5 * XYD, xr = SX1 - 8.5 * XYD;
-        svg.append(S('text', { x: xl, y, class: 'num', 'text-anchor': 'middle', 'dominant-baseline': 'central', transform: `rotate(-90 ${xl} ${y})` }, n));
-        svg.append(S('text', { x: xr, y, class: 'num', 'text-anchor': 'middle', 'dominant-baseline': 'central', transform: `rotate(90 ${xr} ${y})` }, n));
-      }
+    ez(100, 110, themC);
+    ez(-10, 0, meC);
+    for (let L = 5; L <= 95; L += 5) svg.append(S('line', { x1: SX0, y1: yOf(L), x2: SX1, y2: yOf(L), stroke: 'var(--chalk)', 'stroke-width': L % 10 ? 0.6 : 1.1, opacity: L % 10 ? 0.6 : 1 }));
+    [0, 100].forEach((L) => svg.append(S('line', { x1: SX0, y1: yOf(L), x2: SX1, y2: yOf(L), stroke: 'var(--chalk)', 'stroke-width': 2.4 })));
+    svg.append(S('line', { x1: SX0, y1: yOf(-10), x2: SX0, y2: yOf(110), stroke: 'var(--chalk)', 'stroke-width': 1.6 }),
+      S('line', { x1: SX1, y1: yOf(-10), x2: SX1, y2: yOf(110), stroke: 'var(--chalk)', 'stroke-width': 1.6 }));
+    for (let L = 10; L <= 90; L += 10) {
+      const n = String(L <= 50 ? L : 100 - L), y = yOf(L);
+      svg.append(S('text', { x: SX0 + 9, y, class: 'num', 'text-anchor': 'middle', 'dominant-baseline': 'central', transform: `rotate(-90 ${SX0 + 9} ${y})` }, n));
+      svg.append(S('text', { x: SX1 - 9, y, class: 'num', 'text-anchor': 'middle', 'dominant-baseline': 'central', transform: `rotate(90 ${SX1 - 9} ${y})` }, n));
     }
-    const s = mode === 'pat' ? 1 : G.side;
-    const bx = mode === 'pat' ? (HASH_L + HASH_R) / 2 : (s > 0 ? HASH_L : HASH_R);   // strong side is the wide side
-    if (mode === 'kick' || mode === 'done') {
-      if (mode === 'kick') svg.append(S('ellipse', { cx: FW / 2, cy: LOS_Y, rx: 4.2, ry: 6.5, fill: '#8a4b24' }));
-      svg.append(S('text', { x: FW / 2, y: mode === 'kick' ? LOS_Y - 40 : FH / 2, class: 'big', 'text-anchor': 'middle', 'dominant-baseline': 'central' },
-        mode === 'kick' ? (r.free_kick ? 'FREE KICK' : 'KICKOFF') : 'FINAL'));
-      return;
-    }
-    svg.append(S('line', { x1: SX0, y1: LOS_Y, x2: SX1, y2: LOS_Y, stroke: 'var(--los)', 'stroke-width': 3, opacity: 0.95 }));
+    const { L, dir, mode } = spotGeom(r);
+    const losY = yOf(L);
+    if (mode === 'done') { lastBall = null; return; }
+    svg.append(S('line', { x1: SX0, y1: losY, x2: SX1, y2: losY, stroke: 'var(--los)', 'stroke-width': 2.4 }));
     if (mode === 'snap' && r.ytg < r.yl - 0.01) {
-      const y = yOf(own + r.ytg);
-      if (y >= 6) svg.append(S('line', { x1: SX0, y1: y, x2: SX1, y2: y, stroke: 'var(--chain)', 'stroke-width': 3 }));
-      else {
-        const t = S('g', { transform: `translate(${FW / 2},12)` });
-        t.append(S('rect', { x: -58, y: -9, width: 116, height: 18, rx: 9, fill: 'var(--chain)' }),
-          S('text', { class: 'tag', 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: 'var(--chain-ink)' }, `1ST DOWN ↑ ${Math.round(r.ytg)} YDS`));
-        svg.append(t);
+      const fy = yOf(L + dir * r.ytg);
+      svg.append(S('line', { x1: SX0, y1: fy, x2: SX1, y2: fy, stroke: 'var(--chain)', 'stroke-width': 2.4 }));
+    }
+    const s = mode === 'snap' ? G.side : 1;
+    const fxBall = mode === 'snap' ? (s > 0 ? HASH_L : HASH_R) : 180;      // strong side is the wide side
+    const sx = (fx) => (dir > 0 ? fx : 360 - fx);
+    const ballX = sx(fxBall);
+    if (mode === 'snap' || mode === 'pat') {
+      const offI = r.pos, f = formation(lineup(offI).off.slice(), lineup(1 - offI).def.slice(), s, fxBall);
+      const grp = S('g', { class: lastBall ? 'movefade' : '' });
+      const dot = (x, y, p, team, label, mine) => {
+        const g = S('g', { class: `dot ${mine ? 'me' : 'them'}`, transform: `translate(${x.toFixed(1)},${y.toFixed(1)})`, tabindex: 0, role: 'button',
+          'aria-label': `${teamName(team)} ${POS_NAME[label] || label} ${p.name}, ${ordinal(p.pct)} percentile` });
+        g.append(S('circle', { class: 'hit', r: 11 }), S('circle', { class: 'c', r: 6.2, fill: rate(p.pct) }));
+        const open = () => playerInfo(p, label, team);
+        g.addEventListener('click', open);
+        g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+        grp.append(g);
+      };
+      f.def.forEach((o) => dot(sx(o.x), losY - dir * DEF_PX(o.d), o.p, code(1 - offI), o.label, 1 - offI === G.me));
+      f.off.forEach((o) => dot(sx(o.x), losY + dir * OFF_PX(o.d), o.p, code(offI), o.label, offI === G.me));
+      svg.append(grp);
+    }
+    const ball = S('g', { class: 'ballmove' });
+    ball.append(S('ellipse', { cx: ballX, cy: losY, rx: 3.4, ry: 5.2, fill: 'var(--ball)', stroke: 'rgba(255,255,255,.7)', 'stroke-width': 0.8 }));
+    svg.append(ball);
+    if (lastBall && !reduced() && (Math.abs(lastBall.x - ballX) > 0.5 || Math.abs(lastBall.y - losY) > 0.5)) {
+      ball.style.transform = `translate(${lastBall.x - ballX}px, ${lastBall.y - losY}px)`;
+      requestAnimationFrame(() => requestAnimationFrame(() => { ball.style.transform = 'translate(0px, 0px)'; }));
+    }
+    lastBall = { x: ballX, y: losY };
+    if (mode === 'kick') svg.append(S('text', { x: 180, y: losY - dir * 26, class: 'ez', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, r.free_kick ? 'FREE KICK' : 'KICKOFF'));
+  }
+
+  // the in-depth view: the 22 up close with every percentile, and every player listed
+  function drawZoom(svg) {
+    const r = G.root;
+    svg.textContent = '';
+    const FH = 336, PPY = 12.2, LOS_Y = 212, PR = 11.5;
+    const offI = offenseOf(r);
+    const s = r.phase === SNAP ? G.side : 1;
+    const bx = r.phase === SNAP ? (s > 0 ? HASH_L : HASH_R) : 180;
+    svg.append(S('rect', { x: 0, y: 0, width: 360, height: FH, fill: 'var(--turf)' }));
+    const own = r.phase === KICKOFF ? 25 : r.phase === PAT ? 85 : 100 - r.yl;
+    for (let L = 0; L <= 100; L += 5) {
+      const y = LOS_Y - (L - own) * PPY;
+      if (y < -2 || y > FH + 2) continue;
+      svg.append(S('line', { x1: SX0, y1: y, x2: SX1, y2: y, stroke: 'var(--chalk)', 'stroke-width': L % 50 === 0 ? 2.4 : 1.2 }));
+      if (L % 10 === 0 && L > 0 && L < 100 && y > 12 && y < FH - 12) {
+        const n = String(L <= 50 ? L : 100 - L);
+        svg.append(S('text', { x: SX0 + 50, y, class: 'num', 'text-anchor': 'middle', 'dominant-baseline': 'central', transform: `rotate(-90 ${SX0 + 50} ${y})` }, n));
+        svg.append(S('text', { x: SX1 - 50, y, class: 'num', 'text-anchor': 'middle', 'dominant-baseline': 'central', transform: `rotate(90 ${SX1 - 50} ${y})` }, n));
       }
     }
-    svg.append(S('ellipse', { cx: bx, cy: LOS_Y, rx: 4.2, ry: 6.5, fill: '#8a4b24', stroke: 'rgba(255,255,255,.6)', 'stroke-width': 0.8 }));
-    const L = G.scen.lineups || {};
-    const offL = (L[offI === 0 ? 'home' : 'away'] || {}).off || [];
-    const defL = (L[offI === 0 ? 'away' : 'home'] || {}).def || [];
-    const o = offenseSpots(offL, s, bx);
-    const d = defenseSpots(defL, s, bx, o);
-    const drawP = ({ p, x, d: depth, label }, isOff, team) => {
-      const y = isOff ? LOS_Y + depth * PPY : LOS_Y - depth * PPY;
-      const tIdx = isOff ? offI : 1 - offI;
-      const gEl = S('g', { class: `pl t-${tierOf(p.pct)}${tIdx === G.me ? ' me' : ''}`, transform: `translate(${x.toFixed(1)},${y.toFixed(1)})`,
-        tabindex: 0, role: 'button', 'aria-label': `${team} ${POS_NAME[label] || label} ${p.name}, ${ordinal(p.pct)} percentile` });
-      gEl.append(S('circle', { r: PR }), S('text', { class: 'n', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, String(p.pct)),
-        S('text', { class: 'pos', 'text-anchor': 'middle', y: isOff ? PR + 9 : -PR - 4 }, label));
-      const open = () => playerInfo(p, label, team);
-      gEl.addEventListener('click', open);
-      gEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
-      svg.append(gEl);
+    svg.append(S('line', { x1: SX0, y1: LOS_Y, x2: SX1, y2: LOS_Y, stroke: 'var(--los)', 'stroke-width': 3 }));
+    if (r.phase === SNAP && r.ytg < r.yl - 0.01) {
+      const y = LOS_Y - r.ytg * PPY;
+      if (y > 4) svg.append(S('line', { x1: SX0, y1: y, x2: SX1, y2: y, stroke: 'var(--chain)', 'stroke-width': 3 }));
+    }
+    const f = formation(lineup(offI).off.slice(), lineup(1 - offI).def.slice(), s, bx);
+    const put = (o, isOff, team, mine) => {
+      const y = isOff ? LOS_Y + o.d * PPY : LOS_Y - o.d * PPY;
+      const g = S('g', { class: `pl${mine ? ' me' : ''}`, transform: `translate(${o.x.toFixed(1)},${y.toFixed(1)})`, tabindex: 0, role: 'button',
+        'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${o.p.name}, ${ordinal(o.p.pct)} percentile` });
+      g.append(S('circle', { r: PR, fill: rate(o.p.pct) }),
+        S('text', { class: 'n', 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#fff', style: 'paint-order:stroke;stroke:rgba(0,0,0,.35);stroke-width:2px' }, String(o.p.pct)),
+        S('text', { class: 'pos', 'text-anchor': 'middle', y: isOff ? PR + 9 : -PR - 4 }, o.label));
+      const open = () => playerInfo(o.p, o.label, team);
+      g.addEventListener('click', open);
+      g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+      svg.append(g);
     };
-    d.forEach((x) => drawP(x, false, defC));
-    o.pts.forEach((x) => drawP(x, true, offC));
+    f.def.forEach((o) => put(o, false, code(1 - offI), 1 - offI === G.me));
+    f.off.forEach((o) => put(o, true, code(offI), offI === G.me));
   }
+  const offenseOf = (r) => (r.phase === KICKOFF ? 1 - r.pos : r.pos);     // at a kickoff, the team about to get the ball
+  function openDeep() {
+    const r = G.root, offI = offenseOf(r);
+    $('deepNote').textContent = `${teamName(code(offI))} ball${r.phase === KICKOFF ? ' after the kickoff' : ''}. Every player's league percentile at his position (2025 counts less, 2026 through week ${idx.asof.through_week}) and his type. Tap anyone for more.`;
+    drawZoom($('zoom'));
+    const u = $('units');
+    u.textContent = '';
+    const unit = (title, list, team) => {
+      const d = el('div', 'unit');
+      d.append(el('h3', '', title));
+      const ul = el('ul');
+      list.forEach((p) => {
+        const li = el('li'), b = el('button');
+        b.type = 'button';
+        const ch = el('span', 'chipn', String(p.pct)); ch.style.background = rate(p.pct);
+        const nm = el('span', 'nm', p.name);
+        if (p.kind) nm.append(el('small', '', p.kind));
+        b.append(ch, el('span', 'ps', p.pos), nm);
+        b.addEventListener('click', () => playerInfo(p, p.pos, team));
+        li.append(b); ul.append(li);
+      });
+      d.append(ul);
+      return d;
+    };
+    const t = (i) => teamOf(i);
+    const spec = (i) => [{ ...t(i).kicker, pos: 'K', pct: t(i).kicker.pct ?? 50, stat: 'Field goals over expected' },
+      { ...t(i).punter, pos: 'P', pct: t(i).punter.pct ?? 50, stat: 'Net punting over expected' }];
+    u.append(unit(`${teamName(code(offI))} offense`, lineup(offI).off, code(offI)),
+      unit(`${teamName(code(1 - offI))} defense`, lineup(1 - offI).def, code(1 - offI)),
+      unit('Kickers and punters', [...spec(G.me).map((p) => ({ ...p, name: `${p.name} (${code(G.me)})` })),
+        ...spec(1 - G.me).map((p) => ({ ...p, name: `${p.name} (${code(1 - G.me)})` }))], null));
+    lastFocus = document.activeElement;
+    $('deep').hidden = false;
+    $('deepClose').focus();
+  }
+  function closeDeep() { $('deep').hidden = true; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
 
   // ------------------------------------------------------------ chrome ---
   function drawTiles() {
@@ -357,17 +458,9 @@
     t.textContent = '';
     for (let i = 0; i < 3; i++) {
       const s = state.spots[i];
-      const b = el('button', '', String(i + 1));
-      b.type = 'button';
-      b.tabIndex = -1;
-      if (s && s.over) {
-        const w = (s.decisions || []).reduce((a, x) => a + x.wpa, 0);
-        b.className = `done sq ${spotMark(s)}`;
-        b.title = `Spot ${i + 1}: ${pts(w)} win % against a typical NFL play-caller`;
-        b.setAttribute('aria-label', b.title);
-      }
-      else if (G && G.si === i && !state.done) { b.className = 'on'; b.setAttribute('aria-label', `Spot ${i + 1}: playing`); }
-      else b.setAttribute('aria-label', `Spot ${i + 1}`);
+      const b = el('span', '', String(i + 1));
+      if (s && s.over) { b.className = `done sq ${spotMark(s)}`; b.title = `Spot ${i + 1}: done`; }
+      else if (G && G.si === i && !state.done) { b.className = 'on'; b.title = `Spot ${i + 1}: playing`; }
       t.append(b);
     }
   }
@@ -375,48 +468,40 @@
     const w = (s.decisions || []).reduce((a, x) => a + x.wpa, 0);
     return w >= 0.01 ? 'g' : w >= -0.01 ? 'y' : w >= -0.04 ? 'o' : 'r';
   }
-  function drawHead() {
-    const h = $('spothead'), sc = G.scen, r = G.root;
-    h.textContent = '';
-    const lead = r.score[G.me] - r.score[1 - G.me];
-    const opp = code(1 - G.me);
-    h.append(el('div', 'cat', `Spot ${G.si + 1} of 3 · ${idx.categories[sc.category]}`),
-      el('div', 'who', `You're the ${teamName(code(G.me))}, ${lead > 0 ? `up ${lead}` : lead < 0 ? `down ${-lead}` : 'tied'} with the ${teamName(opp)} · ${sc.season} week ${sc.week}`));
-  }
-  function drawBoard() {
-    const r = G.root, b = $('board');
+  function drawBar() {
+    const r = G.root, b = $('bar');
     b.textContent = '';
-    const row = el('span', 'row');
     const side = (i, right) => {
       const c = code(i), d = el('span', `tm${right ? ' r' : ''}`);
-      const sw = el('span', 'sw'); sw.style.background = color(c);
-      const meta = el('span', 'meta');
+      const sw = el('span', 'tsw'); sw.style.background = color(c);
+      const meta = el('span');
       const tos = el('span', 'tos');
       for (let k = 0; k < 3; k++) tos.append(el('i', k < r.to[i] ? '' : 'used'));
-      tos.setAttribute('aria-label', `${r.to[i]} timeouts`);
-      meta.append(el('span', 'ab', c), tos);
-      if (i === G.me) meta.append(el('span', 'you', 'YOU'));
+      const ab = el('span', 'ab', c);
+      if (i === G.me) ab.append(el('small', '', 'YOU'));
+      meta.append(ab, tos);
       d.append(sw, meta);
-      if (r.pos === i && r.phase !== DONE) { const p = el('span', 'poss'); p.title = 'Has the ball'; d.append(p); }
+      if (r.pos === i && r.phase !== DONE) d.append(el('span', 'poss'));
       d.append(el('span', 'sc', String(r.score[i])));
       return d;
     };
-    const ck = clockOf(r.t);
-    const clk = el('span', 'clk');
-    clk.append(el('span', 'q', ck.q <= 4 ? `Q${ck.q}` : 'OT'), el('span', `t${r.clock_running ? ' run' : ''}`, ck.text));
-    row.append(side(1, false), clk, side(0, true));
-    const dd = el('span', 'dd');
-    if (r.phase === SNAP) {
-      dd.append(el('b', '', ddText(r)), document.createTextNode(` · ${spotText(r)} · clock ${r.clock_running ? 'running' : 'stopped'}`));
-    } else dd.textContent = r.phase === PAT ? 'Try after the touchdown' : r.phase === KICKOFF ? 'Kickoff' : 'Final';
-    b.append(row, dd);
+    const ck = clockOf(r.t), over = r.phase === DONE;
+    const mid = el('span', 'mid');
+    mid.append(el('span', 'q', over ? (r.t >= 1800 ? 'HALF' : 'FINAL') : `Q${ck.q}`),
+      el('span', `clk${r.clock_running && !over ? ' run' : ''}`, over ? '0:00' : ck.text));
+    b.append(side(1, false), mid, side(0, true));
+    b.setAttribute('aria-label', `${code(1)} ${r.score[1]}, ${code(0)} ${r.score[0]}, ${ck.text} left in the ${ordinal(ck.q)} quarter. Game details`);
+    const dd = $('dd');
+    dd.textContent = '';
+    if (r.phase === SNAP) dd.append(el('b', '', ddText(r)), document.createTextNode(` · ball ${onSpot(r)} · clock ${r.clock_running ? 'running' : 'stopped'}`));
+    else dd.textContent = r.phase === PAT ? 'Try after the touchdown' : r.phase === KICKOFF ? 'Kickoff' : r.t >= 1800 ? 'Halftime' : 'Final';
   }
-  function drawAll() { drawTiles(); drawHead(); drawBoard(); drawField(); }
-  function setPlaying(on) {
-    ['spothead', 'board'].forEach((id) => { $(id).hidden = !on; });
-    document.querySelector('.fieldwrap').hidden = !on;
-    document.querySelector('.legend').hidden = !on;
-    $('pbpBox').hidden = !on;
+  function drawAll() { drawTiles(); drawBar(); drawField(); }
+  function show(which) {
+    $('intro').hidden = which !== 'intro';
+    $('play').hidden = which !== 'play';
+    $('done').hidden = which !== 'done';
+    $('boot').hidden = which !== 'boot';
   }
 
   function addLog(text, t, mine) {
@@ -433,22 +518,23 @@
       $('pbp').prepend(li);
     });
   }
-  function statusPanel(text, lines, skip) {
-    const d = $('call');
+  function status(text, line, skip) {
+    const d = $('dock');
     d.textContent = '';
     const s = el('div', 'status');
     s.append(el('span', 'spin'), el('span', '', text));
     d.append(s);
-    (lines || []).forEach((l) => d.append(el('div', 'res-play', l)));
+    if (line) d.append(el('div', 'feedline', line));
     if (skip) {
       const c = el('button', 'chip', 'Skip ahead');
       c.type = 'button';
       c.addEventListener('click', () => { G.fast = true; c.disabled = true; });
-      const row = el('div', 'chips'); row.append(c); d.append(row);
+      d.append(c);
     }
   }
   function fatal(msg) {
-    const d = $('call');
+    show('play');
+    const d = $('dock');
     d.textContent = '';
     d.append(el('p', 'err', msg));
   }
@@ -463,43 +549,34 @@
     if (!k || (!k.form && !k.box)) return '';
     const bits = [];
     if (k.form) bits.push(k.form);
-    if (k.motion) bits.push('motion');
     if (k.box) bits.push(`${k.box} in the box`);
     if (k.blitz) bits.push('blitz');
     return ` (${bits.join(', ')})`;
   }
-  function actorOf(id, nm) { return id === 'trick' ? null : id.startsWith('rb_') ? nm.rb : nm.qb; }
   function playLine(e, act) {
-    const mine = e.team === G.me, nm = G.scen.names || {};
-    const who = code(e.team);
-    if (e.kind === SPIKE) return `${who} spikes the ball, clock stopped`;
-    if (e.kind === KNEEL) return `${who} kneels, ${e.running ? 'clock running' : 'clock stopped'}`;
+    const mine = e.team === G.me, nm = names(e.team);
+    const who = teamName(code(e.team));
+    if (e.kind === SPIKE) return `${who} spike it, clock stopped`;
+    if (e.kind === KNEEL) return `${who} kneel, clock ${e.running ? 'running' : 'stopped'}`;
     let what;
     if (e.call >= 0) {
-      const c = idx.calls[e.call], actor = mine ? actorOf(c.id, nm) : null;
-      what = `${actor || who} ${c.say || c.label.toLowerCase()}${lookText(e.look)}`;
-    } else what = `${who} ${e.kind === RUN ? 'run' : 'pass'}`;
+      const c = idx.calls[e.call];
+      const actor = c.id.startsWith('rb_') ? nm.rb : nm.qb;
+      what = `${c.id === 'trick' ? `The ${who} run a trick play` : `${actor || `The ${who}`} ${c.say}`}${mine ? lookText(e.look) : ''}`;
+    } else what = `${nm.qb || who} ${e.kind === RUN ? 'hands off' : 'drops back'}`;
     const y = Math.round(e.yards);
     const gain = y > 0 ? `${y} yard${y === 1 ? '' : 's'}` : y < 0 ? `loss of ${-y}` : 'no gain';
     let res;
     if (e.penalty) res = `flag, ${e.pen || 'penalty'}: ${y >= 0 ? `+${y}` : y} yards`;
     else {
-      switch (e.evt) {
-        case 'bad_snap': res = e.turnover ? 'bad snap, the defense recovers' : `bad snap, the offense falls on it: ${gain}`; break;
-        case 'strip_sack': res = e.tdDef ? 'strip-sack, returned for a touchdown' : 'strip-sack, fumble lost'; break;
-        case 'sack_fumble': res = `sacked and fumbles, but the offense recovers: ${gain}`; break;
-        case 'sack': res = `sacked, ${gain}`; break;
-        case 'pick_six': res = 'intercepted and returned for a touchdown'; break;
-        case 'interception': res = 'intercepted'; break;
-        case 'scoop_score': res = 'fumble, scooped and returned for a touchdown'; break;
-        case 'fumble_lost': res = 'fumble, lost'; break;
-        case 'fumble_kept': res = `fumbles, but the offense recovers: ${gain}`; break;
-        case 'scramble': res = e.td ? `scrambles ${y} yards for a touchdown` : `pressure, scrambles: ${gain}`; break;
-        case 'throwaway': res = 'pressure, throws it away'; break;
-        case 'drop': res = 'dropped, incomplete'; break;
-        case 'near_pick': res = 'nearly intercepted, incomplete'; break;
-        default: break;
-      }
+      res = { bad_snap: e.turnover ? 'bad snap, the defense recovers' : `bad snap, the offense falls on it: ${gain}`,
+        strip_sack: e.tdDef ? 'strip-sack, returned for a touchdown' : 'strip-sack, fumble lost',
+        sack_fumble: `sacked and fumbles, but the offense recovers: ${gain}`, sack: `sacked, ${gain}`,
+        pick_six: 'intercepted and returned for a touchdown', interception: 'intercepted',
+        scoop_score: 'fumble, scooped and returned for a touchdown', fumble_lost: 'fumble, lost',
+        fumble_kept: `fumbles, but the offense recovers: ${gain}`,
+        scramble: e.td ? `scrambles ${y} yards for a touchdown` : `pressure, scrambles: ${gain}`,
+        throwaway: 'pressure, throws it away', drop: 'dropped, incomplete', near_pick: 'nearly intercepted, incomplete' }[e.evt];
     }
     if (!res) {
       if (e.turnover) res = e.tdDef ? 'turnover, returned for a touchdown' : e.kind === PASS ? 'intercepted' : 'fumble, lost';
@@ -521,37 +598,32 @@
     for (const e of log) {
       let text = null, t = e.t;
       switch (e.ev) {
-        case 'timeout': text = `Timeout, ${code(e.team)}${e.why === 'kick' ? ' (to set up the kick)' : ''}`; break;
+        case 'timeout': text = `Timeout, ${teamName(code(e.team))}${e.why === 'kick' ? ' (to set up the kick)' : ''}`; break;
         case 'runoff':
           if (e.stop === '2mw') text = 'Two-minute warning';
           else if (e.stop === 'quarter') text = 'End of the quarter';
           else if (e.secs >= 3 && !e.kneel && !e.spike) text = `Clock runs ${Math.round(e.secs)} seconds`;
           break;
         case 'play': text = playLine(e, act); break;
-        case 'fg': {
-          const k = (e.team === 0 ? G.scen.game.home : G.scen.game.away).kicker.name || code(e.team);
-          text = `${k} ${Math.round(e.dist)}-yard field goal: ${e.made ? 'good' : 'no good'}`; t = null; break;
-        }
-        case 'punt': text = e.blocked ? `${code(e.team)} punt blocked` : e.retTd ? `${code(e.team)} punt returned for a touchdown` :
-          `${code(e.team)} punts${e.touchback ? ', touchback' : `, net ${Math.round(e.net)} yards`}`; t = null; break;
-        case 'pat': text = e.two ? `${code(e.team)} two-point try ${e.good ? 'good' : 'fails'}` : `${code(e.team)} extra point ${e.good ? 'good' : 'no good'}`; break;
-        case 'kickoff': text = e.onside ? `${code(e.team)} onside kick, recovered by ${code(e.recovered ? e.team : 1 - e.team)}` :
-          e.retTd ? 'Kickoff returned for a touchdown' : `Kickoff, ${code(1 - e.team)} starts at its own ${Math.round(100 - e.yl)}`; break;
-        case 'end': text = G.root.t > 1800 ? 'Halftime' : 'End of regulation'; break;
+        case 'fg': text = `${shortName(teamOf(e.team).kicker.name) || teamName(code(e.team))} ${Math.round(e.dist)}-yard field goal: ${e.made ? 'good' : 'no good'}`; t = null; break;
+        case 'punt': text = e.blocked ? `${teamName(code(e.team))} punt blocked` : e.retTd ? `${teamName(code(e.team))} punt returned for a touchdown` :
+          `${teamName(code(e.team))} punt${e.touchback ? ', touchback' : `, net ${Math.round(e.net)} yards`}`; t = null; break;
+        case 'pat': text = e.two ? `Two-point try ${e.good ? 'good' : 'fails'}` : `Extra point ${e.good ? 'good' : 'no good'}`; break;
+        case 'kickoff': text = e.onside ? `Onside kick, recovered by the ${teamName(code(e.recovered ? e.team : 1 - e.team))}` :
+          e.retTd ? 'Kickoff returned for a touchdown' : `Kickoff, ${teamName(code(1 - e.team))} start at their own ${Math.round(100 - e.yl)}`; break;
+        case 'end': text = (e.t ?? G.root.t) >= 1800 ? 'Halftime' : 'End of regulation'; break;
         default: break;
       }
       if (text) out.push([text, t, e.team === G.me]);
     }
     return out;
   }
-  // the big words over a result: what a broadcast would put on screen
   function headline(e, log) {
-    if (!e) return (log || []).some((x) => x.ev === 'end') ? 'Time ran out' : 'No snap';
+    if (!e) return (log || []).some((x) => x.ev === 'end') ? 'Time ran out' : 'Timeout';
     if (e.ev === 'fg') return e.made ? `${Math.round(e.dist)}-yard field goal is good` : 'Field goal: no good';
     if (e.ev === 'punt') return e.retTd ? 'Punt return touchdown' : e.blocked ? 'Punt blocked' : `Punt, net ${Math.round(e.net || 0)}`;
     if (e.ev === 'pat') return e.two ? (e.good ? 'Two-point try good' : 'Two-point try fails') : (e.good ? 'Extra point good' : 'Extra point missed');
     if (e.ev === 'kickoff') return e.onside ? (e.recovered ? 'Onside kick recovered' : 'Onside kick: they recover') : e.retTd ? 'Returned for a touchdown' : 'Kickoff';
-    if (e.ev !== 'play') return 'Snap';
     if (e.kind === SPIKE) return 'Spiked';
     if (e.kind === KNEEL) return 'Kneel';
     const y = Math.round(e.yards);
@@ -569,25 +641,69 @@
   // ------------------------------------------------------------- the spot ---
   function newSpot(i) {
     const sc = today[i];
-    return { si: i, scen: sc, me: sc.player === sc.game.home.team ? 0 : 1, root: startRoot(sc), decisions: [], log: [],
-      seq: 0, snapN: 0, over: false, result: null, side: 1, fast: false };
+    return { si: i, scen: sc, me: sc.player === sc.home ? 0 : 1, root: startRoot(sc), decisions: [], log: [],
+      seq: 0, snapN: 0, over: false, result: null, side: 1, fast: false, started: false };
   }
   function persist() {
-    state.spots[G.si] = { root: G.root, decisions: G.decisions, log: G.log, seq: G.seq, snapN: G.snapN, over: G.over, result: G.result };
+    state.spots[G.si] = { root: G.root, decisions: G.decisions, log: G.log, seq: G.seq, snapN: G.snapN, over: G.over,
+      result: G.result, started: G.started };
     save(`${STORE}:day:${dayN}`, state);
   }
   function resumeSpot(i) {
     G = newSpot(i);
     const s = state.spots[i];
-    if (s) Object.assign(G, { root: s.root, decisions: s.decisions || [], log: s.log || [], seq: s.seq || 0, snapN: s.snapN || 0, over: s.over, result: s.result });
+    if (s) Object.assign(G, { root: s.root, decisions: s.decisions || [], log: s.log || [], seq: s.seq || 0, snapN: s.snapN || 0,
+      over: s.over, result: s.result, started: !!s.started });
     G.side = sideFor(G.seq);
     return G;
   }
-  function startSpot(i) {
+  function openSpot(i) {
     resumeSpot(i);
-    setPlaying(true);
+    lastBall = null;
+    if (G.started || G.over) return enterField();
+    renderIntro();
+  }
+  function renderIntro() {
+    const sc = G.scen, r = G.root, box = $('intro');
+    box.textContent = '';
+    show('intro');
+    drawTiles();
+    const me = code(G.me), op = code(1 - G.me);
+    const lead = r.score[G.me] - r.score[1 - G.me], ck = clockOf(r.t);
+    const left = r.t > 1800 ? `${ck.text} left in the half` : `${ck.text} left in the game`;
+    const state_ = lead > 0 ? `Up by ${lead}` : lead < 0 ? `Down by ${-lead}` : 'Tied';
+    const big = el('div', 'big', state_);
+    big.append(el('span', 'left', left));
+    box.append(el('div', 'cat', `Spot ${G.si + 1} of 3 · ${idx.categories[sc.category]}`), big);
+    const mu = el('div', 'matchup');
+    const t = (c, i) => {
+      const d = el('div', 't');
+      const sw = el('span', 'sw', c); sw.style.background = color(c);
+      d.append(sw, el('span', 'nm', teamName(c)));
+      if (i === G.me) d.append(el('span', 'you', 'YOU'));
+      return d;
+    };
+    mu.append(t(code(1), 1), el('div', 'sc', `${r.score[1]}–${r.score[0]}`), t(code(0), 0));
+    box.append(mu);
+    const facts = el('div', 'chips');
+    const tos = (n) => (n ? `${n} timeout${n === 1 ? '' : 's'}` : 'no timeouts');
+    [`${r.pos === G.me ? 'Your' : `${teamName(op)}`} ball, ${ddText(r)} ${onSpot(r)}`, `You: ${tos(r.to[G.me])}`,
+      `${teamName(op)}: ${tos(r.to[1 - G.me])}`].forEach((f) => facts.append(el('span', '', f)));
+    box.append(facts);
+    const coach = teamOf(G.me).coach;
+    box.append(el('div', 'who', `You're calling it for the ${teamName(me)}${coach ? ` (${coach})` : ''}.`));
+    const go = el('button', 'btn', 'Next');
+    go.type = 'button';
+    go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
+    box.append(go);
+    const rl = sc.real || {};
+    box.append(el('div', 'from', `A real situation from ${rl.season} week ${rl.week} (${teamName(sc.away)} at ${teamName(sc.home)}), played with today's rosters.`));
+    go.focus({ preventScroll: true });
+  }
+  function enterField() {
+    show('play');
     restoreLog();
-    if (!G.log.length) addLog(`${teamName(code(G.root.pos))} ball, ${ddText(G.root)} at the ${spotText(G.root)}`, G.root.t, G.root.pos === G.me);
+    if (!G.log.length) addLog(`${teamName(code(G.root.pos))} ball, ${ddText(G.root)} ${onSpot(G.root)}`, G.root.t, G.root.pos === G.me);
     drawAll();
     if (G.over) finishSpot(); else advance();
   }
@@ -603,12 +719,12 @@
       if (r.phase === KICKOFF && r.pos === G.me && !r.free_kick && kickChoice(r)) return promptChoice('kick');
       if (r.phase === SNAP && r.pos !== G.me && r.clock_running && r.to[G.me] > 0 && defChoice(r)) return promptChoice('deftime');
       const action = r.phase === SNAP ? { to_def: false } : (r.phase === KICKOFF && r.pos === G.me ? { kick: 'deep' } : {});
-      const label = r.phase === KICKOFF ? (r.pos === G.me ? 'You kick off' : `${teamName(code(r.pos))} kick off`) :
-        r.phase === PAT ? `${teamName(code(r.pos))} try the extra point` : `${teamName(code(r.pos))} have the ball`;
-      const lastLines = G.log.slice(-2).map((l) => l[0]).reverse();
-      statusPanel(label, lastLines, !G.fast);
+      const label = r.phase === KICKOFF ? (r.pos === G.me ? 'You kick off' : `The ${teamName(code(r.pos))} kick off`) :
+        r.phase === PAT ? `The ${teamName(code(r.pos))} try the extra point` : `The ${teamName(code(r.pos))} have the ball`;
+      const last = G.log.length ? G.log[G.log.length - 1][0] : '';
+      status(label, last, !G.fast);
       await stepWith(action);
-      await sleep(G.fast ? 60 : 950);
+      await sleep(G.fast ? 60 : 1000);
     }
   }
   function kickChoice(r) { return r.t <= 300 && r.score[G.me] < r.score[1 - G.me]; }
@@ -619,7 +735,7 @@
   }
   async function stepWith(action) {
     const seed = hash('step', dayN, G.si, G.seq++);
-    const res = (await send({ type: 'step', scen: G.scen, root: G.root, action, seed })).res;
+    const res = (await send({ type: 'step', scen: simScen(), root: G.root, action, seed })).res;
     res.action = action;
     narrate(res.log, action).forEach(([text, t, mine]) => addLog(text, t, mine));
     G.root = res.root;
@@ -628,99 +744,95 @@
     return res;
   }
 
-  // offense: tempo (if the clock is running), then Run / Pass / RPO, then the play
+  // your ball: Run / Pass / RPO, plus a timeout, spike, kneel or kick when it matters
   async function promptOffense() {
     const r = G.root;
-    statusPanel('Breaking the huddle…');
-    G.info = (await send({ type: 'info', scen: G.scen, root: r })).info;
+    status('Breaking the huddle…');
+    G.info = (await send({ type: 'info', scen: simScen(), root: r })).info;
     G.fast = false;
-    ui = { step: r.clock_running ? 'tempo' : 'family', tempo: r.clock_running ? null : 'stopped', fam: null, oob: false };
-    drawCall();
+    ui = { step: 'family', fam: null, oob: false };
+    drawDock();
   }
-  function tempoOptions(r) {
-    const me = G.me, lead = r.score[me] - r.score[1 - me], th = halfLeft(r.t);
-    const keys = ['hurry', 'huddle', 'milk'];
-    if (r.to[me] > 0) keys.push('timeout');
-    if (r.down <= 3) keys.push('spike');
-    if (r.down <= 3 && lead > 0) keys.push('kneel');
-    if (r.t <= 1800 && lead >= -2 && lead <= 0 && th <= 180 && r.to[me] > 0 && r.yl <= 40) keys.push('rundown');
+  // kneel: ahead late, or ending the first half; timeout and spike: when you need the time
+  function canKneel(r) {
+    const lead = r.score[G.me] - r.score[1 - G.me], th = halfLeft(r.t);
+    if (r.down > 3) return false;
+    if (r.t > 1800) return lead >= 0 && th <= 120;
+    // about 40 seconds a kneel, one fewer kneel's worth per timeout they have left
+    const kneels = 5 - r.down - r.to[1 - G.me] - (r.clock_running ? 0 : 1);
+    return lead > 0 && th <= 40 * Math.max(kneels, 0) + 30;
+  }
+  function clockOptions(r) {      // with the clock running
+    const me = G.me, lead = r.score[me] - r.score[1 - me];
+    const needTime = r.t > 1800 || lead <= 0;
+    const keys = ['play'];
+    if (r.to[me] > 0 && needTime) keys.push('timeout');
+    if (r.down <= 3 && needTime && halfLeft(r.t) <= 180) keys.push('spike');
+    if (canKneel(r)) keys.push('kneel');
     return keys;
   }
   function callOptions(r) {
-    const me = G.me, lead = r.score[me] - r.score[1 - me], th = halfLeft(r.t);
+    const th = halfLeft(r.t);
     const calls = idx.calls.map((c) => c.id).filter((id) => {
       if (id === 'qb_sneak' && r.ytg > 3) return false;
-      if (id === 'hail_mary' && !(th <= 30 && r.yl >= 30)) return false;   // only as a half runs out
+      if (id === 'hail_mary' && !(th <= 30 && r.yl >= 30)) return false;
       return true;
     });
     const specials = [];
     if (G.info.pFg >= 0.05 && (r.down === 4 || th <= 40)) specials.push('fg');
     if (r.down === 4 && r.yl >= 30) specials.push('punt');
-    if (!r.clock_running && r.down <= 3 && (lead > 0 || r.t > 1800)) specials.push('kneel');
+    if (!r.clock_running && canKneel(r)) specials.push('kneel');
     return { calls, specials };
   }
   const specialLabel = (k) => (k === 'fg' ? 'Field goal' : k === 'punt' ? 'Punt' : 'Kneel');
 
-  function drawCall() {
-    const r = G.root, d = $('call'), me = G.me;
+  function drawDock() {
+    const r = G.root, d = $('dock'), me = G.me;
     d.textContent = '';
     const head = el('div', 'ask');
     d.append(head);
-    if (ui.step === 'tempo') {
-      head.append(el('h2', '', 'Clock is running'), el('span', 'sub', 'Pick a tempo'));
-      const ks = tempoOptions(r);
-      const keys = el('div', 'keys');
-      keys.style.setProperty('--cols', ks.length === 4 ? 2 : 3);
-      ks.forEach((k) => {
-        const b = key(TEMPO[k].label, k === 'timeout' ? `${r.to[me]} left` : TEMPO[k].sub || null);
-        b.addEventListener('click', () => {
-          if (busy) return;
-          if (TEMPO[k].terminal) { decideOffense({ tempo: k }); return; }
-          ui.tempo = k; ui.step = 'family'; drawCall();
-        });
-        keys.append(b);
-      });
-      d.append(keys);
-      return;
-    }
     if (ui.step === 'family') {
       head.append(el('h2', '', 'Your call'), el('span', 'sub', `${ddText(r)} · ${spotText(r)}`));
-      if (r.clock_running && ui.tempo) {
-        const c = el('button', 'chip', `◀ ${TEMPO[ui.tempo].label}`);
-        c.type = 'button';
-        c.setAttribute('aria-label', `Change tempo (now ${TEMPO[ui.tempo].label})`);
-        c.addEventListener('click', () => { ui.step = 'tempo'; ui.tempo = null; drawCall(); });
-        const row = el('div', 'chips'); row.append(c); d.append(row);
-      }
       const fam = el('div', 'keys');
       fam.style.setProperty('--cols', 3);
-      Object.entries(FAM).forEach(([f, label]) => {
-        const b = key(label, null, 'big');
-        b.addEventListener('click', () => { if (busy) return; ui.fam = f; ui.step = 'detail'; drawCall(); });
+      Object.entries(FAM).forEach(([f, label], i) => {
+        const b = key(label, null, 'big', i);
+        b.addEventListener('click', () => { if (busy) return; ui.fam = f; ui.step = 'detail'; drawDock(); });
         fam.append(b);
       });
       d.append(fam);
+      const extra = [];
+      if (r.clock_running) {
+        clockOptions(r).filter((k) => k !== 'play').forEach((k) => extra.push([k, CLOCK[k].label, k === 'timeout' ? `${r.to[me]} left` : null]));
+      }
       const { specials } = callOptions(r);
-      if (specials.length) {
-        const sp = el('div', 'keys');
-        sp.style.setProperty('--cols', specials.length);
-        specials.forEach((k) => {
-          const b = key(specialLabel(k), k === 'fg' ? `${Math.round(G.info.fgDist)} yards` : null);
-          b.addEventListener('click', () => { if (!busy) decideOffense({ special: k }); });
-          sp.append(b);
+      specials.forEach((k) => extra.push([k, specialLabel(k), k === 'fg' ? `${Math.round(G.info.fgDist)} yards` : null]));
+      if (extra.length) {
+        const row = el('div', 'keys');
+        row.style.setProperty('--cols', Math.min(extra.length, 4));
+        extra.forEach(([k, label, sub], i) => {
+          const b = key(label, sub, 'alt', 3 + i);
+          b.addEventListener('click', () => {
+            if (busy) return;
+            if (k === 'timeout') decideTimeout();
+            else if ((k === 'spike' || k === 'kneel') && r.clock_running) decideClock(k);
+            else decideCall({ special: k });
+          });
+          row.append(b);
         });
-        d.append(sp);
+        d.append(row);
       }
       return;
     }
-    // the plays in the chosen family, one row per play, a key per side (arrows match the field)
+    // the plays in the chosen family: one row per play, a key per side (arrows match the field)
     head.append(el('h2', '', FAM[ui.fam]));
     const back = el('button', 'chip', '◀ Back');
     back.type = 'button';
-    back.addEventListener('click', () => { ui.step = 'family'; drawCall(); });
+    back.addEventListener('click', () => { ui.step = 'family'; drawDock(); });
     head.append(back);
     const avail = callOptions(r).calls;
-    const s = G.side;
+    const dir = r.pos === G.me ? 1 : -1;
+    const s = G.side * dir;                       // strong side on screen: +1 right, -1 left
     const rows = [];
     idx.calls.filter((c) => c.family === ui.fam && avail.includes(c.id)).forEach((c) => {
       let row = rows.find((x) => x.base === c.base);
@@ -731,14 +843,16 @@
     const sideText = (c) => (c.side === 'strong' ? (s > 0 ? 'Strong →' : '← Strong') : c.side === 'weak' ? (s > 0 ? '← Weak' : 'Weak →') :
       c.side === 'middle' ? 'Middle' : 'Call it');
     const list = el('div', 'plays');
+    let i = 0;
     rows.forEach((row) => {
-      const pr = el('div', 'prow');
+      const pr = el('div', 'prow pop');
+      pr.style.setProperty('--i', i++);
       pr.append(el('div', 'lab', row.base));
       const sides = el('div', 'sides');
       row.calls.slice().sort((a, b) => order(a) - order(b)).forEach((c) => {
         const b = key(sideText(c));
         b.setAttribute('aria-label', c.label);
-        b.addEventListener('click', () => { if (!busy) decideOffense({ call: c.id }); });
+        b.addEventListener('click', () => { if (!busy) decideCall({ call: c.id }); });
         sides.append(b);
       });
       pr.append(sides);
@@ -754,81 +868,99 @@
     sw.addEventListener('click', () => { ui.oob = !ui.oob; sw.setAttribute('aria-checked', String(ui.oob)); });
     tg.append(lab, sw);
     d.append(tg);
-    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    requestAnimationFrame(() => tg.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' }));
+    requestAnimationFrame(() => tg.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' }));
   }
 
-  function callAction(tempoAct, id, oob) { return { ...tempoAct, play: CALL[id].kind, call: id, oob: !!oob }; }
-  function specialAction(tempoAct, k) { return { ...tempoAct, play: k }; }
-
-  async function decideOffense(pick) {
+  function situation(r) { return `${clockOf(r.t).text} Q${clockOf(r.t).q}, ${ddText(r)} ${onSpot(r)}`; }
+  async function clockDecision(r, chosen) {
+    const me = G.me, lead = r.score[me] - r.score[1 - me];
+    const opts = clockOptions(r).map((k) => ({ key: k, label: CLOCK[k].label, action: CLOCK[k].act }));
+    status('Simulating every clock option 600 times…');
+    const vals = await evaluate(r, opts, hash('clock', dayN, G.si, G.seq));
+    let q = coachProbs('off_clock_stop', r, me);
+    if (lead > 0 && r.t <= 1800) q = { play: 0.9, timeout: 0.03, kneel: 0.07 };
+    else if (q) q = { play: (q.hurry || 0) + (q.normal || 0) + (q.milk || 0) + (q.huddle || 0) + (q.rundown || 0), timeout: q.timeout || 0, spike: q.spike || 0 };
+    else q = { play: 0.8, timeout: 0.14, spike: 0.06 };
+    return decisionFrom('clock', 'off_clock_stop', opts, vals, chosen, q, situation(r));
+  }
+  async function decideTimeout() {
+    if (busy) return;
+    busy = true;
+    const r = G.root;
+    try {
+      const x = await clockDecision(r, 'timeout');
+      G.decisions.push(x);
+      G.snapN += 1;
+      const halfEnd = r.t > 1800 ? 1800 : 0;
+      G.root = { ...r, to: r.to.slice(), clock_running: false, t: Math.max(halfEnd, r.t - 1) };
+      G.root.to[G.me] -= 1;
+      addLog(`Timeout, ${teamName(code(G.me))}`, G.root.t, true);
+      persist();
+      showResult([x], { log: [], action: { to_off: true } }, 'Timeout');
+    } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
+    busy = false;
+  }
+  async function decideClock(k) {
+    if (busy) return;
+    busy = true;
+    const r = G.root;
+    try {
+      const x = await clockDecision(r, k);
+      G.decisions.push(x);
+      G.snapN += 1;
+      status('Snap…');
+      const res = await stepWith(CLOCK[k].act);
+      showResult([x], res);
+    } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
+    busy = false;
+  }
+  function callAction(id, oob) { return { to_off: false, play: CALL[id].kind, call: id, oob: !!oob }; }
+  async function decideCall(pick) {
     if (busy) return;
     busy = true;
     const r = G.root, me = G.me;
-    const situation = `${clockOf(r.t).text} Q${clockOf(r.t).q}, ${ddText(r)} at the ${spotText(r)}`;
     try {
-      const tempoKey = pick.tempo || ui.tempo;
       const decisions = [];
-      if (r.clock_running) {
-        statusPanel('Simulating every tempo 600 times…');
-        const keys = tempoOptions(r);
-        const opts = keys.map((k) => ({ key: k, label: TEMPO[k].label, action: TEMPO[k].act }));
-        const vals = await evaluate(r, opts, hash('clock', dayN, G.si, G.seq));
-        const lead = r.score[me] - r.score[1 - me];
-        let q = coachProbs('off_clock_stop', r, me);
-        if (lead > 0) q = { milk: 0.72, huddle: 0.2, timeout: 0.02, hurry: 0.03, kneel: 0.03 };
-        else if (!q) q = { hurry: 0.4, huddle: 0.38, timeout: 0.12, spike: 0.05, milk: 0.05 };
-        decisions.push(decisionFrom('clock', 'off_clock_stop', opts, vals, tempoKey, q, situation));
-      }
-      let action;
-      if (pick.tempo && TEMPO[pick.tempo].terminal) {
-        action = TEMPO[pick.tempo].act;
-      } else {
-        const tempoAct = r.clock_running ? TEMPO[tempoKey].act : { to_off: false };
-        const { calls, specials } = callOptions(r);
-        const opts = calls.map((id) => ({ key: id, label: CALL[id].label, action: callAction(tempoAct, id, false) }));
-        if (pick.call && ui.oob) opts.push({ key: `${pick.call}+oob`, label: `${CALL[pick.call].label}, get out of bounds`, action: callAction(tempoAct, pick.call, true) });
-        specials.forEach((k) => opts.push({ key: k, label: specialLabel(k), action: specialAction(tempoAct, k) }));
-        statusPanel(`Simulating all ${opts.length} calls 600 times each…`);
-        const vals = await evaluate(r, opts, hash('call', dayN, G.si, G.seq));
-        // what NFL play-callers do here: the real call mix, and on 4th down the go / kick / punt split
-        const q = {};
-        const freq = {}; G.info.calls.forEach((c) => { freq[c.id] = c.freq; });
-        let goShare = 1;
-        if (r.down === 4) {
-          const f4 = coachProbs('fourth_down', r, me) || { go: r.yl <= 40 ? 0.35 : 0.15, fg: r.yl <= 40 ? 0.55 : 0.05, punt: r.yl <= 40 ? 0.1 : 0.8 };
-          goShare = f4.go; if (specials.includes('fg')) q.fg = f4.fg; if (specials.includes('punt')) q.punt = f4.punt;
-        } else if (specials.includes('fg')) { q.fg = halfLeft(r.t) <= 10 ? 0.6 : 0.2; goShare = 1 - q.fg; }
-        if (specials.includes('kneel')) { const qk = r.score[me] > r.score[1 - me] ? 0.5 : 0.1; q.kneel = qk; goShare *= 1 - qk; }
-        const fs = calls.reduce((a, id) => a + (freq[id] || 0), 0) || 1;
-        calls.forEach((id) => { q[id] = goShare * (freq[id] || 0) / fs; });
-        const chosen = pick.call ? (ui.oob ? `${pick.call}+oob` : pick.call) : pick.special;
-        decisions.push(decisionFrom('call', r.down === 4 ? 'fourth_down' : 'play_select', opts, vals, chosen, q, situation));
-        action = opts.find((o) => o.key === chosen).action;
-      }
+      if (r.clock_running) decisions.push(await clockDecision(r, 'play'));
+      const { calls, specials } = callOptions(r);
+      const opts = calls.map((id) => ({ key: id, label: CALL[id].label, action: callAction(id, false) }));
+      if (pick.call && ui.oob) opts.push({ key: `${pick.call}+oob`, label: `${CALL[pick.call].label}, get out of bounds`, action: callAction(pick.call, true) });
+      specials.forEach((k) => opts.push({ key: k, label: specialLabel(k), action: { to_off: false, play: k } }));
+      status(`Simulating all ${opts.length} calls 600 times each…`);
+      const vals = await evaluate(r, opts, hash('call', dayN, G.si, G.seq));
+      const q = {};
+      const freq = {}; G.info.calls.forEach((c) => { freq[c.id] = c.freq; });
+      let goShare = 1;
+      if (r.down === 4) {
+        const f4 = coachProbs('fourth_down', r, me) || { go: r.yl <= 40 ? 0.35 : 0.15, fg: r.yl <= 40 ? 0.55 : 0.05, punt: r.yl <= 40 ? 0.1 : 0.8 };
+        goShare = f4.go; if (specials.includes('fg')) q.fg = f4.fg; if (specials.includes('punt')) q.punt = f4.punt;
+      } else if (specials.includes('fg')) { q.fg = halfLeft(r.t) <= 10 ? 0.6 : 0.2; goShare = 1 - q.fg; }
+      if (specials.includes('kneel')) { const qk = r.score[me] > r.score[1 - me] ? 0.5 : 0.1; q.kneel = qk; goShare *= 1 - qk; }
+      const fs = calls.reduce((a, id) => a + (freq[id] || 0), 0) || 1;
+      calls.forEach((id) => { q[id] = goShare * (freq[id] || 0) / fs; });
+      const chosen = pick.call ? (ui.oob ? `${pick.call}+oob` : pick.call) : pick.special;
+      decisions.push(decisionFrom('call', r.down === 4 ? 'fourth_down' : 'play_select', opts, vals, chosen, q, situation(r)));
       decisions.forEach((x) => G.decisions.push(x));
       G.snapN += 1;
-      statusPanel('Snap…');
-      const res = await stepWith(action);
+      status('Snap…');
+      const res = await stepWith(opts.find((o) => o.key === chosen).action);
       showResult(decisions, res);
-    } catch (e) {
-      fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.');
-    }
+    } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
     busy = false;
   }
 
-  // defensive timeout, extra point or two, onside or deep
+  // their ball late, your touchdown, your kickoff
   function promptChoice(kind) {
-    const r = G.root, me = G.me, d = $('call');
+    const r = G.root, me = G.me, d = $('dock');
     const spec = {
-      deftime: { ask: 'Clock is running', sub: `${teamName(code(r.pos))} ball, ${ddText(r)} at the ${spotText(r)}`, family: 'def_timeout',
+      deftime: { ask: 'Clock is running', sub: `${teamName(code(r.pos))} ball, ${ddText(r)}`, family: 'def_timeout',
         opts: [{ key: 'timeout', label: 'Timeout', sub: `${r.to[me]} left`, action: { to_def: true } }, { key: 'no_timeout', label: 'Let it run', action: { to_def: false } }],
         q: () => coachProbs('def_timeout', r, me) || { timeout: 0.15, no_timeout: 0.85 } },
-      pat: { ask: 'Touchdown', sub: 'Kick it or go for two?', family: 'pat',
-        opts: [{ key: 'xp', label: 'Extra point', action: { pat: 'xp' } }, { key: 'two', label: 'Go for two', action: { pat: 'two' } }],
+      pat: { ask: 'Touchdown!', sub: 'Kick it or go for two?', family: 'pat',
+        opts: [{ key: 'xp', label: 'Kick it', action: { pat: 'xp' } }, { key: 'two', label: 'Go for two', action: { pat: 'two' } }],
         q: () => coachProbs('pat', r, me) || { xp: 0.9, two: 0.1 } },
-      kick: { ask: 'Kickoff', sub: 'Kick it deep or try an onside kick?', family: 'onside',
-        opts: [{ key: 'deep', label: 'Kick deep', action: { kick: 'deep' } }, { key: 'onside', label: 'Onside kick', action: { kick: 'onside' } }],
+      kick: { ask: 'Kickoff', sub: 'Deep or onside?', family: 'onside',
+        opts: [{ key: 'deep', label: 'Kick deep', action: { kick: 'deep' } }, { key: 'onside', label: 'Onside', action: { kick: 'onside' } }],
         q: () => coachProbs('onside', r, me) || { deep: 0.85, onside: 0.15 } },
     }[kind];
     d.textContent = '';
@@ -837,13 +969,13 @@
     d.append(head);
     const keys = el('div', 'keys');
     keys.style.setProperty('--cols', 2);
-    spec.opts.forEach((o) => {
-      const b = key(o.label, o.sub || null, 'big');
+    spec.opts.forEach((o, i) => {
+      const b = key(o.label, o.sub || null, 'big', i);
       b.addEventListener('click', async () => {
         if (busy) return;
         busy = true;
         try {
-          statusPanel('Simulating both options…');
+          status('Simulating both options 600 times…');
           const vals = await evaluate(r, spec.opts, hash(kind, dayN, G.si, G.seq));
           const x = decisionFrom(kind, spec.family, spec.opts, vals, o.key, spec.q(), `${clockOf(r.t).text} Q${clockOf(r.t).q}`);
           G.decisions.push(x);
@@ -859,7 +991,7 @@
   }
 
   // ------------------------------------------------------- after the snap ---
-  const KIND_NAME = { clock: 'Tempo', call: 'Play call', deftime: 'Timeout', pat: 'Try', kick: 'Kickoff' };
+  const KIND_NAME = { clock: 'Clock', call: 'Play call', deftime: 'Timeout', pat: 'Try', kick: 'Kickoff' };
   function optionTable(x) {
     const t = el('table', 'opts');
     t.append(el('caption', '', KIND_NAME[x.kind] || 'Call'));
@@ -872,10 +1004,9 @@
     });
     return t;
   }
-  function showResult(decisions, res) {
-    ui.step = 'result';
+  function showResult(decisions, res, head) {
     drawAll();
-    const d = $('call');
+    const d = $('dock');
     d.textContent = '';
     const cost = decisions.reduce((a, x) => a + x.cost, 0), m = markOf(cost);
     const main = res.log.find((e) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(e.ev));
@@ -885,7 +1016,7 @@
     const sq = el('div', `sq ${m} flip`, GLYPH[m]);
     sq.setAttribute('aria-label', { g: 'Best call or close to it', y: 'A little worse than the best call', o: 'Costly', r: 'A big mistake' }[m]);
     const txt = el('div', 'res-play');
-    txt.append(el('span', 'yd', headline(main, res.log)), document.createTextNode(lines.length ? lines[0][0] : ''));
+    txt.append(el('span', 'yd', head || headline(main, res.log)), document.createTextNode(lines.length ? lines[0][0] : `You stop the clock with ${clockOf(G.root.t).text} left.`));
     top.append(sq, txt);
     wrap.append(top);
     const v = el('div', 'verdict');
@@ -893,10 +1024,7 @@
       if (i) v.append(el('br'));
       const what = decisions.length > 1 ? `${KIND_NAME[x.kind]}: ` : '';
       if (x.cost < 0.0005 || x.best === x.chosen) { v.append(document.createTextNode(what)); v.append(el('b', '', 'Best call.')); }
-      else {
-        v.append(document.createTextNode(`${what}best was `), el('b', '', x.bestLabel));
-        v.append(document.createTextNode(` (${pts(x.cost)} win %).`));
-      }
+      else { v.append(document.createTextNode(`${what}${what ? 'best' : 'Best'} was `), el('b', '', x.bestLabel), document.createTextNode(` (${pts(x.cost)}% win chance).`)); }
     });
     wrap.append(v);
     const det = el('details', 'more');
@@ -904,7 +1032,7 @@
     const inn = el('div', 'in');
     decisions.forEach((x) => inn.append(optionTable(x)));
     const wpa = decisions.reduce((a, x) => a + x.wpa, 0);
-    inn.append(el('p', 'note', `Win chance after your call: ${wpTxt(decisions[decisions.length - 1].wp)} before the snap. Against a typical NFL play-caller here: ${pts(wpa)} points. "NFL" is how often play-callers make that call in this spot.`));
+    inn.append(el('p', 'note', `Against a typical NFL play-caller here: ${pts(wpa)}% win chance. "NFL" is how often play-callers make that call in this spot.`));
     det.append(inn);
     wrap.append(det);
     const btn = el('button', 'btn', G.root.phase === DONE ? 'See how it ended' : 'Next play');
@@ -914,17 +1042,72 @@
     d.append(wrap);
   }
 
+  // ------------------------------------------------- who you coached like ---
+  function coachMatch(decs) {
+    const C = idx.coaches;
+    if (!C || !C.coaches || !C.coaches.length) return null;
+    const acc = { pass: [0, 0], deep: [0, 0], go: [0, 0], two: [0, 0] };
+    decs.forEach((x) => {
+      if (x.kind === 'call') {
+        let qPlay = 0, qPass = 0, qPassOnly = 0, qDeep = 0, qAll = 0;
+        x.wps.forEach((w) => {
+          const q = x.q[w.key] || 0;
+          qAll += q;
+          const c = CALL[w.key.replace('+oob', '')];
+          if (!c || w.key.endsWith('+oob')) return;
+          qPlay += q;
+          qPass += q * (c.family === 'pass' ? 1 : c.family === 'rpo' ? 0.5 : 0);
+          if (c.family === 'pass') { qPassOnly += q; if (DEEP.has(c.id)) qDeep += q; }
+        });
+        const c = CALL[String(x.chosen).replace('+oob', '')];
+        if (c && qPlay > 0) {
+          acc.pass[0] += (c.family === 'pass' ? 1 : c.family === 'rpo' ? 0.5 : 0) - qPass / qPlay; acc.pass[1] += 1;
+          if (c.family === 'pass' && qPassOnly > 0) { acc.deep[0] += (DEEP.has(c.id) ? 1 : 0) - qDeep / qPassOnly; acc.deep[1] += 1; }
+        }
+        if (x.family === 'fourth_down' && qAll > 0) { acc.go[0] += (c ? 1 : 0) - qPlay / qAll; acc.go[1] += 1; }
+      } else if (x.kind === 'pat') { acc.two[0] += (x.chosen === 'two' ? 1 : 0) - (x.q.two || 0); acc.two[1] += 1; }
+    });
+    const zu = {}, w = {};
+    Object.keys(acc).forEach((k) => {
+      const [sum, n] = acc[k];
+      zu[k] = n ? (sum / (n + 1)) / (C.spread[k] || 1) : 0;
+      w[k] = n ? n / (n + 1) : 0;
+    });
+    if (!Object.values(w).some((v) => v > 0)) return null;
+    let best = null, bd = Infinity;
+    C.coaches.forEach((c) => {
+      let dist = 0;
+      Object.keys(w).forEach((k) => { if (w[k]) dist += w[k] * (zu[k] - (c.z[k] || 0)) ** 2; });
+      if (dist < bd) { bd = dist; best = c; }
+    });
+    const why = Object.keys(w).filter((k) => w[k] && Math.abs(zu[k]) >= 0.35 && Math.sign(zu[k]) === Math.sign(best.z[k] || 0))
+      .sort((a, b) => w[b] * Math.abs(zu[b]) - w[a] * Math.abs(zu[a])).slice(0, 2).map((k) => WHY[k][zu[k] > 0 ? 0 : 1]);
+    return { coach: best, why };
+  }
+  function coachCard(decs, label) {
+    const m = coachMatch(decs);
+    if (!m) return null;
+    const c = m.coach, box = el('div', 'coach');
+    box.append(el('div', 'k', label), el('div', 'name', c.name));
+    const reason = m.why.length ? `Like him, you ${m.why.join(' and ')}.` : 'Your calls sit close to his across the board.';
+    box.append(el('div', 'why', reason));
+    const teams = (c.teams || []).map(teamName).join(', ');
+    box.append(el('div', 'meta', `${teams} · ${c.from === c.to ? c.from : `${c.from}–${c.to}`} · from ${c.plays.toLocaleString()} late-game snaps`));
+    box.title = 'Matched on how often you throw, go deep, go for it on fourth down and go for two, each against what NFL play-callers do in the same spots.';
+    return { el: box, name: c.name };
+  }
+
   async function finishSpot() {
     if (!G.result) {
-      statusPanel('Final whistle…');
+      status('Final whistle…');
       const r = G.root;
       const v = await evaluate(r, [{ key: 'end', action: {} }], 1);
-      G.result = { wp: v.end, mine: r.score[G.me], theirs: r.score[1 - G.me], half: r.t > 1800 ? 1 : 2 };
+      G.result = { wp: v.end, mine: r.score[G.me], theirs: r.score[1 - G.me], half: r.t >= 1800 ? 1 : 2 };
       G.over = true;
       persist();
     }
     drawAll();
-    const res = G.result, sc = G.scen, d = $('call');
+    const res = G.result, sc = G.scen, d = $('dock');
     d.textContent = '';
     const card = el('div', 'endcard');
     const head = res.half === 1 ? `Halftime: ${res.mine}–${res.theirs}` :
@@ -932,19 +1115,21 @@
     card.append(el('h2', '', head));
     if (res.half === 1 || res.mine === res.theirs) card.append(el('p', 'note', `Your win chance from here: ${wpTxt(res.wp)}.`));
     card.append(squaresOf(G.decisions));
-    const wpa = G.decisions.reduce((a, x) => a + x.wpa, 0), lost = G.decisions.reduce((a, x) => a + x.cost, 0);
-    card.append(el('p', 'verdict', `${pts(wpa)} win % against a typical NFL play-caller. ${(lost * 100).toFixed(1)} points left on the table against the best call each time.`));
-    const real = sc.real || {};
-    const realCall = real.call && CALL[real.call] ? CALL[real.call].label : 'a play';
-    const fin = real.final ? `final score ${sc.game.away.team} ${real.final.away}, ${sc.game.home.team} ${real.final.home}` : '';
-    const drive = real.drive ? `the drive ended in ${/^[aeiou]/.test(real.drive) ? 'an' : 'a'} ${real.drive}` : '';
-    card.append(el('p', 'real', `What really happened: ${sc.coach || code(G.me)} called "${realCall}" on that first snap${drive ? '; ' + drive : ''}${fin ? '; ' + fin : ''}.`));
+    const wpa = G.decisions.reduce((a, x) => a + x.wpa, 0);
+    card.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller in this spot.`));
+    const cc = coachCard(G.decisions, 'You called this one like');
+    if (cc) card.append(cc.el);
+    const rl = sc.real || {};
+    const realCall = rl.call && CALL[rl.call] ? CALL[rl.call].label : 'a play';
+    const fin = rl.final ? `final ${sc.away} ${rl.final.away}, ${sc.home} ${rl.final.home}` : '';
+    const drive = !rl.drive ? '' : rl.drive === 'ran out the clock' ? 'they ran out the clock' : `the drive ended in a ${rl.drive}`;
+    card.append(el('p', 'real', `In the real ${rl.season} game, ${rl.coach || 'the coach'} called "${realCall}" here; ${drive}${fin ? '; ' + fin : ''}.`));
     const btn = el('button', 'btn', G.si < 2 ? 'Next spot' : "Today's score");
     btn.type = 'button';
     btn.addEventListener('click', () => {
       state.current = G.si + 1;
       save(`${STORE}:day:${dayN}`, state);
-      if (G.si < 2) startSpot(G.si + 1);
+      if (G.si < 2) openSpot(G.si + 1);
       else renderSummary();
     });
     card.append(btn);
@@ -984,50 +1169,40 @@
     }
     return better / N;
   }
-  function shareText(p) {
-    const rows = [0, 1, 2].map((i) => {
-      const s = state.spots[i]; if (!s) return '';
-      const sc = today[i];
-      const r = s.result ? (s.result.half === 1 ? 'HT' : s.result.mine > s.result.theirs ? 'W' : s.result.mine < s.result.theirs ? 'L' : 'OT') : '';
-      return `${sc.player} ${r} ${snapsOf(s.decisions || []).map((m) => SQ[m]).join('')}`;
-    });
-    return `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers\n${rows.join('\n')}`;
-  }
   function renderSummary() {
-    G = G || resumeSpot(2);
-    setPlaying(false);
+    if (!G) resumeSpot(2);
+    show('done');
     const decs = allDecisions();
     const p = decs.length ? percentileVsNFL(decs) : 0;
     const wpa = decs.reduce((a, x) => a + x.wpa, 0);
     const st = load(`${STORE}:stats`, { days: {} });
-    st.days[dayN] = { p, wpa };
+    const cc = coachCard(decs, 'Today you coached like');
+    st.days[dayN] = { p, wpa, coach: cc ? cc.name : null };
     save(`${STORE}:stats`, st);
     state.done = true;
     save(`${STORE}:day:${dayN}`, state);
     drawTiles();
-    const d = $('call');
-    d.textContent = '';
-    const card = el('div', 'endcard');
-    card.append(el('div', 'note', `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
-      el('h2', '', `Better than ${Math.round(p * 100)}% of NFL play-callers`),
-      el('p', 'verdict', `${pts(wpa)} win % against a typical NFL play-caller across today's three spots.`));
-    const text = shareText(p);
+    const box = $('done');
+    box.textContent = '';
+    box.append(el('div', 'note', `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
+      el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers`));
+    if (cc) box.append(cc.el);
+    box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller across today's three spots.`));
+    const rows = [0, 1, 2].map((i) => {
+      const s = state.spots[i]; if (!s) return '';
+      const r = s.result ? (s.result.half === 1 ? 'HT' : s.result.mine > s.result.theirs ? 'W' : s.result.mine < s.result.theirs ? 'L' : 'OT') : '';
+      return `${today[i].player} ${r} ${snapsOf(s.decisions || []).map((m) => SQ[m]).join('')}`;
+    });
+    const text = `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}\n${rows.join('\n')}`;
     const pre = el('div', 'grid-share', text);
-    card.append(pre);
+    box.append(pre);
     const btn = el('button', 'btn alt', 'Share');
     btn.type = 'button';
     btn.addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(text); toast('Copied to clipboard'); }
       catch (e) { const sel = window.getSelection(); const rg = document.createRange(); rg.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(rg); toast('Selected: copy it'); }
     });
-    card.append(btn);
-    card.append(countdown());
-    const again = el('button', 'chip', 'Look back at your calls');
-    again.type = 'button';
-    again.addEventListener('click', () => openStats());
-    const row = el('div', 'chips'); row.style.justifyContent = 'center'; row.append(again);
-    card.append(row);
-    d.append(card);
+    box.append(btn, countdown());
   }
   function countdown() {
     const w = el('div', 'countdown');
@@ -1055,45 +1230,55 @@
   }
   function closeModal() { $('modal').hidden = true; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
   function playerInfo(p, label, team) {
-    const ol = ['T', 'G', 'C'].includes(label);
+    const ol = OL.includes(label) || label === 'T' || label === 'G';
     const top = el('div', 'pinfo');
-    top.append(el('div', `chip-big tier-${tierOf(p.pct)}`, String(p.pct)));
+    const ch = el('div', 'chip-big', String(p.pct)); ch.style.background = rate(p.pct);
+    top.append(ch);
     const nm = el('div');
-    nm.append(el('div', 'nm', p.name), el('div', 'ps', `${teamName(team)} · ${POS_NAME[label] || label} · ${ordinal(p.pct)} percentile`));
+    nm.append(el('div', 'nm', p.name), el('div', 'ps', `${team ? teamName(team) + ' · ' : ''}${POS_NAME[label] || label} · ${ordinal(p.pct)} percentile`));
     top.append(nm);
-    openModal(POS_NAME[label] || label, [top, el('p', 'lead', p.stat || ''), el('p', 'note', `${POS_METHOD[ol ? 'OL' : label] || ''} Stats from the ${G.scen.window}; small samples are pulled toward average.`)]);
+    const nodes = [top];
+    if (p.kind) {
+      const a = el('div', 'arch');
+      a.append(el('span', 'tag', p.kind));
+      if (p.arch.toLowerCase() !== p.kind.toLowerCase()) a.append(el('span', 'mad', `Madden type: ${p.arch}`));
+      nodes.push(a, el('p', 'lead', p.why));
+    }
+    nodes.push(el('p', p.kind ? '' : 'lead', p.stat || ''),
+      el('p', 'note', `${POS_METHOD[ol ? 'OL' : label] || ''} Stats from ${idx.asof.ratings}; small samples are pulled toward average.${p.kind ? ' Types use Madden\'s archetype names, assigned from the same stats.' : ''}`));
+    openModal(POS_NAME[label] || label, nodes);
   }
   function spotInfo() {
-    const sc = G.scen, home = sc.game.home, away = sc.game.away;
+    const sc = G.scen, H = sc.game.home, A = sc.game.away;
     const dl = el('dl', 'facts');
     const add = (k, v) => dl.append(el('dt', '', k), el('dd', '', v));
-    add('Game', `${sc.season} week ${sc.week}: ${teamName(away.team)} at ${teamName(home.team)}`);
-    add('You', `${teamName(sc.player)}, calling it for ${sc.coach || 'the head coach'}`);
-    add('Spot', idx.categories[sc.category]);
-    [away, home].forEach((t) => {
-      add(`${t.team} kicker`, `${t.kicker.name || '—'} · ${ordinal(t.kicker.pct ?? 50)} percentile`);
-      add(`${t.team} punter`, `${t.punter.name || '—'} · ${ordinal(t.punter.pct ?? 50)} percentile`);
+    const line = sc.game.home_spread;
+    add('Game', `${teamName(sc.away)} at ${teamName(sc.home)}`);
+    add('Line today', Math.abs(line) < 0.5 ? 'Pick’em' : `${teamName(line > 0 ? sc.home : sc.away)} by ${Math.abs(line).toFixed(1)}`);
+    [A, H].forEach((t) => {
+      add(`${teamName(t.team)}`, `${t.coach || ''}${t.qb && t.qb.name ? ` · QB ${t.qb.name}` : ''}`);
+      add('Kicker', `${t.kicker.name || '—'} · ${ordinal(t.kicker.pct ?? 50)} percentile`);
+      add('Punter', `${t.punter.name || '—'} · ${ordinal(t.punter.pct ?? 50)} percentile`);
     });
-    openModal('This game', [dl, el('p', 'note', `Kickers and punters are ranked on field goals and net punting over expected. Player percentiles use the ${sc.window}.`)]);
+    openModal('This game', [dl, el('p', 'note', `Today's rosters with everyone healthy; ratings from ${idx.asof.ratings}. The situation is from a real ${sc.real.season} game.`)]);
   }
   function openHelp() {
     const ex = el('div', 'ex');
     ['g', 'y', 'o', 'r'].forEach((m) => ex.append(el('span', `sq ${m}`, GLYPH[m])));
     const ul = el('ul');
     [
-      'If the clock is running, pick a tempo first: hurry up, huddle, milk it, timeout, spike or kneel.',
-      'Then pick Run, Pass or RPO, then the play. Strong side is the wide side of the field, where the tight end lines up; weak side is the short side. The arrows match the field.',
-      'Every circle is a real player from that game with his league percentile at his position, as of that week. Tap one for his numbers.',
-      'Every snap is a real NFL play of that call from 2022–26: sacks, picks, fumbles, bad snaps and flags all happen.',
-      'Nothing tells you which call is best until the ball is snapped.',
+      'Read the situation, tap Next, and the field opens: their end zone at the top, yours at the bottom.',
+      'Every dot is a player on today\'s roster, everyone healthy: green is good, red is not. Tap one to see what kind of player he is (mobile QB, blocking tight end…) and his numbers.',
+      'Call Run, Pass or RPO, then the play. Timeout, spike, kneel and kicks pop up when they matter.',
+      'Every snap is a real NFL play: sacks, picks, fumbles and flags all happen.',
     ].forEach((t) => ul.append(el('li', '', t)));
     openModal('How to play', [
-      el('p', 'lead', 'Three real late-game spots a day. You call every play for one team until the game ends.'),
+      el('p', 'lead', 'Three real late-game spots a day. You call every play.'),
       ul,
-      el('p', '', 'After each snap you see how your call ranked against every other call, simulated 600 times each:'),
+      el('p', '', 'After the snap, see how your call ranked:'),
       ex,
-      el('p', 'note', 'Green: the best call or within half a point of win chance. Yellow: up to 2 points worse. Orange: up to 5. Red: more than 5.'),
-      el('p', '', 'Your daily score is how your calls compare with NFL play-callers in the same three spots. New spots every day at midnight.'),
+      el('p', 'note', 'Green: the best call (within 0.5% win chance). Yellow: within 2%. Orange: within 5%. Red: worse.'),
+      el('p', '', 'At the end: your percentile against NFL play-callers, and the coach you called it like.'),
     ]);
   }
   function openStats() {
@@ -1112,22 +1297,16 @@
     const todayP = st.days[dayN] ? st.days[dayN].p * 100 : null;
     buckets.forEach(([lo, hi, lab], i) => {
       const r = el('div', 'r');
-      const bar = el('div', `bar${todayP != null && todayP >= lo && todayP < hi ? ' hi' : ''}`, String(counts[i]));
+      const bar = el('div', `bar2${todayP != null && todayP >= lo && todayP < hi ? ' hi' : ''}`, String(counts[i]));
       bar.style.width = `${Math.max(8, (counts[i] / mx) * 100)}%`;
       r.append(el('span', '', lab), bar);
       dist.append(r);
     });
     const nodes = [row, el('p', 'note', 'Daily percentile against NFL play-callers'), dist];
-    if (state && state.done) {
-      const decs = allDecisions();
-      const tbl = el('table', 'opts');
-      tbl.append(el('caption', '', 'Today, call by call'));
-      decs.forEach((x) => {
-        const tr = el('tr');
-        tr.append(el('td', '', `${GLYPH[markOf(x.cost)]} ${x.situation}`), el('td', '', x.chosenLabel), el('td', 'n', x.best === x.chosen ? 'best' : pts(-x.cost)));
-        tbl.append(tr);
-      });
-      nodes.push(tbl);
+    const coaches = days.map((k) => st.days[k].coach).filter(Boolean);
+    if (coaches.length) {
+      const top = Object.entries(coaches.reduce((a, c) => ({ ...a, [c]: (a[c] || 0) + 1 }), {})).sort((a, b) => b[1] - a[1])[0];
+      nodes.push(el('p', '', `You coach most like ${top[0]} (${top[1]} day${top[1] === 1 ? '' : 's'}).`));
     }
     openModal('Your stats', nodes);
   }
@@ -1136,34 +1315,34 @@
   async function boot() {
     $('helpBtn').addEventListener('click', openHelp);
     $('statsBtn').addEventListener('click', openStats);
-    $('board').addEventListener('click', () => { if (G) spotInfo(); });
+    $('bar').addEventListener('click', () => { if (G) spotInfo(); });
+    $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
+    $('deepClose').addEventListener('click', closeDeep);
     $('mClose').addEventListener('click', closeModal);
     $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeModal(); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('modal').hidden) closeModal(); });
-    setPlaying(false);
-    statusPanel('Loading 160,000 real plays…');
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (!$('modal').hidden) closeModal();
+      else if (!$('deep').hidden) closeDeep();
+    });
+    let rz = null;
+    window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden) { lastBall = null; drawField(); } }, 150); });
+    show('boot');
     try {
       idx = await fetch('game.json').then((r) => { if (!r.ok) throw new Error('game data ' + r.status); return r.json(); });
       idx.calls.forEach((c) => { CALL[c.id] = c; });
       const launch = new Date(idx.launch + 'T00:00:00');
       const now = new Date(); now.setHours(0, 0, 0, 0);
       dayN = Math.max(1, Math.floor((now - launch) / 864e5) + 1);
-      const ids = idx.schedule[(dayN - 1) % idx.schedule.length];
-      const chunks = [...new Set(ids.map((i) => Math.floor(i / idx.chunk)))];
-      const got = {};
-      await Promise.all(chunks.map((c) => fetch(`spots/${String(c).padStart(2, '0')}.json`)
-        .then((r) => { if (!r.ok) throw new Error('spots ' + r.status); return r.json(); }).then((j) => { got[c] = j; })));
-      today = ids.map((i) => got[Math.floor(i / idx.chunk)][i % idx.chunk]);
+      today = idx.schedule[(dayN - 1) % idx.schedule.length].map((i) => buildScen(idx.spots[i]));
       $('dayLabel').textContent = `No. ${dayN} · ${now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
-    } catch (e) { fatal('Today\'s spots did not load (' + e.message + '). Check your connection and reload.'); return; }
+    } catch (e) { $('boot').textContent = 'Today\'s spots did not load (' + e.message + '). Check your connection and reload.'; return; }
     state = load(`${STORE}:day:${dayN}`, null) || { spots: [], current: 0, done: false };
     if (!load(`${STORE}:seen`, false)) { openHelp(); save(`${STORE}:seen`, true); }
     drawTiles();
-    onReady = () => {
-      if (state.done) { renderSummary(); return; }
-      startSpot(Math.min(state.current || 0, 2));
-    };
     startWorkers();
+    if (state.done) renderSummary();
+    else openSpot(Math.min(state.current || 0, 2));
   }
   boot();
 })();

@@ -276,18 +276,33 @@ lines up). Because calls are labeled by where the ball went, a covered deep shot
 checkdown or a sack, which flatters deep calls; each call's edge over a same-kind play in the same
 situation is halved to correct for it.
 
-The screen is a portrait field with the real 22 from that game (the personnel each team used most,
-from snap counts), each player shown as his league percentile at his position as of that week: EPA per
-dropback for quarterbacks, yards after contact for running backs, EPA per target for receivers,
-pressures per snap for edge and interior linemen, tackling and coverage for linebackers, passer rating
-allowed for corners and safeties, and the offensive line graded as a unit (no public data grades
-linemen one at a time). Play-calling is two taps: Run, Pass or RPO, then the play and its side. Nothing
-says which call is best until after the snap; then every decision is graded in win probability against
-all the alternatives and against what a typical NFL play-caller does there. The day's score is a
-percentile against NFL play-callers in the same three spots, with a share grid of one square per snap.
+Each spot opens on a scenario card (score, clock, down and distance, timeouts, whose call it is);
+**Next** opens the whole field top to bottom, their end zone at the top of the phone and yours at the
+bottom, with all 22 players as dots from red (worse) to green (better). There are no numbers on the
+field: **Player ratings** (or a tap on any dot) shows each player's league percentile at his position,
+his stat line and his type, using Madden's archetype names (a mobile or pocket quarterback, a blocking,
+possession or vertical-threat tight end, a power, elusive or receiving back, and so on), each assigned
+by a rule on the stat that defines it (`archetypes.py`; EA's own ratings are not open data).
+Play-calling is a pop-up of **Run**, **Pass** and **RPO**, then the play and its side; a timeout,
+spike, kneel, field goal or punt only appears when it matters. Nothing says which call is best until
+after the snap; then every decision is graded in win probability against all the alternatives and
+against what a typical NFL play-caller does there. Each spot and the day end with the head coach whose
+late-game calls look most like yours ("You called this one like Nick Sirianni"), from 59 coaches'
+2016-26 fingerprints: passes, deep shots, fourth-down tries and two-point tries, each over what the
+league does in the same spots (`coaches.py`). The day's score is a percentile against NFL play-callers
+in the same three spots, with a share grid of one square per snap.
+
+The spots are real situations; the teams are today's (`current.py`). Rosters are nflverse's weekly
+rosters (the NFL's own transactions: trades, signings, releases), with injuries ignored so every team
+plays its healthy lineup: the 22 are picked by each player's usual share of snaps in the weeks he was
+healthy, his best depth-chart listing (ESPN) and his rating, in the personnel the team uses most.
+Player ratings blend 2025 (counted less) with 2026 to date: EPA per dropback and completion over
+expected for quarterbacks, rush yards over expected for backs, target share and yards per game for
+receivers, pressures for pass rushers, tackling and coverage for linebackers, passer rating allowed for
+corners and safeties, and the offensive line as a unit (no public data grades linemen one at a time).
 
 ```bash
-python -c "from nflclock import dailygame as G; print(G.build())"   # writes web/playbook.json, web/game.json, web/spots/
+python -c "from nflclock import dailygame as G; print(G.build())"   # writes web/playbook.json and web/game.json
 node web/game_smoke.js
 ```
 
@@ -369,6 +384,12 @@ pytest                              # unit tests (clock rules, kneel-out math, i
 | `live.py`, `console.py` | Roster/injury sync for upcoming games; the in-game terminal console |
 | `gamecard.py` | Pre-game 4th-down and two-point cards for one matchup |
 | `webexport.py`, `web/` | Data export and the browser engine (`engine.js`), worker pool, live page and parity test |
+| `playbook.py` | The daily game's 24 play calls, labeled from play-by-play and FTN charting, and each team's call ratings |
+| `players.py` | Player percentiles at every position (EPA, Next Gen Stats, PFR advanced stats), personnel allocation |
+| `current.py` | Every team today: healthy lineups from weekly rosters and snaps, QB, kicker, punter, coach, power rating |
+| `archetypes.py` | Madden-style player types (mobile or pocket QB, blocking or vertical-threat TE, ...) from the stats |
+| `coaches.py` | Head coaches' late-game fingerprints (pass, deep, fourth down, two-point) for "you coached like" |
+| `dailygame.py`, `web/game.html` | Two-Minute Drill: spots, daily schedule, `web/game.json`, and the game page |
 
 ## Limitations
 

@@ -1,16 +1,15 @@
-"""Two-Minute Drill, the daily play-calling game: real late-game spots, three a day.
+"""Two-Minute Drill, the daily play-calling game: real late-game spots, three a day, played with today's rosters.
 
-Every scenario is the first snap of a real drive late in a real game (2023-26): a two-minute drill
-while trailing, a lead to protect, or a tied game / end of the first half. The player calls every play
-for one team until the game ends; the browser engine (web/engine.js) plays the rest with real clock
-rules. This module writes the data the browser game needs:
+Every spot is the first snap of a real drive late in a real game (2023-26): a two-minute drill while
+trailing, a lead to protect, or a tied game / end of the first half. The situation (score, clock, ball,
+timeouts) is real; the two teams take the field as they stand now (current rosters, starters, injuries
+and ratings, see current.py). The player calls every play for one team until the game ends; the browser
+engine (web/engine.js) plays the rest with real clock rules. This module writes what the browser needs:
 
   web/playbook.json   -- call outcome libraries, NFL call frequencies, out-of-bounds odds (playbook.py)
-  web/game.json       -- the index: calls (grouped Run / Pass / RPO), models, and a deterministic
-                         three-a-day schedule over the scenario pool
-  web/spots/NN.json   -- the scenarios, CHUNK per file (only today's three are fetched): as-of team
-                         ratings, both teams' lineups with each player's percentile (players.py), the
-                         real call and result
+  web/game.json       -- the calls (grouped Run / Pass / RPO), the 32 teams today (lineups with every
+                         player's percentile, ratings, kicker, punter, coach), the spots, a three-a-day
+                         schedule, the decision models and the coach fingerprints (coaches.py)
 """
 from __future__ import annotations
 
@@ -20,17 +19,17 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
+from . import coaches as CO
 from . import config, data
+from . import current as C
 from . import playbook as P
-from . import players as PL
 from .analyze import kicker_unavailable
-from .context import GameContextFactory
 from .models import Bundle
 
 WEB = config.ROOT / "web"
 LAUNCH = date(2026, 10, 12)
 DAYS = 365
-CHUNK = 16
+SEASON = 2026
 SCENARIO_SEASONS = (2023, 2024, 2025, 2026)
 CATEGORIES = {"drill": "Two-minute drill", "protect": "Protect the lead", "tight": "Tied, or end of the half"}
 DRIVE_RESULT = {"Touchdown": "touchdown", "Field goal": "field goal", "Punt": "punt", "Turnover": "turnover",
@@ -63,107 +62,57 @@ def candidates(pbp: pd.DataFrame, lib: pd.DataFrame) -> pd.DataFrame:
     return first
 
 
-def _team(info, card, k_pct=50, p_pct=50) -> dict:
-    return {"team": info.team,
-            "base": {k: round(float(getattr(info, k)), 5) for k in ("off_pass", "off_rush", "def_pass", "def_rush", "proe")},
-            "qb": {"adjustment": 0.0}, "injury_adjustment": {"off_pass": 0.0, "off_rush": 0.0, "def_pass": 0.0, "def_rush": 0.0},
-            "kicker": {"name": info.kicker, "rating": round(float(info.kicker_rating), 4), "pct": k_pct},
-            "punter": {"name": info.punter, "rating": round(float(info.punter_rating), 3), "pct": p_pct},
-            # the matchup tilt the engine applies per call (EPA per play over league average); never shown
-            "calls": {c: {"off": v["off"], "def": v["def"]} for c, v in card.items()}}
-
-
-def _window(season: int, week: int) -> str:
-    if week <= 1:
-        return f"{season - 1} season"
-    last = f"week {week - 1}" if week <= 19 else "the regular season and playoffs so far"
-    return f"{season - 1} season (counted less) and {season} through {last}"
-
-
-def _names(raw: pd.DataFrame) -> pd.DataFrame:
-    """Each team's main QB and running back in each game (for play-call labels)."""
-    qb = raw[raw["qb_dropback"] == 1].groupby(["game_id", "posteam"])["passer_player_name"].agg(
-        lambda x: x.mode().iat[0] if x.notna().any() else None)
-    qbs = set(qb.dropna())
-    rb = raw[(raw["play_type"] == "run") & ~raw["rusher_player_name"].isin(qbs)].groupby(
-        ["game_id", "posteam"])["rusher_player_name"].agg(lambda x: x.mode().iat[0] if x.notna().any() else None)
-    return pd.concat([qb.rename("qb"), rb.rename("rb")], axis=1)
-
-
-def build(days: int = DAYS, seed: int = 2026) -> dict:
+def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
     bundle = Bundle.load()
     pbp = data.load(tuple(range(2016, max(SCENARIO_SEASONS) + 1)))
     lib = P.labeled_plays()
     P.export(lib, WEB / "playbook.json")
     cand = candidates(pbp, lib)
     rng = np.random.default_rng(seed)
-    picks = {}
-    for cat in CATEGORIES:
-        c = cand[cand["category"] == cat]
-        picks[cat] = c.iloc[rng.permutation(len(c))].head(days)
-    chosen = pd.concat(picks.values())
-    fac = GameContextFactory(bundle, pbp[pbp["game_id"].isin(chosen["game_id"].unique())])
-    R = PL.Ratings(PL.load_tables(tuple(range(min(SCENARIO_SEASONS) - 1, max(SCENARIO_SEASONS) + 1))), bundle)
+    picks = {cat: cand[cand["category"] == cat].iloc[lambda d: rng.permutation(len(d))].head(days) for cat in CATEGORIES}
 
-    def spec(kind, gid, team, season, week):
-        pid = (fac.kickers if kind == "k" else fac.punters).get((gid, team))
-        return PL.specialist_pct(R, season, week, kind, pid)
-    raw = pd.concat([pd.read_parquet(config.RAW_DIR / f"play_by_play_{s}.parquet",
-                                     columns=["game_id", "posteam", "qb_dropback", "play_type", "passer_player_name",
-                                              "rusher_player_name"]) for s in SCENARIO_SEASONS], ignore_index=True)
-    names = _names(raw[raw["game_id"].isin(chosen["game_id"].unique())])
-    cards = {}
+    now = C.teams_now(bundle, season)
+    card = P.call_ratings(lib, season, now["week"])
+    teams = {}
+    for t, x in now["teams"].items():
+        x = dict(x)
+        x["calls"] = {c: {"off": v["off"], "def": v["def"]} for c, v in P.team_card(card, t).items()}
+        x.pop("recent_games", None)
+        teams[t] = x
+    tr = bundle.team_ratings
+    last = tr[tr["season"] == season]
+    last = last[last["week"] == last["week"].max()].iloc[0]
+    league = {k: round(float(last[k]), 5) for k in ("mu_pass", "mu_rush", "home_pass", "home_rush")}
+    games = pd.read_csv(config.RAW_DIR / "games.csv").set_index("game_id")
+    ko = pbp[pbp["play_type"] == "kickoff"].sort_values(["game_id", "row_order"]).groupby("game_id").head(1)
+    receive2h = dict(zip(ko["game_id"], ko["defteam"]))      # the team that kicked off first gets the ball after halftime
 
-    def card(season, week, team):
-        if (season, week) not in cards:
-            cards[(season, week)] = P.call_ratings(lib, season, week)
-        return P.team_card(cards[(season, week)], team)
-
-    scen, index = [], {}
+    spots = []
     for cat, df in picks.items():
         for _, r in df.iterrows():
             gid = r["game_id"]
-            g = fac.games.loc[gid]
-            season, week = int(g["season"]), int(g["week"])
-            ctx, home, away = fac.for_game(gid)
-            try:
-                lg = fac.tr.loc[(season, week, g["home"])]
-                league = {k: round(float(lg[k]), 5) for k in ("mu_pass", "mu_rush", "home_pass", "home_rush")}
-            except KeyError:
-                league = {"mu_pass": 0.0, "mu_rush": 0.0, "home_pass": 0.0, "home_rush": 0.0}
+            g = games.loc[gid]
+            home, away = g["home_team"], g["away_team"]
             off = r["posteam"]
-            home_off = off == g["home"]
-            nm = names.loc[(gid, off)] if (gid, off) in names.index else {"qb": None, "rb": None}
+            home_off = off == home
             res = r.get("fixed_drive_result")
-            index[(cat, gid, int(r["play_id"]))] = len(scen)
-            scen.append({
-                "id": f"{gid}#{int(r['play_id'])}", "category": cat, "game_id": gid, "season": season, "week": week,
-                "player": off, "opponent": r["defteam"],
-                "coach": g["home_coach"] if home_off else g["away_coach"],
-                "game": {"game_id": gid, "season": season, "week": week,
-                         "home": _team(home, card(season, week, g["home"]), spec("k", gid, g["home"], season, week),
-                                       spec("p", gid, g["home"], season, week)),
-                         "away": _team(away, card(season, week, g["away"]), spec("k", gid, g["away"], season, week),
-                                       spec("p", gid, g["away"], season, week)),
-                         "home_spread": float(np.nan_to_num(g["spread"])), "indoor": g["roof"] in ("dome", "closed"),
-                         "wind": float(np.nan_to_num(g["wind"])), "temp": None if pd.isna(g["temp"]) else float(g["temp"]),
-                         "league": league, "home_coach": g["home_coach"], "away_coach": g["away_coach"]},
+            spots.append({
+                "id": f"{gid}#{int(r['play_id'])}", "category": cat, "home": home, "away": away, "player": off,
+                "indoor": g["roof"] in ("dome", "closed"), "wind": float(np.nan_to_num(g["wind"])),
+                "temp": None if pd.isna(g["temp"]) else float(g["temp"]),
                 "start": {"qtr": int(r["qtr"]), "clock": float(r["quarter_seconds_remaining"]),
                           "score": [int(r["total_away_score"]), int(r["total_home_score"])],
                           "pos": off, "down": 1, "ytg": float(r["ydstogo"]), "yl": float(r["yardline_100"]),
                           "to": [int(r["posteam_timeouts_remaining"] if not home_off else r["defteam_timeouts_remaining"]),
                                  int(r["posteam_timeouts_remaining"] if home_off else r["defteam_timeouts_remaining"])],
-                          "running": False, "phase": "snap", "receive2h": g["home"] if g["hok"] != 1 else g["away"]},
-                "names": {"qb": nm["qb"], "rb": nm["rb"]},
-                "real": {"call": r["real_call"], "desc": r["desc"], "drive": DRIVE_RESULT.get(res, res),
-                         "final": {"away": int(r["away_score"]), "home": int(r["home_score"])}},
-                "lineups": {"home": PL.lineup(R, gid, g["home"], season, week),
-                            "away": PL.lineup(R, gid, g["away"], season, week)},
-                "window": _window(season, week),
+                          "running": False, "phase": "snap", "receive2h": receive2h.get(gid, away)},
+                "real": {"season": int(g["season"]), "week": int(g["week"]),
+                         "coach": g["home_coach"] if home_off else g["away_coach"], "call": r["real_call"],
+                         "drive": DRIVE_RESULT.get(res, res), "final": {"away": int(r["away_score"]), "home": int(r["home_score"])}},
             })
     n = {cat: len(df) for cat, df in picks.items()}
-    off = {cat: sum(len(picks[c]) for c in list(CATEGORIES)[:i]) for i, cat in enumerate(CATEGORIES)}
-    schedule = [[off[cat] + (d % n[cat]) for cat in CATEGORIES] for d in range(days)]
+    offs = {cat: sum(n[c] for c in list(CATEGORIES)[:i]) for i, cat in enumerate(CATEGORIES)}
+    schedule = [[offs[cat] + (d % n[cat]) for cat in CATEGORIES] for d in range(days)]
     for day in schedule:
         rng.shuffle(day)
     models = {}
@@ -176,14 +125,15 @@ def build(days: int = DAYS, seed: int = 2026) -> dict:
         b, side = P.base_side(c)
         calls.append({"id": c, "label": label, "kind": kind, "say": say, "family": P.FAMILY[c], "base": b, "side": side})
     out = {"launch": LAUNCH.isoformat(), "categories": CATEGORIES, "calls": calls, "models": models,
-           "schedule": schedule, "n": len(scen), "chunk": CHUNK,
+           "schedule": schedule, "spots": spots, "teams": teams, "league": league, "hfa": now["hfa"],
+           "coaches": CO.fingerprints(),
+           "asof": {"season": season, "through_week": now["week"] - 1, "depth_chart": now["depth_chart"],
+                    "ratings": f"{season - 1} season (counted less) and {season} through week {now['week'] - 1}"},
            "built": pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds")}
     (WEB / "game.json").write_text(json.dumps(out, separators=(",", ":"), default=float))
-    spots = WEB / "spots"
-    spots.mkdir(exist_ok=True)
-    for old_file in spots.glob("*.json"):
-        old_file.unlink()
-    for k in range(0, len(scen), CHUNK):
-        (spots / f"{k // CHUNK:02d}.json").write_text(json.dumps(scen[k:k + CHUNK], separators=(",", ":"), default=float))
+    for stale in list((WEB / "spots").glob("*.json")) if (WEB / "spots").exists() else []:
+        stale.unlink()
+    if (WEB / "spots").exists():
+        (WEB / "spots").rmdir()
     (WEB / "scenarios.json").unlink(missing_ok=True)
-    return {"scenarios": len(scen), "by_category": n, "days": days, "chunks": -(-len(scen) // CHUNK)}
+    return {"spots": len(spots), "by_category": n, "days": days, "teams": len(teams), "coaches": len(out["coaches"]["coaches"])}

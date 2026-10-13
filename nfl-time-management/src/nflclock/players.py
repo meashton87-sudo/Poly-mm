@@ -84,6 +84,12 @@ def ordinal(n: int) -> str:
     return f"{n}{'th' if 11 <= n % 100 <= 13 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
 
 
+def count(n, one: str, many: str | None = None) -> str:
+    """'1 sack', '5.5 sacks', '0 sacks'."""
+    s = f"{n:g}" if isinstance(n, float) and not float(n).is_integer() else f"{n:.0f}"
+    return f"{s} {one if s == '1' else (many or one + 's')}"
+
+
 def passer_rating(att, cmp, yds, td, ints) -> np.ndarray:
     att = np.maximum(np.asarray(att, float), 1e-9)
     a = np.clip((cmp / att - 0.3) * 5, 0, 2.375)
@@ -106,6 +112,11 @@ class Ratings:
         # the role a player actually plays (PFR calls a 3-4 interior lineman a DE): edge, interior, ...
         self.role = {k: PFF_GROUP[v] for k, v in zip(pl["pfr_id"], pl["pff_position"]) if v in PFF_GROUP}
         self.cache = {}
+
+    def now(self, season: int) -> dict:
+        if ("now", season) not in self.cache:
+            self.cache[("now", season)] = ratings_now(self, season)
+        return self.cache[("now", season)]
 
     def week(self, season: int, week: int) -> dict:
         key = (season, week)
@@ -182,9 +193,9 @@ class Ratings:
         for team in set(pp_pass) | set(pp_run):
             a, b = pp_pass.get(team, 0.5), pp_run.get(team, 0.5)
             out["ol"][team] = ((a + b) / 2, f"Graded as a unit: pressure allowed on {rate.get(team, np.nan):.0%} of "
-                                             f"dropbacks ({ordinal(round(a * 100))} pct), "
+                                             f"dropbacks ({ordinal(round(a * 100))} percentile), "
                                              f"{ybc.get(team, np.nan):.1f} yards before contact per carry "
-                                             f"({ordinal(round(b * 100))} pct)")
+                                             f"({ordinal(round(b * 100))} percentile)")
 
         # defense: PFR stats on top of snap counts
         de = T["def"].assign(w=lambda d: _w(d, season, week))
@@ -273,6 +284,202 @@ class Ratings:
                 if len(wk):
                     out[name] = dict(zip(wk[key], _pct(wk["rating"], wk["rating"])))
         return out
+
+
+# ------------------------------------------------- current composite ratings ---
+NOW_FILES = {"stats": ("stats_player", "stats_player_week_{s}.parquet")}
+NGS_FILES = {k: ("nextgen_stats", f"ngs_{k}.parquet") for k in ("rushing", "passing")}
+
+
+def _z(x: pd.Series, pool: pd.Series) -> pd.Series:
+    sd = pool.std()
+    return (x - pool.mean()) / (sd if sd and np.isfinite(sd) and sd > 0 else 1.0)
+
+
+def ratings_now(R: "Ratings", season: int) -> dict:
+    """League percentiles at each position for this season so far (last season counts PRIOR_SEASON_WEIGHT),
+    from composites of the best public measures, shrunk toward the position average:
+
+      QB     EPA per dropback (0.7) and completion % over expected, NFL Next Gen Stats (0.3)
+      RB     rush yards over expected per carry, Next Gen Stats (0.4), rushing EPA per carry (0.3),
+             scrimmage yards per game (0.3)
+      WR/TE  weighted opportunity rating (target and air-yards share, 0.4), receiving yards per game
+             (0.4), EPA per target (0.2)
+      EDGE/DL pressures per snap (0.6), sacks per game (0.25), tackles for loss per game (0.15)
+      LB     tackles per snap, tackles for loss per game, missed-tackle rate, passer rating allowed
+      CB     passer rating allowed (0.65), passes defended and interceptions per target (0.35)
+      S      passer rating allowed (0.45), missed-tackle rate (0.3), passes defended + INT per game (0.25)
+      OL     the line as a unit (see Ratings): pressure rate allowed and yards before contact
+    """
+    T = R.T
+    seasons = (season - 1, season)
+    wf = lambda d: np.where(d["season"] == season, 1.0, np.where(d["season"] == season - 1, PRIOR_SEASON_WEIGHT, 0.0))
+    ps = pd.concat([pd.read_parquet(_get(*[x.format(s=s) for x in NOW_FILES["stats"]])) for s in seasons], ignore_index=True)
+    ps = ps.assign(w=wf(ps))
+    ps = ps[ps["w"] > 0]
+    ngs = {k: pd.read_parquet(_get(*v)) for k, v in NGS_FILES.items()}
+    for k in ngs:
+        n = ngs[k]
+        n = n[(n["week"] > 0) & n["season"].isin(seasons)]
+        ngs[k] = n.assign(w=wf(n))
+    snaps = T["snaps"][T["snaps"]["season"].isin(seasons)]
+    snaps = snaps.assign(w=wf(snaps))
+    pos_mode = snaps.groupby("pfr_player_id")["position"].agg(lambda x: x.mode().iat[0])
+    out = {"player": {}, "ol": R.week(season, int(snaps["week"].max()) + 1)["ol"], "grp": {}}
+    to_pfr = R.gsis_to_pfr
+
+    def emit(ids_gsis, comp, pool_mask, stats, pos_label):
+        pc = np.sort(comp[pool_mask].to_numpy())
+        for gid, c, st in zip(ids_gsis, comp, stats):
+            if not len(pc):
+                continue
+            p = (np.searchsorted(pc, c, "left") + np.searchsorted(pc, c, "right")) / 2 / len(pc)
+            pfr = to_pfr.get(gid)
+            if pfr:
+                out["player"][pfr] = (float(p), st)
+
+    # QB
+    pbp = T["pbp"]
+    pbp = pbp[pbp["season"].isin(seasons)].assign(w=lambda d: wf(d))
+    q = pbp[(pbp["qb_dropback"] == 1) & pbp["id"].notna() & pbp["qb_epa"].notna()]
+    g = q.assign(we=q["w"] * q["qb_epa"]).groupby("id").agg(n=("w", "sum"), e=("we", "sum"), raw=("w", "size"))
+    pq = ps[ps["attempts"] > 0].assign(wc=lambda d: d["w"] * d["passing_cpoe"].fillna(0) * d["attempts"], wa=lambda d: d["w"] * d["attempts"])
+    cp = pq.groupby("player_id").agg(c=("wc", "sum"), a=("wa", "sum"))
+    g = g.join(cp, how="left").fillna({"c": 0.0, "a": 0.0})
+    m_e, m_c = g["e"].sum() / g["n"].sum(), g["c"].sum() / max(g["a"].sum(), 1)
+    g["epa"] = (g["e"] + 150 * m_e) / (g["n"] + 150)
+    g["cpoe"] = (g["c"] + 150 * m_c) / (g["a"] + 150)
+    pool = g["n"] >= 150
+    g["comp"] = 0.7 * _z(g["epa"], g.loc[pool, "epa"]) + 0.3 * _z(g["cpoe"], g.loc[pool, "cpoe"])
+    emit(g.index, g["comp"], pool, [f"EPA per dropback {r.e / r.n:+.2f}, completion % over expected {r.c / max(r.a, 1):+.1f} "
+                                    f"({count(r.raw, 'dropback')})" for r in g.itertuples()], "QB")
+
+    # RB
+    rb = ps[ps["position"] == "RB"].assign(we=lambda d: d["w"] * d["rushing_epa"].fillna(0), wc=lambda d: d["w"] * d["carries"],
+                                         wy=lambda d: d["w"] * (d["rushing_yards"].fillna(0) + d["receiving_yards"].fillna(0)),
+                                         wr=lambda d: d["w"] * d["rushing_yards"].fillna(0))
+    rb = rb.groupby("player_id").agg(e=("we", "sum"), c=("wc", "sum"), y=("wy", "sum"), ry=("wr", "sum"), gms=("w", "sum"),
+                                     raw=("carries", "sum"))
+    nr = ngs["rushing"].assign(wo=lambda d: d["w"] * d["rush_yards_over_expected"], wa=lambda d: d["w"] * d["rush_attempts"])
+    nr = nr.groupby("player_gsis_id").agg(o=("wo", "sum"), a=("wa", "sum"))
+    rb = rb.join(nr, how="left").fillna({"o": 0.0, "a": 0.0})
+    m_e, m_o, m_y = rb["e"].sum() / rb["c"].sum(), rb["o"].sum() / max(rb["a"].sum(), 1), rb["y"].sum() / rb["gms"].sum()
+    rb["epa"] = (rb["e"] + 60 * m_e) / (rb["c"] + 60)
+    rb["ryoe"] = (rb["o"] + 60 * m_o) / (rb["a"] + 60)
+    rb["ypg"] = (rb["y"] + 3 * m_y) / (rb["gms"] + 3)
+    pool = rb["c"] >= 60
+    rb["comp"] = (0.4 * _z(rb["ryoe"], rb.loc[pool, "ryoe"]) + 0.3 * _z(rb["epa"], rb.loc[pool, "epa"])
+                  + 0.3 * _z(rb["ypg"], rb.loc[pool, "ypg"]))
+    emit(rb.index, rb["comp"], pool, [f"{r.ry / max(r.c, 1e-9):.1f} yards per carry, {r.o / max(r.a, 1e-9):+.2f} rush yards over "
+                                      f"expected per carry, {r.y / r.gms:.0f} scrimmage yards per game" for r in rb.itertuples()], "RB")
+
+    # WR / TE
+    rc = ps[ps["position"].isin(["WR", "TE"])].assign(wt=lambda d: d["w"] * d["targets"], wy=lambda d: d["w"] * d["receiving_yards"].fillna(0),
+                                                     we=lambda d: d["w"] * d["receiving_epa"].fillna(0),
+                                                     wo=lambda d: d["w"] * d["wopr"].fillna(0), wts=lambda d: d["w"] * d["target_share"].fillna(0))
+    rc = rc.groupby(["player_id", "position"]).agg(t=("wt", "sum"), y=("wy", "sum"), e=("we", "sum"), o=("wo", "sum"),
+                                                   ts=("wts", "sum"), gms=("w", "sum")).reset_index()
+    for pos in ("WR", "TE"):
+        s_ = rc[rc["position"] == pos].set_index("player_id")
+        if not len(s_):
+            continue
+        s_["wopr"] = (s_["o"] + 4 * s_["o"].sum() / s_["gms"].sum()) / (s_["gms"] + 4)
+        s_["ypg"] = (s_["y"] + 4 * s_["y"].sum() / s_["gms"].sum()) / (s_["gms"] + 4)
+        s_["ept"] = (s_["e"] + 40 * s_["e"].sum() / s_["t"].sum()) / (s_["t"] + 40)
+        pool = s_["t"] >= 30
+        s_["comp"] = (0.4 * _z(s_["wopr"], s_.loc[pool, "wopr"]) + 0.4 * _z(s_["ypg"], s_.loc[pool, "ypg"])
+                      + 0.2 * _z(s_["ept"], s_.loc[pool, "ept"]))
+        emit(s_.index, s_["comp"], pool, [f"{r.ts / r.gms:.0%} target share, {r.y / r.gms:.0f} receiving yards per game, "
+                                          f"EPA per target {r.e / max(r.t, 1e-9):+.2f}" for r in s_.itertuples()], pos)
+
+    # defense: PFR pressures and coverage on top of snap counts, plus box-score defense
+    de = T["def"][T["def"]["season"].isin(seasons)]
+    dsn = snaps[snaps["defense_snaps"] > 0][["game_id", "pfr_player_id", "defense_snaps", "w"]]
+    cols = ["def_pressures", "def_tackles_combined", "def_missed_tackles", "def_targets", "def_completions_allowed",
+            "def_yards_allowed", "def_receiving_td_allowed", "def_ints"]
+    d = dsn.merge(de[["game_id", "pfr_player_id"] + cols], on=["game_id", "pfr_player_id"], how="left")
+    d[cols] = d[cols].fillna(0)
+    raw = d.groupby("pfr_player_id")[["defense_snaps"] + cols].sum()
+    for c in ["defense_snaps"] + cols:
+        d[c] = d[c] * d["w"]
+    g = d.groupby("pfr_player_id")[["defense_snaps"] + cols].sum()
+    g["gms"] = d.groupby("pfr_player_id")["w"].sum()
+    box = ps.assign(pfr=ps["player_id"].map(to_pfr))
+    box = box.assign(ws=lambda x: x["w"] * x["def_sacks"].fillna(0), wt=lambda x: x["w"] * x["def_tackles_for_loss"].fillna(0),
+                     wp=lambda x: x["w"] * x["def_pass_defended"].fillna(0), rs=lambda x: x["def_sacks"].fillna(0),
+                     rp=lambda x: x["def_pass_defended"].fillna(0)).groupby("pfr").agg(
+        sk=("ws", "sum"), tfl=("wt", "sum"), pd_=("wp", "sum"), rsk=("rs", "sum"), rpd=("rp", "sum"))
+    g = g.join(box, how="left").fillna(0.0)
+    ids = pd.Series(g.index, index=g.index)
+    role = ids.map(R.role)
+    pos = ids.map(pos_mode).fillna(ids.map(R.pfr_pos))
+    guess = np.where(pos.isin(["DE", "OLB"]), "EDGE", np.where(pos.isin(["DT", "NT", "DL"]), "DL", np.where(pos.isin(LB_POS), "LB",
+                     np.where(pos.isin(CB_POS), "CB", np.where(pos.isin(S_POS), "S", "X")))))
+    g["grp"] = role.fillna(pd.Series(guess, index=g.index))
+    out["grp"] = g["grp"].to_dict()
+    gms = g["gms"].clip(lower=1e-9)
+
+    def emit_pfr(sub, comp, pool, stats):
+        pc = np.sort(comp[pool].to_numpy())
+        for pfr, c, st in zip(sub.index, comp, stats):
+            if len(pc):
+                out["player"][pfr] = (float((np.searchsorted(pc, c, "left") + np.searchsorted(pc, c, "right")) / 2 / len(pc)), st)
+
+    def shrunk(num, den, k):
+        m0 = num.sum() / max(den.sum(), 1e-9)
+        return (num + k * m0) / (den + k)
+
+    def cover(sub, k):
+        tg = sub["def_targets"]
+        r_ = [sub[c].sum() / max(tg.sum(), 1) for c in ("def_completions_allowed", "def_yards_allowed", "def_receiving_td_allowed", "def_ints")]
+        return pd.Series(passer_rating(tg + k, sub["def_completions_allowed"] + k * r_[0], sub["def_yards_allowed"] + k * r_[1],
+                                       sub["def_receiving_td_allowed"] + k * r_[2], sub["def_ints"] + k * r_[3]), index=sub.index)
+
+    for grp in ("EDGE", "DL"):
+        sub = g[g["grp"] == grp]
+        if not len(sub):
+            continue
+        pool = sub["defense_snaps"] >= MIN_SNAPS
+        pr = shrunk(sub["def_pressures"], sub["defense_snaps"], K_SNAPS)
+        sk = shrunk(sub["sk"], sub["gms"], 3)
+        tf = shrunk(sub["tfl"], sub["gms"], 3)
+        comp = 0.6 * _z(pr, pr[pool]) + 0.25 * _z(sk, sk[pool]) + 0.15 * _z(tf, tf[pool])
+        rr = raw.loc[sub.index]
+        emit_pfr(sub, comp, pool, [f"{count(a.def_pressures, 'pressure')} and {count(b, 'sack')} in {count(a.defense_snaps, 'snap')}"
+                                   for a, b in zip(rr.itertuples(), sub["rsk"])])
+    sub = g[g["grp"] == "LB"]
+    if len(sub):
+        pool = sub["defense_snaps"] >= MIN_SNAPS
+        tk = shrunk(sub["def_tackles_combined"], sub["defense_snaps"], K_SNAPS)
+        tf = shrunk(sub["tfl"], sub["gms"], 3)
+        ms = shrunk(sub["def_missed_tackles"], sub["def_tackles_combined"] + sub["def_missed_tackles"], K_TACKLES)
+        cv = cover(sub, K_TGT_LB)
+        comp = (0.3 * _z(tk, tk[pool]) + 0.2 * _z(tf, tf[pool]) - 0.25 * _z(ms, ms[pool]) - 0.25 * _z(cv, cv[pool]))
+        rr = raw.loc[sub.index]
+        rc_ = passer_rating(rr["def_targets"], rr["def_completions_allowed"], rr["def_yards_allowed"], rr["def_receiving_td_allowed"], rr["def_ints"])
+        emit_pfr(sub, comp, pool, [f"{count(a.def_tackles_combined, 'tackle')} in {count(a.defense_snaps, 'snap')}, missed "
+                                   f"{a.def_missed_tackles / max(a.def_tackles_combined + a.def_missed_tackles, 1):.0%}, passer rating "
+                                   f"allowed {c:.0f}" for a, c in zip(rr.itertuples(), rc_)])
+    for grp, k in (("CB", K_TGT_CB), ("S", K_TGT_S)):
+        sub = g[g["grp"] == grp]
+        if not len(sub):
+            continue
+        cv = cover(sub, k)
+        rr = raw.loc[sub.index]
+        rc_ = passer_rating(rr["def_targets"], rr["def_completions_allowed"], rr["def_yards_allowed"], rr["def_receiving_td_allowed"], rr["def_ints"])
+        if grp == "CB":
+            pool = sub["def_targets"] >= MIN_TGT
+            pdt = shrunk(sub["pd_"] + sub["def_ints"], sub["def_targets"], k)
+            comp = -0.65 * _z(cv, cv[pool]) + 0.35 * _z(pdt, pdt[pool])
+        else:
+            pool = sub["defense_snaps"] >= MIN_SNAPS
+            ms = shrunk(sub["def_missed_tackles"], sub["def_tackles_combined"] + sub["def_missed_tackles"], K_TACKLES)
+            pdg = shrunk(sub["pd_"] + sub["def_ints"], sub["gms"], 3)
+            comp = -0.45 * _z(cv, cv[pool]) - 0.3 * _z(ms, ms[pool]) + 0.25 * _z(pdg, pdg[pool])
+        emit_pfr(sub, comp, pool, [f"Passer rating allowed {c:.0f} on {count(a.def_targets, 'target')}, "
+                                   f"{count(pdv, 'pass defended', 'passes defended')}, "
+                                   f"{a.def_ints:.0f} INT" for a, c, pdv in zip(rr.itertuples(), rc_, sub["rpd"])])
+    return out
 
 
 # -------------------------------------------------------------- lineups ---
