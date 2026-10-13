@@ -1879,6 +1879,12 @@
     if (G.started || G.over) return enterField();
     renderIntro();
   }
+  // the real game a spot comes from: "2023 · Week 14" or "2024 · Divisional Round"
+  const ROUND = { WC: 'Wild Card Round', DIV: 'Divisional Round', CON: 'Conference Championship', SB: 'Super Bowl' };
+  function gameTag(sc) {
+    const rl = sc.real || {};
+    return `${rl.season} · ${ROUND[rl.type] || `Week ${rl.week}`}`;
+  }
   function renderIntro() {
     const sc = G.scen, r = G.root, box = $('intro');
     box.textContent = '';
@@ -1890,7 +1896,8 @@
     const state_ = lead > 0 ? `Up by ${lead}` : lead < 0 ? `Down by ${-lead}` : 'Tied';
     const big = el('div', 'big', state_);
     big.append(el('span', 'left', left));
-    box.append(el('div', 'cat', `Spot ${G.si + 1} of 3 · ${idx.categories[sc.category]}`), big);
+    box.append(el('div', 'cat', `Spot ${G.si + 1} of 3 · ${idx.categories[sc.category]}`),
+      el('div', 'game', `${gameTag(sc)} · ${teamName(sc.away)} at ${teamName(sc.home)}`), big);
     const mu = el('div', 'matchup');
     const t = (c, i) => {
       const d = el('div', 't');
@@ -1913,7 +1920,7 @@
     go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
     box.append(go);
     const rl = sc.real || {};
-    box.append(el('div', 'from', `A real situation from ${rl.season} week ${rl.week} (${teamName(sc.away)} at ${teamName(sc.home)}), played with today's rosters.`));
+    box.append(el('div', 'from', `The real score, clock, ball and timeouts from that game, played with today's rosters.`));
     go.focus({ preventScroll: true });
   }
   function enterField() {
@@ -2509,7 +2516,7 @@
     const rl = sc.real || {};
     const realCall = rl.call && CALL[rl.call] ? CALL[rl.call].label : 'a play';
     const drive = !rl.drive ? '' : rl.drive === 'ran out the clock' ? 'they ran out the clock' : `the drive ended in a ${rl.drive}`;
-    card.append(el('p', 'real', `In the real ${rl.season} game, ${rl.coach || 'the coach'} called "${realCall}" here; ${drive}.`));
+    card.append(el('p', 'real', `In the real game (${gameTag(sc)}), ${rl.coach || 'the coach'} called "${realCall}" here; ${drive}.`));
     const cc = coachCard(G.decisions, 'You called this one like');
     if (cc) card.append(cc.el);
     const wpa = G.decisions.reduce((a, x) => a + x.wpa, 0);

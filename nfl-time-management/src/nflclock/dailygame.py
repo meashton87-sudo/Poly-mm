@@ -1,6 +1,7 @@
 """Two-Minute Drill, the daily play-calling game: real late-game spots, three a day, played with today's rosters.
 
-Every spot is the first snap of a real drive late in a real game (2023-26): a two-minute drill while
+Every spot is the first snap of a real drive late in a real game (2023-26, playoffs included; the game's season,
+week or playoff round is shown with it): a two-minute drill while
 trailing, a lead to protect, or a tied game / end of the first half. The situation (score, clock, ball,
 timeouts) is real; the two teams take the field as they stand now (current rosters, starters, injuries
 and ratings, see current.py). The player calls every play for one team until the game ends; the browser
@@ -55,7 +56,6 @@ def candidates(pbp: pd.DataFrame, lib: pd.DataFrame) -> pd.DataFrame:
     first = first[(first["category"] != "") & wp.between(0.08, 0.92)]
     bad = kicker_unavailable(pbp)
     first = first[~pd.Series(list(zip(first["game_id"], first["posteam"])), index=first.index).isin(bad)]
-    first = first[first["season_type"] == "REG"] if (first["season_type"] == "REG").sum() > 500 else first
     real_call = lib.set_index(["game_id", "play_id"])["call"]
     first["real_call"] = [P.CALL_IDS[int(real_call.get((g, p), -1))] if (g, p) in real_call.index else None
                           for g, p in zip(first["game_id"], first["play_id"])]
@@ -106,7 +106,7 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
                           "to": [int(r["posteam_timeouts_remaining"] if not home_off else r["defteam_timeouts_remaining"]),
                                  int(r["posteam_timeouts_remaining"] if home_off else r["defteam_timeouts_remaining"])],
                           "running": False, "phase": "snap", "receive2h": receive2h.get(gid, away)},
-                "real": {"season": int(g["season"]), "week": int(g["week"]),
+                "real": {"season": int(g["season"]), "week": int(g["week"]), "type": str(g["game_type"]),
                          "coach": g["home_coach"] if home_off else g["away_coach"], "call": r["real_call"],
                          "drive": DRIVE_RESULT.get(res, res), "final": {"away": int(r["away_score"]), "home": int(r["home_score"])}},
             })

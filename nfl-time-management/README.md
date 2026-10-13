@@ -332,6 +332,10 @@ strip-sack, intercepted, pick-six, fumble, dropped, thrown away, flag, touchdown
 good or no good. Play-by-play does not chart broken tackles, so Pro Football Reference's per-game count
 for a player is credited to his longest carries or catches of that game.
 
+Every spot is a real late-game snap from a real game, 2023-2026 with the playoffs included (21 of the 738
+spots: Wild Card, Divisional, Conference Championship and Super Bowl), and each one says which game: "2023 ·
+Week 14 · Titans at Dolphins" or "2023 · Wild Card Round · Rams at Lions".
+
 Built for NFL fans: after each snap its result stays on top of your next call (no extra tap; a "Next
 play" button only before the other team's plays), and every spot ends **you vs the real coach**: the
 game result in the fourth quarter, or the points the possession was worth before the half, against what
