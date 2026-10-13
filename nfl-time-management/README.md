@@ -303,11 +303,28 @@ into the landing zone: returned, short at the 40 or bounced in to the 20), throu
 touchback at their 35, or onside, which the 2025 rules allow only to a team that is behind.
 
 Every snap is then run out on the field in real time: the
-scoreboard clock ticks off the time before the snap, the camera zooms in like a broadcast, and the dots
-move at NFL speed (the snap reaches the QB in a quarter second, passes come out 1.35 s after an RPO
-snap to 4.3 s for a Hail Mary, the ball flies about 24 yards a second, ball carriers average 4.5 yards a
-second in traffic and 8 in the open with a top speed near 10, sacks land about 3.2 s after the snap,
-punts and kickoffs hang about 4 s). Punts, field goals and extra points shift into their formations
+scoreboard clock ticks off the time before the snap, the camera zooms in like a broadcast, and the 22 move
+the way NFL players move. Each player's motion (`web/motion.js`) is limited to the envelope player tracking
+measures for his position: sprint speed (receivers and corners 9.6 yards a second, backs 9.5, safeties 9.3,
+linebackers 8.6, tight ends 8.6, quarterbacks 7.8, defensive linemen 7.0, offensive linemen 6.3), how hard
+he speeds up at each speed (a receiver about 8.1 - 0.73 x speed yards a second squared), how hard he brakes
+and how sharply he can turn, so a receiver slows to 3 or 4 yards a second at the top of a 90-degree break
+and nobody stops or turns on a dime. The constants come from every snap of the 2017 Big Data Bowl sample
+game and 529 Next Gen Stats highlight plays (2017-2019), public samples
+([Big Data Bowl](https://github.com/nfl-football-ops/Big-Data-Bowl),
+[NGS highlights](https://github.com/asonty/ngs_highlights)); `scripts/motion_envelope.py` and
+`scripts/motion_curves.py` regenerate them. The play itself follows its real play's Next Gen
+Stats charting (2022-2025): the target runs the charted route (go, post, corner, out, deep out, dig, slant,
+shallow cross, hitch, screen, flat, wheel or angle) to the depth of the real throw and is there when the
+ball arrives, released at the real time to throw; the coverage plays the charted shell, man (each
+receiver's defender holds his cushion, backpedals, then trails a beat behind) or zone (Cover 2, 3, 4, 6
+landmarks, breaking on the ball once it is thrown); as many rush as did, the line gives ground on the
+measured depth curves (pass blockers about 4 yards in 3 s), and a pressured passer has a rusher on him as
+he throws. Backs reach the line about 2.5 s after the snap, as in tracking. After the catch or handoff the
+ball carrier runs to daylight; the defender who can get to him first comes at a pursuit angle and meets
+him a yard or two short of the spot, a second arrives just after, the rest chase, his teammates block,
+and after the whistle everyone eases up. A go route is 20.5 yards deep 3.5 s after the snap (tracking:
+19.4); `node web/motion_test.js` checks the envelope, the routes and the coverage. Punts, field goals and extra points shift into their formations
 before the snap, and kickoffs line up the 2024 way (the kicking team at the receiving 40, nine in the
 setup zone, two returners deep, nobody moving until the catch); special-teams units are drawn in team
 colors. What happened is called out where it happened: broken tackle, tackled, out of bounds, sacked,
