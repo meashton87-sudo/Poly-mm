@@ -48,7 +48,8 @@ CALLS = [   # id, call-sheet label, engine kind, what the play-by-play says
     ("rb_middle", "RB up the middle", "run", "runs up the middle"),
     ("qb_sneak", "QB sneak", "run", "sneaks"),
     ("qb_run", "QB designed run", "run", "keeps it on a designed run"),
-    ("rpo", "RPO (run-pass option)", "pass", "runs the RPO"),
+    ("rpo_strong", "RPO, strong side", "pass", "runs the RPO to the strong side"),
+    ("rpo_weak", "RPO, weak side", "pass", "runs the RPO to the weak side"),
     ("quick_strong", "Quick pass, strong side", "pass", "throws quick to the strong side"),
     ("quick_weak", "Quick pass, weak side", "pass", "throws quick to the weak side"),
     ("quick_middle", "Quick pass, middle", "pass", "throws quick over the middle"),
@@ -64,6 +65,21 @@ CALLS = [   # id, call-sheet label, engine kind, what the play-by-play says
     ("trick", "Trick play (reverse, flea-flicker)", "pass", "dials up a trick play"),
 ]
 CALL_IDS = [c[0] for c in CALLS]
+# how the game's call sheet groups them: Run / Pass / RPO first, then the play and the side
+FAMILY = {c: "rpo" if c.startswith("rpo") else "run" if c.startswith(("rb_", "qb_")) else "pass" for c in CALL_IDS}
+BASE = {"rb_out": "Outside run", "rb_tackle": "Off-tackle run", "rb_inside": "Inside run", "rb_middle": "Up the middle",
+        "qb_sneak": "QB sneak", "qb_run": "QB keeper", "rpo": "RPO", "quick": "Quick pass", "deep": "Deep shot",
+        "screen": "Screen", "pa_short": "Play-action short", "pa_deep": "Play-action deep", "roll": "Rollout",
+        "hail_mary": "Hail Mary", "trick": "Trick play"}
+
+
+def base_side(call_id: str) -> tuple[str, str | None]:
+    if call_id in BASE:
+        return BASE[call_id], None
+    for side in ("strong", "weak", "middle"):
+        if call_id.endswith("_" + side):
+            return BASE[call_id[: -len(side) - 1]], side
+    return BASE[call_id], None
 CALL_INDEX = {c: i for i, c in enumerate(CALL_IDS)}
 RUN_CALLS = [i for i, c in enumerate(CALLS) if c[2] == "run"]
 PASS_CALLS = [i for i, c in enumerate(CALLS) if c[2] == "pass"]
@@ -85,7 +101,7 @@ RATING_PRIOR = 80.0          # plays of league-average performance added to each
 PRIOR_SEASON_WEIGHT = 0.35   # last season's plays count this much next to this season's
 OOB_FAMILIES = {             # calls that share an out-of-bounds effect (pooled for sample size)
     "outside_run": ["rb_out_strong", "rb_out_weak", "rb_tackle_strong", "rb_tackle_weak"],
-    "inside_run": ["rb_inside_strong", "rb_inside_weak", "rb_middle", "qb_sneak", "qb_run", "rpo"],
+    "inside_run": ["rb_inside_strong", "rb_inside_weak", "rb_middle", "qb_sneak", "qb_run", "rpo_strong", "rpo_weak"],
     "outside_short": ["quick_strong", "quick_weak", "roll_strong", "roll_weak", "screen", "pa_short", "trick"],
     "middle_short": ["quick_middle"], "deep_outside": ["deep_strong", "deep_weak", "pa_deep"],
     "deep_middle": ["deep_middle", "hail_mary"],
@@ -168,7 +184,8 @@ def labeled_plays(seasons=SEASONS, seed: int = 11) -> pd.DataFrame:
     call[known(run & sneak)] = C["qb_sneak"]
     call[known((run | drop) & ~pen & trick)] = C["trick"]
     call[known(hail)] = C["hail_mary"]
-    call[known((run | drop) & ~pen & rpo)] = C["rpo"]
+    for st in ("strong", "weak"):
+        call[known((run | drop) & ~pen & rpo & (strong == st))] = C[f"rpo_{st}"]
     call[known(run & is_qb_rusher)] = C["qb_run"]
     side_run = run & np.isin(run_loc, ["left", "right"])
     for gap, name in GAP.items():
@@ -405,6 +422,7 @@ def export(lib: pd.DataFrame, path) -> dict:
     out = {
         "version": 2,
         "calls": [{"id": c, "label": label, "kind": kind, "say": say} for c, label, kind, say in CALLS],
+        "families": FAMILY,
         "n_fine": N_FINE,
         "rows": {
             "yards": _b64(np.clip(lib["yards"], -127, 127).astype(np.int8)),

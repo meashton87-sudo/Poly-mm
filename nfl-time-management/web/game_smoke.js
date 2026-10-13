@@ -7,9 +7,12 @@ const dir = __dirname;
 const t0 = Date.now();
 const eng = new NFLClockEngine(JSON.parse(fs.readFileSync(path.join(dir, 'engine_data.json'), 'utf8')));
 eng.loadPlaybook(JSON.parse(fs.readFileSync(path.join(dir, 'playbook.json'), 'utf8')));
-const sc = JSON.parse(fs.readFileSync(path.join(dir, 'scenarios.json'), 'utf8'));
-console.log(`engine + playbook in ${Date.now() - t0} ms; ${sc.scenarios.length} scenarios, ${sc.schedule.length} days`);
-const S = sc.scenarios[sc.schedule[0][0]];
+const idx = JSON.parse(fs.readFileSync(path.join(dir, 'game.json'), 'utf8'));
+const spot = (i) => JSON.parse(fs.readFileSync(path.join(dir, 'spots', `${String(Math.floor(i / idx.chunk)).padStart(2, '0')}.json`), 'utf8'))[i % idx.chunk];
+console.log(`engine + playbook in ${Date.now() - t0} ms; ${idx.n} scenarios, ${idx.schedule.length} days`);
+const S = spot(idx.schedule[0][0]);
+const lu = S.lineups[S.player === S.game.home.team ? 'home' : 'away'];
+console.log('lineup', lu.off.length, '+', lu.def.length, lu.off.map((p) => `${p.pos}:${p.pct}`).join(' '));
 console.log(S.category, S.id, S.player, 'vs', S.opponent, JSON.stringify(S.start), S.names, 'real:', S.real.call, '|', S.real.drive);
 const ctx = eng.makeContext(S.game, { receive2h: S.start.receive2h });
 const sim = eng.simulator(ctx);
@@ -26,10 +29,10 @@ const rows = eng.pb.calls.map((c) => {
   return [c.id, r.mean];
 });
 rows.sort((a, b) => b[1] - a[1]);
-console.log(`16 calls x 1500 in ${Date.now() - t1} ms`);
+console.log(`${rows.length} calls x 1500 in ${Date.now() - t1} ms`);
 rows.forEach(([id, v]) => console.log('  ', id.padEnd(14), (v * 100).toFixed(1)));
 const card = S.game[root.pos === 0 ? 'home' : 'away'].calls;
-console.log('offense pct deep_strong', card.deep_strong, 'rb_out_weak', card.rb_out_weak);
+console.log('matchup tilt deep_strong', card.deep_strong, 'rpo_weak', card.rpo_weak);
 let cur = root;
 for (let i = 0; i < 6; i++) {
   const r = sim.step(cur, { action: cur.pos === me && cur.phase === 0 ? { play: 'pass', call: 'quick_weak', oob: true } : {}, seed: 100 + i });

@@ -276,12 +276,18 @@ lines up). Because calls are labeled by where the ball went, a covered deep shot
 checkdown or a sack, which flatters deep calls; each call's edge over a same-kind play in the same
 situation is halved to correct for it.
 
-Every call shows both teams' league percentile on that play, and every decision is graded in win
-probability against all the alternatives and against what a typical NFL play-caller does there. The
-day's score is a percentile against NFL play-callers in the same three spots.
+The screen is a portrait field with the real 22 from that game (the personnel each team used most,
+from snap counts), each player shown as his league percentile at his position as of that week: EPA per
+dropback for quarterbacks, yards after contact for running backs, EPA per target for receivers,
+pressures per snap for edge and interior linemen, tackling and coverage for linebackers, passer rating
+allowed for corners and safeties, and the offensive line graded as a unit (no public data grades
+linemen one at a time). Play-calling is two taps: Run, Pass or RPO, then the play and its side. Nothing
+says which call is best until after the snap; then every decision is graded in win probability against
+all the alternatives and against what a typical NFL play-caller does there. The day's score is a
+percentile against NFL play-callers in the same three spots, with a share grid of one square per snap.
 
 ```bash
-python -c "from nflclock import dailygame as G; print(G.build())"   # writes web/playbook.json and web/scenarios.json
+python -c "from nflclock import dailygame as G; print(G.build())"   # writes web/playbook.json, web/game.json, web/spots/
 node web/game_smoke.js
 ```
 
