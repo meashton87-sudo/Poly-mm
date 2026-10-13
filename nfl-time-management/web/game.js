@@ -1906,8 +1906,8 @@
     [`${r.pos === G.me ? 'Your' : `${teamName(op)}`} ball, ${ddText(r)} ${onSpot(r)}`, `You: ${tos(r.to[G.me])}`,
       `${teamName(op)}: ${tos(r.to[1 - G.me])}`].forEach((f) => facts.append(el('span', '', f)));
     box.append(facts);
-    const coach = teamOf(G.me).coach;
-    box.append(el('div', 'who', `You're calling it for the ${teamName(me)}${coach ? ` (${coach})` : ''}.`));
+    const rc = (sc.real || {}).coach;
+    box.append(el('div', 'who', `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
     const go = el('button', 'btn', 'Next');
     go.type = 'button';
     go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
@@ -1937,6 +1937,16 @@
       if (r.phase === KICKOFF && r.pos === G.me && !r.free_kick) return promptChoice('kick');
       if (r.phase === KICKOFF && r.pos === G.me && r.free_kick && kickChoice(r)) return promptChoice('freekick');
       if (r.phase === SNAP && r.pos !== G.me && r.clock_running && r.to[G.me] > 0 && defChoice(r)) return promptChoice('deftime');
+      if (G.banner) {             // your last result, before their plays run
+        const b = G.banner, d = $('dock'), btn = el('button', 'btn', 'Next play');
+        G.banner = null;
+        btn.type = 'button';
+        btn.addEventListener('click', () => { if (!busy) advance(); });
+        b.append(btn);
+        d.textContent = '';
+        d.append(b);
+        return;
+      }
       const action = r.phase === SNAP ? { to_def: false } : (r.phase === KICKOFF && r.pos === G.me ? { kick: 'deep' } : {});
       const label = r.phase === KICKOFF ? (r.pos === G.me ? 'You kick off' : `The ${teamName(code(r.pos))} kick off`) :
         r.phase === PAT ? `The ${teamName(code(r.pos))} try the extra point` : `The ${teamName(code(r.pos))} have the ball`;
@@ -2022,6 +2032,7 @@
   function drawDock() {
     const r = G.root, d = $('dock'), me = G.me;
     d.textContent = '';
+    takeBanner(d);
     const head = el('div', 'ask');
     d.append(head);
     if (ui.step === 'family') {
@@ -2246,6 +2257,7 @@
   function drawDefDock() {
     const r = G.root, d = $('dock');
     d.textContent = '';
+    takeBanner(d);
     const head = el('div', 'ask');
     head.append(el('h2', '', 'Your defense'), el('span', 'sub', `${teamName(code(r.pos))} ball · ${ddText(r)} · ${spotText(r)}`));
     d.append(head);
@@ -2325,6 +2337,7 @@
         q: () => coachProbs('onside', r, me) || { deep: 0.85, onside: 0.15 } },
     }[kind];
     d.textContent = '';
+    takeBanner(d);
     const head = el('div', 'ask');
     head.append(el('h2', '', spec.ask), el('span', 'sub', spec.sub));
     d.append(head);
@@ -2396,17 +2409,23 @@
     inn.append(el('p', 'note', `Against a typical NFL play-caller here: ${pts(wpa)}% win chance. "NFL" is how often play-callers make that call in this spot.`));
     det.append(inn);
     wrap.append(det);
-    const btn = el('button', 'btn', G.root.phase === DONE ? 'See how it ended' : 'Next play');
-    btn.type = 'button';
-    btn.addEventListener('click', () => { if (!busy) advance(); });
     if (G.lastPlay && res.animated) {
       const again = el('button', 'chip replay', '↻ Replay the play');
       again.type = 'button';
       again.addEventListener('click', replay);
       wrap.append(again);
     }
-    wrap.append(btn);
+    // no extra tap: the result stays on top of your next call (or the final card); only when their plays come
+    // next does it wait for "Next play" (advance)
     d.append(wrap);
+    G.banner = wrap;
+    advance();
+  }
+  function takeBanner(d) {
+    if (!G.banner) return;
+    G.banner.classList.add('banner');
+    d.append(G.banner);
+    G.banner = null;
   }
 
   // ------------------------------------------------- who you coached like ---
@@ -2476,21 +2495,23 @@
     drawAll();
     const res = G.result, sc = G.scen, d = $('dock');
     d.textContent = '';
+    takeBanner(d);
     const card = el('div', 'endcard');
     const head = res.half === 1 ? `Halftime: ${res.mine}–${res.theirs}` :
       res.mine > res.theirs ? `You win ${res.mine}–${res.theirs}` : res.mine < res.theirs ? `You lose ${res.mine}–${res.theirs}` : `Tied ${res.mine}–${res.theirs}: overtime`;
     card.append(el('h2', '', head));
     if (res.half === 1 || res.mine === res.theirs) card.append(el('p', 'note', `Your win chance from here: ${wpTxt(res.wp)}.`));
     card.append(squaresOf(G.decisions));
-    const wpa = G.decisions.reduce((a, x) => a + x.wpa, 0);
-    card.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller in this spot.`));
-    const cc = coachCard(G.decisions, 'You called this one like');
-    if (cc) card.append(cc.el);
+    const hh = headToHead(G.si, res);
+    if (hh) card.append(hhCard(hh));
     const rl = sc.real || {};
     const realCall = rl.call && CALL[rl.call] ? CALL[rl.call].label : 'a play';
-    const fin = rl.final ? `final ${sc.away} ${rl.final.away}, ${sc.home} ${rl.final.home}` : '';
     const drive = !rl.drive ? '' : rl.drive === 'ran out the clock' ? 'they ran out the clock' : `the drive ended in a ${rl.drive}`;
-    card.append(el('p', 'real', `In the real ${rl.season} game, ${rl.coach || 'the coach'} called "${realCall}" here; ${drive}${fin ? '; ' + fin : ''}.`));
+    card.append(el('p', 'real', `In the real ${rl.season} game, ${rl.coach || 'the coach'} called "${realCall}" here; ${drive}.`));
+    const cc = coachCard(G.decisions, 'You called this one like');
+    if (cc) card.append(cc.el);
+    const wpa = G.decisions.reduce((a, x) => a + x.wpa, 0);
+    card.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller in this spot.`));
     const btn = el('button', 'btn', G.si < 2 ? 'Next spot' : "Today's score");
     btn.type = 'button';
     btn.addEventListener('click', () => {
@@ -2503,10 +2524,49 @@
     d.append(card);
     drawTiles();
   }
+  // You against the real coach: the game result in the fourth quarter; in the second, the points the possession
+  // was worth (his drive: touchdown 7, field goal 3, a defensive touchdown -7, a safety -2)
+  function headToHead(si, result) {
+    const sc = today[si], rl = sc.real || {}, me = sc.player === sc.home ? 0 : 1;
+    if (!result || !rl.coach) return null;
+    const who = rl.coach.split(' ').slice(-1)[0];
+    const net = (n) => (n > 0 ? `+${n} points` : n < 0 ? `${n} points` : 'no points');
+    if (result.half === 1) {
+      const s0 = startRoot(sc).score;
+      const you = result.mine - s0[me] - (result.theirs - s0[1 - me]);
+      const him = { touchdown: 7, 'field goal': 3, 'defensive touchdown': -7, safety: -2 }[rl.drive] || 0;
+      return { coach: rl.coach, who, v: Math.sign(you - him), you: `${net(you)} before the half`,
+        him: `${rl.drive ? rl.drive[0].toUpperCase() + rl.drive.slice(1) : 'His drive'} (${net(him)})` };
+    }
+    if (!rl.final) return null;
+    const hm = me === 0 ? rl.final.home : rl.final.away, ht = me === 0 ? rl.final.away : rl.final.home;
+    const wl = (a, b) => (a > b ? 'Won' : a < b ? 'Lost' : 'Tied');
+    return { coach: rl.coach, who, v: Math.sign(Math.sign(result.mine - result.theirs) - Math.sign(hm - ht)),
+      you: `${wl(result.mine, result.theirs)} ${result.mine}–${result.theirs}`, him: `${wl(hm, ht)} ${hm}–${ht}` };
+  }
+  function hhCard(h) {
+    const box = el('div', `h2h ${h.v > 0 ? 'beat' : h.v < 0 ? 'lost' : 'tie'}`);
+    box.append(el('div', 'k', `You vs ${h.coach}`), el('div', 'res', h.v > 0 ? `You beat ${h.who}` : h.v < 0 ? `${h.who} did better` : `Same as ${h.who}`));
+    const row = el('div', 'rows');
+    [['You', h.you], [h.who, h.him]].forEach(([a, b]) => { const r = el('div', 'r'); r.append(el('span', 'a', a), el('span', 'b', b)); row.append(r); });
+    box.append(row);
+    return box;
+  }
   function snapsOf(decs) {
     const by = new Map();
     decs.forEach((x) => { const k = x.snap ?? by.size; by.set(k, (by.get(k) || 0) + x.cost); });
     return [...by.values()].map(markOf);
+  }
+  // a spot's snaps in at most 8 squares for sharing: longer drives are grouped, each group graded by its average
+  function squeeze(decs) {
+    const by = new Map();
+    decs.forEach((x) => { const k = x.snap ?? by.size; by.set(k, (by.get(k) || 0) + x.cost); });
+    const c = [...by.values()];
+    if (c.length <= 8) return c.map(markOf);
+    return Array.from({ length: 8 }, (_, j) => {
+      const g = c.slice(Math.floor((j * c.length) / 8), Math.floor(((j + 1) * c.length) / 8));
+      return markOf(g.reduce((a, x) => a + x, 0) / g.length);
+    });
   }
   function squaresOf(decs) {
     const w = el('div', 'squares');
@@ -2555,12 +2615,23 @@
       el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers`));
     if (cc) box.append(cc.el);
     box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller across today's three spots.`));
+    const rec = [0, 0, 0];             // against the real coaches: better, worse, the same (a W-L-T record)
     const rows = [0, 1, 2].map((i) => {
       const s = state.spots[i]; if (!s) return '';
       const r = s.result ? (s.result.half === 1 ? 'HT' : s.result.mine > s.result.theirs ? 'W' : s.result.mine < s.result.theirs ? 'L' : 'OT') : '';
-      return `${today[i].player} ${r} ${snapsOf(s.decisions || []).map((m) => SQ[m]).join('')}`;
+      const hh = headToHead(i, s.result);
+      if (hh) rec[hh.v > 0 ? 0 : hh.v < 0 ? 1 : 2]++;
+      return `${today[i].player} ${r} ${squeeze(s.decisions || []).map((m) => SQ[m]).join('')}`;
     });
-    const text = `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}\n${rows.join('\n')}`;
+    const met = rec[0] + rec[1] + rec[2], recTxt = `${rec[0]}-${rec[1]}${rec[2] ? `-${rec[2]}` : ''}`;
+    const vs = met ? `\nVs the real coaches: ${recTxt}` : '';
+    if (met) {
+      const v = el('div', 'h2h-day');
+      v.append(el('span', 'k', 'Vs the real coaches'), el('b', '', recTxt),
+        el('span', 'sub', `${rec[0]} better, ${rec[1]} worse${rec[2] ? `, ${rec[2]} the same` : ''}`));
+      box.insertBefore(v, box.children[3] || null);
+    }
+    const text = `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}\n${rows.join('\n')}`;
     const pre = el('div', 'grid-share', text);
     box.append(pre);
     const btn = el('button', 'btn alt', 'Share');
@@ -2636,21 +2707,16 @@
     ['g', 'y', 'o', 'r'].forEach((m) => ex.append(el('span', `sq ${m}`, GLYPH[m])));
     const ul = el('ul');
     [
-      'Read the situation, tap Next, and the field opens: their end zone at the top, yours at the bottom.',
-      'Every dot is a player on today\'s roster, everyone healthy: green is good, red is not. Tap one to see what kind of player he is (mobile QB, blocking tight end…) and his numbers.',
-      'Call Run, Pass or RPO, then the play. With the clock running, pick the tempo too: no-huddle, huddle, or milk it. Timeout, spike, kneel and kicks pop up when they matter.',
-      'Before your call the defense shows its look: a light or loaded box, maybe a blitz. Real plays of your call against that look decide the snap.',
-      'When they have the ball, you call the defense: blitz, load the box or play it soft. Their play comes from real plays against that look.',
-      'Your kickoffs: kick it to the returner or through the end zone for a touchback at their 35. When you are behind, you can also try an onside kick.',
-      'Every snap is a real NFL play, run out on the field: the real route, coverage and rush, with players moving at the speeds NFL tracking measures. Broken tackles, sacks, picks, fumbles and flags all happen. Tap the field to skip ahead.',
+      'You\'re the head coach for the last minutes of a real NFL game. Three new spots every day.',
+      'Call Run, Pass or RPO, then the play. Timeouts, spikes, kicks and tempo pop up when they matter. On their ball, you call the defense.',
+      'Every snap is a real NFL play run against your call. Tap the field to skip, or a player to see who he is.',
+      'Beat the real coach\'s result, and find out which NFL coach you call it like.',
     ].forEach((t) => ul.append(el('li', '', t)));
     openModal('How to play', [
-      el('p', 'lead', 'Three real late-game spots a day. You call every play.'),
       ul,
-      el('p', '', 'After the snap, see how your call ranked:'),
+      el('p', '', 'After each snap, how your call ranked:'),
       ex,
-      el('p', 'note', 'Green: the best call (within 0.5% win chance). Yellow: within 2%. Orange: within 5%. Red: worse.'),
-      el('p', '', 'At the end: your percentile against NFL play-callers, and the coach you called it like.'),
+      el('p', 'note', 'Green: the best call. Yellow: close. Orange: costly. Red: a big mistake.'),
     ]);
   }
   function openStats() {

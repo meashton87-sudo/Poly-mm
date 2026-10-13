@@ -332,6 +332,12 @@ strip-sack, intercepted, pick-six, fumble, dropped, thrown away, flag, touchdown
 good or no good. Play-by-play does not chart broken tackles, so Pro Football Reference's per-game count
 for a player is credited to his longest carries or catches of that game.
 
+Built for NFL fans: after each snap its result stays on top of your next call (no extra tap; a "Next
+play" button only before the other team's plays), and every spot ends **you vs the real coach**: the
+game result in the fourth quarter, or the points the possession was worth before the half, against what
+the real coach got. The day's summary and the share text carry your record against the real coaches
+(W-L-T), and the share grid keeps each spot to one line (at most eight squares, longer drives grouped).
+
 Real plays are pooled by situation, and a rare call's pool can span the field, so a play keeps only what
 still fits where it is drawn: a touchdown if it covered at least 60% of the way, a safety only if the
 loss reaches the end zone (in both engines: the 80-99 field zone used to turn a goal-line safety into

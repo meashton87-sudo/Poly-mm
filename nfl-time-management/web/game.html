@@ -234,6 +234,23 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 .coach .name { font: 900 34px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
 .coach .why { font-size: 14px; text-wrap: balance; }
 .coach .meta { font-size: 12px; color: var(--muted); }
+/* the last result, riding on top of the next call */
+.result.banner { gap: 6px; padding-bottom: 12px; margin-bottom: 4px; border-bottom: 1px solid var(--line); animation: none; }
+.result.banner .res-play .yd { font-size: 19px; }
+.result.banner .sq { width: 38px; height: 38px; font-size: 18px; }
+/* you against the real coach */
+.h2h-day { display: grid; justify-items: center; gap: 2px; }
+.h2h-day .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.h2h-day b { font: 900 40px/1 var(--display); letter-spacing: .04em; }
+.h2h-day .sub { font-size: 13px; color: var(--muted); }
+.h2h { border: 2px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 8px; background: var(--card); }
+.h2h.beat { border-color: var(--sq-g); } .h2h.lost { border-color: var(--sq-r); }
+.h2h .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.h2h .res { font: 900 28px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; text-wrap: balance; }
+.h2h.beat .res { color: var(--sq-g); } .h2h.lost .res { color: var(--sq-r); }
+.h2h .rows { display: grid; gap: 4px; }
+.h2h .r { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+.h2h .r .a { font-weight: 700; } .h2h .r .b { color: var(--muted); text-align: right; }
 .real { text-align: left; font-size: 13px; color: var(--muted); border-left: 3px solid var(--line); padding-left: 10px; }
 .big-pct { font: 900 96px/.9 var(--display); }
 .pct-lab { font: 800 15px var(--body); letter-spacing: .08em; text-transform: uppercase; margin-top: -4px; text-wrap: balance; }
