@@ -318,6 +318,7 @@ def teams_now(bundle, season: int) -> dict:
     coaches = head_coaches(season)
     week_now = int(pd.read_csv(config.RAW_DIR / "games.csv").query("season == @season and home_score == home_score")["week"].max()) + 1
     no_injuries = S["injuries"].iloc[0:0]
+    espn = {"starters": 0, "on_chart_now": 0, "on_chart_since_aug": 0}     # cross-check against ESPN's depth charts
     since = dc[(dc["dt"].astype(str) >= f"{season}-{DC_FROM}") & (dc["pos_grp"] != "Special Teams")]
     meas = AR.measures(R, season)
     body = ok_rows.drop_duplicates("gsis_id").set_index("gsis_id")[["height", "weight"]]
@@ -336,6 +337,10 @@ def teams_now(bundle, season: int) -> dict:
         dct = latest[latest["team"] == team]
         dc_best = since[since["team"] == team].groupby("gsis_id")["pos_rank"].min()
         lu = lineup_now(R, team, season, avail[team], role, hurt, dct, ok_rows, dc_best)
+        ids = [x["id"] for x in lu["off"] + lu["def"]]
+        espn["starters"] += len(ids)
+        espn["on_chart_now"] += sum(i in set(dct["gsis_id"]) for i in ids)
+        espn["on_chart_since_aug"] += sum(i in dc_best.index for i in ids)
         S2 = {**S, "depth_charts": _promote(dct, {"QB": lu["qb"], "PK": lu["k"], "P": lu["p"]}, lu["names"]),
               "injuries": no_injuries}
         rec = live.team_live(bundle, S2, pbp_raw, team, season, week_now)
@@ -354,4 +359,4 @@ def teams_now(bundle, season: int) -> dict:
         }
     return {"teams": out, "hfa": round(hfa, 2), "week": week_now, "season": season,
             "depth_chart": str(dc["dt"].max()), "roster_weeks": ok_rows.groupby("team")["week"].max().to_dict(),
-            "hurt": sorted(hurt & all_ok)}
+            "hurt": sorted(hurt & all_ok), "espn_check": espn}

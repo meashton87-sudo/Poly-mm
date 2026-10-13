@@ -58,7 +58,8 @@ function info(sim, root) {
   return { calls, fgDist: fi.fgDist, pFg: fi.pFg, pConv: fi.pConv };
 }
 
-// what happened on the real play behind an outcome: event, penalty called, and the pre-snap look
+// what happened on the real play behind an outcome: event, penalty called, the pre-snap look, and for the
+// animation the air yards, who had the ball and whether he broke a tackle
 function describe(row) {
   const P = eng.pb, out = {};
   if (P.event) out.evt = P.eventNames[P.event[row]] || '';
@@ -67,6 +68,8 @@ function describe(row) {
     const k = P.look[row];
     out.look = { form: ['', 'shotgun', 'under center', 'pistol'][k & 3], motion: !!(k & 4), blitz: !!(k & 8), box: k >> 4 };
   }
+  if (P.air && P.air[row] !== -128) out.air = P.air[row];
+  if (P.carry) { const c = P.carry[row]; out.who = ['', 'QB', 'RB', 'WR', 'TE'][c & 7] || ''; out.bt = !!(c & 8); }
   return out;
 }
 

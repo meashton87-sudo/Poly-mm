@@ -231,6 +231,7 @@
         poolOf: decode(pb.pool_of), freq: decode(pb.freq), oobOdds: pb.oob_odds, nFine: pb.n_fine,
         // what happened on each real play (narration only): event, penalty called, pre-snap look
         event: R.event ? decode(R.event) : null, pen: R.pen ? decode(R.pen) : null, look: R.look ? decode(R.look) : null,
+        air: R.air ? decode(R.air) : null, carry: R.carry ? decode(R.carry) : null,    // the animation: air yards, carrier, broken tackle
         eventNames: pb.events || [], penNames: pb.penalties || [],
         shift: pb.pool_shift ? decode(pb.pool_shift) : null,   // intent correction per pool (playbook.py pool_shifts)
       };

@@ -12,8 +12,9 @@ For each call this module builds
   * an outcome library by situation (game mode x down x distance x field zone, merged when sparse),
     with the same fields the simulator uses (yards, clock flags, turnovers, duration, EPA), plus what
     happened on the real play: sacks, strip-sacks, interceptions, pick-sixes, fumbles (lost or not),
-    bad snaps, scrambles, throwaways, drops, near-interceptions, the penalty called, and the look
-    (formation, motion, men in the box, blitz);
+    bad snaps, scrambles, throwaways, drops, near-interceptions, the penalty called, the look
+    (formation, motion, men in the box, blitz), and for the game's animation the air yards, who had
+    the ball and whether he broke a tackle;
   * team ratings by call, offense and defense, as of any week (shrunk EPA per play over league
     average for that call) and their league percentiles;
   * how often NFL play-callers choose each call in each situation (the "typical play-caller");
@@ -131,7 +132,7 @@ def _ftn(seasons=SEASONS) -> pd.DataFrame:
 
 
 def _extras(seasons=SEASONS) -> pd.DataFrame:
-    cols = ["game_id", "play_id", "run_location", "run_gap", "rusher_player_id", "passer_player_id", "fumble"]
+    cols = ["game_id", "play_id", "run_location", "run_gap", "rusher_player_id", "passer_player_id", "receiver_player_id", "fumble"]
     return pd.concat([pd.read_parquet(config.RAW_DIR / f"play_by_play_{s}.parquet", columns=cols) for s in seasons],
                      ignore_index=True)
 
@@ -239,6 +240,12 @@ def labeled_plays(seasons=SEASONS, seed: int = 11) -> pd.DataFrame:
     to_rel = np.where(last_pick, s["air_yards"].fillna(0).to_numpy() - s["return_yards"].fillna(0).to_numpy(), to_rel)
     valid_to |= last_pick
     presnap = pen & s["pass"].fillna(0).eq(0).to_numpy() & s["rush"].fillna(0).eq(0).to_numpy()
+    # for the animation: how far the ball was thrown, and who carried it (or was thrown to)
+    thrown = ~pen & s["qb_dropback"].fillna(0).eq(1).to_numpy() & s["receiver_player_id"].notna().to_numpy()
+    air = np.where(thrown & s["air_yards"].notna().to_numpy(), s["air_yards"].fillna(0).to_numpy(), np.nan)
+    carrier = np.where(~pen & s["rusher_player_id"].notna().to_numpy(), s["rusher_player_id"].to_numpy(),
+                       np.where(thrown, s["receiver_player_id"].to_numpy(), None))
+    caught = thrown & (s["complete_pass"].fillna(0).to_numpy() == 1)
     half = s["half"].to_numpy()
     hs = s["half_seconds_remaining"].to_numpy()
     margin = s["margin"].to_numpy()
@@ -267,10 +274,45 @@ def labeled_plays(seasons=SEASONS, seed: int = 11) -> pd.DataFrame:
         "event": _events(s, pen, aborted, td_def),
         "pen_name": np.where(pen, s["penalty_type"].fillna("Penalty").to_numpy(), ""),
         "look": _look(s),
+        "air": air, "carrier": carrier, "caught": caught,
     })
     out = out[~(turnover & ~valid_to)].reset_index(drop=True)
+    out["who"], out["bt"] = _carry(out)
     out["fine"] = fine_key(out["mode"], out["down"], out["ytg"], out["yl"])
     return out
+
+
+CARRIER_GROUP = {"QB": 1, "RB": 2, "FB": 2, "HB": 2, "WR": 3, "TE": 4}
+
+
+def _carry(out: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Who had the ball on each play (1 QB, 2 RB, 3 WR, 4 TE; 0 none), and whether he broke a tackle.
+
+    Play-by-play does not chart broken tackles; Pro Football Reference counts them per player per game.
+    A game's count is credited to that player's longest carries (or catches) of the game, the plays
+    most likely to have had one."""
+    from . import players as PL      # players imports this module
+    pl = pd.read_parquet(PL._get("players", "players.parquet"), columns=["gsis_id", "pfr_id", "position"])
+    pos = dict(zip(pl["gsis_id"], pl["position"]))
+    to_pfr = dict(zip(pl["gsis_id"], pl["pfr_id"]))
+    who = out["carrier"].map(lambda g: CARRIER_GROUP.get(pos.get(g), 0) if isinstance(g, str) else 0).to_numpy().astype(np.uint8)
+    seasons = sorted(out["season"].unique())
+    rush = pd.concat([pd.read_parquet(PL._get("pfr_advstats", f"advstats_week_rush_{s}.parquet"),
+                                      columns=["game_id", "pfr_player_id", "rushing_broken_tackles"]) for s in seasons])
+    rec = pd.concat([pd.read_parquet(PL._get("pfr_advstats", f"advstats_week_rec_{s}.parquet"),
+                                     columns=["game_id", "pfr_player_id", "receiving_broken_tackles"]) for s in seasons])
+    k_rush = rush.groupby(["game_id", "pfr_player_id"])["rushing_broken_tackles"].sum()
+    k_rec = rec.groupby(["game_id", "pfr_player_id"])["receiving_broken_tackles"].sum()
+    d = out[["game_id", "carrier", "yards", "caught", "penalty", "air"]].copy()
+    d["pfr"] = d["carrier"].map(lambda g: to_pfr.get(g) if isinstance(g, str) else None)
+    d["kind"] = np.where(d["caught"], "rec", np.where(d["air"].isna() & ~d["penalty"], "rush", ""))
+    d = d[d["pfr"].notna() & (d["kind"] != "")]
+    d["rank"] = d.groupby(["game_id", "pfr", "kind"])["yards"].rank(method="first", ascending=False) - 1
+    key = list(zip(d["game_id"], d["pfr"]))
+    k = np.where(d["kind"] == "rush", pd.Series(k_rush.reindex(key).to_numpy()), pd.Series(k_rec.reindex(key).to_numpy()))
+    bt = np.zeros(len(out), bool)
+    bt[d.index[np.nan_to_num(k, nan=0.0) > d["rank"].to_numpy()]] = True
+    return who, bt
 
 
 def _events(s: pd.DataFrame, pen: np.ndarray, aborted: np.ndarray, td_def: np.ndarray) -> np.ndarray:
@@ -433,6 +475,9 @@ def export(lib: pd.DataFrame, path) -> dict:
             "event": _b64(lib["event"].to_numpy().astype(np.uint8)),
             "pen": _b64(pen_code.astype(np.uint8)),
             "look": _b64(lib["look"].to_numpy().astype(np.uint8)),
+            # for the animation only: air yards (-128 = not thrown), carrier group (bits 0-2) and broken tackle (bit 3)
+            "air": _b64(np.where(lib["air"].isna(), -128, np.clip(lib["air"].fillna(0), -20, 100)).astype(np.int8)),
+            "carry": _b64((lib["who"].to_numpy().astype(np.uint8) | (lib["bt"].to_numpy().astype(np.uint8) << np.uint8(3)))),
         },
         "events": EVENTS, "penalties": pen_names,
         "items": _b64(items.astype(np.int32)), "offsets": _b64(offsets.astype(np.int32)),

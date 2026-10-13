@@ -14,6 +14,7 @@
   --chain: #f4c400; --chain-ink: #1d1700; --los: #3b7cf0; --ball: #8a4b24;
   --sq-g: #3d9a56; --sq-y: #d2ad2e; --sq-o: #e27c37; --sq-r: #d0463f; --sq-ink: #ffffff;
   --shade: rgba(10, 18, 13, .55);
+  --call-dark: rgba(9, 15, 11, .86); --call-light: #ffffff; --call-light-ink: #121a15;
   --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
   --body: "Libre Franklin", "Franklin Gothic Medium", "Helvetica Neue", Arial, sans-serif;
   color-scheme: light;
@@ -107,7 +108,26 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 #field .num { font: 800 11px var(--display); fill: var(--chalk); opacity: .85; }
 #field .ez { font: 900 20px var(--display); letter-spacing: .2em; fill: var(--chalk); }
 #field .tag { font: 700 9px var(--body); letter-spacing: .08em; }
-.movefade { animation: fadein .35s ease .45s both; }
+.movefade { animation: fadein .35s ease .2s both; }
+/* the play, animated: call-outs on the field, the ball carrier ringed, players who went down dimmed */
+#field.playing { cursor: pointer; }
+#field.playing .dot { pointer-events: none; }
+#field .dot.down circle.c { opacity: .45; }
+#field .dot.carrier circle.c { stroke: var(--chain); stroke-width: 2.8; }
+#field .posts { fill: none; stroke: var(--chain); stroke-width: 2.6; stroke-linecap: round; }
+#field .call text { font: 900 14px var(--display); letter-spacing: .07em; text-transform: uppercase; fill: var(--sq-ink); }
+#field .call text.big { font-size: 20px; }
+#field .call .in { animation: callpop .42s cubic-bezier(.2, 1.5, .4, 1) both; transform-box: fill-box; transform-origin: center; }
+@keyframes callpop { 0% { transform: scale(.35); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+#field .call.info rect { fill: var(--call-dark); }
+#field .call.hit rect { fill: var(--sq-r); }
+#field .call.good rect { fill: var(--sq-g); }
+#field .call.flag rect { fill: var(--chain); }
+#field .call.flag text { fill: var(--chain-ink); }
+#field .call.boom rect { fill: var(--call-light); }
+#field .call.boom text { fill: var(--call-light-ink); }
+#field .flagmark rect { fill: var(--chain); stroke: var(--call-dark); stroke-width: .6; }
+.replay { justify-self: start; }
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
 .ballmove { transition: transform .6s cubic-bezier(.3, .7, .2, 1); }
 .legend { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); }
@@ -254,7 +274,7 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
 .facts dd { margin: 0; font-weight: 600; }
 .toast { position: fixed; left: 50%; top: calc(60px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); z-index: 30; background: var(--ink); color: var(--paper); font-weight: 700; padding: 10px 16px; border-radius: 6px; }
 .err { color: var(--sq-r); font-weight: 600; }
-@media (prefers-reduced-motion: reduce) { .flip, .spin, .pop, .result, .movefade, .modal .box { animation: none; } .ballmove { transition: none; } .sw2::after { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .flip, .spin, .pop, .result, .movefade, .modal .box, #field .call .in { animation: none; } .ballmove { transition: none; } .sw2::after { transition: none; } }
 </style>
 
 <header class="top">

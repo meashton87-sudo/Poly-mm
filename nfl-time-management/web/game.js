@@ -294,11 +294,16 @@
     g.X.forEach((p, i) => put(def, p, bx + (i - (g.X.length - 1) / 2) * 40, 8));
     return { off, def };
   }
-  // vertical spacing on the full field is drawn, not to scale, so the 22 never overlap
-  const OFF_PX = (d) => 6 + d * 4.2, DEF_PX = (d) => 6 + d * 3.6;
-
   // ------------------------------------------------------------ the field ---
-  // the whole field, your end zone at the bottom; L counts yards from your goal line (0) to theirs (100)
+  // The whole field, your end zone at the bottom of the screen. L counts yards from your goal line (0) to
+  // theirs (100); a camera shows yards lo..hi: the whole field, or close up while a play runs.
+  const FULL = { lo: -10, hi: 110 };
+  const GAP = 6;            // drawn gap (units) between each side and the line of scrimmage before the snap
+  let scene = null, fadeNext = false;
+  const lerp = (a, b, u) => a + (b - a) * u;
+  const EASE = { lin: (u) => u, io: (u) => (u < 0.5 ? 2 * u * u : 1 - ((-2 * u + 2) ** 2) / 2),
+    in: (u) => u * u, out: (u) => 1 - (1 - u) * (1 - u) };
+
   function spotGeom(r) {
     const mine = r.pos === G.me;
     let L, dir = mine ? 1 : -1, mode = 'snap';
@@ -308,70 +313,643 @@
     else L = mine ? 100 - r.yl : r.yl;
     return { L, dir, mode };
   }
-  function drawField() {
-    const svg = $('field'), r = G.root;
+  // where the next snap is, in L, after a play (whoever has the ball)
+  const losOf = (r) => (r.pos === G.me ? 100 - r.yl : r.yl);
+  function fieldHeight() {
+    const svg = $('field');
     const wpx = svg.parentElement.clientWidth || 360;
-    const target = clip(window.innerHeight - 380, 360, 720);
-    const H = Math.round((360 * target) / wpx);
+    return Math.round((360 * clip(window.innerHeight - 380, 360, 720)) / wpx);
+  }
+  const camY = (sc) => { const { lo, hi } = sc.cam, k = (sc.H - 6) / (hi - lo); return (L) => sc.H - 3 - (L - lo) * k; };
+
+  // the field and the 22 for state r (side: the strong side of this snap); place() draws them for the camera
+  function makeScene(r, side) {
+    const svg = $('field'), H = fieldHeight();
     svg.setAttribute('viewBox', `0 0 360 ${H}`);
     svg.textContent = '';
-    const M = 3, ppy = (H - 2 * M) / 120;
-    const yOf = (L) => H - M - (L + 10) * ppy;
-    const meC = code(G.me), themC = code(1 - G.me);
-    svg.append(S('rect', { x: 0, y: 0, width: 360, height: H, fill: 'var(--turf)' }));
-    for (let L = 0; L < 100; L += 10) svg.append(S('rect', { x: 0, y: yOf(L + 5), width: 360, height: 5 * ppy, fill: 'var(--turf-2)' }));
-    const ez = (L0, L1, c) => {
-      svg.append(S('rect', { x: 0, y: yOf(L1), width: 360, height: (L1 - L0) * ppy, fill: color(c), opacity: 0.92 }));
-      svg.append(S('text', { x: 180, y: (yOf(L1) + yOf(L0)) / 2, class: 'ez', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, teamName(c).toUpperCase()));
+    svg.classList.remove('playing');
+    const sc = { svg, H, r, cam: { ...FULL }, parts: [], actors: [], calls: [] };
+    const put = (el, upd) => { svg.append(el); if (upd) sc.parts.push(upd); return el; };
+    put(S('rect', { x: 0, y: 0, width: 360, height: H, fill: 'var(--turf)' }));
+    for (let L = 0; L < 100; L += 10) {
+      const e = put(S('rect', { x: 0, width: 360, fill: 'var(--turf-2)' }), (Y) => { e.setAttribute('y', Y(L + 5)); e.setAttribute('height', Math.max(0, Y(L) - Y(L + 5))); });
+    }
+    [[100, 110, code(1 - G.me)], [-10, 0, code(G.me)]].forEach(([a, b, c]) => {
+      const e = put(S('rect', { x: 0, width: 360, fill: color(c), opacity: 0.92 }), (Y) => { e.setAttribute('y', Y(b)); e.setAttribute('height', Math.max(0, Y(a) - Y(b))); });
+      const t = put(S('text', { x: 180, class: 'ez', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, teamName(c).toUpperCase()), (Y) => t.setAttribute('y', (Y(a) + Y(b)) / 2));
+    });
+    const hline = (L, attrs) => {
+      const e = put(S('line', { x1: SX0, x2: SX1, ...attrs }), (Y) => { const y = Y(L); e.setAttribute('y1', y); e.setAttribute('y2', y); });
+      return e;
     };
-    ez(100, 110, themC);
-    ez(-10, 0, meC);
-    for (let L = 5; L <= 95; L += 5) svg.append(S('line', { x1: SX0, y1: yOf(L), x2: SX1, y2: yOf(L), stroke: 'var(--chalk)', 'stroke-width': L % 10 ? 0.6 : 1.1, opacity: L % 10 ? 0.6 : 1 }));
-    [0, 100].forEach((L) => svg.append(S('line', { x1: SX0, y1: yOf(L), x2: SX1, y2: yOf(L), stroke: 'var(--chalk)', 'stroke-width': 2.4 })));
-    svg.append(S('line', { x1: SX0, y1: yOf(-10), x2: SX0, y2: yOf(110), stroke: 'var(--chalk)', 'stroke-width': 1.6 }),
-      S('line', { x1: SX1, y1: yOf(-10), x2: SX1, y2: yOf(110), stroke: 'var(--chalk)', 'stroke-width': 1.6 }));
+    for (let L = 5; L <= 95; L += 5) hline(L, { stroke: 'var(--chalk)', 'stroke-width': L % 10 ? 0.6 : 1.1, opacity: L % 10 ? 0.6 : 1 });
+    [0, 100].forEach((L) => hline(L, { stroke: 'var(--chalk)', 'stroke-width': 2.4 }));
+    [-10, 110].forEach((L) => {     // the goalposts on each end line, seen from above
+      const e = put(S('path', { class: 'posts' }), (Y) => { const y = Y(L), k = L < 0 ? -1 : 1; e.setAttribute('d', `M160 ${y + k * 5}V${y}H200V${y + k * 5}`); });
+    });
+    put(S('line', { x1: SX0, y1: 0, x2: SX0, y2: H, stroke: 'var(--chalk)', 'stroke-width': 1.6 }));
+    put(S('line', { x1: SX1, y1: 0, x2: SX1, y2: H, stroke: 'var(--chalk)', 'stroke-width': 1.6 }));
     for (let L = 10; L <= 90; L += 10) {
-      const n = String(L <= 50 ? L : 100 - L), y = yOf(L);
-      svg.append(S('text', { x: SX0 + 9, y, class: 'num', 'text-anchor': 'middle', 'dominant-baseline': 'central', transform: `rotate(-90 ${SX0 + 9} ${y})` }, n));
-      svg.append(S('text', { x: SX1 - 9, y, class: 'num', 'text-anchor': 'middle', 'dominant-baseline': 'central', transform: `rotate(90 ${SX1 - 9} ${y})` }, n));
+      const n = String(L <= 50 ? L : 100 - L);
+      [[SX0 + 9, -90], [SX1 - 9, 90]].forEach(([x, rot]) => {
+        const e = put(S('text', { x, class: 'num', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, n),
+          (Y) => { const y = Y(L); e.setAttribute('y', y); e.setAttribute('transform', `rotate(${rot} ${x} ${y})`); });
+      });
     }
     const { L, dir, mode } = spotGeom(r);
-    const losY = yOf(L);
-    if (mode === 'done') { lastBall = null; return; }
-    svg.append(S('line', { x1: SX0, y1: losY, x2: SX1, y2: losY, stroke: 'var(--los)', 'stroke-width': 2.4 }));
-    if (mode === 'snap' && r.ytg < r.yl - 0.01) {
-      const fy = yOf(L + dir * r.ytg);
-      svg.append(S('line', { x1: SX0, y1: fy, x2: SX1, y2: fy, stroke: 'var(--chain)', 'stroke-width': 2.4 }));
-    }
-    const s = mode === 'snap' ? G.side : 1;
-    const fxBall = mode === 'snap' ? (s > 0 ? HASH_L : HASH_R) : 180;      // strong side is the wide side
+    Object.assign(sc, { losL: L, dir, mode });
+    if (mode === 'done') { place(sc); return sc; }
+    hline(L, { stroke: 'var(--los)', 'stroke-width': 2.4 });
+    if (mode === 'snap' && r.ytg < r.yl - 0.01) hline(L + dir * r.ytg, { stroke: 'var(--chain)', 'stroke-width': 2.4 });
+    const s = mode === 'snap' ? side : 1;
+    const fxBall = mode === 'snap' ? (s > 0 ? HASH_L : HASH_R) : 180;     // strong side is the wide side
     const sx = (fx) => (dir > 0 ? fx : 360 - fx);
-    const ballX = sx(fxBall);
+    Object.assign(sc, { s, bx: sx(fxBall) });
+    sc.layer = put(S('g', {}));
     if (mode === 'snap' || mode === 'pat') {
       const offI = r.pos, f = formation(lineup(offI).off.slice(), lineup(1 - offI).def.slice(), s, fxBall);
-      const grp = S('g', { class: lastBall ? 'movefade' : '' });
-      const dot = (x, y, p, team, label, mine) => {
-        const g = S('g', { class: `dot ${mine ? 'me' : 'them'}`, transform: `translate(${x.toFixed(1)},${y.toFixed(1)})`, tabindex: 0, role: 'button',
-          'aria-label': `${teamName(team)} ${POS_NAME[label] || label} ${p.name}, ${ordinal(p.pct)} percentile` });
-        g.append(S('circle', { class: 'hit', r: 11 }), S('circle', { class: 'c', r: 6.2, fill: rate(p.pct) }));
-        const open = () => playerInfo(p, label, team);
+      const add = (o, teamI, off) => {
+        const team = code(teamI), mine = teamI === G.me;
+        const g = S('g', { class: `dot ${mine ? 'me' : 'them'}`, tabindex: 0, role: 'button',
+          'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${o.p.name}, ${ordinal(o.p.pct)} percentile` });
+        g.append(S('circle', { class: 'hit', r: 11 }), S('circle', { class: 'c', r: 6.2, fill: rate(o.p.pct) }));
+        const open = () => playerInfo(o.p, o.label, team);
         g.addEventListener('click', open);
-        g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
-        grp.append(g);
+        g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } });
+        sc.layer.append(g);
+        const a = { g, p: o.p, label: o.label, team, teamI, off, x0: sx(o.x), L0: L + (off ? -dir : dir) * o.d, side: off ? dir : -dir };
+        Object.assign(a, { x: a.x0, L: a.L0, w: 1 });
+        sc.actors.push(a);
       };
-      f.def.forEach((o) => dot(sx(o.x), losY - dir * DEF_PX(o.d), o.p, code(1 - offI), o.label, 1 - offI === G.me));
-      f.off.forEach((o) => dot(sx(o.x), losY + dir * OFF_PX(o.d), o.p, code(offI), o.label, offI === G.me));
-      svg.append(grp);
+      f.def.forEach((o) => add(o, 1 - offI, false));
+      f.off.forEach((o) => add(o, offI, true));
     }
-    const ball = S('g', { class: 'ballmove' });
-    ball.append(S('ellipse', { cx: ballX, cy: losY, rx: 3.4, ry: 5.2, fill: 'var(--ball)', stroke: 'rgba(255,255,255,.7)', 'stroke-width': 0.8 }));
+    const ball = S('g', {}), inner = S('g', { class: 'ballmove' });
+    inner.append(S('ellipse', { cx: 0, cy: 0, rx: 3.4, ry: 5.2, fill: 'var(--ball)', stroke: 'rgba(255,255,255,.75)', 'stroke-width': 0.8 }));
+    ball.append(inner);
     svg.append(ball);
-    if (lastBall && !reduced() && (Math.abs(lastBall.x - ballX) > 0.5 || Math.abs(lastBall.y - losY) > 0.5)) {
-      ball.style.transform = `translate(${lastBall.x - ballX}px, ${lastBall.y - losY}px)`;
-      requestAnimationFrame(() => requestAnimationFrame(() => { ball.style.transform = 'translate(0px, 0px)'; }));
+    sc.ball = { g: ball, inner, x: sc.bx, L, z: 0, show: true };
+    sc.callLayer = put(S('g', {}));
+    if (mode === 'kick') showCall(sc, { text: r.free_kick ? 'Free kick' : 'Kickoff', kind: 'info', slot: 0, x: 180, L: L + dir * 7 });
+    place(sc);
+    return sc;
+  }
+  function place(sc) {
+    const Y = camY(sc);
+    sc.parts.forEach((f) => f(Y));
+    sc.actors.forEach((a) => a.g.setAttribute('transform', `translate(${a.x.toFixed(1)},${(Y(a.L) + a.side * GAP * a.w).toFixed(1)})`));
+    const b = sc.ball;
+    if (b) {
+      b.g.setAttribute('transform', `translate(${b.x.toFixed(1)},${Y(b.L).toFixed(1)}) scale(${(1 + b.z).toFixed(2)})`);
+      b.g.style.opacity = b.show ? 1 : 0;
     }
-    lastBall = { x: ballX, y: losY };
-    if (mode === 'kick') svg.append(S('text', { x: 180, y: losY - dir * 26, class: 'ez', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, r.free_kick ? 'FREE KICK' : 'KICKOFF'));
+    sc.calls.forEach((c) => {
+      const at_ = c.follow ? { x: c.follow.x, L: c.follow.L } : c;
+      const x = clip(at_.x, c.w / 2 + 6, 354 - c.w / 2), y = clip(Y(at_.L) - 26 - c.slot * 30, 18, sc.H - 18);
+      c.g.setAttribute('transform', `translate(${x.toFixed(1)},${y.toFixed(1)})`);
+    });
+  }
+  // a call-out on the field: "SACKED!", "TOUCHDOWN!", "FLAG: HOLDING"...; one per slot
+  function showCall(sc, c) {
+    sc.calls.filter((o) => o.slot === c.slot).forEach((o) => o.g.remove());
+    sc.calls = sc.calls.filter((o) => o.slot !== c.slot);
+    const big = c.kind === 'hit' || c.kind === 'good';
+    const g = S('g', { class: `call ${c.kind}` }), inn = S('g', { class: 'in' });
+    const t = S('text', { x: 0, y: 1, 'text-anchor': 'middle', 'dominant-baseline': 'central', class: big ? 'big' : '' }, c.text);
+    const rect = S('rect', { rx: 7 });
+    inn.append(rect, t);
+    g.append(inn);
+    sc.callLayer.append(g);
+    let w = c.text.length * (big ? 11 : 8.5);
+    try { w = t.getComputedTextLength() || w; } catch (err) { /* not rendered yet */ }
+    w += 20;
+    const h = big ? 32 : 25;
+    Object.entries({ x: -w / 2, y: -h / 2, width: w, height: h }).forEach(([k, v]) => rect.setAttribute(k, v));
+    c.shown = true;
+    sc.calls.push({ ...c, g, w });
+  }
+
+  function drawField() {
+    const sc = makeScene(G.root, G.side);
+    scene = sc;
+    if (fadeNext || lastBall) sc.layer && sc.layer.classList.add('movefade');
+    fadeNext = false;
+    const b = sc.ball;
+    if (!b || sc.mode === 'done') { lastBall = null; return; }
+    const y = camY(sc)(b.L);
+    if (lastBall && !reduced() && (Math.abs(lastBall.x - b.x) > 0.5 || Math.abs(lastBall.y - y) > 0.5)) {
+      b.inner.style.transform = `translate(${lastBall.x - b.x}px, ${lastBall.y - y}px)`;
+      requestAnimationFrame(() => requestAnimationFrame(() => { b.inner.style.transform = 'translate(0px, 0px)'; }));
+    }
+    lastBall = { x: b.x, y };
+  }
+
+  // ------------------------------------------------------ the play, animated ---
+  // After the snap the camera zooms in and the 22 run the real NFL play the engine drew: the snap, the
+  // handoff or the drop, the routes, the rush, the throw, the run after the catch and the tackle, with
+  // what happened called out on the field. Tap the field to skip; with reduced motion the result just shows.
+  const PRE_SNAP = new Set(['False Start', 'Offside', 'Defensive Offside', 'Encroachment', 'Neutral Zone Infraction', 'Delay of Game',
+    'Illegal Formation', 'Illegal Shift', 'Illegal Motion', 'Defensive Delay of Game', 'Defensive Too Many Men on Field',
+    'Offensive Too Many Men on Field', 'Illegal Substitution']);
+  const RUN_GAP = { 'Outside run': 92, 'Off-tackle run': 58, 'Inside run': 26, 'Up the middle': 0, 'QB sneak': 0, 'QB keeper': 60, RPO: 30 };
+  const AIR = { quick_strong: 5, quick_weak: 5, quick_middle: 7, screen: -2, deep_strong: 24, deep_weak: 24, deep_middle: 22,
+    pa_short: 9, pa_deep: 27, roll_strong: 8, roll_weak: 8, hail_mary: 48, rpo_strong: 4, rpo_weak: 4, trick: 30 };
+  const RELEASE = { quick: 0.8, screen: 0.75, deep: 1.3, pa: 1.4, roll: 1.25, hail: 1.6, rpo: 0.7, trick: 1.75 };
+
+  function kf(a, t, x, L, w, e) {
+    if (!a) return;
+    if (!a.kf) a.kf = [[0, a.x0, a.L0, 1, 'io']];
+    const last = a.kf[a.kf.length - 1];
+    a.kf.push([Math.max(t, last[0]), x, L, w === undefined ? 0 : w, e || 'io']);
+  }
+  function at(a, t) {       // where actor a is at play time t
+    const k = a.kf;
+    if (!k) return { x: a.x0, L: a.L0, w: 1 };
+    let i = 1;
+    while (i < k.length && k[i][0] < t) i++;
+    if (i >= k.length) { const z = k[k.length - 1]; return { x: z[1], L: z[2], w: z[3] }; }
+    const [t0, x0, L0, w0] = k[i - 1], [t1, x1, L1, w1, e] = k[i];
+    const u = EASE[e](clip((t - t0) / Math.max(t1 - t0, 1e-6), 0, 1));
+    return { x: lerp(x0, x1, u), L: lerp(L0, L1, u), w: lerp(w0, w1, u) };
+  }
+  const lastKf = (a) => (a.kf ? a.kf[a.kf.length - 1] : [0, a.x0, a.L0, 1]);
+  function ballAt(sc, P, t) {
+    let seg = null;
+    for (const s of P.segs) if (s.t0 <= t + 1e-9) seg = s;
+    if (!seg) return { x: sc.bx, L: sc.losL, z: 0, show: true };
+    if (seg.kind === 'hold') { const p = at(seg.a, t); return { x: p.x + 5, L: p.L, z: 0, show: true }; }
+    if (seg.kind === 'fly') {
+      const u = clip((t - seg.t0) / Math.max(seg.t1 - seg.t0, 1e-6), 0, 1);
+      return { x: lerp(seg.x0, seg.x1, u), L: lerp(seg.L0, seg.L1, u), z: seg.h * 4 * u * (1 - u), show: true };
+    }
+    return { x: seg.x, L: seg.L, z: 0, show: !seg.hide };
+  }
+  function cast(sc) {
+    const off = sc.actors.filter((a) => a.off), def = sc.actors.filter((a) => !a.off);
+    const is = (lab) => (a) => a.label === lab;
+    return { off, def, qb: off.find(is('QB')), rb: off.find(is('RB')), recv: off.filter((a) => a.label === 'WR' || a.label === 'TE'),
+      ol: off.filter((a) => OL.includes(a.label) || a.label === 'T' || a.label === 'G'),
+      rush: def.filter((a) => a.label === 'EDGE' || a.label === 'DL'), cover: def.filter((a) => a.label === 'CB' || a.label === 'S' || a.label === 'LB') };
+  }
+  const near = (list, x, L, skip) => {
+    let best = null, bd = Infinity;
+    (list || []).forEach((a) => {
+      if (!a || (skip && skip.has(a))) return;
+      const p = lastKf(a), d = (p[1] - x) ** 2 + ((p[2] - L) * XYD) ** 2;
+      if (d < bd) { bd = d; best = a; }
+    });
+    return best;
+  };
+
+  function choreograph(sc, e, res, two) {
+    const P = { T: 1, hold: 0.95, segs: [], calls: [], fx: [] };
+    const dir = sc.dir, L0 = sc.losL, bx = sc.bx;
+    const fwd = (L, y) => L + dir * y;
+    const R = rng(hash('anim', e.row, e.t, e.yards, e.ev));
+    const jit = (n) => (R() * 2 - 1) * n;
+    const say = (t, text, kind, o) => P.calls.push({ t, text, kind, slot: 0, x: bx, L: L0, ...(o || {}) });
+    const fly = (t0, t1, x0, La, x1, Lb, h) => P.segs.push({ t0, t1, kind: 'fly', x0, L0: La, x1, L1: Lb, h: h || 0 });
+    const hold = (t0, a) => { if (a) P.segs.push({ t0, kind: 'hold', a }); };
+    const rest = (t0, x, L, hide) => P.segs.push({ t0, kind: 'rest', x, L, hide });
+    const fxAt = (t, f) => P.fx.push({ t, f });
+    const down = (t, a) => { if (a) fxAt(t, () => a.g.classList.add('down')); };
+    const ring = (t, a, on) => { if (a) fxAt(t, () => a.g.classList.toggle('carrier', on !== false)); };
+    const K = cast(sc), qb = K.qb;
+    const defName = teamName(code(1 - e.team));
+    const used = new Set();
+    const endL = (yards, td) => (td ? (dir > 0 ? 103 : -3) : clip(fwd(L0, yards), -9.5, 109.5));
+    const sideline = (x) => (x > 180 ? SX1 + 4 : SX0 - 4);
+
+    // everyone not scripted: linemen engage, receivers release, the defense flows to the ball
+    function ambient(t1, x, L) {
+      sc.actors.forEach((a) => {
+        if (used.has(a)) return;
+        const p = lastKf(a);
+        if (p[0] >= t1) return;
+        if (a.off) {
+          if (K.ol.includes(a)) { if (!a.kf) kf(a, 0.5, a.x0, fwd(L0, -0.5), 0); kf(a, t1, p[1], fwd(L0, 0.6), 0, 'out'); }
+          else kf(a, t1, p[1] + (x - p[1]) * 0.15, p[2] + (L - p[2]) * 0.3 + dir * 2, 0, 'io');
+        } else {
+          if (!a.kf) kf(a, 0.45, a.x0, a.L0 - dir * 0.6, 0);
+          kf(a, t1, lerp(p[1], x, 0.4), lerp(p[2], L, 0.45), 0, 'io');
+        }
+      });
+    }
+    // the ball carrier's last stretch: a missed tackle, the tackle, the score, the fumble
+    function finish(car, t0, t1, xEnd, Lend) {
+      used.add(car);
+      if (e.bt && t1 - t0 > 0.3) {
+        const tb = t0 + (t1 - t0) * 0.4, p = at(car, tb), d = near(K.def, p.x, p.L, used);
+        if (d) { used.add(d); kf(d, tb, p.x + 6, p.L + dir * 0.5, 0, 'io'); kf(d, tb + 0.4, p.x + 12, p.L - dir * 1.5, 0, 'out'); down(tb + 0.06, d); }
+        say(tb, 'Broken tackle!', 'boom', { follow: car });
+      }
+      const fumble = ['fumble_lost', 'fumble_kept', 'scoop_score'].includes(e.evt);
+      for (let i = 0; i < (e.td ? 1 : e.oob ? 1 : 2); i++) {
+        const d = near(K.def, xEnd, Lend, used);
+        if (!d) break;
+        used.add(d);
+        if (e.td) kf(d, t1, xEnd + 16, Lend - dir * 3, 0, 'io');
+        else kf(d, t1, clampX(xEnd) + (i ? -7 : 7), Lend + dir * (i ? 0.2 : 0.9), 0, 'io');
+      }
+      ambient(t1, xEnd, Lend);
+      let t = t1;
+      if (e.td) say(t1, two ? 'Two-point try good!' : 'Touchdown!', 'good', { follow: car });
+      else if (e.safety) say(t1, 'Safety!', 'hit', { follow: car });
+      else if (fumble) {
+        const lost = e.evt !== 'fumble_kept';
+        say(t1, 'Fumble!', 'hit', { follow: car });
+        const fx = clampX(xEnd + jit(14)), fL = Lend + dir * 1.2;
+        fly(t1, t1 + 0.35, xEnd, Lend, fx, fL, 0.3);
+        const rec = lost ? near(K.def, fx, fL) : car;
+        if (rec && rec !== car) kf(rec, t1 + 0.4, fx, fL, 0, 'io');
+        hold(t1 + 0.42, rec);
+        t = t1 + 0.42;
+        if (e.evt === 'scoop_score' && rec) {
+          const Lz = dir > 0 ? -3 : 103;
+          t = t + 0.25 + Math.abs(Lz - fL) * 0.035;
+          kf(rec, t, clampX(fx + jit(30)), Lz, 0, 'lin');
+          say(t, 'Scoop and score!', 'hit', { follow: rec });
+        } else say(t, lost ? `${defName} ball` : 'Recovered', lost ? 'hit' : 'info', { slot: 1, follow: rec || car });
+        t += 0.2;
+      } else if (e.oob) say(t1, 'Out of bounds', 'info', { follow: car });
+      else {
+        say(t1, fwd(0, Lend - L0) < -0.5 ? 'Stopped for a loss' : two ? 'Stopped short' : 'Tackled', 'info', { follow: car });
+        down(t1 + 0.08, car);
+      }
+      if (e.fd && !e.td) say(t1 + 0.35, 'First down', 'good', { slot: 1, follow: car });
+      if (e.onDowns) say(t1 + 0.35, 'Turnover on downs', 'hit', { slot: 1, follow: car });
+      P.T = Math.max(P.T, t + 0.4);
+    }
+    function snapToQb() {
+      if (!qb) return;
+      fly(0, 0.22, bx, L0, qb.x0, qb.L0, 0.15);
+      hold(0.22, qb);
+    }
+    function pickTarget(id, sign) {
+      if (e.who === 'RB' || id === 'screen') return K.rb || K.recv[0];
+      const side = (a) => (sign ? sign * (a.x0 - bx) > 0 : true);
+      if (e.who === 'TE') return near(K.recv.filter((a) => a.label === 'TE' && side(a)), bx, L0) || K.recv.find((a) => a.label === 'TE') || K.recv[0];
+      const wr = K.recv.filter((a) => a.label === 'WR');
+      const pool = (wr.length ? wr : K.recv).filter(side);
+      const all = pool.length ? pool : (wr.length ? wr : K.recv);
+      if (!all.length) return K.rb;
+      const out = all.slice().sort((a, b) => Math.abs(b.x0 - bx) - Math.abs(a.x0 - bx));
+      return id.startsWith('deep') || id === 'pa_deep' || id === 'hail_mary' ? out[0] : out[out.length - 1];
+    }
+
+    function run(c, id, sign) {
+      const carrier = (id === 'qb_sneak' || id === 'qb_run' || e.who === 'QB') ? qb
+        : (id === 'trick' && e.who === 'WR') ? near(K.recv.filter((a) => a.label === 'WR'), bx - (sign || 1) * 120, L0) : (K.rb || qb);
+      if (!carrier) return;
+      const gap = RUN_GAP[c ? c.base : ''] ?? 26;
+      const sg = sign || (id === 'qb_run' ? sc.s * dir : 0);
+      const holeX = clampX(bx + sg * gap);
+      const Lend = endL(e.yards, e.td);
+      const tH = carrier === qb ? 0.3 : 0.5, tHole = tH + 0.3;
+      const t1 = tHole + clip(0.3 + Math.abs(Lend - L0) * 0.05, 0.35, 2.8);
+      const xEnd = e.oob ? sideline(sg ? (sg > 0 ? 300 : 60) : holeX) : clampX(holeX + sg * Math.min(26, Math.abs(e.yards) * 1.6) + jit(10));
+      snapToQb();
+      if (carrier !== qb) {
+        if (carrier.label === 'WR') kf(carrier, tH, bx + sg * 8, fwd(L0, -4.5), 0, 'in');
+        else kf(carrier, tH, bx + sg * 10, fwd(L0, -4.3), 0, 'io');
+        kf(qb, tH, bx + sg * 5, fwd(L0, -5), 0, 'io');
+        kf(qb, t1, clampX(bx - (sg || 1) * 22), fwd(L0, -6.5), 0, 'out');      // carries out the fake
+        hold(tH, carrier);
+      }
+      ring(tH, carrier);
+      kf(carrier, tHole, holeX, fwd(L0, 0.4), 0, 'in');
+      kf(carrier, t1, xEnd, Lend, 0, 'out');
+      used.add(qb);
+      K.ol.forEach((a) => { kf(a, 0.55, a.x0 + sg * 4, fwd(L0, -0.3), 0); kf(a, t1, a.x0 + sg * 9, fwd(L0, 1.4), 0, 'out'); used.add(a); });
+      K.rush.forEach((a) => kf(a, 0.55, a.x0 + sg * 3, fwd(L0, 0.5), 0));
+      finish(carrier, tHole, t1, xEnd, Lend);
+    }
+
+    function pass(c, id, sign) {
+      if (!qb) return;
+      const kind = id.startsWith('quick') ? 'quick' : id === 'screen' ? 'screen' : id.startsWith('deep') ? 'deep'
+        : id.startsWith('pa_') ? 'pa' : id.startsWith('roll') ? 'roll' : id === 'hail_mary' ? 'hail' : id.startsWith('rpo') ? 'rpo'
+          : id === 'trick' ? 'trick' : 'quick';
+      const tRel = RELEASE[kind];
+      const air = e.air !== undefined ? e.air : (AIR[id] ?? 7);
+      let qx = qb.x0, qL = fwd(L0, kind === 'hail' ? -8 : -6.5);
+      if (kind === 'roll') { qx = clampX(bx + (sign || sc.s * dir) * 60); qL = fwd(L0, -6); }
+      snapToQb();
+      used.add(qb);
+      if ((kind === 'pa' || kind === 'trick') && K.rb) {
+        kf(K.rb, 0.55, bx + 9, fwd(L0, -4.6), 0);
+        if (kind === 'trick') { hold(0.55, K.rb); fly(1.0, 1.25, bx + 14, fwd(L0, -3), qx, qL, 0.4); hold(1.25, qb); kf(K.rb, 1.0, bx + 14, fwd(L0, -3), 0); }
+        kf(K.rb, tRel, bx + 26, fwd(L0, 1.5), 0, 'io');
+      }
+      kf(qb, kind === 'quick' || kind === 'rpo' || kind === 'screen' ? 0.55 : 0.85, qx, qL, 0, 'io');
+      const tgt = pickTarget(id, sign) || K.rb;
+      const tArr = tRel + 0.22 + Math.abs(air) * 0.017;
+      let cL = fwd(L0, air), cx;
+      if (!tgt) return;
+      if (kind === 'screen' || tgt === K.rb) cx = clampX(bx + (sign || (tgt.x0 > bx ? 1 : -1)) * 62);
+      else if (id.endsWith('middle')) cx = lerp(tgt.x0, bx, 0.6);
+      else if (kind === 'deep' || kind === 'hail') cx = clampX(tgt.x0 + (tgt.x0 > 180 ? 10 : -10));
+      else cx = clampX(tgt.x0 + (tgt.x0 > bx ? -14 : 14));
+      if (e.evt === 'throwaway') { cx = sideline(qx) + (qx > 180 ? 12 : -12); cL = fwd(L0, Math.max(3, air)); }
+      used.add(tgt);
+      if (e.evt !== 'throwaway') {
+        kf(tgt, tRel, lerp(tgt.x0, cx, 0.4), fwd(L0, Math.min(air * 0.6, Math.max(air - 5, 0))), 0, 'in');
+        kf(tgt, tArr, cx, cL, 0, 'lin');
+      }
+      K.recv.forEach((a) => {
+        if (a === tgt) return;
+        used.add(a);
+        kf(a, tArr + 0.25, clampX(a.x0 + (a.x0 > bx ? -12 : 12) + jit(8)), fwd(L0, kind === 'hail' ? 40 + jit(5) : 9 + Math.abs(jit(7))), 0, 'io');
+      });
+      if (K.rb && K.rb !== tgt && kind !== 'pa' && kind !== 'trick') { kf(K.rb, 0.6, bx + (qx > bx ? 14 : -14), fwd(L0, -4.2), 0); used.add(K.rb); }
+      K.ol.forEach((a) => { kf(a, 0.6, a.x0, fwd(L0, -1.5), 0, 'out'); used.add(a); });
+      K.rush.forEach((a) => { kf(a, tArr, lerp(a.x0, qx, 0.25), fwd(L0, -2.4), 0, 'io'); used.add(a); });
+      K.cover.forEach((d) => {
+        used.add(d);
+        if (d.label === 'LB') { kf(d, tArr, d.x0 + jit(10), fwd(L0, 6.5), 0, 'io'); return; }
+        const r = near(K.recv, d.x0, d.L0);
+        const p = r ? at(r, tArr) : { x: d.x0, L: fwd(d.L0, 3) };
+        kf(d, tArr, p.x + (d.x0 < p.x ? -6 : 6), p.L + dir * 1.6, 0, 'io');
+      });
+      if (kind !== 'trick') hold(0.22, qb);
+      ring(0.22, qb);
+      fly(tRel, tArr, qx + 4, qL, cx, cL, Math.min(2.2, 0.35 + Math.abs(air) * 0.05));
+      ring(tRel, qb, false);
+      if (e.evt === 'interception' || e.evt === 'pick_six') {
+        const pick = near(K.cover.filter((d) => d.label !== 'LB').concat(K.cover), cx, cL) || K.def[0];
+        kf(pick, tArr - 0.02, cx + 3, cL + dir * 0.6, 0, 'io');
+        hold(tArr, pick);
+        ring(tArr, pick);
+        say(tArr, 'Intercepted!', 'hit', { follow: pick });
+        const Lret = e.evt === 'pick_six' ? (dir > 0 ? -3 : 103) : clip(losOf(res.root), -9, 109);
+        const t1 = tArr + 0.3 + Math.abs(Lret - cL) * 0.045;
+        kf(pick, t1, clampX(cx + jit(40)), Lret, 0, 'out');
+        const ch = near(K.recv.concat([qb]), cx, cL, new Set([tgt]));
+        if (ch) kf(ch, t1, clampX(cx + jit(40)), Lret + dir * 1.5, 0, 'io');
+        if (e.evt === 'pick_six') say(t1, 'Pick-six!', 'hit', { follow: pick });
+        else down(t1 + 0.05, pick);
+        used.add(pick);
+        ambient(t1, cx, Lret);
+        P.T = t1 + 0.4;
+        return;
+      }
+      if (e.incomplete || ['throwaway', 'drop', 'near_pick'].includes(e.evt)) {
+        const brk = near(K.cover, cx, cL);
+        if (brk && e.evt !== 'throwaway') kf(brk, tArr, cx + (lastKf(brk)[1] < cx ? -6 : 6), cL + dir * 0.8, 0, 'io');
+        const gx = e.evt === 'throwaway' ? cx : clampX(cx + jit(8)), gL = cL + dir * 1.6;
+        fly(tArr, tArr + 0.18, cx, cL, gx, gL, 0.15);
+        rest(tArr + 0.18, gx, gL);
+        rest(tArr + 0.9, gx, gL, true);
+        const text = e.evt === 'drop' ? 'Dropped!' : e.evt === 'near_pick' ? 'Almost picked!' : e.evt === 'throwaway' ? 'Thrown away'
+          : kind === 'hail' ? 'Knocked down' : two ? 'Incomplete: no good' : 'Incomplete';
+        say(tArr, text, e.evt === 'near_pick' ? 'boom' : 'info', { x: clampX(cx), L: cL });
+        if (e.evt === 'drop') down(tArr + 0.1, tgt);
+        ambient(tArr + 0.35, cx, cL);
+        P.T = tArr + 0.8;
+        return;
+      }
+      hold(tArr, tgt);
+      ring(tArr, tgt);
+      const Lend = endL(e.yards, e.td);
+      const t1 = tArr + 0.2 + Math.abs(Lend - cL) * 0.05;
+      const xEnd = e.oob ? sideline(cx) : clampX(cx + jit(12));
+      kf(tgt, t1, xEnd, Lend, 0, 'out');
+      if (Math.abs(Lend - cL) > 4 && !e.bt) say(tArr, 'Caught', 'boom', { follow: tgt });
+      finish(tgt, tArr, t1, xEnd, Lend);
+    }
+
+    function sack() {
+      if (!qb) return;
+      snapToQb();
+      const qL = fwd(L0, -7), tS = 1.15 + R() * 0.35;
+      kf(qb, 0.7, qb.x0, qL, 0, 'io');
+      const pool = e.look && e.look.blitz ? K.rush.concat(K.cover.filter((d) => d.label === 'LB')) : K.rush;
+      const rusher = near(pool, qb.x0, qL) || K.def[0];
+      kf(rusher, tS, qb.x0 + (rusher.x0 < qb.x0 ? -6 : 6), fwd(L0, -6.4), 0, 'in');
+      const Lend = clip(fwd(L0, e.yards), -9.5, 109.5);
+      kf(qb, tS, qb.x0 + jit(5), qL, 0);
+      kf(qb, tS + 0.3, qb.x0 + jit(8), Lend, 0, 'out');
+      kf(rusher, tS + 0.3, qb.x0 + jit(8) + 5, Lend + dir * 0.4, 0, 'out');
+      [qb, rusher].forEach((a) => used.add(a));
+      K.recv.forEach((a) => { kf(a, tS, clampX(a.x0 + jit(10)), fwd(L0, 8 + Math.abs(jit(8))), 0, 'io'); used.add(a); });
+      K.ol.forEach((a) => { kf(a, 0.6, a.x0, fwd(L0, -1.6), 0, 'out'); used.add(a); });
+      hold(0.22, qb);
+      ring(0.22, qb);
+      say(tS, e.evt === 'strip_sack' ? 'Strip-sack!' : 'Sacked!', 'hit', { follow: qb });
+      down(tS + 0.3, qb);
+      let t = tS + 0.3;
+      if (e.evt === 'strip_sack' || e.evt === 'sack_fumble') {
+        const fx = clampX(qb.x0 + jit(14)), fL = Lend - dir * 1.4;
+        fly(tS, tS + 0.35, qb.x0, qL, fx, fL, 0.2);
+        const rec = e.evt === 'strip_sack' ? near(K.rush, fx, fL, new Set([rusher])) || rusher : near(K.ol, fx, fL);
+        if (rec) { kf(rec, tS + 0.45, fx, fL, 0, 'io'); hold(tS + 0.47, rec); }
+        say(tS + 0.45, e.evt === 'strip_sack' ? `${defName} ball` : 'Fumble: recovered', e.evt === 'strip_sack' ? 'hit' : 'info', { slot: 1, follow: rec || qb });
+        t = tS + 0.55;
+      }
+      if (e.safety) say(tS + 0.35, 'Safety!', 'hit', { slot: 1, follow: qb });
+      ambient(t, qb.x0, Lend);
+      P.T = t + 0.45;
+    }
+
+    function scramble() {
+      if (!qb) return;
+      snapToQb();
+      const qL = fwd(L0, -7), tE = 1.15;
+      const sg = R() < 0.5 ? -1 : 1;
+      kf(qb, 0.7, qb.x0, qL, 0, 'io');
+      kf(qb, tE, clampX(qb.x0 + sg * 30), fwd(L0, -6), 0, 'io');
+      const Lend = endL(e.yards, e.td);
+      const t1 = tE + 0.2 + Math.abs(Lend - fwd(L0, -6)) * 0.05;
+      const xEnd = e.oob ? sideline(qb.x0 + sg * 60) : clampX(qb.x0 + sg * 60 + jit(20));
+      kf(qb, t1, xEnd, Lend, 0, 'out');
+      K.recv.forEach((a) => { kf(a, t1, clampX(a.x0 + jit(14)), fwd(L0, 9 + Math.abs(jit(9))), 0, 'io'); used.add(a); });
+      K.ol.forEach((a) => { kf(a, 0.6, a.x0, fwd(L0, -1.5), 0, 'out'); used.add(a); });
+      K.rush.forEach((a) => { kf(a, tE, lerp(a.x0, qb.x0, 0.3), fwd(L0, -3.5), 0, 'io'); });
+      ring(0.22, qb);
+      say(tE, 'Scramble!', 'boom', { follow: qb });
+      finish(qb, tE, t1, xEnd, Lend);
+    }
+
+    function flag(tFlag, text) {       // the yellow flag lands near the line, then stays with the camera
+      const g = S('g', { class: 'flagmark' }), fx = clampX(bx + jit(30)), fL = fwd(L0, 1 + Math.abs(jit(3)));
+      g.append(S('rect', { x: -4, y: -4, width: 8, height: 8, rx: 1.5, transform: 'rotate(18)' }));
+      fxAt(tFlag, () => {
+        sc.callLayer.before(g);
+        sc.parts.push((Y) => g.setAttribute('transform', `translate(${fx.toFixed(1)},${Y(fL).toFixed(1)})`));
+      });
+      say(tFlag, text, 'flag');
+    }
+
+    if (e.ev === 'play') {
+      const c = e.call >= 0 ? idx.calls[e.call] : null;
+      const id = c ? c.id : '';
+      const sign = !c || !c.side || c.side === 'middle' ? 0 : (c.side === 'strong' ? 1 : -1) * sc.s * dir;
+      if (e.penalty && (PRE_SNAP.has(e.pen) || !(e.dur > 0))) {     // a flag before the snap: nobody moves far
+        const jumper = /Offside|Encroachment|Neutral Zone/.test(e.pen || '') ? near(K.rush, bx, L0) : near(K.ol, bx, L0);
+        if (jumper) { kf(jumper, 0.2, jumper.x0, fwd(jumper.L0, jumper.off ? 1 : -1), 0.3); kf(jumper, 0.6, jumper.x0, jumper.L0, 1); }
+        flag(0.3, `Flag: ${e.pen || 'penalty'}`);
+        P.T = 0.9;
+      } else if (e.evt === 'bad_snap') {
+        const lx = bx + 9, lL = fwd(L0, -9);
+        fly(0, 0.4, bx, L0, lx, lL, 0.05);
+        rest(0.4, lx, lL);
+        say(0.35, 'Bad snap!', 'hit', { x: lx, L: lL });
+        const rec = e.turnover ? near(K.rush, lx, lL) : qb;
+        if (rec) { kf(rec, 0.7, lx, lL + (rec.off ? 0 : dir * 0.5), 0, 'io'); hold(0.72, rec); used.add(rec); }
+        if (rec === qb && qb) kf(qb, 1.3, lx + jit(10), endL(e.yards, false), 0, 'out');
+        say(0.8, e.turnover ? `${defName} ball` : 'Recovered', e.turnover ? 'hit' : 'info', { slot: 1, follow: rec || qb });
+        ambient(1.2, lx, lL);
+        P.T = 1.5;
+      } else if (e.kind === SPIKE) {
+        snapToQb();
+        if (qb) {
+          fly(0.45, 0.58, qb.x0 + 4, qb.L0, qb.x0 + 4, fwd(qb.L0, 1.3), 0.05);
+          rest(0.58, qb.x0 + 4, fwd(qb.L0, 1.3));
+          say(0.5, 'Spike', 'info', { follow: qb });
+        }
+        P.T = 0.95;
+      } else if (e.kind === KNEEL) {
+        snapToQb();
+        if (qb) { kf(qb, 0.55, qb.x0, fwd(qb.L0, -1), 0, 'out'); down(0.55, qb); say(0.55, 'Kneel', 'info', { follow: qb }); }
+        P.T = 0.95;
+      } else if (e.penalty) {                                    // a flag during the play: it is called back
+        snapToQb();
+        if (qb) { kf(qb, 0.7, qb.x0, fwd(L0, -6.5), 0, 'io'); used.add(qb); }
+        ambient(1.0, bx, fwd(L0, 3));
+        flag(0.85, `Flag: ${e.pen || 'penalty'}`);
+        P.T = 1.45;
+      } else if (['sack', 'strip_sack', 'sack_fumble'].includes(e.evt)) sack();
+      else if (e.evt === 'scramble') scramble();
+      else {
+        const thrown = e.air !== undefined || e.incomplete || ['interception', 'pick_six', 'drop', 'near_pick', 'throwaway'].includes(e.evt);
+        if (e.kind === PASS && (thrown || !['rpo_strong', 'rpo_weak', 'trick'].includes(id))) pass(c, id, sign);
+        else run(c, id, sign);
+      }
+    } else if (e.ev === 'fg' || (e.ev === 'pat' && !two)) {
+      const hL = fwd(L0, -7), Ly = dir > 0 ? 110 : -10;
+      fly(0, 0.3, bx, L0, bx, hL, 0.1);
+      rest(0.3, bx, hL);
+      const good = e.ev === 'fg' ? e.made : e.good;
+      const miss = good ? 0 : (R() < 0.5 ? -1 : 1);
+      const t1 = 0.6 + 0.35 + Math.abs(Ly - hL) * 0.011;
+      fly(0.6, t1, bx, hL, 180 + miss * 34, Ly, 2.4);
+      rest(t1, 180 + miss * 38, Ly + dir * 1.5);
+      K.rush.forEach((a) => kf(a, 0.65, a.x0, fwd(L0, 0.2), 0));
+      K.ol.forEach((a) => kf(a, 0.65, a.x0, fwd(L0, -0.6), 0));
+      say(t1, good ? "It's good!" : 'No good', good ? 'good' : 'hit', { x: 180, L: Ly - dir * 6 });
+      P.T = t1 + 0.35;
+    } else if (e.ev === 'punt') {
+      const pL = fwd(L0, -14);
+      fly(0, 0.35, bx, L0, bx, pL, 0.1);
+      rest(0.35, bx, pL);
+      const Lnew = clip(losOf(res.root), -9, 109);
+      if (e.blocked) {
+        fly(0.6, 0.95, bx, pL, bx + jit(20), fwd(pL, -4), 0.2);
+        rest(0.95, bx + jit(20), fwd(pL, -4));
+        say(0.7, 'Blocked!', 'hit', { x: bx, L: pL });
+        P.T = 1.4;
+      } else {
+        const land = e.touchback ? (dir > 0 ? 104 : -4) : e.retTd ? fwd(pL, 52) : Lnew + dir * 6;
+        const lx = clampX(bx + jit(40));
+        fly(0.6, 1.75, bx, pL, lx, land, 2.8);
+        let t = 1.75;
+        if (!e.touchback) {
+          const Lr = e.retTd ? (dir > 0 ? -3 : 103) : Lnew;
+          const t2 = t + 0.2 + Math.abs(land - Lr) * 0.03;
+          fly(t, t2, lx, land, clampX(lx + jit(30)), Lr, 0.05);
+          t = t2;
+        }
+        say(t, e.retTd ? 'Punt return touchdown!' : e.touchback ? 'Touchback' : `Punt · net ${Math.round(e.net || 0)}`, e.retTd ? 'hit' : 'info',
+          { x: 180, L: e.retTd ? (dir > 0 ? 4 : 96) : Lnew });
+        P.T = t + 0.4;
+      }
+    } else if (e.ev === 'kickoff') {
+      const Lnew = clip(losOf(res.root), -9, 109);
+      if (e.onside) {
+        const lx = clampX(bx + jit(30)), lL = fwd(L0, 11);
+        fly(0.3, 0.95, bx, L0, lx, lL, 0.25);
+        rest(0.95, lx, lL);
+        say(0.95, e.recovered ? 'Onside kick recovered!' : 'Onside kick: they recover', e.recovered === (e.team === G.me) ? 'good' : 'hit', { x: lx, L: lL });
+        P.T = 1.4;
+      } else {
+        const land = dir > 0 ? 97 : 3, lx = clampX(180 + jit(40));
+        fly(0.3, 1.55, bx, L0, lx, land, 3);
+        const Lr = e.retTd ? (dir > 0 ? -3 : 103) : Lnew;
+        const t2 = 1.55 + 0.25 + Math.abs(land - Lr) * 0.025;
+        fly(1.55, t2, lx, land, clampX(lx + jit(40)), Lr, 0.05);
+        rest(t2, clampX(lx + jit(40)), Lr);
+        say(t2, e.retTd ? 'Kick return touchdown!' : `${teamName(code(res.root.pos))} ball at ${spotText(res.root)}`,
+          e.retTd ? (e.team === G.me ? 'hit' : 'good') : 'info', { x: 180, L: Lr });
+        P.T = t2 + 0.4;
+      }
+    } else return null;
+
+    // the camera: everything that moves, with room around it
+    const Ls = [L0];
+    sc.actors.forEach((a) => (a.kf || []).forEach((k) => Ls.push(k[2])));
+    P.segs.forEach((s) => { if (s.kind === 'fly') Ls.push(s.L0, s.L1); else if (s.kind === 'rest') Ls.push(s.L); });
+    let lo = Math.min(...Ls) - 5, hi = Math.max(...Ls) + 5;
+    const span = clip(hi - lo, 36, 120), mid = (lo + hi) / 2;
+    lo = mid - span / 2; hi = mid + span / 2;
+    if (lo < -10) { hi += -10 - lo; lo = -10; }
+    if (hi > 110) { lo -= hi - 110; hi = 110; }
+    P.cam = { lo: Math.max(lo, -10), hi: Math.min(hi, 110) };
+    P.segs.sort((a, b) => a.t0 - b.t0);
+    return P;
+  }
+
+  function runPlan(sc, P, speed) {
+    const ZI = 0.45, ZO = 0.4, total = ZI + P.T + P.hold + ZO;
+    return new Promise((resolve) => {
+      let start = null, skip = false;
+      const onTap = () => { skip = true; };
+      sc.svg.classList.add('playing');
+      sc.svg.addEventListener('click', onTap);
+      const frame = (now) => {
+        if (start === null) start = now;
+        const t = skip ? total : ((now - start) / 1000) * speed;
+        const k = EASE.io(clip(t / ZI, 0, 1)) * (1 - EASE.io(clip((t - ZI - P.T - P.hold) / ZO, 0, 1)));
+        sc.cam = { lo: lerp(FULL.lo, P.cam.lo, k), hi: lerp(FULL.hi, P.cam.hi, k) };
+        const tp = clip(t - ZI, 0, P.T);
+        sc.actors.forEach((a) => { const p = at(a, tp); a.x = p.x; a.L = p.L; a.w = p.w; });
+        Object.assign(sc.ball, ballAt(sc, P, tp));
+        P.calls.forEach((c) => { if (!c.shown && tp >= c.t) { c.shown = true; showCall(sc, c); } });
+        P.fx.forEach((f) => { if (!f.done && tp >= f.t) { f.done = true; f.f(); } });
+        place(sc);
+        if (t >= total) {
+          sc.svg.removeEventListener('click', onTap);
+          sc.svg.classList.remove('playing');
+          resolve();
+        } else requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+    });
+  }
+
+  // play one snap on the field: `before` is the state it was snapped from, `side` its strong side
+  async function animatePlay(before, res, side, replay) {
+    if (reduced() || (G.fast && !replay) || $('play').hidden) return false;
+    const e = res.log.find((x) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(x.ev));
+    if (!e) return false;
+    const two = e.ev === 'pat' && e.two;
+    let sc, P = null;
+    try {
+      if (two) {           // a two-point try is a snap from the 2: a pass that scores or does not
+        sc = makeScene({ ...before, phase: SNAP, yl: 2, ytg: 2, down: 1 }, side);
+        const q = { ev: 'play', team: e.team, kind: PASS, call: idx.calls.findIndex((c) => c.id === 'quick_strong'), yards: e.good ? 4 : 0,
+          air: 4, incomplete: !e.good, td: e.good, row: -1, t: before.t };
+        P = choreograph(sc, q, res, true);
+      } else {
+        sc = makeScene(before, side);
+        P = choreograph(sc, e, res, false);
+      }
+    } catch (err) { console.warn('animation skipped:', err); P = null; }
+    scene = sc;
+    if (!P) return false;
+    await runPlan(sc, P, e.team === G.me ? 1 : 1.25);
+    fadeNext = true;
+    lastBall = null;
+    return true;
   }
 
   // the in-depth view: the 22 up close with every percentile, and every player listed
@@ -723,8 +1301,8 @@
         r.phase === PAT ? `The ${teamName(code(r.pos))} try the extra point` : `The ${teamName(code(r.pos))} have the ball`;
       const last = G.log.length ? G.log[G.log.length - 1][0] : '';
       status(label, last, !G.fast);
-      await stepWith(action);
-      await sleep(G.fast ? 60 : 1000);
+      const res = await stepWith(action);
+      await sleep(G.fast ? 60 : res.animated ? 300 : 1000);
     }
   }
   function kickChoice(r) { return r.t <= 300 && r.score[G.me] < r.score[1 - G.me]; }
@@ -735,13 +1313,22 @@
   }
   async function stepWith(action) {
     const seed = hash('step', dayN, G.si, G.seq++);
+    const before = G.root, side = G.side;
     const res = (await send({ type: 'step', scen: simScen(), root: G.root, action, seed })).res;
     res.action = action;
     narrate(res.log, action).forEach(([text, t, mine]) => addLog(text, t, mine));
     G.root = res.root;
     if (res.done) G.root.phase = DONE;
     persist();
+    G.lastPlay = { before, res, side };
+    res.animated = await animatePlay(before, res, side, false);
     return res;
+  }
+  async function replay() {
+    const lp = G.lastPlay;
+    if (busy || !lp) return;
+    busy = true;
+    try { await animatePlay(lp.before, lp.res, lp.side, true); } finally { busy = false; drawField(); }
   }
 
   // your ball: Run / Pass / RPO, plus a timeout, spike, kneel or kick when it matters
@@ -908,7 +1495,7 @@
       const x = await clockDecision(r, k);
       G.decisions.push(x);
       G.snapN += 1;
-      status('Snap…');
+      status('Snap…', reduced() ? null : 'Tap the field to skip');
       const res = await stepWith(CLOCK[k].act);
       showResult([x], res);
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
@@ -942,7 +1529,7 @@
       decisions.push(decisionFrom('call', r.down === 4 ? 'fourth_down' : 'play_select', opts, vals, chosen, q, situation(r)));
       decisions.forEach((x) => G.decisions.push(x));
       G.snapN += 1;
-      status('Snap…');
+      status('Snap…', reduced() ? null : 'Tap the field to skip');
       const res = await stepWith(opts.find((o) => o.key === chosen).action);
       showResult(decisions, res);
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
@@ -1038,6 +1625,12 @@
     const btn = el('button', 'btn', G.root.phase === DONE ? 'See how it ended' : 'Next play');
     btn.type = 'button';
     btn.addEventListener('click', () => { if (!busy) advance(); });
+    if (G.lastPlay && res.animated) {
+      const again = el('button', 'chip replay', '↻ Replay the play');
+      again.type = 'button';
+      again.addEventListener('click', replay);
+      wrap.append(again);
+    }
     wrap.append(btn);
     d.append(wrap);
   }
@@ -1270,7 +1863,7 @@
       'Read the situation, tap Next, and the field opens: their end zone at the top, yours at the bottom.',
       'Every dot is a player on today\'s roster, everyone healthy: green is good, red is not. Tap one to see what kind of player he is (mobile QB, blocking tight end…) and his numbers.',
       'Call Run, Pass or RPO, then the play. Timeout, spike, kneel and kicks pop up when they matter.',
-      'Every snap is a real NFL play: sacks, picks, fumbles and flags all happen.',
+      'Every snap is a real NFL play, run out on the field: broken tackles, sacks, picks, fumbles and flags all happen. Tap the field to skip ahead.',
     ].forEach((t) => ul.append(el('li', '', t)));
     openModal('How to play', [
       el('p', 'lead', 'Three real late-game spots a day. You call every play.'),

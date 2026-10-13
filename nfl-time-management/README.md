@@ -284,7 +284,13 @@ his stat line and his type, using Madden's archetype names (a mobile or pocket q
 possession or vertical-threat tight end, a power, elusive or receiving back, and so on), each assigned
 by a rule on the stat that defines it (`archetypes.py`; EA's own ratings are not open data).
 Play-calling is a pop-up of **Run**, **Pass** and **RPO**, then the play and its side; a timeout,
-spike, kneel, field goal or punt only appears when it matters. Nothing says which call is best until
+spike, kneel, field goal or punt only appears when it matters. Every snap is then run out on the field:
+the camera zooms in like a broadcast, the dots move (the handoff or the drop, the routes, the rush, the
+throw at the real play's air yards, the run after the catch, the pursuit and the tackle), and what
+happened is called out where it happened: broken tackle, tackled, out of bounds, sacked, strip-sack,
+intercepted, pick-six, fumble, dropped, thrown away, flag, touchdown, first down, field goal good or
+no good. Play-by-play does not chart broken tackles, so Pro Football Reference's per-game count for a
+player is credited to his longest carries or catches of that game. Nothing says which call is best until
 after the snap; then every decision is graded in win probability against all the alternatives and
 against what a typical NFL play-caller does there. Each spot and the day end with the head coach whose
 late-game calls look most like yours ("You called this one like Nick Sirianni"), from 59 coaches'
@@ -295,7 +301,9 @@ in the same three spots, with a share grid of one square per snap.
 The spots are real situations; the teams are today's (`current.py`). Rosters are nflverse's weekly
 rosters (the NFL's own transactions: trades, signings, releases), with injuries ignored so every team
 plays its healthy lineup: the 22 are picked by each player's usual share of snaps in the weeks he was
-healthy, his best depth-chart listing (ESPN) and his rating, in the personnel the team uses most.
+healthy, his best depth-chart listing (ESPN) and his rating, in the personnel the team uses most. The
+build cross-checks every starter against ESPN's depth charts (703 of 704 on ESPN's current chart for
+his team as of October 12, 2026; all 704 listed since August).
 Player ratings blend 2025 (counted less) with 2026 to date: EPA per dropback and completion over
 expected for quarterbacks, rush yards over expected for backs, target share and yards per game for
 receivers, pressures for pass rushers, tackling and coverage for linebackers, passer rating allowed for

@@ -136,4 +136,5 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
     if (WEB / "spots").exists():
         (WEB / "spots").rmdir()
     (WEB / "scenarios.json").unlink(missing_ok=True)
-    return {"spots": len(spots), "by_category": n, "days": days, "teams": len(teams), "coaches": len(out["coaches"]["coaches"])}
+    return {"spots": len(spots), "by_category": n, "days": days, "teams": len(teams), "coaches": len(out["coaches"]["coaches"]),
+            "espn_check": now["espn_check"]}
