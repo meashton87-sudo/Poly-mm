@@ -36,7 +36,7 @@ GA_TAG = ("<script async src=\"https://www.googletagmanager.com/gtag/js?id={id}\
 
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None) -> Path:
-    missing = [f for f in FILES if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
+    missing = [f for f in FILES + ["stats.html"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
     if missing:
         raise SystemExit(f"build the game data first; missing in web/: {', '.join(missing)}")
     if out.exists():
@@ -49,8 +49,21 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         extra = GA_TAG.format(id=ga) + extra
     if board_api:
         extra += f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">"
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=WEB, capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        commit = ""
+    stamp = (commit[:12] or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"))
+    # every file the page loads carries the build stamp (game.js reads the meta), so phones never mix two builds
+    extra += f"<meta name=\"build\" content=\"{stamp}\">"
     page = (WEB / "game.html").read_text()
+    for js in ("motion.js", "game.js"):
+        page = page.replace(f'<script src="{js}"></script>', f'<script src="{js}?v={stamp}"></script>')
     (out / "index.html").write_text(HEAD.format(extra=extra) + page + "</body></html>\n")
+    # the stats page (/stats): its own document; the same analytics tag and backend address
+    stats_head = (GA_TAG.format(id=ga) if ga else "") + (
+        f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else "")
+    (out / "stats.html").write_text((WEB / "stats.html").read_text().replace("<!--SITE-HEAD-->", stats_head))
     for f in FILES:
         shutil.copy2(WEB / f, out / f)
     for f in sorted((WEB / "spots").glob("s*.json")):
@@ -58,10 +71,6 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     if domain:
         (out / "CNAME").write_text(domain.strip() + "\n")
     (out / ".nojekyll").write_text("")          # serve the files as they are
-    try:
-        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=WEB, capture_output=True, text=True, timeout=10).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        commit = ""
     game = json.loads((WEB / "game.json").read_text())
     (out / "version.json").write_text(json.dumps({
         "built": datetime.now(timezone.utc).isoformat(timespec="seconds"), "commit": commit or None,

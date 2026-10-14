@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!--SITE-HEAD-->
+<title>Two-Minute Drill Stats</title>
+<meta name="description" content="How everyone did on the Two-Minute Drill daily drive.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Libre+Franklin:wght@400;500;600;700;800&display=swap">
+<style>
+/* The daily game's stats (board/worker.js /days and /daily): players per day, then one day up close. Same
+   tokens as the game (web/game.html). */
+:root {
+  --paper: #f3f5f2; --card: #ffffff; --ink: #121a15; --muted: #5a675e; --line: #d3dbd5;
+  --turf: #2c7549; --chain: #f4c400; --chain-ink: #1d1700; --sq-g: #3d9a56; --sq-r: #d0463f; --grid: #e4e9e5;
+  --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "Libre Franklin", "Franklin Gothic Medium", "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d;
+  --turf: #3f9a63; --chain: #f2c200; --chain-ink: #1d1700; --sq-g: #3a8f51; --sq-r: #c0403a; --grid: #222b25;
+  color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d;
+  --turf: #3f9a63; --chain: #f2c200; --chain-ink: #1d1700; --sq-g: #3a8f51; --sq-r: #c0403a; --grid: #222b25;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 14px/1.45 var(--body); padding-top: env(safe-area-inset-top, 0px); }
+.wrap { max-width: 560px; margin: 0 auto; padding: 14px 16px 40px; display: grid; gap: 16px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+h1 { margin: 0; font: 900 30px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
+h1 small { display: block; font: 700 11px var(--body); letter-spacing: .16em; color: var(--muted); margin-top: 4px; }
+a.play { font-weight: 700; color: var(--ink); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; background: var(--card); white-space: nowrap; }
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.tile b { display: block; font: 900 32px/1 var(--display); font-variant-numeric: tabular-nums; }
+.tile span { font-size: 12px; color: var(--muted); }
+.k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+section { display: grid; gap: 8px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 10px; }
+/* players per day: one bar a day, the picked day in the first-down yellow */
+.days { display: flex; align-items: flex-end; gap: 2px; height: 120px; border-bottom: 1px solid var(--line); overflow-x: auto; padding-top: 14px; }
+.days button { flex: 1 0 9px; max-width: 26px; min-height: 2px; border: 0; padding: 0; background: var(--turf); border-radius: 4px 4px 0 0; cursor: pointer; position: relative; }
+.days button.on { background: var(--chain); }
+.days button:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+.axis { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.day-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.day-head h2 { margin: 0; font: 800 22px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.nav { display: flex; gap: 6px; }
+.nav button { border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; width: 36px; height: 36px; font-size: 16px; cursor: pointer; }
+.nav button:disabled { opacity: .35; cursor: default; }
+.facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; text-align: center; }
+.facts b { display: block; font: 900 26px/1 var(--display); font-variant-numeric: tabular-nums; }
+.facts span { font-size: 12px; color: var(--muted); }
+/* the day's scores in ten buckets */
+.hist { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 2px; align-items: end; height: 110px; border-bottom: 1px solid var(--line); }
+.hist div { background: var(--turf); border-radius: 4px 4px 0 0; min-height: 2px; position: relative; }
+.hist div i { position: absolute; top: -16px; left: 0; right: 0; text-align: center; font: 600 11px var(--body); font-style: normal; color: var(--muted); font-variant-numeric: tabular-nums; }
+.hlab { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 2px; font-size: 10.5px; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; }
+ol.top { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-variant-numeric: tabular-nums; }
+ol.top li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--grid); }
+ol.top li:last-child { border-bottom: 0; }
+ol.top .n { color: var(--muted); } ol.top .nm { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+ol.top b { font: 900 18px var(--display); }
+.note { color: var(--muted); font-size: 13px; margin: 0; }
+.empty { color: var(--muted); text-align: center; padding: 20px 0; margin: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Two-Minute Drill<small>Everyone’s daily stats</small></h1>
+    <a class="play" href="./">Play today ›</a>
+  </header>
+  <div class="tiles" id="tiles" aria-live="polite"></div>
+  <section>
+    <p class="k">Players per day</p>
+    <div class="card">
+      <div class="days" id="days" role="group" aria-label="Players per day: tap a day to see it"></div>
+      <div class="axis" id="axis"></div>
+    </div>
+  </section>
+  <section>
+    <div class="card" id="day"><p class="empty">Loading…</p></div>
+  </section>
+  <p class="note">Each player’s first finish of the day counts. The score is how the calls on that day’s drive compare with
+    NFL play-callers in the same spot (better than that share of them).</p>
+</div>
+<script>
+(() => {
+  const meta = document.querySelector('meta[name="board-api"]');
+  const API = meta ? meta.content.replace(/\/+$/, '') : '';
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const fmt = (n) => Number(n).toLocaleString();
+  const dateOf = (s) => new Date(s + 'T12:00:00');
+  const short = (s) => dateOf(s).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const long = (s) => dateOf(s).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const localToday = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  let days = [], pick = -1;
+
+  async function get(path) {
+    const r = await fetch(API + path, { cache: 'no-store' });
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  }
+  function tiles() {
+    const t = $('tiles'), today = days.find((d) => d.date === localToday());
+    const total = days.reduce((a, d) => a + d.n, 0), best = days.reduce((a, d) => Math.max(a, d.n), 0);
+    t.textContent = '';
+    [[today ? fmt(today.n) : '0', 'played today'], [today ? Math.round(today.avg * 100) : '–', 'average score today'],
+      [fmt(total), 'drives played, all time'], [fmt(best), 'most in one day']].forEach(([v, l]) => {
+      const c = el('div', 'tile'); c.append(el('b', '', String(v)), el('span', '', l)); t.append(c);
+    });
+  }
+  function bars() {
+    const box = $('days'), shown = days.slice(-60), mx = Math.max(1, ...shown.map((d) => d.n));
+    box.textContent = '';
+    shown.forEach((d) => {
+      const i = days.indexOf(d), b = el('button', i === pick ? 'on' : '');
+      b.type = 'button';
+      b.style.height = `${Math.max(2, (d.n / mx) * 100)}%`;
+      b.title = `${long(d.date)}: ${fmt(d.n)} player${d.n === 1 ? '' : 's'}, average ${Math.round(d.avg * 100)}`;
+      b.setAttribute('aria-label', b.title);
+      b.setAttribute('aria-pressed', String(i === pick));
+      b.addEventListener('click', () => show(i));
+      box.append(b);
+    });
+    const ax = $('axis');
+    ax.textContent = '';
+    if (shown.length) ax.append(el('span', '', short(shown[0].date)), el('span', '', `most ${fmt(mx)}`), el('span', '', short(shown[shown.length - 1].date)));
+  }
+  async function show(i) {
+    pick = i;
+    bars();
+    const box = $('day'), d = days[i];
+    box.textContent = '';
+    const head = el('div', 'day-head');
+    head.append(el('h2', '', long(d.date)));
+    const nav = el('div', 'nav');
+    [['‹', i - 1, 'Day before'], ['›', i + 1, 'Day after']].forEach(([t, j, lab]) => {
+      const b = el('button', '', t); b.type = 'button'; b.setAttribute('aria-label', lab);
+      b.disabled = j < 0 || j >= days.length;
+      b.addEventListener('click', () => show(j));
+      nav.append(b);
+    });
+    head.append(nav);
+    box.append(head, el('p', 'empty', 'Loading…'));
+    let x;
+    try { x = await get(`/daily?date=${d.date}`); } catch (e) { box.lastChild.textContent = 'That day did not load. Try again in a moment.'; return; }
+    if (pick !== i) return;
+    box.lastChild.remove();
+    let sum = 0, best = 0;
+    x.hist.forEach((c, pt) => { sum += c * pt; if (c) best = pt; });
+    const facts = el('div', 'facts');
+    [[fmt(x.n), 'players'], [x.n ? Math.round(sum / x.n) : '–', 'average score'], [x.n ? best : '–', 'best score']].forEach(([v, l]) => {
+      const c = el('div'); c.append(el('b', '', String(v)), el('span', '', l)); facts.append(c);
+    });
+    box.append(facts);
+    // the scores in ten buckets (0-9 ... 90-100), counts above the bars
+    const buckets = Array.from({ length: 10 }, (_, k) => x.hist.slice(k * 10, k === 9 ? 101 : k * 10 + 10).reduce((a, c) => a + c, 0));
+    const mx = Math.max(1, ...buckets);
+    box.append(el('p', 'k', 'How everyone scored'));
+    const h = el('div', 'hist');
+    h.setAttribute('role', 'img');
+    h.setAttribute('aria-label', 'Scores: ' + buckets.map((c, k) => `${k * 10} to ${k === 9 ? 100 : k * 10 + 9}: ${c}`).join(', '));
+    buckets.forEach((c, k) => {
+      const bar = el('div');
+      bar.style.height = `${Math.max(2, (c / mx) * 100)}%`;
+      bar.title = `${k * 10}–${k === 9 ? 100 : k * 10 + 9}: ${fmt(c)} player${c === 1 ? '' : 's'}`;
+      if (c) bar.append(el('i', '', fmt(c)));
+      h.append(bar);
+    });
+    const lab = el('div', 'hlab');
+    buckets.forEach((_, k) => lab.append(el('span', '', String(k * 10))));
+    box.append(h, lab);
+    const s0 = x.spots && x.spots[0];
+    if (s0 && s0.n) box.append(el('p', 'note', `On the drive, the average player moved their win chance ${s0.avg >= 0 ? '+' : '−'}${Math.abs(s0.avg * 100).toFixed(1)} points against a typical NFL play-caller.`));
+    box.append(el('p', 'k', 'Top ten'));
+    if (x.top && x.top.length) {
+      const ol = el('ol', 'top');
+      x.top.forEach((r, k) => { const li = el('li'); li.append(el('span', 'n', String(k + 1)), el('span', 'nm', r.name), el('b', '', String(Math.round(r.p * 100)))); ol.append(li); });
+      box.append(ol);
+    } else box.append(el('p', 'note', 'Nobody with a name on the board finished this day.'));
+  }
+  async function boot() {
+    if (!API) { $('day').textContent = ''; $('day').append(el('p', 'empty', 'Stats show on the website (nfl2mindrill.com/stats).')); return; }
+    try { days = (await get('/days')).days || []; } catch (e) { $('day').textContent = ''; $('day').append(el('p', 'empty', 'The stats did not load. Try again in a moment.')); return; }
+    tiles();
+    if (!days.length) { bars(); $('day').textContent = ''; $('day').append(el('p', 'empty', 'Nobody has finished a daily drive yet.')); return; }
+    const t = days.findIndex((d) => d.date === localToday());
+    show(t >= 0 ? t : days.length - 1);
+  }
+  boot();
+})();
+</script>
+</body>
+</html>

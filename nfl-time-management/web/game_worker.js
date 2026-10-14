@@ -4,7 +4,7 @@
  *            the usual tempo and seconds between snaps by tempo)
  *   eval  -> win probability of a list of options (same seed for all: common random numbers)
  *   step  -> plays one real snap / try / kickoff and returns the new state and a play-by-play log */
-importScripts('engine.js');
+importScripts('engine.js' + self.location.search);     // the page's build stamp (?v=...), if any
 
 let eng = null;
 const sims = new Map();

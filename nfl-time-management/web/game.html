@@ -223,6 +223,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .pop { animation: pop .42s cubic-bezier(.2, 1.4, .4, 1) both; animation-delay: calc(var(--i, 0) * 60ms); }
 @keyframes pop { 0% { opacity: 0; transform: translateY(18px) scale(.7); } 100% { opacity: 1; transform: none; } }
 .chip { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 5px 11px; font-size: 13px; font-weight: 600; cursor: pointer; }
+a.chip { color: var(--ink); text-decoration: none; display: inline-block; }
 .chip:hover { border-color: var(--muted); }
 .plays { display: grid; }
 .prow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--line); }

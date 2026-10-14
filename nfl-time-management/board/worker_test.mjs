@@ -3,7 +3,8 @@ import assert from 'node:assert';
 import worker, { Board } from './worker.js';
 
 const store = new Map();
-const storage = { get: async (k) => structuredClone(store.get(k)), put: async (k, v) => { store.set(k, structuredClone(v)); } };
+const storage = { get: async (k) => structuredClone(store.get(k)), put: async (k, v) => { store.set(k, structuredClone(v)); },
+  list: async ({ prefix }) => new Map([...store].filter(([k]) => k.startsWith(prefix)).map(([k, v]) => [k, structuredClone(v)])) };
 const env = { ALLOWED_ORIGINS: 'https://nfl2mindrill.com', ADMIN_TOKEN: 'commish-secret-123' };
 let board = new Board({ storage }, env);
 env.BOARD = { idFromName: (n) => n, get: () => ({ fetch: (req) => board.fetch(req) }) };
@@ -98,4 +99,11 @@ assert.strictEqual((await (await call('GET', null, { path: '/daily?date=2001-01-
 await day({ date: today, key: 'nate-device-key-0000001', p: 0.7, spots: [0, 0, 0], name: 'Nate' });
 assert.strictEqual((await call('POST', { name: 'nate', best: 5, key: KEY.spam })).status, 409);
 assert.strictEqual((await call('POST', { name: 'Nate', best: 5, key: 'nate-device-key-0000001' })).status, 200);
+// the day list for the stats page: every day played, oldest first
+store.set('day:2026-01-02', { n: 2, hist: Object.assign(new Array(101).fill(0), { 40: 1, 80: 1 }), spots: [], top: [] });
+b = await (await call('GET', null, { path: '/days' })).json();
+assert.strictEqual(b.days[0].date, '2026-01-02'); assert.strictEqual(b.days[0].n, 2);
+assert.ok(Math.abs(b.days[0].avg - 0.6) < 1e-9); assert.strictEqual(b.days[0].best, 0.8);
+assert.strictEqual(b.days[b.days.length - 1].date, today); assert.strictEqual(b.days[b.days.length - 1].n, 5);
+assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
 console.log('board worker ok');

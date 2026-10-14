@@ -364,6 +364,10 @@ the summary shows how you compare with everyone who played that day: the share o
 scores in the same buckets as your own stats, each spot against the day's average, and the day's top ten named
 players (a name is claimed the same way as on the survivor board). The day is the player's local date.
 
+**The stats page** (`web/stats.html`, nfl2mindrill.com/stats; `board/worker.js` `/days`): players per day, today's
+count and average, the all-time total, and any day up close (its score spread, the drive's average and the top
+ten).
+
 **Survivor leaderboard** (on claude.ai). The artifact's shared database keeps every player's best run (`board/<name>`). Everyone who
 opens the page reads it; only the owner and editors write it, since visitors through a public link can only read
 shared data. The owner's runs post themselves under the name set on the run summary, and the owner adds a friend's by
