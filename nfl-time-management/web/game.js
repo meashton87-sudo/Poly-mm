@@ -3006,6 +3006,113 @@
     return w;
   }
 
+  // ----------------------------------------------------- the leaderboard ---
+  // Survivor's best runs, kept in the artifact's shared database (capabilities db + user): everyone who opens the page
+  // reads the board, but only its owner (and editors) can write it, since friends who open a public link can only read
+  // shared data. So the owner's runs post themselves, and the owner adds a friend's by pasting the share text the
+  // friend sends (it carries their name). One document per player, board/<slug of the name>: { name, best, at }.
+  const BOARD = { db: null, canWrite: false, rows: [], ready: null };
+  const NAME_KEY = `${STORE}:name`;
+  const myName = () => String(load(NAME_KEY, '') || '').slice(0, 24);
+  const slugOf = (name) => `p-${String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'player'}`;
+  function boardInit() {
+    BOARD.ready = (async () => {
+      if (!(window.claude && typeof window.claude.use === 'function')) return;
+      try {
+        const [db, user] = await Promise.all([window.claude.use('db'), window.claude.use('user')]);
+        if (!db) return;
+        BOARD.db = db;
+        BOARD.canWrite = user ? !!(await user.canEdit()) : false;
+        db.collection('board').orderBy('best', 'desc').limit(25).onSnapshot((snap) => {
+          BOARD.rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) })).filter((r) => r.name);
+          document.querySelectorAll('.board').forEach(fillBoard);
+        }, () => {});
+        document.querySelectorAll('.board').forEach(fillBoard);
+      } catch (e) { BOARD.db = null; }
+    })();
+    return BOARD.ready;
+  }
+  // a player's best run: kept only when it beats what the board has
+  async function boardPost(name, best) {
+    name = String(name || '').trim().slice(0, 24);
+    best = Math.round(Number(best));
+    if (!BOARD.db || !BOARD.canWrite || !name || !(best >= 0 && best < 1000)) return false;
+    try {
+      const ref = BOARD.db.doc(`board/${slugOf(name)}`), snap = await ref.get();
+      const prev = snap.exists ? Number((snap.data() || {}).best) : -1;
+      if (snap.exists && prev >= best) return { kept: prev };
+      await ref.set({ name, best, at: new Date().toISOString().slice(0, 10) });
+      return { best };
+    } catch (e) { BOARD.canWrite = false; document.querySelectorAll('.board').forEach(fillBoard); return false; }
+  }
+  // "Two-Minute Drill Survivor · Eli / Survived 7 games": every such run in a pasted message
+  function parseShares(text) {
+    const out = [], re = /Survivor\s*·\s*([^\n]{1,24}?)\s*\n\s*Survived\s+(\d{1,3})\s+game/gi;
+    let m;
+    while ((m = re.exec(String(text)))) out.push({ name: m[1].trim(), best: +m[2] });
+    return out;
+  }
+  function boardEl() { const b = el('div', 'board'); fillBoard(b); return b; }
+  function fillBoard(b) {
+    b.textContent = '';
+    b.hidden = !BOARD.db;
+    if (!BOARD.db) return;
+    b.append(el('div', 'k', 'Survivor leaderboard'));
+    if (!BOARD.rows.length) b.append(el('p', 'note', 'No runs on the board yet.'));
+    else {
+      const ol = el('ol', 'brows'), me = myName().toLowerCase();
+      BOARD.rows.slice(0, 10).forEach((r, i) => {
+        const li = el('li', String(r.name).toLowerCase() === me ? 'me' : '');
+        li.append(el('span', 'n', String(i + 1)), el('span', 'nm', String(r.name)), el('b', '', String(r.best)));
+        if (BOARD.canWrite) {
+          const x = el('button', 'x', '×');
+          x.type = 'button';
+          x.setAttribute('aria-label', `Remove ${r.name}`);
+          x.addEventListener('click', async () => { try { await BOARD.db.doc(`board/${r.id}`).delete(); } catch (e) { toast('Could not remove it'); } });
+          li.append(x);
+        }
+        ol.append(li);
+      });
+      b.append(ol);
+    }
+    if (BOARD.canWrite) {
+      const det = el('details', 'addrun');
+      det.open = !!BOARD.addOpen;                   // stays open while you add several (the board redraws on each)
+      det.addEventListener('toggle', () => { BOARD.addOpen = det.open; });
+      det.append(el('summary', '', 'Add a friend’s run'));
+      const ta = el('textarea');
+      ta.rows = 3;
+      ta.placeholder = 'Paste the survivor share text they sent you';
+      ta.setAttribute('aria-label', 'A friend’s survivor share text');
+      const add = el('button', 'chip', 'Add to the board');
+      add.type = 'button';
+      add.addEventListener('click', async () => {
+        const runs = parseShares(ta.value);
+        if (!runs.length) { toast('No survivor run found in that text'); return; }
+        const said = [];
+        for (const r of runs) {
+          const res = await boardPost(r.name, r.best);
+          if (res) said.push(res.kept != null ? `${r.name} keeps ${res.kept}` : `${r.name}: ${r.best}`);
+        }
+        toast(said.length ? said.join(' · ') : 'Could not save to the board');
+        if (said.length) ta.value = '';
+      });
+      det.append(ta, add);
+      b.append(det);
+    } else b.append(el('p', 'note', 'To get on the board, send your share text to whoever shared this game with you.'));
+  }
+  function nameInput() {
+    const w = el('label', 'myname');
+    w.append(el('span', '', 'Your name on the board'));
+    const inp = el('input');
+    inp.maxLength = 24;
+    inp.value = myName();
+    inp.placeholder = 'e.g. Eli';
+    inp.addEventListener('change', () => { save(NAME_KEY, inp.value.trim().slice(0, 24)); renderSurvSummary(true); });
+    w.append(inp);
+    return w;
+  }
+
   // ------------------------------------------------------------ survivor ---
   // the pool: every fourth-quarter spot (each one plays to the final gun), none twice in a run until all are used
   const survPool = () => idx.spots.map((sp, i) => (sp.start.qtr >= 4 ? i : -1)).filter((i) => i >= 0);
@@ -3050,10 +3157,12 @@
     $('dayLabel').textContent = survLabel();
     openSpot(0);
   }
-  function renderSurvSummary() {
+  function renderSurvSummary(redraw) {
     show('done');
     const st = survStats();
     if (st.last !== state.run) { st.runs += 1; st.best = Math.max(st.best, state.won); st.last = state.run; save(`${STORE}:survstats`, st); }
+    // the board keeps your best (when you can write it and have a name on it)
+    if (BOARD.ready && myName()) BOARD.ready.then(() => boardPost(myName(), st.best));
     $('dayLabel').textContent = survLabel();
     drawTiles();
     const box = $('done');
@@ -3085,7 +3194,8 @@
       });
       box.append(how);
     }
-    const text = `Two-Minute Drill Survivor\nSurvived ${n} game${n === 1 ? '' : 's'}\n${state.games.map((g) => (g.w ? SQ.g : SQ.r)).join('')}`;
+    const nm = myName();
+    const text = `Two-Minute Drill Survivor${nm ? ` · ${nm}` : ''}\nSurvived ${n} game${n === 1 ? '' : 's'}\n${state.games.map((g) => (g.w ? SQ.g : SQ.r)).join('')}`;
     const pre = el('div', 'grid-share', text);
     const share = el('button', 'btn alt', 'Share');
     share.type = 'button';
@@ -3096,8 +3206,8 @@
     const again = el('button', 'btn', 'New run');
     again.type = 'button';
     again.addEventListener('click', () => { state = newRun(); saveState(); survOpen(); });
-    box.append(pre, share, again);
-    again.focus({ preventScroll: true });
+    box.append(nameInput(), pre, share, again, boardEl());
+    if (!redraw) again.focus({ preventScroll: true });
   }
 
   // ------------------------------------------------------------- the day ---
@@ -3276,6 +3386,7 @@
     }
     const sv = survStats();
     if (sv.runs) nodes.push(el('p', '', `Survivor: best run ${sv.best} win${sv.best === 1 ? '' : 's'} (${sv.runs} run${sv.runs === 1 ? '' : 's'}).`));
+    nodes.push(boardEl());
     openModal('Your stats', nodes);
   }
 
@@ -3285,6 +3396,7 @@
     topH(); addEventListener('resize', topH);
     $('helpBtn').addEventListener('click', openHelp);
     fieldTaps();
+    boardInit();
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
     $(SURV ? 'modeSurv' : 'modeDaily').setAttribute('aria-current', 'page');
     $('statsBtn').addEventListener('click', openStats);
