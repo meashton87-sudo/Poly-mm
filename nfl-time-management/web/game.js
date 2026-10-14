@@ -3032,28 +3032,45 @@
   }
 
   // ----------------------------------------------------- the leaderboard ---
-  // Survivor's best runs, kept in the artifact's shared database (capabilities db + user): everyone who opens the page
-  // reads the board, but only its owner (and editors) can write it, since friends who open a public link can only read
-  // shared data. So the owner's runs post themselves, and the owner adds a friend's by pasting the share text the
-  // friend sends (it carries their name). One document per player, board/<slug of the name>: { name, best, at }.
-  const BOARD = { db: null, canWrite: false, rows: [], ready: null };
+  // Survivor's best runs, from one of two places. On the website (index.html names a backend in
+  // <meta name="board-api">: board/worker.js) every player's best posts itself under the name they set. On claude.ai
+  // the artifact's shared database keeps them (capabilities db + user): everyone who opens the page reads the board,
+  // but only its owner (and editors) can write it, since friends who open a public link can only read shared data;
+  // so the owner's runs post themselves, and the owner adds a friend's by pasting the share text the friend sends (it
+  // carries their name). One document per player there, board/<slug of the name>: { name, best, at }.
+  const BOARD = { mode: null, db: null, api: null, canWrite: false, rows: [], ready: null };
   const NAME_KEY = `${STORE}:name`;
   const myName = () => String(load(NAME_KEY, '') || '').slice(0, 24);
   const slugOf = (name) => `p-${String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'player'}`;
+  const redrawBoards = () => document.querySelectorAll('.board').forEach(fillBoard);
+  async function apiBoard(method, body) {
+    const r = await fetch(`${BOARD.api}/board`, method === 'POST' ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+    if (!r.ok) throw new Error(`board ${r.status}`);
+    return r.json();
+  }
+  async function apiRefresh() {
+    try { BOARD.rows = (await apiBoard('GET')).rows || []; redrawBoards(); } catch (e) { /* keep what we have */ }
+  }
   function boardInit() {
     BOARD.ready = (async () => {
+      const meta = document.querySelector('meta[name="board-api"]');
+      if (meta && /^(https:\/\/|http:\/\/(127\.0\.0\.1|localhost)[:/])/.test(meta.content)) {      // https, or a local test server
+        BOARD.mode = 'api'; BOARD.api = meta.content.replace(/\/+$/, ''); BOARD.canWrite = true;
+        await apiRefresh();
+        return;
+      }
       if (!(window.claude && typeof window.claude.use === 'function')) return;
       try {
         const [db, user] = await Promise.all([window.claude.use('db'), window.claude.use('user')]);
         if (!db) return;
-        BOARD.db = db;
+        BOARD.db = db; BOARD.mode = 'db';
         BOARD.canWrite = user ? !!(await user.canEdit()) : false;
         db.collection('board').orderBy('best', 'desc').limit(25).onSnapshot((snap) => {
           BOARD.rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) })).filter((r) => r.name);
           document.querySelectorAll('.board').forEach(fillBoard);
         }, () => {});
         document.querySelectorAll('.board').forEach(fillBoard);
-      } catch (e) { BOARD.db = null; }
+      } catch (e) { BOARD.db = null; BOARD.mode = null; }
     })();
     return BOARD.ready;
   }
@@ -3061,7 +3078,15 @@
   async function boardPost(name, best) {
     name = String(name || '').trim().slice(0, 24);
     best = Math.round(Number(best));
-    if (!BOARD.db || !BOARD.canWrite || !name || !(best >= 0 && best < 1000)) return false;
+    if (!BOARD.mode || !BOARD.canWrite || !name || !(best >= 0 && best < 1000)) return false;
+    if (BOARD.mode === 'api') {
+      try {
+        const res = await apiBoard('POST', { name, best });
+        BOARD.rows = res.rows || BOARD.rows;
+        redrawBoards();
+        return res.kept != null ? { kept: res.kept } : { best };
+      } catch (e) { return false; }
+    }
     try {
       const ref = BOARD.db.doc(`board/${slugOf(name)}`), snap = await ref.get();
       const prev = snap.exists ? Number((snap.data() || {}).best) : -1;
@@ -3077,11 +3102,11 @@
     while ((m = re.exec(String(text)))) out.push({ name: m[1].trim(), best: +m[2] });
     return out;
   }
-  function boardEl() { const b = el('div', 'board'); fillBoard(b); return b; }
+  function boardEl() { const b = el('div', 'board'); fillBoard(b); if (BOARD.mode === 'api') apiRefresh(); return b; }
   function fillBoard(b) {
     b.textContent = '';
-    b.hidden = !BOARD.db;
-    if (!BOARD.db) return;
+    b.hidden = !BOARD.mode;
+    if (!BOARD.mode) return;
     b.append(el('div', 'k', 'Survivor leaderboard'));
     if (!BOARD.rows.length) b.append(el('p', 'note', 'No runs on the board yet.'));
     else {
@@ -3089,7 +3114,7 @@
       BOARD.rows.slice(0, 10).forEach((r, i) => {
         const li = el('li', String(r.name).toLowerCase() === me ? 'me' : '');
         li.append(el('span', 'n', String(i + 1)), el('span', 'nm', String(r.name)), el('b', '', String(r.best)));
-        if (BOARD.canWrite) {
+        if (BOARD.canWrite && BOARD.mode === 'db') {
           const x = el('button', 'x', '×');
           x.type = 'button';
           x.setAttribute('aria-label', `Remove ${r.name}`);
@@ -3100,7 +3125,9 @@
       });
       b.append(ol);
     }
-    if (BOARD.canWrite) {
+    if (BOARD.mode === 'api') {
+      b.append(el('p', 'note', myName() ? `Your best run posts here as ${myName()}.` : 'Set your name on a survivor run’s summary to get on the board.'));
+    } else if (BOARD.canWrite) {
       const det = el('details', 'addrun');
       det.open = !!BOARD.addOpen;                   // stays open while you add several (the board redraws on each)
       det.addEventListener('toggle', () => { BOARD.addOpen = det.open; });

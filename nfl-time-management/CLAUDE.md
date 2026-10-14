@@ -13,6 +13,7 @@ python -m nflclock.cli build          # downloads nflverse play-by-play to data/
 python -m nflclock.cli sync --no-refresh --games 2026_05_BUF_LA        # live game file (Bills at Rams)
 python -c "from nflclock import webexport as w; w.export_engine(); w.export_game('2026_05_BUF_LA')"
 python -c "from nflclock import dailygame as G; print(G.build())"   # daily game data (web/playbook.json, web/game.json)
+python scripts/site.py _site --domain 2mindrill.bashton.xyz --board-api https://...   # the game as a static website
 ```
 
 ## Checks
@@ -23,6 +24,7 @@ python scripts/parity_expected.py 2026_05_BUF_LA 8000 && node web/parity_test.js
 node web/game_smoke.js                # daily game: every spot's two real teams, playbook sampling, call ranking, play-by-play log
 node web/game_sweep.js                # daily game: every spot x call x tempo, whole games, football invariants, points to the right team, the called play is the play run (~3 min)
 node web/motion_test.js               # daily game animation: player motion stays in the tracking envelope, routes, coverage
+node board/worker_test.mjs            # the website's survivor leaderboard (Cloudflare Worker), in-memory KV
 ```
 
 ## Rules
@@ -35,5 +37,6 @@ node web/motion_test.js               # daily game animation: player motion stay
 - The full grading pipeline (`scripts/run_analysis.py`, `validate_sim.py`, `make_report.py`,
   `finalize.py`) takes about 1.5 hours on 4 cores. Do not run it casually.
 - `data/`, `artifacts/`, `web/engine_data.json`, `web/parity_expected.json`, `web/playbook.json`,
-  `web/game.json` and `web/spots/` are generated; never commit them.
+  `web/game.json`, `web/spots/` and `_site/` are generated; never commit them (the website workflow,
+  `.github/workflows/site.yml`, builds them in CI and ships them only to GitHub Pages).
 - Decisions are graded "as of" the week of the game: no ratings may use later games.

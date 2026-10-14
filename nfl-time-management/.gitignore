@@ -13,3 +13,6 @@ web/spots/
 web/_test_game.html
 web/_test_anim.html
 web/_test_game.js
+_site/
+board/node_modules/
+board/.wrangler/

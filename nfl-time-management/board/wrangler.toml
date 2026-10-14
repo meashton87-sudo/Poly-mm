@@ -1,0 +1,13 @@
+# The survivor leaderboard Worker (board/worker.js). Deploy: create the KV namespace once
+#   npx wrangler kv namespace create BOARD
+# put its id below, then `npx wrangler deploy` (or the board workflow in .github/workflows/board.yml).
+name = "two-minute-drill-board"
+main = "worker.js"
+compatibility_date = "2025-06-01"
+
+[vars]
+ALLOWED_ORIGINS = "https://2mindrill.bashton.xyz"
+
+[[kv_namespaces]]
+binding = "BOARD"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"

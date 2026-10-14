@@ -331,7 +331,15 @@ sideline routes when trailing in the two-minute drill; quick throws on short yar
 yardage). His button shows his odds on that route from the very real plays the pick draws from (share caught, yards a
 throw, interceptions when they matter), and the last route tap can be undone.
 
-**Survivor leaderboard.** The artifact's shared database keeps every player's best run (`board/<name>`). Everyone who
+**The website** (2mindrill.bashton.xyz). `.github/workflows/site.yml` rebuilds the data from nflverse (models,
+browser engine, the daily spots and their real rosters), checks the game (smoke, motion and leaderboard tests) and
+publishes it to GitHub Pages with `scripts/site.py`, which wraps `web/game.html` in a full page: on changes to the
+game, every Tuesday after Monday Night Football, and on demand. Its survivor leaderboard is a Cloudflare Worker with
+one KV namespace (`board/worker.js`, deployed by `.github/workflows/board.yml`): every player's best run posts itself
+under the name they set; only a better run replaces it, names are cleaned and capped at 24 characters, posts are
+rate-limited per IP, and only the site's origin may call it.
+
+**Survivor leaderboard** (on claude.ai). The artifact's shared database keeps every player's best run (`board/<name>`). Everyone who
 opens the page reads it; only the owner and editors write it, since visitors through a public link can only read
 shared data. The owner's runs post themselves under the name set on the run summary, and the owner adds a friend's by
 pasting the share text the friend sends (it carries their name). A run ends with the three costliest calls of the game
