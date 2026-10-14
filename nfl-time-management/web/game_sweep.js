@@ -76,6 +76,7 @@ function attrib(before, r, tag) {
       if (e.td && e.tdDef) flag('TD for both teams', `${tag} ${JSON.stringify(e)}`);
       if (e.tdDef && !e.turnover) flag('defensive TD without a turnover', `${tag} ${JSON.stringify(e)}`);
     } else if (e.ev === 'fg' && e.made) { want[e.team] += 3; last = { phase: 2, pos: e.team, why: 'FG' }; }
+    else if (e.ev === 'fg' && e.retTd) { want[1 - e.team] += 6; last = { phase: 1, pos: 1 - e.team, why: 'blocked FG TD' }; count('blocked FG TDs'); }
     else if (e.ev === 'pat' && e.good) want[e.team] += e.two ? 2 : 1;
     else if (e.ev === 'punt' && e.retTd) { want[1 - e.team] += 6; last = { phase: 1, pos: 1 - e.team, why: 'punt return TD' }; }
     else if (e.ev === 'kickoff' && e.retTd) { want[1 - e.team] += 6; last = { phase: 1, pos: 1 - e.team, why: 'kick return TD' }; }
@@ -192,7 +193,7 @@ idx.spots.forEach((sp, si) => {
           : pick === 3 && cur.down === 4 && cur.yl >= 35 ? { to_off: false, play: 'punt' } : pick === 4 && cur.down <= 3 && n % 3 === 0 ? { to_off: false, play: 'kneel' }
           : pick >= 5 && pick <= 7 ? routePick(n + g + si)
           : { to_off: false, play: P.calls[ci].kind, call: calls[ci], oob: n % 2 === 0, tempo: cur.clock_running ? ['urgent', 'hurry', 'normal', 'milk'][n % 4] : undefined };
-      } else if (cur.phase === 0) action = { to_def: n % 5 === 0, def: n % 4 ? ['blitz', 'load', 'soft'][n % 3] : undefined };
+      } else if (cur.phase === 0) action = { to_def: n % 5 === 0, def: n % 4 ? ['blitz', 'load', 'soft'][n % 3] : undefined, st: ['block', 'safe', 'rush', 'return'][(n + g) % 4] };
       else if (cur.phase === 1 && cur.pos === me) action = { pat: n % 3 ? 'xp' : 'two' };
       else if (cur.phase === 2 && cur.pos === me) action = { kick: ['return', 'touchback', 'onside', 'deep'][(n + g) % 4] };
       const before = JSON.parse(JSON.stringify(cur));
@@ -202,6 +203,16 @@ idx.spots.forEach((sp, si) => {
       attrib(before, r, `game ${si}.${g} step ${n}`);
       if (cur.pos === me) honored(before, action, r, `game ${si}.${g} step ${n}`);
       if (action.kick) kickCheck(r, action.kick, `game ${si}.${g} step ${n}`, before.free_kick);
+      for (const e of r.log) if ((e.ev === 'fg' || e.ev === 'punt') && action.st) {     // your special teams on their kick
+        const tag = `${e.ev} ${action.st}`;
+        count(`${tag}: kicks`);
+        if (e.blocked) count(`${tag}: blocked`);
+        if (e.foul) {
+          count(`${tag}: roughing`);
+          if (r.root.pos !== e.team || r.root.down !== 1) flag('roughing did not give the kicking team a first down', `game ${si}.${g} step ${n}`);
+        }
+        if (e.foul && !((e.ev === 'fg' && action.st === 'block') || (e.ev === 'punt' && action.st === 'rush'))) flag('a roughing flag without the rush', `game ${si}.${g} step ${n} ${tag}`);
+      }
       if (action.def) lookHit(r, { blitz: 10, load: 4, soft: 1 }[action.def]);
       cur = r.root;
       if (r.done) break;

@@ -1541,6 +1541,39 @@
       const good = e.ev === 'fg' ? e.made : e.good;
       const miss = good ? 0 : (R() < 0.5 ? -1 : 1);
       const tK = T0 + 1.3, t1 = tK + 0.25 + Math.abs(Ly - hL) / 24;
+      // your all-out rush: a block (picked up, and now and then run back), or a roughing flag
+      if (e.ev === 'fg' && (e.blocked || e.foul)) {
+        const rusher = nearest(front, [yx(bx), hL]) || front[0];
+        line.forEach((a) => leg(a, T0 + 0.1, 'go', { x: a.b.x, y: fwd(L0, -1.1), eff: 0.7 }));
+        front.forEach((a) => { if (a !== rusher) leg(a, T0 + 0.15, 'go', { x: a.b.x + jit(0.6), y: fwd(L0, -0.6), eff: 0.9 }); });
+        if (rusher) { busy.add(rusher); Wd.run(T0 + 0.1); runFrom(rusher, T0 + 0.1, [[yx(bx) + 0.6, fwd(hL, e.foul ? -1.5 : 1.2)]], { T: tK - T0 + (e.foul ? 0.25 : -0.1) }); }
+        if (e.foul) {
+          fly(tK, t1, bx, hL, 180 + (R() < 0.5 ? -1 : 1) * 30, Ly, 2.4);
+          rest(t1, 180, Ly + dir * 1.5);
+          flag(tK + 0.4, 'Flag: roughing the kicker');
+          P.T = t1 + 0.9;
+        } else {
+          const bp = [inX(yx(bx) + jit(3)), fwd(hL, 3)];
+          fly(tK, tK + 0.35, bx, hL, px(bp[0]), bp[1], 0.3);
+          rest(tK + 0.35, px(bp[0]), bp[1]);
+          say(tK + 0.1, 'Blocked!', 'hit', { x: bx, L: hL });
+          const rec = nearest(front, bp) || rusher;
+          if (rec && e.retTd) {
+            busy.add(rec);
+            Wd.run(tK + 0.4);
+            const tH = tK + 0.45 + runFrom(rec, tK + 0.4, [bp], { T: 0.6, v1: 2 }).T;
+            hold(tH, rec);
+            P.T = returnTd(rec, tH + 0.03, bp, 'Returned for a touchdown!') + 1.0;
+          } else {
+            if (rec) { busy.add(rec); runFrom(rec, tK + 0.4, [bp], { T: 0.7, v1: 0 }); hold(tK + 1.1, rec); }
+            whistle(tK + 1.4, bp);
+            P.T = tK + 2.2;
+          }
+        }
+        frozen = false; snapAt = T0;
+        bakeSpecial(P.T + 0.2);
+        return;
+      }
       fly(tK, t1, bx, hL, 180 + miss * 34, Ly, 2.4);
       rest(t1, 180 + miss * 38, Ly + dir * 1.5);
       // the rush: the front pushes into the line, the line holds
@@ -1587,16 +1620,32 @@
       const tK = T0 + 2.0, kL = fwd(pL, 2);       // two steps into the kick
       leg(punter, T0 + 1.1, 'go', { x: yx(bx), y: kL, eff: 0.35 });
       snapAt = T0;
-      if (e.blocked) {
+      if (e.blocked || e.foul) {
         Wd.run(T0 + 0.6);
         const blocker = nearest(box, [yx(bx), pL]) || box[0];
-        if (blocker) { busy.add(blocker); runFrom(blocker, T0 + 0.6, [[yx(bx) + 0.5, fwd(pL, 1)]], { T: tK - T0 - 0.6 }); }
+        if (blocker) { busy.add(blocker); runFrom(blocker, T0 + 0.6, [[yx(bx) + 0.5, fwd(pL, e.foul ? -0.5 : 1)]], { T: tK - T0 - 0.6 + (e.foul ? 0.3 : 0) }); }
         line.forEach((a) => leg(a, T0 + 0.1, 'go', { x: a.b.x + jit(0.4), y: fwd(L0, -1.2), eff: 0.6 }));
-        fly(tK, tK + 0.35, bx, kL, bx + jit(20), fwd(pL, -4), 0.2);
-        rest(tK + 0.35, bx + jit(20), fwd(pL, -4));
+        if (e.foul) {                                   // the kick goes; the rusher runs into the punter: a flag
+          fly(tK, tK + 3.6, bx, kL, clampX(bx + jit(40)), fwd(pL, 48), 2.6);
+          rest(tK + 3.6, clampX(bx), fwd(pL, 48));
+          flag(tK + 0.4, 'Flag: roughing the punter');
+          P.T = tK + 2.6;
+          bakeSpecial(P.T + 0.2);
+          return;
+        }
+        const bp = [inX(yx(bx) + jit(3)), fwd(pL, -4)];
+        fly(tK, tK + 0.35, bx, kL, px(bp[0]), bp[1], 0.2);
+        rest(tK + 0.35, px(bp[0]), bp[1]);
         say(tK + 0.05, 'Blocked!', 'hit', { x: bx, L: pL });
-        whistle(tK + 0.6, [yx(bx), pL]);
-        P.T = tK + 1.4;
+        if (e.retTd && blocker) {                       // scooped and run in
+          Wd.run(tK + 0.4);
+          const tH = tK + 0.45 + runFrom(blocker, tK + 0.4, [bp], { T: 0.5, v1: 2 }).T;
+          hold(tH, blocker);
+          P.T = returnTd(blocker, tH + 0.03, bp, 'Returned for a touchdown!') + 1.0;
+        } else {
+          whistle(tK + 0.6, [yx(bx), pL]);
+          P.T = tK + 1.4;
+        }
         bakeSpecial(P.T + 0.2);
         return;
       }
@@ -2050,8 +2099,9 @@
           else if (e.secs >= 3 && !e.kneel && !e.spike) text = `Clock runs ${Math.round(e.secs)} seconds`;
           break;
         case 'play': text = playLine(e, act); break;
-        case 'fg': text = `${shortName(teamOf(e.team).kicker.name) || teamName(code(e.team))} ${Math.round(e.dist)}-yard field goal: ${e.made ? 'good' : 'no good'}`; t = null; break;
-        case 'punt': text = e.blocked ? `${teamName(code(e.team))} punt blocked` : e.retTd ? `${teamName(code(e.team))} punt returned for a touchdown` :
+        case 'fg': text = e.foul ? `Roughing the kicker on the ${teamName(code(1 - e.team))}: 15 yards and a first down`
+          : `${shortName(teamOf(e.team).kicker.name) || teamName(code(e.team))} ${Math.round(e.dist)}-yard field goal: ${e.made ? 'good' : e.blocked ? `blocked${e.retTd ? ', returned for a touchdown' : ''}` : 'no good'}`; t = null; break;
+        case 'punt': text = e.foul ? `Roughing the punter on the ${teamName(code(1 - e.team))}: 15 yards and a first down` : e.blocked ? `${teamName(code(e.team))} punt blocked${e.retTd ? ', returned for a touchdown' : ''}` : e.retTd ? `${teamName(code(e.team))} punt returned for a touchdown` :
           `${teamName(code(e.team))} punt${e.touchback ? ', touchback' : `, net ${Math.round(e.net)} yards`}`; t = null; break;
         case 'pat': text = e.two ? `Two-point try ${e.good ? 'good' : 'fails'}` : `Extra point ${e.good ? 'good' : 'no good'}`; break;
         case 'kickoff': text = e.onside ? `Onside kick, recovered by the ${teamName(code(e.recovered ? e.team : 1 - e.team))}` :
@@ -2065,8 +2115,8 @@
   }
   function headline(e, log) {
     if (!e) return (log || []).some((x) => x.ev === 'end') ? 'Time ran out' : 'Timeout';
-    if (e.ev === 'fg') return e.made ? `${Math.round(e.dist)}-yard field goal is good` : 'Field goal: no good';
-    if (e.ev === 'punt') return e.retTd ? 'Punt return touchdown' : e.blocked ? 'Punt blocked' : `Punt, net ${Math.round(e.net || 0)}`;
+    if (e.ev === 'fg') return e.foul ? 'Roughing the kicker' : e.made ? `${Math.round(e.dist)}-yard field goal is good` : e.blocked ? (e.retTd ? 'Blocked and returned for a TD' : 'Field goal blocked') : 'Field goal: no good';
+    if (e.ev === 'punt') return e.foul ? 'Roughing the punter' : e.blocked ? (e.retTd ? 'Blocked and returned for a TD' : 'Punt blocked') : e.retTd ? 'Punt return touchdown' : `Punt, net ${Math.round(e.net || 0)}`;
     if (e.ev === 'pat') return e.two ? (e.good ? 'Two-point try good' : 'Two-point try fails') : (e.good ? 'Extra point good' : 'Extra point missed');
     if (e.ev === 'kickoff') return e.onside ? (e.recovered ? 'Onside kick recovered' : 'Onside kick: they recover') : e.retTd ? 'Returned for a touchdown'
       : e.tb ? (Math.round(e.yl) === 60 ? 'Short kick: ball at the 40' : 'Touchback') : 'Kickoff';
@@ -2646,6 +2696,11 @@
     const r = G.root;
     status('Their huddle…');
     G.dinfo = (await send({ type: 'info', scen: simScen(), root: r }, true)).info;
+    // are they kicking? The snap as it will be played (the same seed stepWith will use), left alone: a field goal or a
+    // punt gets your special-teams call instead of the defense
+    const peek = (await send({ type: 'step', scen: simScen(), root: r, action: { to_def: false }, seed: hash('step', seedKey(), G.si, G.seq) }, true)).res;
+    const kick = peek.log.find((e) => e.ev === 'fg' || e.ev === 'punt');
+    if (kick) { G.fast = false; return promptChoice(kick.ev === 'fg' ? 'fgdef' : 'puntdef'); }
     G.fast = false;
     ui = { step: 'defense', to: false };
     drawDefDock();
@@ -2722,6 +2777,17 @@
           const on = behind ? (coachProbs('onside', r, me) || { onside: 0.01 }).onside || 0.01 : 0;
           return { ...(behind ? { onside: on } : {}), return: (1 - on) * 0.82, touchback: (1 - on) * 0.18 };
         } },
+      // their field goal or punt: your special teams (engine.js ST_*); icing the kicker is a timeout first (it changes
+      // nothing about the kick but the clock)
+      fgdef: { ask: 'They’re kicking a field goal', sub: `${teamName(code(r.pos))}: about a ${Math.round(r.yl + 17)}-yarder`, family: 'fg_def',
+        opts: [{ key: 'block', label: 'Go for the block', sub: 'All-out rush. A roughing flag gives them a first down', action: { to_def: false, st: 'block' } },
+          { key: 'safe', label: 'Stay home', sub: 'Normal rush, no risk', action: { to_def: false, st: 'safe' } },
+          ...(r.clock_running && r.to[me] > 0 ? [{ key: 'ice', label: 'Ice the kicker', sub: `Timeout first (${r.to[me]} left)`, action: { to_def: true, st: 'safe' } }] : [])],
+        q: () => ({ block: 0.2, safe: 0.7, ...(r.clock_running && r.to[me] > 0 ? { ice: 0.1 } : {}) }) },
+      puntdef: { ask: 'They’re punting', sub: `${teamName(code(r.pos))} from ${spotText(r)}`, family: 'punt_def',
+        opts: [{ key: 'return', label: 'Set up the return', sub: 'Your returner gets a shot at it', action: { to_def: false, st: 'return' } },
+          { key: 'rush', label: 'Rush the punt', sub: 'More blocks, a roughing risk, no return', action: { to_def: false, st: 'rush' } }],
+        q: () => ({ return: 0.85, rush: 0.15 }) },
       freekick: { ask: 'Free kick', sub: 'After the safety: deep or onside?', family: 'onside',
         opts: [{ key: 'deep', label: 'Kick deep', action: { kick: 'deep' } }, { key: 'onside', label: 'Onside', action: { kick: 'onside' } }],
         q: () => coachProbs('onside', r, me) || { deep: 0.85, onside: 0.15 } },
@@ -2750,7 +2816,8 @@
   }
 
   // ------------------------------------------------------- after the snap ---
-  const KIND_NAME = { clock: 'Clock', call: 'Play call', deftime: 'Timeout', defcall: 'Defense', pat: 'Try', kick: 'Kickoff', freekick: 'Free kick' };
+  const KIND_NAME = { clock: 'Clock', call: 'Play call', deftime: 'Timeout', defcall: 'Defense', pat: 'Try', kick: 'Kickoff', freekick: 'Free kick',
+    fgdef: 'Field goal defense', puntdef: 'Punt defense' };
   function optionTable(x) {
     const t = el('table', 'opts');
     t.append(el('caption', '', KIND_NAME[x.kind] || 'Call'));
@@ -3396,7 +3463,7 @@
     const ul = el('ul');
     [
       'You\'re the head coach for the last minutes of a real NFL game. Three new spots every day.',
-      'Call Run, Pass or RPO. On a pass, every receiver shows his route: tap any of them on the field to change it, then pick who gets the ball, with play action or a rollout if you like. Timeouts, spikes, kicks and tempo pop up when they matter. On their ball, you call the defense.',
+      'Call Run, Pass or RPO. On a pass, every receiver shows his route: tap any of them on the field to change it, then pick who gets the ball, with play action or a rollout if you like. Timeouts, spikes, kicks and tempo pop up when they matter. On their ball, you call the defense, and when they line up to kick, you choose to go for the block or play it safe.',
       'Every snap is a real NFL play run against your call. Tap the field to skip, or a player to see who he is.',
       'Matchups matter: a blitz beats deep shots but loses to quick passes and screens; a loaded box stuffs runs but gets beaten by play-action and deep shots; playing soft stops deep shots but gives up runs. Read their look before you call, and when you call the defense, they will check into what beats it.',
       'Beat the real coach\'s result, and find out which NFL coach you call it like.',

@@ -309,10 +309,16 @@ reads (28-43% without the widening).
 (a run into a loaded box is worth about 0.05 points less than into a light box in real plays: too small to feel). A
 blitz beats deep shots and loses to quick passes, screens and RPOs; a loaded box beats runs and loses to play
 action, deep shots and RPOs; playing soft stops deep shots and gives up runs. The play is still a real one, but the
-odds tilt toward better or worse real outcomes by about 0.45 expected points a play (scaled by each call's spread of
-outcomes): a run into a loaded box gets stuffed about a third of the time instead of a fifth. When you call their
+odds tilt toward better or worse real outcomes by a fifth of the call's own spread of outcomes (`MATCH_SD`): an
+inside run averages about 6 yards against a light box and under 3 into a loaded one (4.8 in real plays overall). When you call their
 defense, the offense checks into calls that beat it, so a blitz against a quick-passing offense gets burned. The
 result card says who won the matchup.
+
+**Special teams on defense**: when the other team is about to kick (the game peeks at their snap with the same
+seed the play will use), you get a field-goal or punt defense instead of the usual looks. Against a field goal: go
+for the block (about a 4.5% block, a tenth of them returned for a touchdown, and a 2% roughing flag that gives them
+15 yards and a first down, on an untimed down at the end of a half), stay home, or ice the kicker with a timeout.
+Against a punt: set up the return (about 4 more yards a punt) or rush it (a 3.5% block, the same roughing risk).
 
 After each snap the result box shows what the play did to your win chance (green when it helped); the call's grade
 is a separate chip, so a touchdown on a call that was not the very best still shows as a touchdown. Grading values

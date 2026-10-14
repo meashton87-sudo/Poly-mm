@@ -58,8 +58,10 @@
   // RPOs better against a blitz). The play is still a real one; its odds tilt toward better or worse outcomes by
   // exp(MATCH_TILT * s * EPA), so a call into the teeth of the defense gets blown up far more often than the
   // ~0.05-point real gaps would make it (a game choice: the real gaps are too small to feel play by play). The tilt is
-  // scaled by each pool's spread of EPA, so a winning or losing matchup moves any call by about the same amount
-  const MATCH_SHIFT = 0.45;           // expected points per play a full matchup (s = +-1) is worth, about
+  // scaled to each pool's own spread of EPA: a winning matchup is a fifth of a standard deviation better, so a run into
+  // a light box gains about 6 yards a carry instead of the real 4.8, not a big play every time (a flat 0.45 points made
+  // it 11.5), and a deep shot's swing stays a deep shot's
+  const MATCH_SD = 0.2;              // a full matchup (s = +-1) moves a call's mean EPA by this share of its own spread
   const MATCH_EPA_CAP = 3;
   const MATCH_AUDIBLE = 0.9;          // when you call their defense, the offense checks into calls that beat it
   const RUN_M = { blitz: 0, load: -1, soft: 1 }, DEEP_M = { blitz: -1, load: 1, soft: -1 };
@@ -75,6 +77,12 @@
   };
   // the defense's call a look stands for (lookBucket: 0 light box, 1 light + blitz, 2 loaded box, 3 loaded + blitz)
   const LOOK_DEF = ['soft', 'blitz', 'load', 'blitz'];
+  // daily game: your special-teams defense (act.st) when they kick. 'block' (field goal) or 'rush' (punt) sends
+  // everyone: more blocks, but now and then a roughing flag (15 yards and a first down, an untimed down if time ran
+  // out), and on a punt no return set up (a fair catch: no return yards, no return touchdown). 'safe' / 'return' is
+  // the usual kick (the engine's plain model). NFL rates: about 1.5% of field goals and 1% of punts are blocked;
+  // an all-out rush roughly triples that; blocked kicks are run back for touchdowns about one time in ten.
+  const ST_BLOCK = { fg: 0.045, punt: 0.035 }, ST_FOUL = 0.02, ST_BLOCK_TD = 0.1, ST_FAIR_GAIN = 4;
   const WHO_CODE = { RB: 2, WR: 3, TE: 4 };            // the target's position in the playbook's carry codes
   const PB_LOOK_MIN = 15;             // daily game: a call's plays against one defensive look are used when at least this many
                                       // (playbook.py LOOK_MIN)
@@ -657,7 +665,7 @@
       if (!byKey) { byKey = new Map(); this._pick.set(cdf, byKey); }
       let T = byKey.get(key);
       if (T === undefined) {
-        const P = this.e.pb, lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1, k = s ? (MATCH_SHIFT * s) / this._poolVar(cdf, pool) : 0;
+        const P = this.e.pb, lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1, k = s ? (MATCH_SD * s) / Math.sqrt(this._poolVar(cdf, pool)) : 0;
         const items = [], cum = [];
         let tot = 0;
         for (let i = lo; i <= hi; i++) {
@@ -721,7 +729,7 @@
         if (s && rows.length) {
           let m1 = 0, m2 = 0;
           rows.forEach((r) => { const x = clip(Number.isFinite(P.epa[r]) ? P.epa[r] : 0, -MATCH_EPA_CAP, MATCH_EPA_CAP); m1 += x; m2 += x * x; });
-          k = (MATCH_SHIFT * s) / Math.max(m2 / rows.length - (m1 / rows.length) ** 2, 0.3);
+          k = (MATCH_SD * s) / Math.sqrt(Math.max(m2 / rows.length - (m1 / rows.length) ** 2, 0.3));
         }
         const cum = [];
         let tot = 0;
@@ -1005,8 +1013,8 @@
       }
       S.plays += 1;
       // (4) execute
-      if (kind === FG) this._fieldGoal(S, g, u, o, fire);
-      else if (kind === PUNT) this._punt(S, g, u, o);
+      if (kind === FG) this._fieldGoal(S, g, u, o, fire, act && act.st);
+      else if (kind === PUNT) this._punt(S, g, u, o, act && act.st);
       else {
         let pbRow = -1, callIdx = -1, match = 0;
         if (act && act.call !== undefined && this.pbCdf && (kind === RUN || kind === PASS)) {
@@ -1178,13 +1186,14 @@
       this._endHalfCheck(S, g);
     }
 
-    _fieldGoal(S, g, u, o, fire) {
+    _fieldGoal(S, g, u, o, fire, st) {
       const yl0 = S.yl;
       let p = this.fgProb(yl0 + FG_SNAP_YARDS, o);
       if (fire && p > 0) {
         const z = Math.log(clip(p, 1e-9, 1 - 1e-9) / clip(1 - p, 1e-9, 1)) + FIRE_DRILL_LOGIT;
         p = sigmoid(z);
       }
+      if (st === 'block' && this._stRush(S, g, u, o, 'fg', yl0 + FG_SNAP_YARDS, p)) return;
       const made = u[3] < p;
       if (S.log) S.log.push({ ev: 'fg', team: o, dist: yl0 + FG_SNAP_YARDS, made, p, fire: !!fire });
       this._clockAfterPlay(S, g, 5.0, true, 0);
@@ -1192,14 +1201,43 @@
       this._endHalfCheck(S, g);
     }
 
-    _punt(S, g, u, o) {
+    // an all-out rush on a kick (act.st): a roughing flag, a block (run back for a touchdown now and then), or
+    // neither (false: the kick goes on). Blocked: the defense's ball where the kick was taken from
+    _stRush(S, g, u, o, kind, dist, p) {
+      const d = 1 - o, yl0 = S.yl, v = u[7];
+      if (v < ST_FOUL) {
+        if (S.log) S.log.push({ ev: kind, team: o, dist, made: false, p, foul: true, net: 0, retTd: false, blocked: false, touchback: false });
+        const t0 = S.t;
+        this._clockAfterPlay(S, g, 4.0, true, 0);
+        if (S.t <= g.halfEnd) S.t = Math.min(t0, g.halfEnd + 0.5);   // a half cannot end on a defensive foul: an untimed down
+        S.yl = Math.max(yl0 - 15, 1); S.down = 1; S.ytg = Math.min(10, S.yl);
+        return true;
+      }
+      if (v < ST_FOUL + ST_BLOCK[kind]) {
+        const spot = yl0 + (kind === 'punt' ? 12 : FG_SNAP_YARDS - 10);        // where the ball was kicked from
+        const retTd = spot >= 100 || u[6] < ST_BLOCK_TD;
+        if (S.log) S.log.push({ ev: kind, team: o, dist, made: false, p, blocked: true, retTd, net: 0, touchback: false });
+        this._clockAfterPlay(S, g, retTd ? 8.0 : 4.0, true, 0);
+        if (retTd) { S.s[d] += 6; S.pos = d; S.phase = PAT; }
+        else this._flip(S, clip(100 - spot, 1, 99));
+        this._endHalfCheck(S, g);
+        return true;
+      }
+      return false;
+    }
+
+    _punt(S, g, u, o, st) {
+      if (st === 'rush' && this._stRush(S, g, u, o, 'punt', 0, 0)) return;
       const d = 1 - o, P = this.e.punt, yl0 = S.yl;
       const yi = clip(Math.trunc(yl0), 0, 100);
       const lo = this.e.puntLo[yi], hi = this.e.puntHi[yi];
-      const j = Math.min(lo + Math.floor(u[4] * (hi - lo)), hi - 1);
+      let j = Math.min(lo + Math.floor(u[4] * (hi - lo)), hi - 1);
+      // rushing it: nobody set up a return, so no return touchdown (a block was decided above): the next real punt
+      if (st === 'rush') for (let k = 0; k < hi - lo && (P.retTd[j] || P.blocked[j]); k++) j = lo + ((j - lo + 1) % (hi - lo));
       let net = P.net[j];
       const normal = !P.blocked[j] && !P.retTd[j] && !P.touchback[j];
       if (normal) net += this.ctx.punterShift[o];
+      if (normal && st === 'rush') net += ST_FAIR_GAIN;                 // a fair catch: no return yards
       const spot = yl0 - net;
       const recvYl = (P.touchback[j] || spot <= 0) ? 80 : clip(100 - spot, 1, 99);
       this._clockAfterPlay(S, g, P.dur[j], true, 0);
