@@ -254,8 +254,9 @@ node web/parity_test.js
 
 ### 4. Two-Minute Drill: the daily play-calling game
 
-`web/game.html` is a Wordle-style daily game built on the same engine. Every day it serves three real
-late-game spots from 2023-26 (a two-minute drill, protecting a lead, a tied game or the end of a half),
+`web/game.html` is a Wordle-style daily game built on the same engine. Every day it serves one real
+late-game drive from 2023-26, the kind rotating day to day (a two-minute drill, protecting a lead, a tied
+game or the end of a half; the schedule holds three spots a day and the page plays the day's kind),
 and the player calls every play for one team until the game ends: tempo, timeouts, spikes, kneels,
 field goals, punts, two-point tries and onside kicks, plus 26 play calls:
 
@@ -357,7 +358,7 @@ key the page keeps; the board stores only its hash), so nobody else can post und
 not verified. Names are cleaned and capped at 24 characters, only the site's origin may call it, and with an
 `ADMIN_TOKEN` secret `DELETE /board?name=...` removes a row.
 
-**Everyone today** (the website's daily stats, `board/worker.js` `/daily`). When you finish the day's three spots,
+**Everyone today** (the website's daily stats, `board/worker.js` `/daily`). When you finish the day's drive,
 your score and each spot's win chance post once (your first finish of the day counts; a replay changes nothing) and
 the summary shows how you compare with everyone who played that day: the share of players you beat, the day's
 scores in the same buckets as your own stats, each spot against the day's average, and the day's top ten named
@@ -428,7 +429,7 @@ against what a typical NFL play-caller does there. Each spot and the day end wit
 late-game calls look most like yours ("You called this one like Nick Sirianni"), from 59 coaches'
 2016-26 fingerprints: passes, deep shots, fourth-down tries and two-point tries, each over what the
 league does in the same spots (`coaches.py`). The day's score is a percentile against NFL play-callers
-in the same three spots, with a share grid of one square per snap.
+on the same drive, with a share grid of one square per snap.
 
 **Survivor** (the Survivor tab, or `game.html#survivor`) plays random real fourth quarters back to back from
 the same pool: the 430 spots that start in the fourth quarter, so every one is played to the final gun. Win
@@ -453,7 +454,7 @@ grade linemen one at a time. The simulator plays with that week's team pass and 
 who played (against the team's usual mix), the kicker and punter from that game and their ratings then,
 each team's call ratings, the real head coach and the real point spread. 2023 Week 1 games take each team's
 first 2023 rating, since the ratings start there. The build writes the teams in chunks (`web/spots/`), and
-the page loads only the chunks for the day's three spots.
+the page loads only the chunk for the day's drive.
 
 For the live tools, today's teams (`current.py`) come from nflverse's weekly rosters (the NFL's own
 transactions: trades, signings, releases), with injuries ignored so every team

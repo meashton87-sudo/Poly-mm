@@ -1,6 +1,6 @@
 /* Two-Minute Drill: the daily NFL play-calling game.
  *
- * Three real late-game spots a day (2023-26, playoffs included), each played by the two teams of that game:
+ * One real late-game drive a day (2023-26, playoffs included), played by the two teams of that game:
  * the 22 who were on the field, rated as of that week. Each spot opens on a scenario card;
  * Next shows the whole field (their end zone at the top, yours at the bottom) with every player as a dot
  * from red to green by his overall rating. Call Run, Pass or RPO (or a timeout, spike, kneel or kick when it
@@ -100,7 +100,7 @@
 
   let idx = null;                 // game.json
   let dayN = 1, today = [];
-  let state = null;               // saved progress: today's three spots, or the survivor run
+  let state = null;               // saved progress: today's drive, or the survivor run
   // two modes: the daily three spots, or survivor (#survivor): random real fourth-quarter spots back to back, win to
   // keep going, one loss and the run is over (a tie at the gun goes to overtime, played out: see overtime())
   const SURV = location.hash === '#survivor';
@@ -2063,7 +2063,8 @@
       if (!state.out && G) { const b = el('span', 'on', String(g.length + 1)); b.title = `Game ${g.length + 1}: playing`; t.append(b); }
       return;
     }
-    for (let i = 0; i < 3; i++) {
+    t.hidden = today.length < 2;          // one drive a day: nothing to count
+    for (let i = 0; i < today.length; i++) {
       const s = state.spots[i];
       const b = el('span', '', String(i + 1));
       if (s && s.over) { b.className = `done sq ${spotMark(s)}`; b.title = `Spot ${i + 1}: done`; }
@@ -2295,7 +2296,7 @@
     const state_ = lead > 0 ? `Up by ${lead}` : lead < 0 ? `Down by ${-lead}` : 'Tied';
     const big = el('div', 'big', state_);
     big.append(el('span', 'left', left));
-    box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : `Spot ${G.si + 1} of 3 · ${idx.categories[sc.category]}`),
+    box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : (today.length > 1 ? `Spot ${G.si + 1} of ${today.length} · ` : 'Today’s drive · ') + idx.categories[sc.category]),
       el('div', 'game', `${gameTag(sc)} · ${teamName(sc.away)} at ${teamName(sc.home)}`), big);
     const mu = el('div', 'matchup');
     const t = (c, i) => {
@@ -3202,7 +3203,7 @@
     if (cc) card.append(cc.el);
     const wpa = G.decisions.reduce((a, x) => a + x.wpa, 0);
     card.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller in this spot.`));
-    const btn = el('button', 'btn', SURV ? (state.out ? 'Your run' : 'Next game') : G.si < 2 ? 'Next spot' : "Today's score");
+    const btn = el('button', 'btn', SURV ? (state.out ? 'Your run' : 'Next game') : G.si < today.length - 1 ? 'Next spot' : "Today's score");
     btn.type = 'button';
     btn.addEventListener('click', () => {
       if (SURV) {
@@ -3213,7 +3214,7 @@
       }
       state.current = G.si + 1;
       saveState();
-      if (G.si < 2) openSpot(G.si + 1);
+      if (G.si < today.length - 1) openSpot(G.si + 1);
       else renderSummary();
     });
     card.append(btn);
@@ -3520,7 +3521,7 @@
   // ------------------------------------------------------------- the day ---
   function allDecisions() {
     const out = [];
-    for (let i = 0; i < 3; i++) { const s = state.spots[i]; if (s && s.decisions) out.push(...s.decisions); }
+    for (let i = 0; i < today.length; i++) { const s = state.spots[i]; if (s && s.decisions) out.push(...s.decisions); }
     return out;
   }
   function percentileVsNFL(decs) {
@@ -3540,7 +3541,7 @@
     return better / N;
   }
   function renderSummary() {
-    if (!G) resumeSpot(2);
+    if (!G) resumeSpot(today.length - 1);
     show('done');
     const decs = allDecisions();
     const p = decs.length ? percentileVsNFL(decs) : 0;
@@ -3557,10 +3558,10 @@
     box.append(el('div', 'note', `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
       el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers`));
     if (cc) box.append(cc.el);
-    box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller across today's three spots.`));
-    box.append(dailyBox(p, [0, 1, 2].map((i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0))));
+    box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller ${today.length > 1 ? 'across today’s spots' : 'on today’s drive'}.`));
+    box.append(dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0))));
     const rec = [0, 0, 0];             // against the real coaches: better, worse, the same (a W-L-T record)
-    const rows = [0, 1, 2].map((i) => {
+    const rows = today.map((_, i) => {
       const s = state.spots[i]; if (!s) return '';
       const r = s.result ? (s.result.half === 1 ? 'HT' : s.result.mine > s.result.theirs ? 'W' : s.result.mine < s.result.theirs ? 'L' : 'OT') : '';
       const hh = headToHead(i, s.result);
@@ -3568,8 +3569,14 @@
       return `${today[i].player} ${r} ${squeeze(s.decisions || []).map((m) => SQ[m]).join('')}`;
     });
     const met = rec[0] + rec[1] + rec[2], recTxt = `${rec[0]}-${rec[1]}${rec[2] ? `-${rec[2]}` : ''}`;
-    const vs = met ? `\nVs the real coaches: ${recTxt}` : '';
-    if (met) {
+    // one drive: a sentence, not a record
+    const one = today.length === 1 ? (rec[0] ? 'Beat the real coach' : rec[1] ? 'Lost to the real coach' : 'Matched the real coach') : null;
+    const vs = met ? (one ? `\n${one}` : `\nVs the real coaches: ${recTxt}`) : '';
+    if (met && one) {
+      const v = el('div', 'h2h-day');
+      v.append(el('span', 'k', 'Vs the real coach'), el('b', '', rec[0] ? 'Better' : rec[1] ? 'Worse' : 'Same'));
+      box.insertBefore(v, box.children[3] || null);
+    } else if (met) {
       const v = el('div', 'h2h-day');
       v.append(el('span', 'k', 'Vs the real coaches'), el('b', '', recTxt),
         el('span', 'sub', `${rec[0]} better, ${rec[1]} worse${rec[2] ? `, ${rec[2]} the same` : ''}`));
@@ -3641,7 +3648,7 @@
       const yp = clip(Math.round(yourW[i] * 100) + 50, 0, 100);
       x.hist.forEach((c, k) => { if (k < yp) lower += c; });
       const row = el('div', 'dsp');
-      row.append(el('b', '', `Spot ${i + 1} · ${today[i].player}`),
+      row.append(el('b', '', today.length > 1 ? `Spot ${i + 1} · ${today[i].player}` : `Your drive · ${today[i].player}`),
         el('span', '', `You ${pts(yourW[i])}% · everyone ${pts(x.avg)}%${x.n > 1 ? ` · better than ${Math.round((lower / (x.n - 1 || 1)) * 100)}%` : ''}`));
       sp.append(row);
     });
@@ -3665,7 +3672,7 @@
   function countdown() {
     const w = el('div', 'countdown');
     const b = el('b', '', '');
-    w.append(document.createTextNode('New spots in '), b);
+    w.append(document.createTextNode(today.length > 1 ? 'New spots in ' : 'Next drive in '), b);
     const upd = () => {
       const now = new Date(), next = new Date(now); next.setHours(24, 0, 0, 0);
       let s = Math.max(0, Math.floor((next - now) / 1000));
@@ -3727,7 +3734,7 @@
     ['g', 'y', 'o', 'r'].forEach((m) => ex.append(el('span', `sq ${m}`, GLYPH[m])));
     const ul = el('ul');
     [
-      'You call the plays at the end of a real NFL game. Three new spots every day.',
+      'You call the plays at the end of a real NFL game. A new drive every day.',
       'Pick Run, Pass, RPO or Trick. On a pass, tap a receiver on the field to change his route, then tap his name to throw it.',
       'Every snap is a real NFL play. Read the defense: a blitz loses to quick throws, a loaded box to play action.',
       'Beat the real coach, and see how you rank against everyone who played today.',
@@ -3736,7 +3743,7 @@
     more.append(el('summary', '', 'More about the game'));
     const ul2 = el('ul');
     [
-      'You\'re the head coach for the last minutes of a real NFL game. Three new spots every day.',
+      'You\'re the head coach for the last minutes of a real NFL game. A new drive every day.',
       'Call Run, Pass or RPO. On a pass, every receiver shows his route: tap any of them on the field to change it, then pick who gets the ball, with play action or a rollout if you like. Timeouts, spikes, kicks and tempo pop up when they matter. On their ball, you call the defense, and when they line up to kick, you choose to go for the block or play it safe.',
       'Every snap is a real NFL play run against your call. Tap the field to skip, or a player to see who he is.',
       'Matchups matter: a blitz beats deep shots but loses to quick passes and screens; a loaded box stuffs runs but gets beaten by play-action and deep shots; playing soft stops deep shots but gives up runs. Read their look before you call, and when you call the defense, they will check into what beats it.',
@@ -3822,7 +3829,11 @@
         if (state.out) renderSurvSummary(); else await survOpen();
         return;
       }
-      const ids = idx.schedule[(dayN - 1) % idx.schedule.length];
+      // one drive a day: the schedule holds three spots a day (a two-minute drill, protecting a lead, a tied game or
+      // the end of a half); the day's drive is one of them, the kind rotating from day to day
+      const row = idx.schedule[(dayN - 1) % idx.schedule.length], kinds = Object.keys(idx.categories);
+      const want = kinds[(dayN - 1) % kinds.length];
+      const ids = [row.find((i) => idx.spots[i].category === want) ?? row[(dayN - 1) % row.length]];
       const teams = await loadTeams(ids);
       today = ids.map((i) => buildScen(idx.spots[i], teams[i]));
       $('dayLabel').textContent = `No. ${dayN} · ${now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
@@ -3832,7 +3843,7 @@
     drawTiles();
     startWorkers();
     if (state.done) renderSummary();
-    else openSpot(Math.min(state.current || 0, 2));
+    else openSpot(Math.min(state.current || 0, today.length - 1));
   }
   boot();
 })();

@@ -82,15 +82,17 @@ assert.strictEqual(b.spots[0].hist[0], 1, 'clipped at -50'); assert.strictEqual(
 r = await day({ date: today, key: 'anon-device-key-0000001', p: 0.5, spots: [0, 0, 0] });      // no name: counted, not listed
 b = await r.json();
 assert.strictEqual(b.n, 3); assert.strictEqual(b.top.length, 1);
-for (const bad of [{ date: '2001-01-01' }, { date: 'today' }, { p: 1.5 }, { p: -0.1 }, { spots: [0, 0] }, { spots: [0, 2, 0] }, { key: 'short' }]) {
+for (const bad of [{ date: '2001-01-01' }, { date: 'today' }, { p: 1.5 }, { p: -0.1 }, { spots: [] }, { spots: [0, 0, 0, 0] }, { spots: [0, 2, 0] }, { key: 'short' }]) {
   r = await day({ date: today, key: 'other-device-key-000001', p: 0.5, spots: [0, 0, 0], ...bad });
   assert.strictEqual(r.status, 400, JSON.stringify(bad));
 }
+b = await (await day({ date: today, key: 'one-drive-device-key-01', p: 0.6, spots: [0.05] })).json();      // a one-drive day
+assert.strictEqual(b.counted, true); assert.strictEqual(b.spots[0].n, 4); assert.strictEqual(b.spots[1].n, 3);
 b = await (await day({ date: today, key: 'anon-device-key-0000001', p: 0.9, spots: [0, 0, 0], name: 'Pat' })).json();   // named afterwards
-assert.strictEqual(b.counted, false); assert.strictEqual(b.n, 3); assert.deepStrictEqual(b.top.map((x) => [x.name, x.p]), [['Eli', 0.82], ['Pat', 0.5]]);
+assert.strictEqual(b.counted, false); assert.strictEqual(b.n, 4); assert.deepStrictEqual(b.top.map((x) => [x.name, x.p]), [['Eli', 0.82], ['Pat', 0.5]]);
 r = await call('GET', null, { path: `/daily?date=${today}` });
 b = await r.json();
-assert.strictEqual(b.n, 3); assert.ok(!JSON.stringify(b).includes('kh'), 'no key hashes out');
+assert.strictEqual(b.n, 4); assert.ok(!JSON.stringify(b).includes('kh'), 'no key hashes out');
 assert.strictEqual((await (await call('GET', null, { path: '/daily?date=2001-01-01' })).json()).n, 0, 'a day nobody played');
 // a name claimed on the daily list is claimed on the survivor board too
 await day({ date: today, key: 'nate-device-key-0000001', p: 0.7, spots: [0, 0, 0], name: 'Nate' });
