@@ -20,6 +20,10 @@
   const TOUCH = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
   const POOL = Math.max(1, Math.min(TOUCH ? 2 : 3, (navigator.hardwareConcurrency || 2) - 1));
   const STORE = 'tmd:v3';
+  // the website stamps each build (<meta name="build">, scripts/site.py): every file the page loads carries it, so a
+  // phone that cached the last build's files fetches this build's instead of mixing old and new
+  const BUILD = (document.querySelector('meta[name="build"]') || {}).content || '';
+  const asset = (u) => (BUILD ? `${u}?v=${encodeURIComponent(BUILD)}` : u);
   const SVGNS = 'http://www.w3.org/2000/svg';
 
   const TEAMS = {
@@ -221,12 +225,12 @@
   let dataBytes = null;
   function startWorkers() {
     const get = (url, what) => fetch(url).then((r) => { if (!r.ok) throw new Error(`${what} ${r.status}`); return r.arrayBuffer(); });
-    dataBytes = Promise.all([get('engine_data.json', 'engine data'), get('playbook.json', 'playbook')]);
+    dataBytes = Promise.all([get(asset('engine_data.json'), 'engine data'), get(asset('playbook.json'), 'playbook')]);
     dataBytes.catch((e) => fatal('The simulator could not load (' + e.message + '). Check your connection and reload.'));
     startWorker();
   }
   function startWorker() {
-    const w = new Worker('game_worker.js');
+    const w = new Worker(asset('game_worker.js'));
     const slot = { w, ready: false, busy: false };
     w.onmessage = (ev) => onMsg(slot, ev.data);
     w.onerror = (e) => fatal('The simulator could not start: ' + (e.message || 'worker error'));
@@ -3434,7 +3438,7 @@
   }
   async function loadTeams(ids) {
     const per = idx.spot_chunk || 20, teams = {};
-    await Promise.all([...new Set(ids.map((i) => Math.floor(i / per)))].map((k) => fetch(`spots/s${k}.json`)
+    await Promise.all([...new Set(ids.map((i) => Math.floor(i / per)))].map((k) => fetch(asset(`spots/s${k}.json`))
       .then((r) => { if (!r.ok) throw new Error('spot data ' + r.status); return r.json(); }).then((c) => Object.assign(teams, c))));
     return teams;
   }
@@ -3817,7 +3821,7 @@
     window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } }, 150); });
     show('boot');
     try {
-      idx = await fetch('game.json').then((r) => { if (!r.ok) throw new Error('game data ' + r.status); return r.json(); });
+      idx = await fetch(asset('game.json')).then((r) => { if (!r.ok) throw new Error('game data ' + r.status); return r.json(); });
       idx.calls.forEach((c) => { CALL[c.id] = c; });
       const launch = new Date(idx.launch + 'T00:00:00');
       const now = new Date(); now.setHours(0, 0, 0, 0);
