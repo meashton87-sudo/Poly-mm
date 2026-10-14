@@ -280,7 +280,7 @@ Each spot opens on a scenario card (score, clock, down and distance, timeouts, w
 **Next** opens the whole field top to bottom, their end zone at the top of the phone and yours at the
 bottom, with all 22 players as dots from red (worse) to green (better). There are no numbers on the
 field: **Player ratings** (or a tap on any dot) shows each player's overall rating (our own, 40 to 99;
-see below), where it ranks among today's starters at his position, his stat line and his type (a mobile
+see below), how much better he was than the league at his position that week, his stat line and his type (a mobile
 or pocket quarterback, a blocking, possession or vertical-threat tight end, a power, elusive or receiving
 back, and so on), each type assigned by a rule on the stat that defines it (`archetypes.py`).
 Play-calling is a pop-up of **Run**, **Pass** and **RPO**, then the play and its side; a timeout,
@@ -359,8 +359,22 @@ late-game calls look most like yours ("You called this one like Nick Sirianni"),
 league does in the same spots (`coaches.py`). The day's score is a percentile against NFL play-callers
 in the same three spots, with a share grid of one square per snap.
 
-The spots are real situations; the teams are today's (`current.py`). Rosters are nflverse's weekly
-rosters (the NFL's own transactions: trades, signings, releases), with injuries ignored so every team
+Every spot is a real late-game drive from the last four seasons (2023-2026, playoffs included), and the
+card names the game ("2024 Week 12, PHI at LA" or "2025 Divisional, HOU at KC"). The two teams are the ones
+that played it (`history.py`): the 22 on the field are the players on that very snap (nflverse
+participation data), and the unit not on the field then is the lineup from that team's nearest snap of the
+game; for 2026, where participation is not published yet, it is the players who took the most snaps in that
+game at each position. Each player's rating is his percentile at his position among the league as of the
+week of the game (only games before it count), on the 40-99 scale, and the player card says so ("better
+than 88% of NFL wide receivers at the time"); a lineman takes his line's rating, since public data does not
+grade linemen one at a time. The simulator plays with that week's team pass and run ratings, the quarterback
+who played (against the team's usual mix), the kicker and punter from that game and their ratings then,
+each team's call ratings, the real head coach and the real point spread. 2023 Week 1 games take each team's
+first 2023 rating, since the ratings start there. The build writes the teams in chunks (`web/spots/`), and
+the page loads only the chunks for the day's three spots.
+
+For the live tools, today's teams (`current.py`) come from nflverse's weekly rosters (the NFL's own
+transactions: trades, signings, releases), with injuries ignored so every team
 plays its healthy lineup: the 22 are picked by each player's usual share of snaps in the weeks he was
 healthy, his best depth-chart listing (ESPN) and his rating, in the personnel the team uses most. A
 player who is out (on a reserve list, ruled out or doubtful, or inactive for the latest game) keeps his
@@ -372,7 +386,7 @@ and then points a listing at a namesake (DET's rookie right tackle Blake Miller 
 the 2000s); such listings are matched by name on the team's roster. The build cross-checks every
 starter against ESPN's depth charts (703 of 704 on ESPN's current chart for his team as of
 October 12, 2026; all 704 listed since August).
-Player ratings are our own (`overall.py`), on a 40 to 99 scale where the average starter at a position
+Today's player ratings are our own (`overall.py`), on a 40 to 99 scale where the average starter at a position
 is 77, one standard deviation better is 86, and the scale bends above 88 so the very best land between
 93 and 99. Each rating blends two parts, both scored within the position group:
 
@@ -484,6 +498,7 @@ pytest                              # unit tests (clock rules, kneel-out math, i
 | `webexport.py`, `web/` | Data export and the browser engine (`engine.js`), worker pool, live page and parity test |
 | `playbook.py` | The daily game's 24 play calls, labeled from play-by-play and FTN charting, and each team's call ratings |
 | `players.py` | Player percentiles at every position (EPA, Next Gen Stats, PFR advanced stats), personnel allocation |
+| `history.py` | The daily game's teams as they were in each real game: the 22 on the snap, ratings as of that week |
 | `current.py` | Every team today: healthy lineups from weekly rosters and snaps, QB, kicker, punter, coach, power rating |
 | `overall.py` | Our overall player ratings, 40 to 99: play over five seasons blended with contract, honors, draft slot and snaps; checked against the All-Pros |
 | `archetypes.py` | Player types (mobile or pocket QB, blocking or vertical-threat TE, ...) from the stats |

@@ -1,6 +1,7 @@
 /* Two-Minute Drill: the daily NFL play-calling game.
  *
- * Three real late-game spots a day, played with today's rosters. Each spot opens on a scenario card;
+ * Three real late-game spots a day (2023-26, playoffs included), each played by the two teams of that game:
+ * the 22 who were on the field, rated as of that week. Each spot opens on a scenario card;
  * Next shows the whole field (their end zone at the top, yours at the bottom) with every player as a dot
  * from red to green by his overall rating. Call Run, Pass or RPO (or a timeout, spike, kneel or kick when it
  * matters), then the play. The nflclock engine (engine.js, in Web Workers) plays the snap from real NFL
@@ -127,14 +128,6 @@
     return `hsl(${h.toFixed(0)} ${v > 72 && v < 82 ? 88 : 80}% ${l.toFixed(0)}%)`;
   }
   const groupOf = (label) => (OL.includes(label) || label === 'T' || label === 'G' ? 'OL' : label);
-  function rankOf(p, label) {  // where his rating sits among the league's starters at his position
-    const g = groupOf(label), all = [];
-    Object.values(idx.teams).forEach((t) => {
-      if (g === 'K' || g === 'P') all.push((g === 'K' ? t.kicker : t.punter).ovr);
-      else [...t.lineup.off, ...t.lineup.def].forEach((q) => { if (groupOf(q.pos) === g) all.push(q.ovr); });
-    });
-    return { rank: all.filter((v) => v > p.ovr).length + 1, of: all.length, g };
-  }
   function shortName(n) {
     const parts = String(n || '').replace(/\s+(Jr\.?|Sr\.?|II|III|IV|V)$/, '').split(/\s+/);
     return parts.length > 1 ? `${parts[0][0]}.${parts.slice(1).join(' ')}` : (n || '');
@@ -174,10 +167,12 @@
       score: [st.score[1], st.score[0]], down: st.down, ytg: Math.min(st.ytg, st.yl), yl: st.yl,
       to: [st.to[1], st.to[0]], clock_running: !!st.running, phase: SNAP, credit: 0, free_kick: false };
   }
-  function buildScen(sp) {
-    const H = idx.teams[sp.home], A = idx.teams[sp.away];
-    const game = { home: H, away: A, home_spread: (idx.hfa || 1.5) + (H.power || 0) - (A.power || 0), indoor: sp.indoor,
-      wind: sp.wind, temp: sp.temp, league: idx.league, home_coach: H.coach, away_coach: A.coach, season: idx.asof.season };
+  // a spot's matchup: its two teams as they were in that game (web/spots), the real point spread, that
+  // season's league averages
+  function buildScen(sp, T) {
+    const H = T.home, A = T.away;
+    const game = { home: H, away: A, home_spread: sp.spread ?? 0, indoor: sp.indoor, wind: sp.wind, temp: sp.temp,
+      league: sp.league || idx.league, home_coach: H.coach, away_coach: A.coach, season: sp.real ? sp.real.season : idx.asof.season };
     return { ...sp, game };
   }
   const sideFor = (seq) => (hash('side', dayN, G.si, seq) % 2 ? 1 : -1);   // +1: strong side on the offense's right
@@ -1920,7 +1915,7 @@
     go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
     box.append(go);
     const rl = sc.real || {};
-    box.append(el('div', 'from', `The real score, clock, ball and timeouts from that game, played with today's rosters.`));
+    box.append(el('div', 'from', `The real score, clock, ball and timeouts from that game, with the players who were on the field and how good they were that week.`));
     go.focus({ preventScroll: true });
   }
   function enterField() {
@@ -2681,9 +2676,9 @@
     const top = el('div', 'pinfo');
     const ch = el('div', 'chip-big', String(p.ovr)); ch.style.background = rate(p.ovr);
     top.append(ch);
-    const nm = el('div'), rk = rankOf(p, label);
-    nm.append(el('div', 'nm', p.name), el('div', 'ps', `${team ? teamName(team) + ' · ' : ''}${POS_NAME[label] || label}`),
-      el('div', 'ps', `${ordinal(rk.rank)} of ${rk.of} starting ${POS_PLURAL[rk.g] || 'players'}`));
+    const nm = el('div'), g = groupOf(label);
+    nm.append(el('div', 'nm', p.name), el('div', 'ps', `${team ? teamName(team) + ' · ' : ''}${POS_NAME[label] || label}`));
+    if (p.pct != null) nm.append(el('div', 'ps', `Better than ${p.pct}% of NFL ${POS_PLURAL[g] || 'players'} at the time`));
     top.append(nm);
     const nodes = [top];
     if (p.kind) {
@@ -2693,8 +2688,8 @@
     }
     const how = POS_METHOD[groupOf(label)];
     nodes.push(el('p', p.kind ? '' : 'lead', p.stat || ''),
-      el('p', 'note', how ? `Our rating, 40 to 99: how he has played (${how}) over the last five seasons, the latest counting most, blended with how the league values him: his contract, Pro Bowls and All-Pros, draft slot and playing time. A typical starter is 77.`
-        : 'Our rating, 40 to 99, from his kicking over the last seasons. A typical starter is 77.'));
+      el('p', 'note', how ? `Our rating, 40 to 99: where he stood among NFL ${POS_PLURAL[g] || 'players'} in the games before this one (${how}), the latest counting most. A typical starter is 77.`
+        : 'Our rating, 40 to 99, from his kicking before this game. A typical starter is 77.'));
     openModal(POS_NAME[label] || label, nodes);
   }
   function spotInfo() {
@@ -2783,7 +2778,10 @@
       const launch = new Date(idx.launch + 'T00:00:00');
       const now = new Date(); now.setHours(0, 0, 0, 0);
       dayN = Math.max(1, Math.floor((now - launch) / 864e5) + 1);
-      today = idx.schedule[(dayN - 1) % idx.schedule.length].map((i) => buildScen(idx.spots[i]));
+      const ids = idx.schedule[(dayN - 1) % idx.schedule.length], per = idx.spot_chunk || 60, teams = {};
+      await Promise.all([...new Set(ids.map((i) => Math.floor(i / per)))].map((k) => fetch(`spots/s${k}.json`)
+        .then((r) => { if (!r.ok) throw new Error('spot data ' + r.status); return r.json(); }).then((c) => Object.assign(teams, c))));
+      today = ids.map((i) => buildScen(idx.spots[i], teams[i]));
       $('dayLabel').textContent = `No. ${dayN} · ${now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
     } catch (e) { $('boot').textContent = 'Today\'s spots did not load (' + e.message + '). Check your connection and reload.'; return; }
     state = load(`${STORE}:day:${dayN}`, null) || { spots: [], current: 0, done: false };

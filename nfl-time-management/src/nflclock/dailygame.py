@@ -1,16 +1,17 @@
-"""Two-Minute Drill, the daily play-calling game: real late-game spots, three a day, played with today's rosters.
+"""Two-Minute Drill, the daily play-calling game: real late-game spots, three a day, played with the real lineups.
 
 Every spot is the first snap of a real drive late in a real game (2023-26, playoffs included; the game's season,
 week or playoff round is shown with it): a two-minute drill while
 trailing, a lead to protect, or a tied game / end of the first half. The situation (score, clock, ball,
-timeouts) is real; the two teams take the field as they stand now (current rosters, starters, injuries
-and ratings, see current.py). The player calls every play for one team until the game ends; the browser
+timeouts) is real, and so are the teams: the players on the field in that game and everyone's strength as
+of that week (history.py). The player calls every play for one team until the game ends; the browser
 engine (web/engine.js) plays the rest with real clock rules. This module writes what the browser needs:
 
   web/playbook.json   -- call outcome libraries, NFL call frequencies, out-of-bounds odds (playbook.py)
-  web/game.json       -- the calls (grouped Run / Pass / RPO), the 32 teams today (lineups with every
-                         player's percentile, ratings, kicker, punter, coach), the spots, a three-a-day
+  web/game.json       -- the calls (grouped Run / Pass / RPO), the spots (with the real spread), a three-a-day
                          schedule, the decision models and the coach fingerprints (coaches.py)
+  web/spots/s<k>.json -- the two teams of spots 60k..60k+59 as they were in that game: lineups with every
+                         player's rating as of that week, ratings, QB, kicker, punter, coach, call ratings
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ import pandas as pd
 
 from . import coaches as CO
 from . import config, data
-from . import current as C
+from . import history as HI
 from . import playbook as P
 from .analyze import kicker_unavailable
 from .models import Bundle
@@ -31,7 +32,8 @@ WEB = config.ROOT / "web"
 LAUNCH = date(2026, 10, 12)
 DAYS = 365
 SEASON = 2026
-SCENARIO_SEASONS = (2023, 2024, 2025, 2026)
+SCENARIO_SEASONS = (2023, 2024, 2025, 2026)   # the last four seasons, playoffs included
+SPOT_CHUNK = 60                               # spots per web/spots file (a day loads at most three files)
 CATEGORIES = {"drill": "Two-minute drill", "protect": "Protect the lead", "tight": "Tied, or end of the half"}
 DRIVE_RESULT = {"Touchdown": "touchdown", "Field goal": "field goal", "Punt": "punt", "Turnover": "turnover",
                 "Turnover on downs": "turnover on downs", "End of half": "ran out the clock",
@@ -71,14 +73,7 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
     rng = np.random.default_rng(seed)
     picks = {cat: cand[cand["category"] == cat].iloc[lambda d: rng.permutation(len(d))].head(days) for cat in CATEGORIES}
 
-    now = C.teams_now(bundle, season)
-    card = P.call_ratings(lib, season, now["week"])
-    teams = {}
-    for t, x in now["teams"].items():
-        x = dict(x)
-        x["calls"] = {c: {"off": v["off"], "def": v["def"]} for c, v in P.team_card(card, t).items()}
-        x.pop("recent_games", None)
-        teams[t] = x
+    hist = HI.History(bundle, lib)
     tr = bundle.team_ratings
     last = tr[tr["season"] == season]
     last = last[last["week"] == last["week"].max()].iloc[0]
@@ -106,10 +101,20 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
                           "to": [int(r["posteam_timeouts_remaining"] if not home_off else r["defteam_timeouts_remaining"]),
                                  int(r["posteam_timeouts_remaining"] if home_off else r["defteam_timeouts_remaining"])],
                           "running": False, "phase": "snap", "receive2h": receive2h.get(gid, away)},
+                "spread": float(np.nan_to_num(g["spread_line"])),
                 "real": {"season": int(g["season"]), "week": int(g["week"]), "type": str(g["game_type"]),
                          "coach": g["home_coach"] if home_off else g["away_coach"], "call": r["real_call"],
                          "drive": DRIVE_RESULT.get(res, res), "final": {"away": int(r["away_score"]), "home": int(r["home_score"])}},
             })
+    # the two teams as they were in each spot's game, in chunks the browser loads a day at a time
+    chunks: dict = {}
+    for i, sp in enumerate(spots):
+        gid, pid = sp["id"].split("#")
+        g = games.loc[gid]
+        t = hist.teams(gid, int(g["season"]), int(g["week"]), float(pid), sp["home"], sp["away"],
+                       {"home": g["home_coach"], "away": g["away_coach"]})
+        sp["league"] = t["league"]
+        chunks.setdefault(i // SPOT_CHUNK, {})[str(i)] = t["teams"]
     n = {cat: len(df) for cat, df in picks.items()}
     offs = {cat: sum(n[c] for c in list(CATEGORIES)[:i]) for i, cat in enumerate(CATEGORIES)}
     schedule = [[offs[cat] + (d % n[cat]) for cat in CATEGORIES] for d in range(days)]
@@ -125,16 +130,15 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
         b, side = P.base_side(c)
         calls.append({"id": c, "label": label, "kind": kind, "say": say, "family": P.FAMILY[c], "base": b, "side": side})
     out = {"launch": LAUNCH.isoformat(), "categories": CATEGORIES, "calls": calls, "models": models,
-           "schedule": schedule, "spots": spots, "teams": teams, "league": league, "hfa": now["hfa"],
+           "schedule": schedule, "spots": spots, "spot_chunk": SPOT_CHUNK, "league": league,
            "coaches": CO.fingerprints(),
-           "asof": {"season": season, "through_week": now["week"] - 1, "depth_chart": now["depth_chart"],
-                    "ratings": f"our own, 40-99: {season - 4}-{season} play (the latest seasons count most) through {season} week {now['week'] - 1}"},
+           "asof": {"season": season, "ratings": "our own, 40-99: each player's percentile at his position as of the week of the game"},
            "built": pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds")}
     (WEB / "game.json").write_text(json.dumps(out, separators=(",", ":"), default=float))
-    for stale in list((WEB / "spots").glob("*.json")) if (WEB / "spots").exists() else []:
+    (WEB / "spots").mkdir(exist_ok=True)
+    for stale in (WEB / "spots").glob("*.json"):
         stale.unlink()
-    if (WEB / "spots").exists():
-        (WEB / "spots").rmdir()
+    for k, ch in chunks.items():
+        (WEB / "spots" / f"s{k}.json").write_text(json.dumps(ch, separators=(",", ":"), default=float))
     (WEB / "scenarios.json").unlink(missing_ok=True)
-    return {"spots": len(spots), "by_category": n, "days": days, "teams": len(teams), "coaches": len(out["coaches"]["coaches"]),
-            "espn_check": now["espn_check"]}
+    return {"spots": len(spots), "by_category": n, "days": days, "chunks": len(chunks), "coaches": len(out["coaches"]["coaches"])}

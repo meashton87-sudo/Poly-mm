@@ -1,4 +1,4 @@
-// Node smoke test for the daily game path: today's teams, playbook sampling, option values and single steps.
+// Node smoke test for the daily game path: every spot's two real teams, playbook sampling, option values and single steps.
 //   node web/game_smoke.js
 const fs = require('fs');
 const path = require('path');
@@ -9,29 +9,35 @@ const t0 = Date.now();
 const eng = new NFLClockEngine(JSON.parse(fs.readFileSync(path.join(dir, 'engine_data.json'), 'utf8')));
 eng.loadPlaybook(JSON.parse(fs.readFileSync(path.join(dir, 'playbook.json'), 'utf8')));
 const idx = JSON.parse(fs.readFileSync(path.join(dir, 'game.json'), 'utf8'));
+// every spot's two teams as they were in that game (web/spots): a full 22 with ratings (40-99), a QB, a kicker
+// and a punter, and a game built from them (as game.js does)
+const TEAMS = {};
+fs.readdirSync(path.join(dir, 'spots')).forEach((f) => Object.assign(TEAMS, JSON.parse(fs.readFileSync(path.join(dir, 'spots', f), 'utf8'))));
 console.log(`engine + playbook in ${Date.now() - t0} ms; ${idx.spots.length} spots, ${idx.schedule.length} days, ` +
-  `${Object.keys(idx.teams).length} teams, ${idx.coaches.coaches.length} coaches; ratings: ${idx.asof.ratings}`);
-
-// every team: a full 22 with overall ratings (40-99), a starting QB, a kicker and a punter
-for (const [code, T] of Object.entries(idx.teams)) {
-  assert.strictEqual(T.lineup.off.length, 11, `${code} offense`);
-  assert.strictEqual(T.lineup.def.length, 11, `${code} defense`);
-  assert.ok(T.lineup.off.some((p) => p.pos === 'QB'), `${code} QB`);
-  assert.ok(T.kicker.name && T.punter.name && T.kicker.ovr >= 40 && T.punter.ovr >= 40, `${code} specialists`);
-  [...T.lineup.off, ...T.lineup.def].forEach((p) => assert.ok(Number.isInteger(p.ovr) && p.ovr >= 40 && p.ovr <= 99 && p.name, `${code} ${p.name}`));
-}
-// the schedule points at real spots; every spot builds a game against today's teams (as game.js does)
+  `${idx.coaches.coaches.length} coaches; ratings: ${idx.asof.ratings}`);
+idx.spots.forEach((sp, i) => {
+  const T = TEAMS[i];
+  assert.ok(T && T.home && T.away, `spot ${i} teams`);
+  for (const t of [T.home, T.away]) {
+    const tag = `${sp.id} ${t.team}`;
+    assert.strictEqual(t.lineup.off.length, 11, `${tag} offense`);
+    assert.strictEqual(t.lineup.def.length, 11, `${tag} defense`);
+    assert.ok(t.lineup.off.some((p) => p.pos === 'QB'), `${tag} QB`);
+    assert.ok(t.kicker.name && t.punter.name && t.kicker.ovr >= 40 && t.punter.ovr >= 40, `${tag} specialists`);
+    [...t.lineup.off, ...t.lineup.def].forEach((p) => assert.ok(Number.isInteger(p.ovr) && p.ovr >= 40 && p.ovr <= 99 && p.name, `${tag} ${p.name}`));
+  }
+});
 idx.schedule.forEach((day) => day.forEach((i) => assert.ok(idx.spots[i], `spot ${i}`)));
 const scen = (sp) => {
-  const H = idx.teams[sp.home], A = idx.teams[sp.away];
-  return { ...sp, game: { home: H, away: A, home_spread: (idx.hfa || 1.5) + (H.power || 0) - (A.power || 0), indoor: sp.indoor,
-    wind: sp.wind, temp: sp.temp, league: idx.league, home_coach: H.coach, away_coach: A.coach, season: idx.asof.season } };
+  const T = TEAMS[idx.spots.indexOf(sp)], H = T.home, A = T.away;
+  return { ...sp, game: { home: H, away: A, home_spread: sp.spread ?? 0, indoor: sp.indoor, wind: sp.wind, temp: sp.temp,
+    league: sp.league || idx.league, home_coach: H.coach, away_coach: A.coach, season: sp.real.season } };
 };
 idx.spots.forEach((sp) => eng.makeContext(scen(sp).game, { receive2h: sp.start.receive2h }));
 
 const S = scen(idx.spots[idx.schedule[0][0]]);
-const lu = idx.teams[S.player].lineup;
-console.log(S.category, S.id, 'you:', S.player, idx.teams[S.player].coach, '| line', S.game.home_spread.toFixed(1));
+const mine = S.player === S.home ? S.game.home : S.game.away, lu = mine.lineup;
+console.log(S.category, S.id, 'you:', S.player, mine.coach, '| line', S.game.home_spread.toFixed(1));
 console.log('  offense', lu.off.map((p) => `${p.pos} ${p.name} ${p.ovr}`).join(', '));
 console.log('  start', JSON.stringify(S.start), '| real:', S.real.coach, S.real.call, '->', S.real.drive);
 const sim = eng.simulator(eng.makeContext(S.game, { receive2h: S.start.receive2h }));

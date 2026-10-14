@@ -13,10 +13,13 @@ const SEEDS = +(process.argv[2] || 4), GAMES = +(process.argv[3] || 2);
 const bad = {}, seen = {};
 const flag = (k, msg) => { bad[k] = bad[k] || []; if (bad[k].length < 6) bad[k].push(msg); bad[k].n = (bad[k].n || 0) + 1; };
 const count = (k) => { seen[k] = (seen[k] || 0) + 1; };
+// every spot's two teams as they were in that game (web/spots)
+const TEAMS = {};
+fs.readdirSync(W + 'spots').forEach((f) => Object.assign(TEAMS, JSON.parse(fs.readFileSync(W + 'spots' + path.sep + f, 'utf8'))));
 function scen(sp) {
-  const H = idx.teams[sp.home], A = idx.teams[sp.away];
-  return { home: H, away: A, home_spread: (idx.hfa || 1.5) + (H.power || 0) - (A.power || 0), indoor: sp.indoor, wind: sp.wind,
-    temp: sp.temp, league: idx.league, home_coach: H.coach, away_coach: A.coach, season: idx.asof.season };
+  const T = TEAMS[idx.spots.indexOf(sp)], H = T.home, A = T.away;
+  return { home: H, away: A, home_spread: sp.spread ?? 0, indoor: sp.indoor, wind: sp.wind, temp: sp.temp,
+    league: sp.league || idx.league, home_coach: H.coach, away_coach: A.coach, season: sp.real.season };
 }
 function rootOf(sp) {
   const st = sp.start;
