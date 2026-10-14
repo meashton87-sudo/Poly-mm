@@ -74,7 +74,7 @@ jobs:
           node board/worker_test.mjs
 
       - name: Assemble the site
-        run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --board-api "${{ vars.BOARD_API }}"
+        run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --board-api "${{ vars.BOARD_API }}" --ga "${{ vars.GA_ID || 'G-4QQ8N62SMB' }}"
 
       - if: vars.PAGES_DEPLOY == 'true'
         uses: actions/upload-pages-artifact@v3

@@ -5,13 +5,14 @@ cli build, webexport.export_engine, dailygame.build).
     python scripts/site.py [out_dir, default _site] [--domain nfl2mindrill.com] [--board-api https://...]
 
 --domain writes the CNAME file for a custom domain; --board-api points the survivor leaderboard at its backend
-(board/worker.js); without it the site has no leaderboard. version.json says when the site was built and from which
+(board/worker.js); without it the site has no leaderboard. --ga adds Google Analytics (gtag.js) to the page. version.json says when the site was built and from which
 commit (an uptime check can alert when "built" gets old: a failing build leaves the last site up).
 """
 from __future__ import annotations
 
 import argparse
 import html
+import re
 import json
 import shutil
 import subprocess
@@ -29,7 +30,12 @@ HEAD = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "body{{margin:0;font:14px system-ui,sans-serif}}img{{max-width:100%}}[hidden]{{display:none!important}}</style></head><body>")
 
 
-def build(out: Path, domain: str | None = None, board_api: str | None = None) -> Path:
+GA_TAG = ("<script async src=\"https://www.googletagmanager.com/gtag/js?id={id}\"></script>"
+          "<script>window.dataLayer=window.dataLayer||[];function gtag(){{dataLayer.push(arguments);}}"
+          "gtag('js',new Date());gtag('config','{id}');</script>")
+
+
+def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None) -> Path:
     missing = [f for f in FILES if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
     if missing:
         raise SystemExit(f"build the game data first; missing in web/: {', '.join(missing)}")
@@ -37,6 +43,10 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None) ->
         shutil.rmtree(out)
     (out / "spots").mkdir(parents=True)
     extra = "<meta name=\"description\" content=\"Call the plays in real late-game NFL spots.\">"
+    if ga:                                   # Google Analytics (gtag.js), as Google gives it, at the top of <head>
+        if not re.fullmatch(r"G-[A-Z0-9]{4,16}", ga):
+            raise SystemExit(f"--ga wants a measurement id like G-XXXXXXX, not {ga!r}")
+        extra = GA_TAG.format(id=ga) + extra
     if board_api:
         extra += f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">"
     page = (WEB / "game.html").read_text()
@@ -64,8 +74,9 @@ if __name__ == "__main__":
     ap.add_argument("out", nargs="?", default="_site")
     ap.add_argument("--domain")
     ap.add_argument("--board-api")
+    ap.add_argument("--ga", help="Google Analytics measurement id (G-...)")
     a = ap.parse_args()
-    o = build(Path(a.out), a.domain, a.board_api)
+    o = build(Path(a.out), a.domain, a.board_api, a.ga)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6
     print(f"site in {o}: {n} files, {size:.1f} MB")
