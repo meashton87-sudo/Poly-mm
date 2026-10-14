@@ -2188,7 +2188,9 @@
     status('Breaking the huddle…');
     G.info = (await send({ type: 'info', scen: simScen(), root: r }, true)).info;
     G.fast = false;
-    G.look = pickLook(G.info.looks, hash('look', seedKey(), G.si, G.seq));
+    const ad = adaptLooks(G.info.looks);
+    G.look = pickLook(ad.p, hash('look', seedKey(), G.si, G.seq));
+    G.lookNote = G.look != null ? ad.note : null;
     ui = { step: 'family', fam: null, oob: false, tempo: tempoKeyOf(G.info.tempo) };
     drawField();
     drawDock();
@@ -2396,7 +2398,48 @@
     if (L.blitz) v.append(el('b', 'blitz', 'Showing blitz'));
     v.append(el('small', '', L.loaded ? '7 or more near the line' : '6 or fewer near the line'));
     w.append(v);
+    if (G.lookNote) w.append(el('div', 'keyed', G.lookNote));
     return w;
+  }
+  // A defense that adapts to you: the looks it shows lean toward the ones that beat your recent calls (this game's,
+  // and the day's or the survivor run's before it: the last ADAPT_N, recent ones counting more), more so the more of
+  // your calls it has seen. Each look's real share here is weighted by exp(ADAPT * conf * edge), edge being how well
+  // that look does against your calls by the matchup chart (engine.js MATCH), -1 to +1.
+  const ADAPT = 1.4, ADAPT_N = 12, ADAPT_DECAY = 0.85;
+  const LOOK_DEFKEY = ['soft', 'blitz', 'load', 'blitz'];
+  const HABIT = { run: 'runs', deep: 'deep shots', short: 'short passes' };
+  const EXPECT = { load: 'more loaded boxes', blitz: 'more pressure', soft: 'more men in coverage' };
+  const habitOf = (id) => (CALL[id] && CALL[id].kind === 'run' ? 'run' : DEEP_CALLS.has(id) ? 'deep' : 'short');
+  const DEEP_CALLS = new Set(['deep_strong', 'deep_weak', 'deep_middle', 'pa_deep', 'hail_mary']);
+  function adaptLooks(p) {
+    const tend = (state && state.tend) || [], M = G.info && G.info.match;
+    if (!p || !M || !tend.length) return { p, note: null };
+    let wsum = 0;
+    const edge = [0, 0, 0, 0];
+    tend.forEach((id, k) => {
+      const w = Math.pow(ADAPT_DECAY, tend.length - 1 - k), m = M[id];
+      if (!m) return;
+      wsum += w;
+      LOOK_DEFKEY.forEach((d, b) => { edge[b] -= w * (m[d] || 0); });
+    });
+    if (!wsum) return { p, note: null };
+    const conf = tend.length / (tend.length + 4);
+    const q = p.map((x, b) => x * Math.exp(ADAPT * conf * (edge[b] / wsum)));
+    const z = q.reduce((a, x) => a + x, 0) || 1;
+    const out = q.map((x) => x / z);
+    // said out loud once it is a real lean on a real habit: what you keep calling, and what they show more of
+    let top = -1, lift = 1.35;
+    out.forEach((x, b) => { const l = x / Math.max(p[b], 1e-6); if (l > lift && x > 0.15) { lift = l; top = b; } });
+    const share = { run: 0, deep: 0, short: 0 };
+    tend.forEach((id, k) => { share[habitOf(id)] += Math.pow(ADAPT_DECAY, tend.length - 1 - k); });
+    const habit = Object.keys(share).sort((a, b) => share[b] - share[a])[0];
+    const note = top >= 0 && share[habit] / wsum > 0.5 ? `They have seen your ${HABIT[habit]}: expect ${EXPECT[LOOK_DEFKEY[top]]}.` : null;
+    return { p: out, note };
+  }
+  // your offensive calls, for the defense to read (kept with the day's or the run's progress)
+  function remember(call) {
+    if (!call || !state) return;
+    state.tend = ((state.tend || []).concat([call])).slice(-ADAPT_N);
   }
   function tempoPicker(r) {
     const w = el('div', 'tempo');
@@ -2496,6 +2539,7 @@
       if (passPick) opts.push(passPick);
       specials.forEach((k) => opts.push({ key: k, label: specialLabel(k), action: withTempo({ to_off: false, play: k }) }));
       const chosen = passPick ? passPick.key : pick.call ? (ui.oob ? `${pick.call}+oob` : pick.call) : pick.special;
+      remember(opts.find((o) => o.key === chosen).action.call);
       const q = {};
       const freq = {}, byLook = G.info.lookByCall;
       G.info.calls.forEach((c, ci) => { freq[c.id] = c.freq * (G.look != null && byLook ? byLook[ci][G.look] : 1); });

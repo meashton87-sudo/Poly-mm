@@ -67,7 +67,10 @@ function info(sim, root) {
   if (lookByCall) lookByCall.forEach((d, ci) => d.forEach((x, b) => { looks[b] += P.freq[fk * P.calls.length + ci] * x; }));
   const lt = looks.reduce((a, x) => a + x, 0) || 1;
   const fi = sim.fourthInfo(root);
-  return { calls, fgDist: fi.fgDist, pFg: fi.pFg, pConv: fi.pConv, tempo: sim.defaultTempo(root), tempoSecs: sim.tempoSeconds(),
+  // the matchup chart (engine.js MATCH), for the defense that adapts to your calls (game.js adaptLooks)
+  const match = {};
+  P.calls.forEach((c, i) => { match[c.id] = P.match[i]; });
+  return { calls, match, fgDist: fi.fgDist, pFg: fi.pFg, pConv: fi.pConv, tempo: sim.defaultTempo(root), tempoSecs: sim.tempoSeconds(),
     looks: lookByCall ? looks.map((x) => x / lt) : null, lookByCall };
 }
 
