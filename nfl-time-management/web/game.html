@@ -145,6 +145,12 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 #field .route-head.tgt { fill: #ffffff; stroke: rgba(8, 14, 10, .55); stroke-width: 1.2; }
 #field .dot.target circle.c { stroke: #ffffff; stroke-width: 3.6; }
 .hint { margin: 0; font-size: 13px; color: var(--muted); }
+/* simpler screens: the pass options as small toggles on one line; the result's extras on one line */
+.opts-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip.opt[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.res-acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+.res-acts details.more { flex: 1 1 auto; min-width: 0; }
+.res-acts details.more[open] { flex-basis: 100%; }
 .read .keyed { grid-column: 1 / -1; font-size: 12.5px; font-weight: 700; color: var(--sq-o); }
 .rcvs { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
 .rcv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 8px; align-items: center; text-align: left; padding: 8px 10px; border-radius: 8px;
@@ -265,8 +271,8 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .sq.swing.pending { background: var(--key); color: var(--muted); }
 .res-play .wc { display: block; margin-top: 3px; font: 600 12.5px var(--body); color: var(--muted); font-variant-numeric: tabular-nums; }
 /* the matchup behind the snap: who won it */
-.matchup { font: 700 13px var(--body); padding-left: 10px; border-left: 3px solid var(--line); }
-.matchup.won { border-color: var(--sq-g); } .matchup.lost { border-color: var(--sq-r); }
+.mline { font: 700 13px var(--body); padding-left: 10px; border-left: 3px solid var(--line); }
+.mline.won { border-color: var(--sq-g); } .mline.lost { border-color: var(--sq-r); }
 /* the call's grade, small and beside the text */
 .verdict .chip-g { display: inline-grid; width: 18px; height: 18px; font-size: 12px; border-radius: 3px; vertical-align: -3px; margin-right: 6px; }
 .res-play .yd { font: 900 22px/1.05 var(--display); letter-spacing: .03em; display: block; text-transform: uppercase; margin-bottom: 2px; }

@@ -5,7 +5,8 @@
 //   POST   /board  { name, best, key }  -> { rows, kept? }                  a player's best (only a better run replaces it)
 //   DELETE /board?name=Eli  (Authorization: Bearer <ADMIN_TOKEN>)          remove a row (no ADMIN_TOKEN secret: off)
 //   GET    /daily?date=2026-10-14                         -> that day's players: { n, hist, spots, top }
-//   POST   /daily  { date, key, p, spots: [w, w, w], name? } -> the same, after counting your result
+//   POST   /daily  { date, key, p, spots: [w, ...], name? }  -> the same, after counting your result (1-3 spots: the
+//                                                             day's drive, or the three spots days had before)
 // The daily game: every device's first result of a day counts once (a replay of the day changes nothing). p is the
 // day's score (0-1, better than that share of NFL play-callers), spots each spot's win chance against a typical
 // play-caller (-1 to 1). The day keeps a histogram of scores in whole points (hist[0..100]), each spot's histogram
@@ -79,7 +80,7 @@ async function daily(req, env, storage, hits, h, url) {
   const spots = Array.isArray(body && body.spots) ? body.spots.map(Number) : null, name = clean(body && body.name);
   if (!dateOk(date)) return json({ error: 'date (YYYY-MM-DD, today) wanted' }, 400, h);
   if (!(p >= 0 && p <= 1)) return json({ error: 'p (0-1) wanted' }, 400, h);
-  if (!spots || spots.length !== 3 || !spots.every((w) => w >= -1 && w <= 1)) return json({ error: 'spots (three, -1 to 1) wanted' }, 400, h);
+  if (!spots || spots.length < 1 || spots.length > 3 || !spots.every((w) => w >= -1 && w <= 1)) return json({ error: 'spots (1-3, each -1 to 1) wanted' }, 400, h);
   if (!KEY_RE.test(devKey)) return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
   const kh = await sha256(devKey);                 // before the reads: from here to the writes is storage only
   const mine = `dk:${date}:${kh}`;
