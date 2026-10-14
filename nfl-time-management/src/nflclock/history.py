@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from . import archetypes as AR
+from . import coaches as CO
 from . import config
 from . import live
 from . import overall as O
@@ -174,7 +175,9 @@ class History:
             pfr = gid[4:] if gid.startswith("pfr:") else R.gsis_to_pfr.get(gid)
             if season not in self.pfr_names:
                 pl = R.T["players"].dropna(subset=["pfr_id"])
-                self.pfr_names[season] = dict(zip(pl["pfr_id"], pl["display_name"]))
+                sn = R.T["snaps"].dropna(subset=["pfr_player_id"])     # names for players new to the players table
+                self.pfr_names[season] = {**dict(zip(sn["pfr_player_id"], sn["player"])),
+                                          **dict(zip(pl["pfr_id"], pl["display_name"]))}
             name = self.names.get(gid) or self.pfr_names[season].get(pfr, "Unknown")
             if label in OL_SLOTS:
                 pct, stat = line_pct, (line_stat or "").replace("Graded as a unit: ", "His line that season: ")
@@ -213,6 +216,12 @@ class History:
             ids = kick[col].dropna()
             if not len(ids) and col == "kicker_player_id":
                 ids = self.pbp[(self.pbp["game_id"] == game_id) & (self.pbp["defteam"] == team) & (self.pbp["play_type"] == "kickoff")][col].dropna()
+            if not len(ids):        # no kick of that kind in the game: the team's latest one before it, else its next
+                own = self.pbp[(self.pbp["posteam"] == team) & self.pbp[col].notna() & (self.pbp["season"] == season)]
+                if col == "kicker_player_id":
+                    own = own[own["play_type"].isin(["field_goal", "extra_point"])]
+                before = own[own["week"] <= week]
+                ids = (before[before["week"] == before["week"].max()] if len(before) else own[own["week"] == own["week"].min()])[col]
             pid = Counter(ids).most_common(1)[0][0] if len(ids) else None
             t = tab[(tab[key] == pid) & ((tab["season"] < season) | ((tab["season"] == season) & (tab["week"] < week)))]
             rating = float(t.sort_values(["season", "week"])["rating"].iloc[-1]) if len(t) else 0.0
@@ -246,7 +255,7 @@ class History:
                 qb_id = Counter(ids).most_common(1)[0][0] if len(ids) else None
             st = self._strength(team, season, week, game_id, qb_id)
             out[side] = {
-                "team": team, "coach": coaches.get(side), "base": st["base"], "qb": st["qb"],
+                "team": team, "coach": CO.COACH_FIX.get(coaches.get(side), coaches.get(side)), "base": st["base"], "qb": st["qb"],
                 "injury_adjustment": st["injury_adjustment"], "kicker": st["kicker"], "punter": st["punter"],
                 "lineup": {"off": self._players(R, rt, season, team, "off", off), "def": self._players(R, rt, season, team, "def", dfn)},
                 "calls": {c: {"off": v["off"], "def": v["def"]} for c, v in P.team_card(card, team).items()},

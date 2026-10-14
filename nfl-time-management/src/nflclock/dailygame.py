@@ -33,7 +33,7 @@ LAUNCH = date(2026, 10, 12)
 DAYS = 365
 SEASON = 2026
 SCENARIO_SEASONS = (2023, 2024, 2025, 2026)   # the last four seasons, playoffs included
-SPOT_CHUNK = 60                               # spots per web/spots file (a day loads at most three files)
+SPOT_CHUNK = 20                               # spots per web/spots file (a day loads at most three files)
 CATEGORIES = {"drill": "Two-minute drill", "protect": "Protect the lead", "tight": "Tied, or end of the half"}
 DRIVE_RESULT = {"Touchdown": "touchdown", "Field goal": "field goal", "Punt": "punt", "Turnover": "turnover",
                 "Turnover on downs": "turnover on downs", "End of half": "ran out the clock",
@@ -103,7 +103,7 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
                           "running": False, "phase": "snap", "receive2h": receive2h.get(gid, away)},
                 "spread": float(np.nan_to_num(g["spread_line"])),
                 "real": {"season": int(g["season"]), "week": int(g["week"]), "type": str(g["game_type"]),
-                         "coach": g["home_coach"] if home_off else g["away_coach"], "call": r["real_call"],
+                         "coach": CO.COACH_FIX.get(c := g["home_coach"] if home_off else g["away_coach"], c), "call": r["real_call"],
                          "drive": DRIVE_RESULT.get(res, res), "final": {"away": int(r["away_score"]), "home": int(r["home_score"])}},
             })
     # the two teams as they were in each spot's game, in chunks the browser loads a day at a time

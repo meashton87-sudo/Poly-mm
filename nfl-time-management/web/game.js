@@ -2778,7 +2778,7 @@
       const launch = new Date(idx.launch + 'T00:00:00');
       const now = new Date(); now.setHours(0, 0, 0, 0);
       dayN = Math.max(1, Math.floor((now - launch) / 864e5) + 1);
-      const ids = idx.schedule[(dayN - 1) % idx.schedule.length], per = idx.spot_chunk || 60, teams = {};
+      const ids = idx.schedule[(dayN - 1) % idx.schedule.length], per = idx.spot_chunk || 20, teams = {};
       await Promise.all([...new Set(ids.map((i) => Math.floor(i / per)))].map((k) => fetch(`spots/s${k}.json`)
         .then((r) => { if (!r.ok) throw new Error('spot data ' + r.status); return r.json(); }).then((c) => Object.assign(teams, c))));
       today = ids.map((i) => buildScen(idx.spots[i], teams[i]));
