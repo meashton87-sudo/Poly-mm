@@ -15,6 +15,7 @@
   const RUN = 0, PASS = 1, KNEEL = 2, SPIKE = 3;
   const SNAP = 0, PAT = 1, KICKOFF = 2, DONE = 3;
   const N_EVAL = 600;
+  const N_REFINE = 3000, REFINE_TOP = 3;   // the second round of grading (evaluateGraded)
   const POOL = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 2) - 1));
   const STORE = 'tmd:v3';
   const SVGNS = 'http://www.w3.org/2000/svg';
@@ -226,15 +227,28 @@
     return new Promise((resolve, reject) => { msg.id = ++reqId; pending.set(msg.id, { resolve, reject }); queue.push(msg); pump(); });
   }
   const simScen = () => ({ id: G.scen.id, game: G.scen.game, start: { receive2h: G.scen.start.receive2h } });
-  async function evaluate(root, options, seed) {
+  async function evaluate(root, options, seed, n = N_EVAL) {
     const k = Math.min(Math.max(1, readyCount), options.length);
     const chunks = Array.from({ length: k }, () => []);
     options.forEach((o, i) => chunks[i % k].push({ key: o.key, action: o.action }));
     const sc = simScen();
-    const res = await Promise.all(chunks.map((c) => send({ type: 'eval', scen: sc, root, options: c, n: N_EVAL, persp: G.me, seed })));
+    const res = await Promise.all(chunks.map((c) => send({ type: 'eval', scen: sc, root, options: c, n, persp: G.me, seed })));
     const out = {};
     res.forEach((r) => r.out.forEach((o) => { out[o.key] = o.mean; }));
     return out;
+  }
+  // grading a decision: every option N_EVAL times, then the top few and your choice again N_REFINE times on fresh
+  // games. Valued on the same games that picked it, the best of many noisy options is lucky, and every other call looks
+  // worse than it is (at 600 games, 15% of the calls shown red were really green or yellow); valued again, it is not.
+  // An option left out of the second round never counts as better than the best one valued in it.
+  async function evaluateGraded(root, options, seed, chosen) {
+    const v = await evaluate(root, options, seed);
+    const keys = new Set(options.slice().sort((a, b) => v[b.key] - v[a.key]).slice(0, REFINE_TOP).map((o) => o.key));
+    if (chosen !== undefined) keys.add(chosen);
+    const v2 = await evaluate(root, options.filter((o) => keys.has(o.key)), (seed ^ 0x5bd1e995) >>> 0, N_REFINE);
+    const top = Math.max(...Object.values(v2));
+    options.forEach((o) => { v[o.key] = keys.has(o.key) ? v2[o.key] : Math.min(v[o.key], top); });
+    return v;
   }
 
   // ------------------------------------------------- what coaches do (q) ---
@@ -2212,7 +2226,7 @@
     const me = G.me, lead = r.score[me] - r.score[1 - me];
     const opts = clockOptions(r).map((k) => ({ key: k, label: CLOCK[k].label, action: clockAct(k, r) }));
     status('Simulating every clock option 600 times…');
-    const vals = await evaluate(r, opts, hash('clock', seedKey(), G.si, G.seq));
+    const vals = await evaluateGraded(r, opts, hash('clock', seedKey(), G.si, G.seq), chosen);
     let q = coachProbs('off_clock_stop', r, me);
     if (lead > 0 && r.t <= 1800) q = { play: 0.9, timeout: 0.03, kneel: 0.07 };
     else if (q) q = { play: q.hurry || 0, timeout: q.timeout || 0, spike: q.spike || 0 };
@@ -2268,7 +2282,8 @@
       if (pick.call && ui.oob) opts.push({ key: `${pick.call}+oob`, label: `${CALL[pick.call].label}, get out of bounds`, action: callAction(pick.call, true) });
       specials.forEach((k) => opts.push({ key: k, label: specialLabel(k), action: withTempo({ to_off: false, play: k }) }));
       status(`Simulating all ${opts.length} calls 600 times each…`);
-      const vals = await evaluate(r, opts, hash('call', seedKey(), G.si, G.seq));
+      const chosen = pick.call ? (ui.oob ? `${pick.call}+oob` : pick.call) : pick.special;
+      const vals = await evaluateGraded(r, opts, hash('call', seedKey(), G.si, G.seq), chosen);
       const q = {};
       const freq = {}, byLook = G.info.lookByCall;
       G.info.calls.forEach((c, ci) => { freq[c.id] = c.freq * (G.look != null && byLook ? byLook[ci][G.look] : 1); });
@@ -2280,7 +2295,6 @@
       if (specials.includes('kneel')) { const qk = r.score[me] > r.score[1 - me] ? 0.5 : 0.1; q.kneel = qk; goShare *= 1 - qk; }
       const fs = calls.reduce((a, id) => a + (freq[id] || 0), 0) || 1;
       calls.forEach((id) => { q[id] = goShare * (freq[id] || 0) / fs; });
-      const chosen = pick.call ? (ui.oob ? `${pick.call}+oob` : pick.call) : pick.special;
       decisions.push(decisionFrom('call', r.down === 4 ? 'fourth_down' : 'play_select', opts, vals, chosen, q, situation(r)));
       decisions.forEach((x) => G.decisions.push(x));
       G.snapN += 1;
@@ -2341,13 +2355,13 @@
       if (defTimeoutOk(r)) {
         const to = [{ key: 'timeout', label: 'Timeout', action: { to_def: true, def: k } }, { key: 'no_timeout', label: 'Let it run', action: { to_def: false, def: k } }];
         status('Simulating both clock options 600 times…');
-        const tv = await evaluate(r, to, hash('deftime', seedKey(), G.si, G.seq));
+        const tv = await evaluateGraded(r, to, hash('deftime', seedKey(), G.si, G.seq), useTo ? 'timeout' : 'no_timeout');
         decisions.push(decisionFrom('deftime', 'def_timeout', to, tv, useTo ? 'timeout' : 'no_timeout',
           coachProbs('def_timeout', r, me) || { timeout: 0.15, no_timeout: 0.85 }, situation(r)));
       }
       const opts = DEFS.map((x) => ({ key: x, label: DEF[x].label, action: { to_def: useTo, def: x } }));
       status('Simulating all three defensive calls 600 times each…');
-      const vals = await evaluate(r, opts, hash('def', seedKey(), G.si, G.seq));
+      const vals = await evaluateGraded(r, opts, hash('def', seedKey(), G.si, G.seq), k);
       const L = (G.dinfo && G.dinfo.looks) || [0.25, 0.25, 0.25, 0.25];
       decisions.push(decisionFrom('defcall', 'def_call', opts, vals, k, { blitz: L[1] + L[3], load: L[2], soft: L[0] }, situation(r)));
       decisions.forEach((x) => G.decisions.push(x));
@@ -2397,7 +2411,7 @@
         busy = true;
         try {
           status(`Simulating ${spec.opts.length > 2 ? 'every option' : 'both options'} 600 times…`);
-          const vals = await evaluate(r, spec.opts, hash(kind, seedKey(), G.si, G.seq));
+          const vals = await evaluateGraded(r, spec.opts, hash(kind, seedKey(), G.si, G.seq), o.key);
           const x = decisionFrom(kind, spec.family, spec.opts, vals, o.key, spec.q(), `${clockOf(r.t).text} Q${clockOf(r.t).q}`);
           G.decisions.push(x);
           G.snapN += 1;
@@ -2434,6 +2448,23 @@
     const v = await evaluate(r, [{ key: 'now', action: {} }], hash('after', seedKey(), G.si, G.seq));
     return v.now;
   }
+  // the matchup behind a snap (engine.js MATCH): your call against their look, or their call against your defense
+  const LOOK_NAME = ['a light box', 'the blitz', 'a loaded box', 'the blitz'];
+  const DEF_NAME = { blitz: 'blitz', load: 'loaded box', soft: 'soft coverage' };
+  function matchupLine(e, action) {
+    if (!e || e.ev !== 'play' || !e.match || Math.abs(e.match) < 0.5 || e.call < 0 || !idx.calls[e.call]) return null;
+    const call = idx.calls[e.call].label.toLowerCase();
+    if (e.team === G.me) {
+      const b = action && action.looks ? Math.round(Math.log2(action.looks)) : -1;
+      if (!(b >= 0 && b < 4)) return null;
+      return e.match > 0 ? { good: true, text: `Good read: ${call} against ${LOOK_NAME[b]}.` }
+        : { good: false, text: `${LOOK_NAME[b][0].toUpperCase()}${LOOK_NAME[b].slice(1)} was waiting for ${call}.` };
+    }
+    const d = action && DEF_NAME[action.def];
+    if (!d) return null;
+    return e.match < 0 ? { good: true, text: `Your ${d} won the matchup: they ran ${call} into it.` }
+      : { good: false, text: `They checked into ${call} against your ${d}.` };
+  }
   function showResult(decisions, res, head) {
     drawAll();
     const d = $('dock');
@@ -2454,6 +2485,8 @@
     if (played) txt.append(wc);
     top.append(sq, txt);
     wrap.append(top);
+    const mu = matchupLine(main, res.action);
+    if (mu) wrap.append(el('div', `matchup ${mu.good ? 'won' : 'lost'}`, mu.text));
     if (played) {
       const before = decisions[decisions.length - 1].wp;
       winChanceAfter(res.root, res.done).then((after) => {
@@ -2885,6 +2918,7 @@
       'You\'re the head coach for the last minutes of a real NFL game. Three new spots every day.',
       'Call Run, Pass or RPO, then the play. Timeouts, spikes, kicks and tempo pop up when they matter. On their ball, you call the defense.',
       'Every snap is a real NFL play run against your call. Tap the field to skip, or a player to see who he is.',
+      'Matchups matter: a blitz beats deep shots but loses to quick passes and screens; a loaded box stuffs runs but gets beaten by play-action and deep shots; playing soft stops deep shots but gives up runs. Read their look before you call, and when you call the defense, they will check into what beats it.',
       'Beat the real coach\'s result, and find out which NFL coach you call it like.',
       'Survivor: random real fourth quarters back to back. Win to keep going; lose once and your run is over.',
     ].forEach((t) => ul.append(el('li', '', t)));

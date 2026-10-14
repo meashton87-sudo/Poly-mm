@@ -52,6 +52,29 @@
   const CLOSE_SNAP_FLOOR = 12.0, CLOSE_DEF_WINDOW = 120.0;
   const KO_TOUCHBACK = 65;             // daily game: a kickoff through the end zone starts the receivers at their 35 (2025 rule)
   const PB_TD_SHARE = 0.6;            // daily game: a playbook touchdown drawn farther out scores only if it covered 60% of the way
+  // daily game: matchups. Every call against the defense's call (a blitz, a loaded box, or playing soft / a light box):
+  // +1 when the call beats it, -1 when it loses to it, by football logic (and the sign of the real EPA gaps: deep
+  // shots fare worse against a blitz and better against a loaded box, runs worse into a loaded box, screens and
+  // RPOs better against a blitz). The play is still a real one; its odds tilt toward better or worse outcomes by
+  // exp(MATCH_TILT * s * EPA), so a call into the teeth of the defense gets blown up far more often than the
+  // ~0.05-point real gaps would make it (a game choice: the real gaps are too small to feel play by play). The tilt is
+  // scaled by each pool's spread of EPA, so a winning or losing matchup moves any call by about the same amount
+  const MATCH_SHIFT = 0.45;           // expected points per play a full matchup (s = +-1) is worth, about
+  const MATCH_EPA_CAP = 3;
+  const MATCH_AUDIBLE = 0.9;          // when you call their defense, the offense checks into calls that beat it
+  const RUN_M = { blitz: 0, load: -1, soft: 1 }, DEEP_M = { blitz: -1, load: 1, soft: -1 };
+  const MATCH = {
+    rb_out_strong: RUN_M, rb_out_weak: RUN_M, rb_tackle_strong: RUN_M, rb_tackle_weak: RUN_M, rb_inside_strong: RUN_M,
+    rb_inside_weak: RUN_M, rb_middle: RUN_M, qb_sneak: { blitz: 0, load: -0.5, soft: 0.5 }, qb_run: { blitz: 0.5, load: -1, soft: 1 },
+    rpo_strong: { blitz: 0.5, load: 1, soft: -0.5 }, rpo_weak: { blitz: 0.5, load: 1, soft: -0.5 },
+    quick_strong: { blitz: 1, load: 0.5, soft: -0.5 }, quick_weak: { blitz: 1, load: 0.5, soft: -0.5 },
+    quick_middle: { blitz: 1, load: 0.5, soft: -0.5 }, screen: { blitz: 1, load: 0.5, soft: -0.5 },
+    deep_strong: DEEP_M, deep_weak: DEEP_M, deep_middle: DEEP_M, pa_deep: DEEP_M, pa_short: { blitz: -0.5, load: 1, soft: 0 },
+    roll_strong: { blitz: -0.5, load: 0.5, soft: 0 }, roll_weak: { blitz: -0.5, load: 0.5, soft: 0 },
+    hail_mary: { blitz: 0, load: 0, soft: 0 }, trick: { blitz: 0, load: 1, soft: -1 },
+  };
+  // the defense's call a look stands for (lookBucket: 0 light box, 1 light + blitz, 2 loaded box, 3 loaded + blitz)
+  const LOOK_DEF = ['soft', 'blitz', 'load', 'blitz'];
   const PB_LOOK_MIN = 15;             // daily game: a call's plays against one defensive look are used when at least this many
                                       // (playbook.py LOOK_MIN)
   // daily game: a defensive look as a bucket: 0 light box (6 or fewer), 1 light with a blitz, 2 loaded box (7 or more),
@@ -253,6 +276,7 @@
       };
       P.callIndex = {};
       pb.calls.forEach((c, i) => { P.callIndex[c.id] = i; });
+      P.match = pb.calls.map((c) => MATCH[c.id] || { blitz: 0, load: 0, soft: 0 });
       P.lookB = P.look ? Uint8Array.from(P.look, lookBucket) : null;
       P.nPools = P.offsets.length - 1;
       P.poolCall = new Int32Array(P.nPools);
@@ -529,58 +553,92 @@
     // a play of the chosen call from the playbook (daily game); oob = the ball carrier tries to get out; looks = a
     // bit mask of defensive looks (lookBucket): only plays run against those, from the situation's pool when it has
     // PB_LOOK_MIN of them, else from the coarser pool built for that look; else any look
-    samplePlaybook(team, callIdx, fk, u, oob, looks) {
+    // s: the matchup (MATCH) of the call against the defense's call, tilting the draw
+    samplePlaybook(team, callIdx, fk, u, oob, looks, s) {
       const P = this.e.pb, cdf = oob ? this.pbCdf[team].cdfOob : this.pbCdf[team].cdf;
       const pool = P.poolOf[callIdx * P.nFine + fk];
       if (looks && P.lookB) {
-        let r = this._sampleLook(cdf, pool, u, looks);
+        let r = this._sampleLook(cdf, pool, u, looks, s);
         for (let b = 0; r < 0 && P.lookPool && b < 4; b++) {
           const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b];
-          if ((looks >> b) & 1 && lp !== pool) r = this._sampleLook(cdf, lp, u, looks);
+          if ((looks >> b) & 1 && lp !== pool) r = this._sampleLook(cdf, lp, u, looks, s);
         }
         if (r >= 0) return r;
       }
+      if (s) return this._sampleLook(cdf, pool, u, 0, s);
       let lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
       const target = pool + u;
       while (lo < hi) { const mid = (lo + hi) >> 1; if (cdf[mid] < target) lo = mid + 1; else hi = mid; }
       return P.items[lo];
     }
 
-    // daily game: a call of this kind ('run' or 'pass'), as often as NFL play-callers make each in situation fk
-    pickCall(kind, fk, u) {
+    // daily game: a call of this kind ('run' or 'pass'), as often as NFL play-callers make each in situation fk; against
+    // your defensive call (def) the offense checks into the calls that beat it (MATCH_AUDIBLE)
+    pickCall(kind, fk, u, def) {
       const P = this.e.pb, nC = P.calls.length;
+      const w = (c) => P.freq[fk * nC + c] * (def ? Math.exp(MATCH_AUDIBLE * P.match[c][def]) : 1);
       let tot = 0;
-      for (let c = 0; c < nC; c++) if (P.calls[c].kind === kind) tot += P.freq[fk * nC + c];
+      for (let c = 0; c < nC; c++) if (P.calls[c].kind === kind) tot += w(c);
       if (!(tot > 0)) return -1;
       let acc = 0, last = -1;
       for (let c = 0; c < nC; c++) {
         if (P.calls[c].kind !== kind) continue;
-        acc += P.freq[fk * nC + c]; last = c;
+        acc += w(c); last = c;
         if (acc >= u * tot) return c;
       }
       return last;
     }
+    // the matchup of call c against the defense's call def ('blitz' | 'load' | 'soft'), or against a one-look mask
+    matchOf(c, def) { return c >= 0 && def ? this.e.pb.match[c][def] : 0; }
+    defOfLooks(looks) {
+      if (!looks) return null;
+      for (let b = 0; b < 4; b++) if (looks === 1 << b) return LOOK_DEF[b];
+      return null;
+    }
 
-    // a play of pool `pool` run against one of the looks in mask `looks`, by the pool's weights; -1 when fewer than
-    // PB_LOOK_MIN of its plays were
-    _sampleLook(cdf, pool, u, looks) {
-      const P = this.e.pb, lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
+    // a play of pool `pool` run against one of the looks in mask `looks` (0: any look), by the pool's weights tilted by
+    // the matchup s; -1 when fewer than PB_LOOK_MIN of its plays were run against those looks
+    _sampleLook(cdf, pool, u, looks, s) {
+      const P = this.e.pb, lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1, k = s ? (MATCH_SHIFT * s) / this._poolVar(cdf, pool) : 0;
+      const ok = (i) => { if (!looks) return true; const b = P.lookB[P.items[i]]; return b < 8 && (looks >> b) & 1; };
+      const wt = (i) => {
+        const w = cdf[i] - (i > lo ? cdf[i - 1] : pool);
+        if (!k) return w;
+        const e = P.epa[P.items[i]];
+        return Number.isFinite(e) ? w * Math.exp(k * clip(e, -MATCH_EPA_CAP, MATCH_EPA_CAP)) : w;
+      };
       let tot = 0, m = 0;
-      for (let i = lo; i <= hi; i++) {
-        const b = P.lookB[P.items[i]];
-        if (b < 8 && (looks >> b) & 1) { tot += cdf[i] - (i > lo ? cdf[i - 1] : pool); m++; }
-      }
-      if (m < PB_LOOK_MIN || !(tot > 0)) return -1;
+      for (let i = lo; i <= hi; i++) if (ok(i)) { tot += wt(i); m++; }
+      if ((looks && m < PB_LOOK_MIN) || !(tot > 0)) return -1;
       const target = u * tot;
       let acc = 0, last = -1;
       for (let i = lo; i <= hi; i++) {
-        const b = P.lookB[P.items[i]];
-        if (!(b < 8 && (looks >> b) & 1)) continue;
-        acc += cdf[i] - (i > lo ? cdf[i - 1] : pool);
+        if (!ok(i)) continue;
+        acc += wt(i);
         last = i;
         if (acc >= target) return P.items[i];
       }
       return P.items[last];
+    }
+
+    // the variance of a pool's (capped) EPA, by its weights: an exponential tilt k shifts the mean by about k * var
+    _poolVar(cdf, pool) {
+      this._var = this._var || new WeakMap();          // per weight table (team, out of bounds or not), per pool
+      let byPool = this._var.get(cdf);
+      if (!byPool) { byPool = new Map(); this._var.set(cdf, byPool); }
+      let v = byPool.get(pool);
+      if (v !== undefined) return v;
+      const P = this.e.pb, lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
+      let w0 = 0, m1 = 0, m2 = 0;
+      for (let i = lo; i <= hi; i++) {
+        const w = cdf[i] - (i > lo ? cdf[i - 1] : pool), e = P.epa[P.items[i]];
+        if (!Number.isFinite(e)) continue;
+        const x = clip(e, -MATCH_EPA_CAP, MATCH_EPA_CAP);
+        w0 += w; m1 += w * x; m2 += w * x * x;
+      }
+      v = w0 > 0 ? Math.max(m2 / w0 - (m1 / w0) * (m1 / w0), 0.3) : 1;
+      byPool.set(pool, v);
+      return v;
     }
 
     sampleStop(team, pool, u) {
@@ -839,18 +897,22 @@
       if (kind === FG) this._fieldGoal(S, g, u, o, fire);
       else if (kind === PUNT) this._punt(S, g, u, o);
       else {
-        let pbRow = -1, callIdx = -1;
+        let pbRow = -1, callIdx = -1, match = 0;
         if (act && act.call !== undefined && this.pbCdf && (kind === RUN || kind === PASS)) {
+          // your call, against the look the defense showed: the matchup tilts the draw
           callIdx = this.e.pb.callIndex[act.call];
-          pbRow = this.samplePlaybook(o, callIdx, fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl), u[2], !!act.oob, act.looks);
+          match = this.matchOf(callIdx, this.defOfLooks(act.looks));
+          pbRow = this.samplePlaybook(o, callIdx, fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl), u[2], !!act.oob, act.looks, match);
         } else if (act && act.def && DEF_LOOKS[act.def] && this.pbCdf && (kind === RUN || kind === PASS)) {
           // daily game: you called the defense; the offense runs a play of the kind it chose, a call as often as
-          // play-callers make it here, drawn from real plays of that call against the look you called
+          // play-callers make it here (more often one that beats your call: it checks into it), drawn from real plays
+          // of that call against the look you called, tilted by the matchup
           const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl);
-          callIdx = this.pickCall(kind === PASS ? 'pass' : 'run', fk, u[4]);
-          if (callIdx >= 0) pbRow = this.samplePlaybook(o, callIdx, fk, u[2], false, DEF_LOOKS[act.def]);
+          callIdx = this.pickCall(kind === PASS ? 'pass' : 'run', fk, u[4], act.def);
+          match = this.matchOf(callIdx, act.def);
+          if (callIdx >= 0) pbRow = this.samplePlaybook(o, callIdx, fk, u[2], false, DEF_LOOKS[act.def], match);
         }
-        this._scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx);
+        this._scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match);
       }
     }
 
@@ -935,7 +997,7 @@
       S.credit = S.running ? credit : 0;
     }
 
-    _scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx) {
+    _scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match) {
       const d = 1 - o, L = this.e.lib;
       const yl0 = S.yl, ytg0 = S.ytg, down0 = S.down;
       let yards = 0, penalty = false, autoFd = false, incomplete = false, oob = false, tdOff = false, tdDef = false,
@@ -999,7 +1061,7 @@
       if (S.log) {
         S.log.push({ ev: 'play', team: o, kind, call: callIdx === undefined ? -1 : callIdx, yards, down: down0, ytg: ytg0,
           yl: yl0, oob: oob && !penalty, incomplete, penalty, td: tdOff, tdDef, turnover, safety, fd: fd && !change,
-          onDowns, dur, t: S.t, running: S.running, row: pbRow === undefined ? -1 : pbRow });
+          onDowns, dur, t: S.t, running: S.running, row: pbRow === undefined ? -1 : pbRow, match: match || 0 });
       }
       this._endHalfCheck(S, g);
     }

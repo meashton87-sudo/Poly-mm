@@ -59,4 +59,19 @@ for (let i = 0; i < 8; i++) {
   cur = r.root;
   if (r.done) break;
 }
+// matchups (engine.js MATCH): a call that beats the defense's call does better than the real plays alone, one that
+// loses to it worse (mean EPA of the plays drawn, over every situation)
+{
+  const S = eng.simulator(eng.makeContext(scen(idx.spots[0]).game, { receive2h: idx.spots[0].start.receive2h }));
+  const P = eng.pb, mean = (id, look, s) => {
+    let t = 0, n = 0;
+    for (let fk = 0; fk < P.nFine; fk += 7) for (let k = 0; k < 400; k++) { const r = S.samplePlaybook(0, P.callIndex[id], fk, (k + 0.5) / 400, false, look, s); t += P.epa[r]; n++; }
+    return t / n;
+  };
+  [['rb_inside_strong', 4, -1], ['deep_strong', 2, -1], ['screen', 2, 1], ['pa_deep', 4, 1]].forEach(([id, look, s]) => {
+    const lo = mean(id, look, -Math.abs(s)), mid = mean(id, look, 0), hi = mean(id, look, Math.abs(s));
+    assert.ok(lo < mid - 0.15 && hi > mid + 0.15, `matchup tilt ${id}: ${lo.toFixed(2)} / ${mid.toFixed(2)} / ${hi.toFixed(2)}`);
+    console.log(`matchup ${id.padEnd(17)} losing ${lo.toFixed(2)}  real ${mid.toFixed(2)}  winning ${hi.toFixed(2)} EPA`);
+  });
+}
 console.log('smoke ok');
