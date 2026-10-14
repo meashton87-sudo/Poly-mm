@@ -24,6 +24,19 @@
   // phone that cached the last build's files fetches this build's instead of mixing old and new
   const BUILD = (document.querySelector('meta[name="build"]') || {}).content || '';
   const asset = (u) => (BUILD ? `${u}?v=${encodeURIComponent(BUILD)}` : u);
+  // Analytics events (the website's Google tag, scripts/site.py --ga; nothing anywhere else): what players do, so the
+  // next changes follow the data. Event names and fields are listed in the README.
+  const track = (name, params) => { try { if (typeof window.gtag === 'function') window.gtag('event', name, params || {}); } catch (e) { /* never in the way */ } };
+  const modeName = () => (SURV ? 'survivor' : 'daily');
+  // Share: the phone's share sheet where there is one (a group chat in a tap), else the clipboard, else select it
+  async function shareText(text, pre, what) {
+    if (navigator.share && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+      try { await navigator.share({ text }); track('share', { what, method: 'sheet' }); return; }
+      catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    try { await navigator.clipboard.writeText(text); toast('Copied to clipboard'); track('share', { what, method: 'copy' }); }
+    catch (e) { const sel = window.getSelection(); const rg = document.createRange(); rg.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(rg); toast('Selected: copy it'); track('share', { what, method: 'select' }); }
+  }
   const SVGNS = 'http://www.w3.org/2000/svg';
 
   const TEAMS = {
@@ -2322,7 +2335,10 @@
     if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
     const go = el('button', 'btn', 'Next');
     go.type = 'button';
-    go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
+    go.addEventListener('click', () => {
+      if (!G.started) track('drive_start', { mode: modeName(), kind: sc.category, day: dayN });
+      G.started = true; persist(); enterField();
+    });
     box.append(go);
     const rl = sc.real || {};
     box.append(el('div', 'from', `The real score, clock, ball and timeouts from that game, with the players who were on the field and how good they were that week.`));
@@ -2397,6 +2413,7 @@
     return res;
   }
   async function replay() {
+    track('replay');
     const lp = G.lastPlay;
     if (busy || !lp) return;
     busy = true;
@@ -2799,6 +2816,9 @@
       specials.forEach((k) => opts.push({ key: k, label: specialLabel(k), action: withTempo({ to_off: false, play: k }) }));
       const chosen = passPick ? passPick.key : pick.call ? (ui.oob ? `${pick.call}+oob` : pick.call) : pick.special;
       remember(opts.find((o) => o.key === chosen).action.call);
+      const cid = passPick ? passPick.action.call : pick.call;
+      track('play_call', { mode: modeName(), family: pick.special || (passPick ? 'pass' : (CALL[cid] || {}).family || 'other'), call: cid || pick.special,
+        routes_changed: passPick ? ((ui.pass && ui.pass.hist) || []).length : 0, oob: !!ui.oob });
       const q = {};
       const freq = {}, byLook = G.info.lookByCall;
       G.info.calls.forEach((c, ci) => { freq[c.id] = c.freq * (G.look != null && byLook ? byLook[ci][G.look] : 1); });
@@ -2868,6 +2888,7 @@
   async function decideDefense(k) {
     if (busy) return;
     busy = true;
+    track('defense_call', { mode: modeName(), call: k });
     const r = G.root, me = G.me;
     try {
       const useTo = !!(ui.to && defTimeoutOk(r)), askTo = defTimeoutOk(r), seq = G.seq;
@@ -3127,6 +3148,7 @@
   const isPlayoff = (sc) => !!ROUND[(sc.real || {}).type];
   const needsOvertime = (r) => SURV && r.phase === DONE && r.t <= 0 && !r.ot && r.score[0] === r.score[1];
   function overtime() {
+    track('overtime', { day: dayN });
     const r = G.root, po = isPlayoff(G.scen), d = $('dock'), them = teamName(code(1 - G.me));
     const won = rng(hash('toss', seedKey(), G.si))() < 0.5;
     drawAll();
@@ -3180,6 +3202,7 @@
       state.games.push({ id: sc.id, tag: gameTag(sc), me: sc.player, op: sc.player === sc.home ? sc.away : sc.home,
         mine: res.mine, theirs: res.theirs, ot: inOT, w, tie });
       if (w) state.won += 1; else if (!tie) state.out = true;
+      track('survivor_game', { result: w ? 'win' : tie ? 'tie' : 'loss', overtime: inOT, streak: state.won });
       persist();
     }
     d.textContent = '';
@@ -3420,7 +3443,7 @@
     inp.maxLength = 24;
     inp.value = myName();
     inp.placeholder = 'e.g. Eli';
-    inp.addEventListener('change', () => { save(NAME_KEY, inp.value.trim().slice(0, 24)); if (onSet) onSet(); else renderSurvSummary(true); });
+    inp.addEventListener('change', () => { save(NAME_KEY, inp.value.trim().slice(0, 24)); track('name_set', { mode: modeName() }); if (onSet) onSet(); else renderSurvSummary(true); });
     w.append(inp);
     return w;
   }
@@ -3511,10 +3534,7 @@
     const pre = el('div', 'grid-share', text);
     const share = el('button', 'btn alt', 'Share');
     share.type = 'button';
-    share.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(text); toast('Copied to clipboard'); }
-      catch (e) { const sel = window.getSelection(); const rg = document.createRange(); rg.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(rg); toast('Selected: copy it'); }
-    });
+    share.addEventListener('click', () => shareText(text, pre, 'survivor'));
     const again = el('button', 'btn', 'New run');
     again.type = 'button';
     again.addEventListener('click', () => { state = newRun(); saveState(); survOpen(); });
@@ -3554,6 +3574,7 @@
     const cc = coachCard(decs, 'Today you coached like');
     st.days[dayN] = { p, wpa, coach: cc ? cc.name : null };
     save(`${STORE}:stats`, st);
+    const firstFinish = !state.done;
     state.done = true;
     saveState();
     drawTiles();
@@ -3573,6 +3594,8 @@
       return `${today[i].player} ${r} ${squeeze(s.decisions || []).map((m) => SQ[m]).join('')}`;
     });
     const met = rec[0] + rec[1] + rec[2], recTxt = `${rec[0]}-${rec[1]}${rec[2] ? `-${rec[2]}` : ''}`;
+    if (firstFinish) track('daily_finish', { day: dayN, kind: today[0] && today[0].category, score: Math.round(p * 100),
+      vs_coach: rec[0] ? 'better' : rec[1] ? 'worse' : met ? 'same' : 'none', snaps: decs.length });
     // one drive: a sentence, not a record
     const one = today.length === 1 ? (rec[0] ? 'Beat the real coach' : rec[1] ? 'Lost to the real coach' : 'Matched the real coach') : null;
     const vs = met ? (one ? `\n${one}` : `\nVs the real coaches: ${recTxt}`) : '';
@@ -3591,10 +3614,7 @@
     box.append(pre);
     const btn = el('button', 'btn alt', 'Share');
     btn.type = 'button';
-    btn.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(text); toast('Copied to clipboard'); }
-      catch (e) { const sel = window.getSelection(); const rg = document.createRange(); rg.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(rg); toast('Selected: copy it'); }
-    });
+    btn.addEventListener('click', () => shareText(text, pre, 'daily'));
     box.append(btn, countdown());
   }
   // Everyone who played today (the website: board/worker.js /daily). Your first result of the day counts once;
@@ -3673,6 +3693,7 @@
     btn.addEventListener('click', again);
     const all = el('a', 'chip', 'Every day’s stats ›');
     all.href = 'stats';
+    all.addEventListener('click', () => track('stats_page_link'));
     const row = el('div', 'res-acts');
     row.append(btn, all);
     box.append(row);
@@ -3738,6 +3759,7 @@
     openModal('This game', [dl, el('p', 'note', `The players who were on the field in that game (${gameTag(sc)}), each rated against his position as of that week, and the real point spread.`)]);
   }
   function openHelp() {
+    track('help_open');
     const ex = el('div', 'ex');
     ['g', 'y', 'o', 'r'].forEach((m) => ex.append(el('span', `sq ${m}`, GLYPH[m])));
     const ul = el('ul');
@@ -3768,6 +3790,7 @@
     ]);
   }
   function openStats() {
+    track('stats_open');
     const st = load(`${STORE}:stats`, { days: {} });
     const days = Object.keys(st.days).map(Number).sort((a, b) => a - b);
     let streak = 0; for (let k = dayN; st.days[k]; k--) streak++;
