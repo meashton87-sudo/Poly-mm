@@ -633,11 +633,26 @@
       return best;
     };
     const foes = (a) => (a.off ? K.def : K.off);
-    const tdL = () => (dir > 0 ? 103 : -3);
+    const tdL = () => (dir > 0 ? 103 : -3);                 // the end zone the offense is attacking
+    const defTdL = () => (dir > 0 ? -3 : 103);              // the one behind it, where a defensive return scores
+    // a turnover returned for a touchdown (the engine's outcome, whatever the real play's label): the man with the
+    // ball runs it back to the end zone behind the offense, the offense chasing
+    function returnTd(rec, t, from, call) {
+      const pl = runFrom(rec, t, [[inX(from[0] + jit(8)), defTdL()]], { eff: 0.95 });
+      foes(rec).forEach((d) => { if (d !== rec) leg(d, t + 0.3, 'chase', { who: rec.b, gap: 2, eff: 0.9 }); });
+      say(t + pl.T, call, 'hit', { follow: rec });
+      return t + pl.T;
+    }
     const sidelineX = (x) => (x > FW / 2 ? FW + 0.6 : -0.6);
     const lastEnd = (t) => { P.T = Math.max(P.T, t); };
 
     // ---- the snap and the line
+    // a spike or a kneel is taken under center: the quarterback lines up a yard behind the ball
+    function underCenter() {
+      if (!qb) return;
+      qb.x0 = bx; qb.L0 = fwd(L0, -0.8);
+      qb.b.x = yx(qb.x0); qb.b.y = qb.L0;
+    }
     function snapToQb() {
       if (!qb) return;
       fly(0, T_SNAP, bx, L0, qb.x0, qb.L0, 0.15);
@@ -709,7 +724,8 @@
         pts.push(best);
       }
       const [ex, ey] = unit(endPt[0] - (pts.length ? pts[0][0] : start[0]), endPt[1] - (pts.length ? pts[0][1] : start[1]));
-      const contact = tackled ? [endPt[0] - ex * after, endPt[1] - ey * after] : endPt;
+      // (inside the sideline, as every run is: the pile below starts where his run ended)
+      const contact = tackled ? [inX(endPt[0] - ex * after), endPt[1] - ey * after] : endPt;
       const route = dist(start, contact) > 0.6 ? pts.concat([contact]) : [contact];
       let A = runFrom(car, t0, route, { eff: o.eff ?? 0.97, v1: tackled ? 3.4 : undefined });
       let tC = t0 + A.T;
@@ -812,16 +828,10 @@
         const rec = lost ? nearest(foes(car), f) : nearest((car.off ? K.off : K.def).filter((m) => m !== car), f) || car;
         if (rec) {
           busy.add(rec);
-          runFrom(rec, tEnd + 0.1, [f], { T: 0.6, v1: 0 });
-          hold(tEnd + 0.72, rec);
-          t = tEnd + 0.72;
-          if (e.evt === 'scoop_score') {
-            const z = [inX(f[0] + jit(8)), dir > 0 ? -3 : 103];
-            const pl = runFrom(rec, t, [z], { eff: 0.95 });
-            foes(rec).forEach((d) => { if (d !== rec) leg(d, t + 0.3, 'chase', { who: rec.b, gap: 2, eff: 0.9 }); });
-            t += pl.T;
-            say(t, 'Scoop and score!', 'hit', { follow: rec });
-          } else {
+          t = tEnd + 0.12 + runFrom(rec, tEnd + 0.1, [f], { T: 0.6, v1: 0 }).T;      // he has it when he gets to it
+          hold(t, rec);
+          if (lost && e.tdDef) t = returnTd(rec, t, f, 'Scoop and score!');
+          else {
             leg(rec, t, 'stand');
             say(t, lost ? `${defName} ball` : 'Recovered', lost ? 'hit' : 'info', { slot: 1, follow: rec });
           }
@@ -1039,10 +1049,10 @@
         hold(tCatch, picker);
         ring(tCatch, picker);
         say(tCatch, 'Intercepted!', 'hit', { follow: picker });
-        const end = e.evt === 'pick_six' ? [inX(catchPt[0] + jit(10)), tdL()] : [inX(catchPt[0] + jit(8)), inL(losOf(res.root))];
+        const end = e.tdDef ? [inX(catchPt[0] + jit(10)), defTdL()] : [inX(catchPt[0] + jit(8)), inL(losOf(res.root))];
         // he runs it back the other way: the offense becomes the chasers
-        const tEnd = runDown(picker, tCatch + 0.05, end, { td: e.evt === 'pick_six', after: 0.6 });
-        if (e.evt === 'pick_six') say(tEnd, 'Pick-six!', 'hit', { follow: picker });
+        const tEnd = runDown(picker, tCatch + 0.05, end, { td: e.tdDef, after: 0.6 });
+        if (e.tdDef) say(tEnd, 'Pick-six!', 'hit', { follow: picker });
         else down(tEnd + 0.05, picker);
         lastEnd(tEnd + 1.0);
         return;
@@ -1138,7 +1148,7 @@
       snapToQb();
       busy.add(qb);
       ring(T_SNAP, qb);
-      const tS = clip(e.dur ? e.dur - 0.6 : 3.0, 2.2, 4.4) + jit(0.25);
+      let tS = clip(e.dur ? e.dur - 0.6 : 3.0, 2.2, 4.4) + jit(0.25);
       const q0 = here(qb), drop = [q0[0] + jit(0.3), fwd(L0, -7.3)];
       follow(qb, T_SNAP, plan(qb, [q0, drop], { eff: 0.5, v1: 0 }));
       const nRush = e.rushers || (e.look && e.look.blitz ? 5 : 4);
@@ -1148,8 +1158,11 @@
       passShape({ kind: 'deep', tgt: null, catchPt: [BX, fwd(L0, 10)], tThrow: tS + 1, tCatch: tS + 2, rushers, shell: shellOf(), side, qbSpot: (t) => Wd.posAt(qb.b, Math.min(t, Wd.t)) });
       rushers.filter((d) => !K.rush.includes(d)).forEach((d, i) => leg(d, REACT_DEF + 0.1, 'chase', { who: qb.b, gap: 1.8 + i * 0.6, eff: 0.95 }));
       const Lend = inL(fwd(L0, e.yards)), spot = [inX(drop[0] + jit(1.5)), Lend];
-      // he feels it and moves, then goes down where the play ended
-      const tMove = Math.max(T_SNAP + 1.4, tS - 0.7);
+      // he feels it and moves, then goes down where the play ended (a long sack: he flees sooner, and goes down
+      // only once he can have got there)
+      const flee = Motion.minTime([drop, spot], qb.b.g, { spd: qb.b.spd }) / 0.9;
+      const tMove = Math.max(T_SNAP + 0.9, Math.min(Math.max(T_SNAP + 1.4, tS - 0.7), tS - flee));
+      tS = Math.max(tS, tMove + flee);
       Wd.run(tMove);
       runFrom(qb, tMove, [spot], { T: tS - tMove, v1: 0 });
       const rusher = nearest(e.look && e.look.blitz ? rushers : K.rush.length ? K.rush : rushers, here(qb)) || K.def[0];
@@ -1172,9 +1185,14 @@
         fly(tS, tS + 0.55, px(spot[0]), spot[1], px(f[0]), f[1], 0.2);
         rest(tS + 0.55, px(f[0]), f[1]);
         const rec = e.evt === 'strip_sack' ? nearest(rushers.filter((d) => d !== rusher), f) || rusher : nearest(K.ol, f);
-        if (rec) { busy.add(rec); runFrom(rec, tS + 0.1, [f], { T: 0.6, v1: 0 }); hold(tS + 0.72, rec); leg(rec, tS + 0.75, 'stand'); }
-        say(tS + 0.7, e.evt === 'strip_sack' ? `${defName} ball` : 'Fumble: recovered', e.evt === 'strip_sack' ? 'hit' : 'info', { slot: 1, follow: rec || qb });
-        t = tS + 0.85;
+        let tRec = tS + 0.72;      // he has the ball when he gets to it
+        if (rec) { busy.add(rec); tRec = tS + 0.12 + runFrom(rec, tS + 0.1, [f], { T: 0.6, v1: 0 }).T; hold(tRec, rec); }
+        if (rec && e.tdDef) t = returnTd(rec, tRec + 0.03, f, 'Scoop and score!');
+        else {
+          if (rec) leg(rec, tRec + 0.03, 'stand');
+          say(tRec, e.evt === 'strip_sack' ? `${defName} ball` : 'Fumble: recovered', e.evt === 'strip_sack' ? 'hit' : 'info', { slot: 1, follow: rec || qb });
+          t = tRec + 0.13;
+        }
       }
       if (e.safety) say(tS + 0.35, 'Safety!', 'hit', { slot: 1, follow: qb });
       whistle(tS + 0.3, spot);
@@ -1245,17 +1263,24 @@
         say(0.5, 'Bad snap!', 'hit', { x: px(l[0]), L: l[1] });
         lineplay('pass', 0, K.rush);
         const rec = e.turnover ? nearest(K.rush.concat(K.def), l) : qb;
+        let tRec = 1.07;           // he has the ball when he gets to it
         if (rec) {
           busy.add(rec);
-          follow(rec, 0.3, plan(rec, [here(rec), l], { T: 0.75, v1: 0 }));
-          hold(1.07, rec);
-          if (rec === qb && qb) { Wd.run(1.1); runFrom(qb, 1.1, [[inX(l[0] + jit(2)), inL(fwd(L0, e.yards))]], { eff: 0.8, v1: 0 }); }
+          tRec = 0.32 + follow(rec, 0.3, plan(rec, [here(rec), l], { T: 0.75, v1: 0 })).T;
+          hold(tRec, rec);
+          if (rec === qb && qb) { Wd.run(tRec + 0.03); runFrom(qb, tRec + 0.03, [[inX(l[0] + jit(2)), inL(fwd(L0, e.yards))]], { eff: 0.8, v1: 0 }); }
         }
-        say(1.2, e.turnover ? `${defName} ball` : 'Recovered', e.turnover ? 'hit' : 'info', { slot: 1, follow: rec || qb });
-        Wd.run(1.3);
-        whistle(1.9, l);
-        P.T = 3.0;
+        if (rec && rec !== qb && e.tdDef) {
+          const tEnd = returnTd(rec, tRec + 0.03, l, 'Scoop and score!');
+          P.T = tEnd + 1.2;
+        } else {
+          say(tRec + 0.13, e.turnover ? `${defName} ball` : 'Recovered', e.turnover ? 'hit' : 'info', { slot: 1, follow: rec || qb });
+          Wd.run(tRec + 0.23);
+          whistle(tRec + 0.83, l);
+          P.T = tRec + 1.93;
+        }
       } else if (e.kind === SPIKE) {
+        underCenter();
         snapToQb();
         if (qb) {
           leg(qb, T_SNAP + 0.1, 'go', { x: qb.b.x, y: fwd(qb.b.y, 0.6), eff: 0.4 });
@@ -1269,8 +1294,9 @@
         whistle(0.9, null);
         P.T = 1.9;
       } else if (e.kind === KNEEL) {
+        underCenter();
         snapToQb();
-        if (qb) { leg(qb, T_SNAP, 'go', { x: qb.b.x, y: fwd(qb.b.y, -1), eff: 0.35 }); down(0.85, qb); say(0.85, 'Kneel', 'info', { follow: qb }); }
+        if (qb) { leg(qb, T_SNAP, 'go', { x: qb.b.x, y: fwd(L0, e.yards), eff: 0.35 }); down(0.85, qb); say(0.85, 'Kneel', 'info', { follow: qb }); }
         K.ol.forEach((a) => leg(a, REACT_OFF, 'go', { x: a.b.x, y: fwd(a.b.y, 0.3), eff: 0.3 }));
         K.def.forEach((a) => leg(a, REACT_DEF + R() * 0.3, 'go', { x: a.b.x, y: fwd(a.b.y, -0.6), eff: 0.25 }));
         P.T = 2.0;
@@ -1801,7 +1827,7 @@
         scoop_score: 'fumble, scooped and returned for a touchdown', fumble_lost: 'fumble, lost',
         fumble_kept: `fumbles, but the offense recovers: ${gain}`,
         scramble: e.td ? `scrambles ${y} yards for a touchdown` : `pressure, scrambles: ${gain}`,
-        throwaway: 'pressure, throws it away', drop: 'dropped, incomplete', near_pick: 'nearly intercepted, incomplete' }[e.evt];
+        throwaway: y < 0 ? `pressure, intentional grounding: ${gain}` : 'pressure, throws it away', drop: 'dropped, incomplete', near_pick: 'nearly intercepted, incomplete' }[e.evt];
     }
     if (!res) {
       if (e.turnover) res = e.tdDef ? 'turnover, returned for a touchdown' : e.kind === PASS ? 'intercepted' : 'fumble, lost';
@@ -1809,6 +1835,8 @@
       else if (e.incomplete) res = 'incomplete';
       else res = gain;
     } else if (e.td && !/touchdown/.test(res)) res += `, ${y}-yard touchdown`;
+    // the engine decides the score: a turnover it returned for a touchdown says so, whatever the real play's label
+    if (e.tdDef && !/touchdown/.test(res)) res = e.kind === PASS && !/fumble|bad snap|strip/.test(res) ? 'intercepted and returned for a touchdown' : `${res.split(',')[0]}, returned for a touchdown`;
     const extra = [];
     if (e.oob && !e.incomplete) extra.push('out of bounds');
     else if (act && act.oob && mine && !e.incomplete && !e.penalty && !e.turnover && !e.td && !e.safety) extra.push('could not get out of bounds');

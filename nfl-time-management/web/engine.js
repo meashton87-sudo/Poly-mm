@@ -776,7 +776,9 @@
       spikeNow = spikeNow && !kneelNow;
       if (act && act.tempo) { tempo = TEMPO[act.tempo]; spikeNow = false; kneelNow = false; }
       const forced = act ? act.play : undefined;
-      if (forced !== undefined) { kneelNow = forced === 'kneel'; spikeNow = forced === 'spike' && runC; }
+      // a called spike is a spike even if the clock stopped before the snap (their timeout, the two-minute
+      // warning): never a play from the library
+      if (forced !== undefined) { kneelNow = forced === 'kneel'; spikeNow = forced === 'spike'; }
       // 4th down with the clock running and a kick that ties or wins: rush the field-goal unit on
       const fgUseful0 = half === 1 || (margin >= -3 && margin <= 0);
       let fire = runC && down === 4 && fgUseful0 && this.fgProb(yl + FG_SNAP_YARDS, o) >= 0.3 && tHalf <= FIRE_WINDOW;
@@ -820,7 +822,7 @@
       const snapBudget = S.to[o] > 0 ? 8.0 : 15.0;
       fgLast = fgLast || (tHalf <= snapBudget && pFg >= 0.3 && fgUseful && !runningAtSnap);
       if (kind < 0 && fgLast) kind = FG;
-      if (kind === SPIKE && fgLast) kind = FG;
+      if (kind === SPIKE && fgLast && forced !== 'spike') kind = FG;
       if (fire || endkick) kind = FG;
       if (kind < 0 && down === 4) kind = this._fourthDown(S, g, o, margin, tHalf, pFg, u[5]);
       if (kind < 0 && runOut && down < 4) kind = RUN;

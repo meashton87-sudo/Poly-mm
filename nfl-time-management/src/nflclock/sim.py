@@ -395,7 +395,9 @@ class Simulator:
         forced = act.get("play")
         if forced is not None:
             kneel_now[:] = forced == "kneel"
-            spike_now[:] = (forced == "spike") & run_c
+            # a called spike is a spike even if the clock stopped before the snap (their timeout, the two-minute
+            # warning): never a play from the library
+            spike_now[:] = forced == "spike"
         # 4th down with the clock running and a kick that ties or wins: rush the field-goal unit on
         fg_useful0 = (half == 1) | ((margin >= -3) & (margin <= 0))
         fire = run_c & (down == 4) & fg_useful0 & (self.fg_prob(yl + FG_SNAP_YARDS, o) >= 0.3) & (t_half <= FIRE_WINDOW)
@@ -453,7 +455,8 @@ class Simulator:
         snap_budget = np.where(S.to[ix, o] > 0, 8.0, 15.0)
         fg_last |= (t_half <= snap_budget) & (p_fg >= 0.3) & fg_useful & ~running_at_snap
         kind[(kind < 0) & fg_last] = FG
-        kind[(kind == SPIKE) & fg_last] = FG
+        if forced != "spike":
+            kind[(kind == SPIKE) & fg_last] = FG
         kind[fire | endkick] = FG
         fourth = (kind < 0) & (down == 4)
         if fourth.any():
