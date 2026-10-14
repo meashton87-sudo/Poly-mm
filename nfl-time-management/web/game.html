@@ -57,6 +57,20 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .tiles span { width: 28px; height: 28px; border: 2px solid var(--line); border-radius: 4px; font: 800 14px var(--display); color: var(--muted); display: grid; place-items: center; }
 .tiles span.on { border-color: var(--ink); color: var(--ink); }
 .tiles span.done { border-color: transparent; color: var(--sq-ink); }
+.tiles span.more { width: auto; padding-inline: 4px; border-color: transparent; }
+/* Daily or Survivor: two links that swap the page's #anchor (the page reloads into that mode) */
+.modes { display: flex; justify-content: center; gap: 4px; }
+.modes a { font: 700 12px var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); text-decoration: none;
+  padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); }
+.modes a[aria-current="page"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.intro .who.surv { font: 800 13px var(--body); letter-spacing: .1em; text-transform: uppercase; color: var(--sq-r); }
+.endcard .alive { margin: 0; font: 900 22px/1.1 var(--display); letter-spacing: .04em; text-transform: uppercase; }
+.endcard .alive.in { color: var(--sq-g); } .endcard .alive.out { color: var(--sq-r); }
+.runlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; text-align: left; }
+.runlist li { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; padding: 8px 10px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); }
+.runlist .res { grid-row: span 2; align-self: center; font: 900 18px var(--display); letter-spacing: .03em; font-variant-numeric: tabular-nums; }
+.runlist li.w .res { color: var(--sq-g); } .runlist li.l .res { color: var(--sq-r); }
+.runlist .m { font-weight: 700; min-width: 0; } .runlist .tag { font-size: 12.5px; color: var(--muted); }
 
 /* the scenario card */
 .intro { display: grid; gap: 14px; text-align: center; padding-block: 18px 8px; }
@@ -330,6 +344,7 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
 </header>
 
 <main class="wrap">
+  <nav class="modes" aria-label="Game mode"><a id="modeDaily" href="#daily">Daily</a><a id="modeSurv" href="#survivor">Survivor</a></nav>
   <div id="tiles" class="tiles" aria-label="Today's three spots"></div>
   <section id="intro" class="intro" hidden></section>
   <section id="play" hidden>

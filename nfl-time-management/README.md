@@ -359,6 +359,12 @@ late-game calls look most like yours ("You called this one like Nick Sirianni"),
 league does in the same spots (`coaches.py`). The day's score is a percentile against NFL play-callers
 in the same three spots, with a share grid of one square per snap.
 
+**Survivor** (the Survivor tab, or `game.html#survivor`) plays random real fourth quarters back to back from
+the same pool: the 430 spots that start in the fourth quarter, so every one is played to the final gun. Win
+and the next game is drawn (none twice in a run until all have been played); lose and the run is over. A tie
+at the gun goes to overtime, won or lost with the engine's win chance for the tied game. The run survives a
+reload, and the best run is kept.
+
 Every spot is a real late-game drive from the last four seasons (2023-2026, playoffs included), and the
 card names the game ("2024 Week 12, PHI at LA" or "2025 Divisional, HOU at KC"). The two teams are the ones
 that played it (`history.py`): the 22 on the field are the players on that very snap (nflverse

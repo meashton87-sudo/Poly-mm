@@ -7,7 +7,8 @@
  * matters), then the play. The nflclock engine (engine.js, in Web Workers) plays the snap from real NFL
  * plays of that call and values every option by simulating the rest of the game. Nothing says which call
  * is best until after the snap. The day ends with a percentile against NFL play-callers and the head
- * coach whose late-game calls look most like yours. */
+ * coach whose late-game calls look most like yours. Survivor (#survivor) plays random real fourth quarters
+ * back to back: win to keep going, one loss ends the run. */
 (function () {
   'use strict';
   const $ = (id) => document.getElementById(id);
@@ -77,7 +78,13 @@
 
   let idx = null;                 // game.json
   let dayN = 1, today = [];
-  let state = null;               // saved progress for today
+  let state = null;               // saved progress: today's three spots, or the survivor run
+  // two modes: the daily three spots, or survivor (#survivor): random real fourth-quarter spots back to back, win to
+  // keep going, one loss and the run is over (a tie at the gun goes to overtime, won with the engine's win chance)
+  const SURV = location.hash === '#survivor';
+  const stateKey = () => (SURV ? `${STORE}:surv` : `${STORE}:day:${dayN}`);
+  const saveState = () => save(stateKey(), state);
+  const seedKey = () => (SURV ? `s${state.run}:${state.games.length}` : dayN);    // what the engine's draws are seeded by
   let G = null;                   // the spot being played
   let ui = { step: null, fam: null, oob: false };
   let busy = false, lastFocus = null, tick = null, lastBall = null;
@@ -175,7 +182,7 @@
       league: sp.league || idx.league, home_coach: H.coach, away_coach: A.coach, season: sp.real ? sp.real.season : idx.asof.season };
     return { ...sp, game };
   }
-  const sideFor = (seq) => (hash('side', dayN, G.si, seq) % 2 ? 1 : -1);   // +1: strong side on the offense's right
+  const sideFor = (seq) => (hash('side', seedKey(), G.si, seq) % 2 ? 1 : -1);   // +1: strong side on the offense's right
   const lineup = (i) => (teamOf(i).lineup || { off: [], def: [] });
   function names(i) {
     const off = lineup(i).off;
@@ -1666,6 +1673,14 @@
   function drawTiles() {
     const t = $('tiles');
     t.textContent = '';
+    if (SURV) {                 // the run so far: a square per game (the last 7), then the game being played
+      const g = state.games, from = Math.max(0, g.length - 7);
+      t.setAttribute('aria-label', `Survivor: ${state.won} win${state.won === 1 ? '' : 's'}`);
+      if (from) t.append(el('span', 'more', `+${from}`));
+      g.slice(from).forEach((x) => { const b = el('span', `done sq ${x.w ? 'g' : 'r'}`, x.w ? 'W' : 'L'); b.title = `${x.tag}: ${x.w ? 'won' : 'lost'} ${x.mine}–${x.theirs}`; t.append(b); });
+      if (!state.out && G) { const b = el('span', 'on', String(g.length + 1)); b.title = `Game ${g.length + 1}: playing`; t.append(b); }
+      return;
+    }
     for (let i = 0; i < 3; i++) {
       const s = state.spots[i];
       const b = el('span', '', String(i + 1));
@@ -1858,7 +1873,7 @@
   function persist() {
     state.spots[G.si] = { root: G.root, decisions: G.decisions, log: G.log, seq: G.seq, snapN: G.snapN, over: G.over,
       result: G.result, started: G.started };
-    save(`${STORE}:day:${dayN}`, state);
+    saveState();
   }
   function resumeSpot(i) {
     G = newSpot(i);
@@ -1891,7 +1906,7 @@
     const state_ = lead > 0 ? `Up by ${lead}` : lead < 0 ? `Down by ${-lead}` : 'Tied';
     const big = el('div', 'big', state_);
     big.append(el('span', 'left', left));
-    box.append(el('div', 'cat', `Spot ${G.si + 1} of 3 · ${idx.categories[sc.category]}`),
+    box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : `Spot ${G.si + 1} of 3 · ${idx.categories[sc.category]}`),
       el('div', 'game', `${gameTag(sc)} · ${teamName(sc.away)} at ${teamName(sc.home)}`), big);
     const mu = el('div', 'matchup');
     const t = (c, i) => {
@@ -1910,6 +1925,7 @@
     box.append(facts);
     const rc = (sc.real || {}).coach;
     box.append(el('div', 'who', `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
+    if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over.'));
     const go = el('button', 'btn', 'Next');
     go.type = 'button';
     go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
@@ -1965,7 +1981,7 @@
     return late && (lead <= 0 || (lead <= 3 && r.yl <= 45));
   }
   async function stepWith(action) {
-    const seed = hash('step', dayN, G.si, G.seq++);
+    const seed = hash('step', seedKey(), G.si, G.seq++);
     const before = G.root, side = G.side;
     const res = (await send({ type: 'step', scen: simScen(), root: G.root, action, seed })).res;
     res.action = action;
@@ -1993,7 +2009,7 @@
     status('Breaking the huddle…');
     G.info = (await send({ type: 'info', scen: simScen(), root: r })).info;
     G.fast = false;
-    G.look = pickLook(G.info.looks, hash('look', dayN, G.si, G.seq));
+    G.look = pickLook(G.info.looks, hash('look', seedKey(), G.si, G.seq));
     ui = { step: 'family', fam: null, oob: false, tempo: tempoKeyOf(G.info.tempo) };
     drawField();
     drawDock();
@@ -2167,7 +2183,7 @@
     const me = G.me, lead = r.score[me] - r.score[1 - me];
     const opts = clockOptions(r).map((k) => ({ key: k, label: CLOCK[k].label, action: clockAct(k, r) }));
     status('Simulating every clock option 600 times…');
-    const vals = await evaluate(r, opts, hash('clock', dayN, G.si, G.seq));
+    const vals = await evaluate(r, opts, hash('clock', seedKey(), G.si, G.seq));
     let q = coachProbs('off_clock_stop', r, me);
     if (lead > 0 && r.t <= 1800) q = { play: 0.9, timeout: 0.03, kneel: 0.07 };
     else if (q) q = { play: q.hurry || 0, timeout: q.timeout || 0, spike: q.spike || 0 };
@@ -2223,7 +2239,7 @@
       if (pick.call && ui.oob) opts.push({ key: `${pick.call}+oob`, label: `${CALL[pick.call].label}, get out of bounds`, action: callAction(pick.call, true) });
       specials.forEach((k) => opts.push({ key: k, label: specialLabel(k), action: withTempo({ to_off: false, play: k }) }));
       status(`Simulating all ${opts.length} calls 600 times each…`);
-      const vals = await evaluate(r, opts, hash('call', dayN, G.si, G.seq));
+      const vals = await evaluate(r, opts, hash('call', seedKey(), G.si, G.seq));
       const q = {};
       const freq = {}, byLook = G.info.lookByCall;
       G.info.calls.forEach((c, ci) => { freq[c.id] = c.freq * (G.look != null && byLook ? byLook[ci][G.look] : 1); });
@@ -2296,13 +2312,13 @@
       if (defTimeoutOk(r)) {
         const to = [{ key: 'timeout', label: 'Timeout', action: { to_def: true, def: k } }, { key: 'no_timeout', label: 'Let it run', action: { to_def: false, def: k } }];
         status('Simulating both clock options 600 times…');
-        const tv = await evaluate(r, to, hash('deftime', dayN, G.si, G.seq));
+        const tv = await evaluate(r, to, hash('deftime', seedKey(), G.si, G.seq));
         decisions.push(decisionFrom('deftime', 'def_timeout', to, tv, useTo ? 'timeout' : 'no_timeout',
           coachProbs('def_timeout', r, me) || { timeout: 0.15, no_timeout: 0.85 }, situation(r)));
       }
       const opts = DEFS.map((x) => ({ key: x, label: DEF[x].label, action: { to_def: useTo, def: x } }));
       status('Simulating all three defensive calls 600 times each…');
-      const vals = await evaluate(r, opts, hash('def', dayN, G.si, G.seq));
+      const vals = await evaluate(r, opts, hash('def', seedKey(), G.si, G.seq));
       const L = (G.dinfo && G.dinfo.looks) || [0.25, 0.25, 0.25, 0.25];
       decisions.push(decisionFrom('defcall', 'def_call', opts, vals, k, { blitz: L[1] + L[3], load: L[2], soft: L[0] }, situation(r)));
       decisions.forEach((x) => G.decisions.push(x));
@@ -2352,7 +2368,7 @@
         busy = true;
         try {
           status(`Simulating ${spec.opts.length > 2 ? 'every option' : 'both options'} 600 times…`);
-          const vals = await evaluate(r, spec.opts, hash(kind, dayN, G.si, G.seq));
+          const vals = await evaluate(r, spec.opts, hash(kind, seedKey(), G.si, G.seq));
           const x = decisionFrom(kind, spec.family, spec.opts, vals, o.key, spec.q(), `${clockOf(r.t).text} Q${clockOf(r.t).q}`);
           G.decisions.push(x);
           G.snapN += 1;
@@ -2498,13 +2514,25 @@
     }
     drawAll();
     const res = G.result, sc = G.scen, d = $('dock');
+    if (SURV && res.ot == null) {           // survivor: a tie goes to overtime, won with the engine's win chance
+      res.ot = res.mine !== res.theirs ? 0 : rng(hash('ot', seedKey()))() < res.wp ? 1 : -1;
+      const w = res.mine > res.theirs || res.ot > 0;
+      state.games.push({ id: sc.id, tag: gameTag(sc), me: sc.player, op: sc.player === sc.home ? sc.away : sc.home,
+        mine: res.mine, theirs: res.theirs, ot: res.ot !== 0, w });
+      if (w) state.won += 1; else state.out = true;
+      persist();
+    }
     d.textContent = '';
     takeBanner(d);
     const card = el('div', 'endcard');
     const head = res.half === 1 ? `Halftime: ${res.mine}–${res.theirs}` :
-      res.mine > res.theirs ? `You win ${res.mine}–${res.theirs}` : res.mine < res.theirs ? `You lose ${res.mine}–${res.theirs}` : `Tied ${res.mine}–${res.theirs}: overtime`;
+      res.mine > res.theirs ? `You win ${res.mine}–${res.theirs}` : res.mine < res.theirs ? `You lose ${res.mine}–${res.theirs}` :
+      SURV ? `Tied ${res.mine}–${res.theirs}: you ${res.ot > 0 ? 'win' : 'lose'} in overtime` : `Tied ${res.mine}–${res.theirs}: overtime`;
     card.append(el('h2', '', head));
-    if (res.half === 1 || res.mine === res.theirs) card.append(el('p', 'note', `Your win chance from here: ${wpTxt(res.wp)}.`));
+    if (SURV && res.ot) card.append(el('p', 'note', `Your overtime win chance was ${wpTxt(res.wp)}.`));
+    else if (res.half === 1 || res.mine === res.theirs) card.append(el('p', 'note', `Your win chance from here: ${wpTxt(res.wp)}.`));
+    if (SURV) card.append(el('p', `alive ${state.out ? 'out' : 'in'}`, state.out ? `Eliminated after ${state.won} win${state.won === 1 ? '' : 's'}.` :
+      `${state.won} straight. You're still alive.`));
     card.append(squaresOf(G.decisions));
     const hh = headToHead(G.si, res);
     if (hh) card.append(hhCard(hh));
@@ -2516,11 +2544,17 @@
     if (cc) card.append(cc.el);
     const wpa = G.decisions.reduce((a, x) => a + x.wpa, 0);
     card.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller in this spot.`));
-    const btn = el('button', 'btn', G.si < 2 ? 'Next spot' : "Today's score");
+    const btn = el('button', 'btn', SURV ? (state.out ? 'Your run' : 'Next game') : G.si < 2 ? 'Next spot' : "Today's score");
     btn.type = 'button';
     btn.addEventListener('click', () => {
+      if (SURV) {
+        if (state.out) return renderSurvSummary();
+        state.pick = null;
+        saveState();
+        return survOpen();
+      }
       state.current = G.si + 1;
-      save(`${STORE}:day:${dayN}`, state);
+      saveState();
       if (G.si < 2) openSpot(G.si + 1);
       else renderSummary();
     });
@@ -2578,6 +2612,85 @@
     return w;
   }
 
+  // ------------------------------------------------------------ survivor ---
+  // the pool: every fourth-quarter spot (each one plays to the final gun), none twice in a run until all are used
+  const survPool = () => idx.spots.map((sp, i) => (sp.start.qtr >= 4 ? i : -1)).filter((i) => i >= 0);
+  function newRun() {
+    return { run: Math.floor(Math.random() * 2 ** 31), spots: [], current: 0, pick: null, won: 0, games: [], played: [], out: false };
+  }
+  function survStats() { return load(`${STORE}:survstats`, { runs: 0, best: 0, last: null }); }
+  function survLabel() {
+    const b = Math.max(survStats().best, state.won);
+    return `Survivor · ${state.won} win${state.won === 1 ? '' : 's'}${b ? ` · best ${b}` : ''}`;
+  }
+  async function loadTeams(ids) {
+    const per = idx.spot_chunk || 20, teams = {};
+    await Promise.all([...new Set(ids.map((i) => Math.floor(i / per)))].map((k) => fetch(`spots/s${k}.json`)
+      .then((r) => { if (!r.ok) throw new Error('spot data ' + r.status); return r.json(); }).then((c) => Object.assign(teams, c))));
+    return teams;
+  }
+  async function survOpen() {
+    if (state.pick == null) {
+      const seen = new Set(state.played), all = survPool(), left = all.filter((i) => !seen.has(i));
+      const from = left.length ? left : all;
+      state.pick = from[Math.floor(Math.random() * from.length)];
+      state.played.push(state.pick);
+      state.spots = [];
+      state.current = 0;
+      saveState();
+    }
+    show('boot');
+    $('boot').textContent = 'Loading the next game…';
+    let teams;
+    try { teams = await loadTeams([state.pick]); }
+    catch (e) {
+      $('boot').textContent = '';
+      const retry = el('button', 'btn', 'Try again');
+      retry.type = 'button';
+      retry.addEventListener('click', survOpen);
+      $('boot').append(el('p', '', `The next game did not load (${e.message}). Check your connection.`), retry);
+      return;
+    }
+    today = [buildScen(idx.spots[state.pick], teams[state.pick])];
+    G = null;
+    $('dayLabel').textContent = survLabel();
+    openSpot(0);
+  }
+  function renderSurvSummary() {
+    show('done');
+    const st = survStats();
+    if (st.last !== state.run) { st.runs += 1; st.best = Math.max(st.best, state.won); st.last = state.run; save(`${STORE}:survstats`, st); }
+    $('dayLabel').textContent = survLabel();
+    drawTiles();
+    const box = $('done');
+    box.textContent = '';
+    const n = state.won;
+    box.append(el('div', 'note', 'Survivor · run over'), el('div', 'big-pct', String(n)),
+      el('div', 'pct-lab', `${n === 1 ? 'Win' : 'Wins'} before you were knocked out`),
+      el('p', 'verdict', !st.best ? 'One loss and it\'s over. Run it back.' : n >= st.best ? 'Your best run yet.' : `Your best run: ${st.best} win${st.best === 1 ? '' : 's'}.`));
+    const list = el('ol', 'runlist');
+    state.games.forEach((g) => {
+      const li = el('li', g.w ? 'w' : 'l');
+      li.append(el('span', 'res', `${g.w ? 'W' : 'L'} ${g.mine}–${g.theirs}${g.ot ? ' OT' : ''}`),
+        el('span', 'm', `${teamName(g.me)} vs ${teamName(g.op)}`), el('span', 'tag', g.tag));
+      list.append(li);
+    });
+    box.append(list);
+    const text = `Two-Minute Drill Survivor\nSurvived ${n} game${n === 1 ? '' : 's'}\n${state.games.map((g) => (g.w ? SQ.g : SQ.r)).join('')}`;
+    const pre = el('div', 'grid-share', text);
+    const share = el('button', 'btn alt', 'Share');
+    share.type = 'button';
+    share.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(text); toast('Copied to clipboard'); }
+      catch (e) { const sel = window.getSelection(); const rg = document.createRange(); rg.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(rg); toast('Selected: copy it'); }
+    });
+    const again = el('button', 'btn', 'New run');
+    again.type = 'button';
+    again.addEventListener('click', () => { state = newRun(); saveState(); survOpen(); });
+    box.append(pre, share, again);
+    again.focus({ preventScroll: true });
+  }
+
   // ------------------------------------------------------------- the day ---
   function allDecisions() {
     const out = [];
@@ -2611,7 +2724,7 @@
     st.days[dayN] = { p, wpa, coach: cc ? cc.name : null };
     save(`${STORE}:stats`, st);
     state.done = true;
-    save(`${STORE}:day:${dayN}`, state);
+    saveState();
     drawTiles();
     const box = $('done');
     box.textContent = '';
@@ -2698,13 +2811,13 @@
     const add = (k, v) => dl.append(el('dt', '', k), el('dd', '', v));
     const line = sc.game.home_spread;
     add('Game', `${teamName(sc.away)} at ${teamName(sc.home)}`);
-    add('Line today', Math.abs(line) < 0.5 ? 'Pick’em' : `${teamName(line > 0 ? sc.home : sc.away)} by ${Math.abs(line).toFixed(1)}`);
+    add('Point spread', Math.abs(line) < 0.5 ? 'Pick’em' : `${teamName(line > 0 ? sc.home : sc.away)} by ${Math.abs(line).toFixed(1)}`);
     [A, H].forEach((t) => {
       add(`${teamName(t.team)}`, `${t.coach || ''}${t.qb && t.qb.name ? ` · QB ${t.qb.name}` : ''}`);
       add('Kicker', `${t.kicker.name || '—'} · rated ${t.kicker.ovr ?? '—'}`);
       add('Punter', `${t.punter.name || '—'} · rated ${t.punter.ovr ?? '—'}`);
     });
-    openModal('This game', [dl, el('p', 'note', `Today's rosters with everyone healthy, and our player ratings through ${idx.asof.season} week ${idx.asof.through_week}. The situation is from a real ${sc.real.season} game.`)]);
+    openModal('This game', [dl, el('p', 'note', `The players who were on the field in that game (${gameTag(sc)}), each rated against his position as of that week, and the real point spread.`)]);
   }
   function openHelp() {
     const ex = el('div', 'ex');
@@ -2715,6 +2828,7 @@
       'Call Run, Pass or RPO, then the play. Timeouts, spikes, kicks and tempo pop up when they matter. On their ball, you call the defense.',
       'Every snap is a real NFL play run against your call. Tap the field to skip, or a player to see who he is.',
       'Beat the real coach\'s result, and find out which NFL coach you call it like.',
+      'Survivor: random real fourth quarters back to back. Win to keep going; lose once and your run is over.',
     ].forEach((t) => ul.append(el('li', '', t)));
     openModal('How to play', [
       ul,
@@ -2750,6 +2864,8 @@
       const top = Object.entries(coaches.reduce((a, c) => ({ ...a, [c]: (a[c] || 0) + 1 }), {})).sort((a, b) => b[1] - a[1])[0];
       nodes.push(el('p', '', `You coach most like ${top[0]} (${top[1]} day${top[1] === 1 ? '' : 's'}).`));
     }
+    const sv = survStats();
+    if (sv.runs) nodes.push(el('p', '', `Survivor: best run ${sv.best} win${sv.best === 1 ? '' : 's'} (${sv.runs} run${sv.runs === 1 ? '' : 's'}).`));
     openModal('Your stats', nodes);
   }
 
@@ -2758,6 +2874,8 @@
     const topH = () => document.documentElement.style.setProperty('--top-h', `${document.querySelector('.top').offsetHeight}px`);
     topH(); addEventListener('resize', topH);
     $('helpBtn').addEventListener('click', openHelp);
+    addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
+    $(SURV ? 'modeSurv' : 'modeDaily').setAttribute('aria-current', 'page');
     $('statsBtn').addEventListener('click', openStats);
     $('bar').addEventListener('click', () => { if (G) spotInfo(); });
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
@@ -2778,9 +2896,15 @@
       const launch = new Date(idx.launch + 'T00:00:00');
       const now = new Date(); now.setHours(0, 0, 0, 0);
       dayN = Math.max(1, Math.floor((now - launch) / 864e5) + 1);
-      const ids = idx.schedule[(dayN - 1) % idx.schedule.length], per = idx.spot_chunk || 20, teams = {};
-      await Promise.all([...new Set(ids.map((i) => Math.floor(i / per)))].map((k) => fetch(`spots/s${k}.json`)
-        .then((r) => { if (!r.ok) throw new Error('spot data ' + r.status); return r.json(); }).then((c) => Object.assign(teams, c))));
+      if (SURV) {
+        state = load(stateKey(), null) || newRun();
+        if (!load(`${STORE}:seen`, false)) { openHelp(); save(`${STORE}:seen`, true); }
+        startWorkers();
+        if (state.out) renderSurvSummary(); else await survOpen();
+        return;
+      }
+      const ids = idx.schedule[(dayN - 1) % idx.schedule.length];
+      const teams = await loadTeams(ids);
       today = ids.map((i) => buildScen(idx.spots[i], teams[i]));
       $('dayLabel').textContent = `No. ${dayN} · ${now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
     } catch (e) { $('boot').textContent = 'Today\'s spots did not load (' + e.message + '). Check your connection and reload.'; return; }
