@@ -96,7 +96,7 @@ def export_engine(bundle: Bundle | None = None, path=None) -> dict:
     }
     WEB_DIR.mkdir(exist_ok=True)
     path = path or WEB_DIR / "engine_data.json"
-    path.write_text(json.dumps(out, separators=(",", ":")))
+    path.write_text(json.dumps(out, separators=(",", ":"), allow_nan=False))
     return out
 
 
@@ -114,5 +114,5 @@ def export_game(game_id: str, extra: dict | None = None, path=None) -> dict:
     rec.update(extra or {})
     WEB_DIR.mkdir(exist_ok=True)
     path = path or WEB_DIR / f"{game_id}.json"
-    path.write_text(json.dumps(rec, separators=(",", ":"), default=str))
+    path.write_text(json.dumps(rec, separators=(",", ":"), default=str, allow_nan=False))
     return rec

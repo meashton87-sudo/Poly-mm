@@ -134,11 +134,11 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
            "coaches": CO.fingerprints(),
            "asof": {"season": season, "ratings": "our own, 40-99: each player's percentile at his position as of the week of the game"},
            "built": pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds")}
-    (WEB / "game.json").write_text(json.dumps(out, separators=(",", ":"), default=float))
+    (WEB / "game.json").write_text(json.dumps(out, separators=(",", ":"), default=float, allow_nan=False))
     (WEB / "spots").mkdir(exist_ok=True)
     for stale in (WEB / "spots").glob("*.json"):
         stale.unlink()
     for k, ch in chunks.items():
-        (WEB / "spots" / f"s{k}.json").write_text(json.dumps(ch, separators=(",", ":"), default=float))
+        (WEB / "spots" / f"s{k}.json").write_text(json.dumps(ch, separators=(",", ":"), default=float, allow_nan=False))
     (WEB / "scenarios.json").unlink(missing_ok=True)
     return {"spots": len(spots), "by_category": n, "days": days, "chunks": len(chunks), "coaches": len(out["coaches"]["coaches"])}

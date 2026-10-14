@@ -196,6 +196,11 @@ def effective(team_rec: dict, manual: dict | None = None) -> TeamInfo:
     )
 
 
+def _opt(v):
+    """A games.csv field, or None when nflverse left it blank (NaN is not valid JSON; browsers reject the file)."""
+    return None if pd.isna(v) else v
+
+
 def build_game(game_id: str, bundle=None, sources=None, pbp_raw=None) -> dict:
     from .models import Bundle
     bundle = bundle or Bundle.load()
@@ -214,13 +219,13 @@ def build_game(game_id: str, bundle=None, sources=None, pbp_raw=None) -> dict:
     away = team_live(bundle, sources, pbp_raw, g["away_team"], season, week)
     spread = float(np.nan_to_num(g["spread_line"]))
     rec = {
-        "game_id": game_id, "season": season, "week": week, "gameday": g["gameday"], "gametime": g["gametime"],
+        "game_id": game_id, "season": season, "week": week, "gameday": _opt(g["gameday"]), "gametime": _opt(g["gametime"]),
         "home": home, "away": away, "home_spread": spread, "total": float(np.nan_to_num(g["total_line"])),
-        "roof": g["roof"], "surface": g["surface"], "stadium": g["stadium"],
+        "roof": _opt(g["roof"]), "surface": _opt(g["surface"]), "stadium": _opt(g["stadium"]),
         "indoor": g["roof"] in ("dome", "closed"),
         "temp": None if pd.isna(g["temp"]) else float(g["temp"]),
         "wind": None if pd.isna(g["wind"]) else float(g["wind"]),
-        "home_coach": g["home_coach"], "away_coach": g["away_coach"],
+        "home_coach": _opt(g["home_coach"]), "away_coach": _opt(g["away_coach"]),
         "league": {"mu_pass": float(last["mu_pass"]), "mu_rush": float(last["mu_rush"]),
                    "home_pass": float(last["home_pass"]), "home_rush": float(last["home_rush"])},
         "ot_wp_home": ot_wp(spread),
@@ -228,7 +233,7 @@ def build_game(game_id: str, bundle=None, sources=None, pbp_raw=None) -> dict:
         "depth_chart_snapshot": str(sources["depth_charts"]["dt"].max()),
     }
     LIVE_OUT.mkdir(parents=True, exist_ok=True)
-    (LIVE_OUT / f"{game_id}.json").write_text(json.dumps(rec, indent=1, default=str))
+    (LIVE_OUT / f"{game_id}.json").write_text(json.dumps(rec, indent=1, default=str, allow_nan=False))
     return rec
 
 

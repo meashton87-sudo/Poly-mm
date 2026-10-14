@@ -16,7 +16,9 @@
   const SNAP = 0, PAT = 1, KICKOFF = 2, DONE = 3;
   const N_EVAL = 600;
   const N_REFINE = 3000, REFINE_TOP = 3;   // the second round of grading (evaluateGraded)
-  const POOL = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 2) - 1));
+  // each worker holds its own parsed copy of the engine and play data (about 11.5 MB of JSON): two on phones
+  const TOUCH = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  const POOL = Math.max(1, Math.min(TOUCH ? 2 : 3, (navigator.hardwareConcurrency || 2) - 1));
   const STORE = 'tmd:v3';
   const SVGNS = 'http://www.w3.org/2000/svg';
 
@@ -208,15 +210,25 @@
   // -------------------------------------------------------- worker pool ---
   const pool = [], queue = [], pending = new Map();
   let reqId = 0, readyCount = 0;
+  // The data downloads once here; the first worker starts at once and the rest once it is ready, so the first snap
+  // isn't waiting on several workers parsing at the same time.
+  let dataBytes = null;
   function startWorkers() {
-    for (let i = 0; i < POOL; i++) {
-      const w = new Worker('game_worker.js');
-      const slot = { w, ready: false, busy: false };
-      w.onmessage = (ev) => onMsg(slot, ev.data);
-      w.onerror = (e) => fatal('The simulator could not start: ' + (e.message || 'worker error'));
-      w.postMessage({ type: 'init' });
-      pool.push(slot);
-    }
+    const get = (url, what) => fetch(url).then((r) => { if (!r.ok) throw new Error(`${what} ${r.status}`); return r.arrayBuffer(); });
+    dataBytes = Promise.all([get('engine_data.json', 'engine data'), get('playbook.json', 'playbook')]);
+    dataBytes.catch((e) => fatal('The simulator could not load (' + e.message + '). Check your connection and reload.'));
+    startWorker();
+  }
+  function startWorker() {
+    const w = new Worker('game_worker.js');
+    const slot = { w, ready: false, busy: false };
+    w.onmessage = (ev) => onMsg(slot, ev.data);
+    w.onerror = (e) => fatal('The simulator could not start: ' + (e.message || 'worker error'));
+    pool.push(slot);
+    dataBytes.then(([eng, pb]) => {
+      const engine = eng.slice(0), playbook = pb.slice(0);      // a copy each, moved into the worker
+      w.postMessage({ type: 'init', engine, playbook }, [engine, playbook]);
+    }, () => {});
   }
   function pump() {
     for (const s of pool) {
@@ -228,7 +240,12 @@
     }
   }
   function onMsg(slot, m) {
-    if (m.type === 'ready') { slot.ready = true; readyCount++; pump(); return; }
+    if (m.type === 'ready') {
+      slot.ready = true; readyCount++;
+      if (readyCount === 1) for (let i = 1; i < POOL; i++) startWorker();
+      if (readyCount === POOL) dataBytes = null;               // every worker has its copy: let the bytes go
+      pump(); return;
+    }
     if (m.type === 'error' && m.id == null) { fatal('The simulator could not load (' + m.message + '). Check your connection and reload.'); return; }
     slot.busy = false;
     const p = pending.get(m.id);
@@ -3105,13 +3122,25 @@
   // but only its owner (and editors) can write it, since friends who open a public link can only read shared data;
   // so the owner's runs post themselves, and the owner adds a friend's by pasting the share text the friend sends (it
   // carries their name). One document per player there, board/<slug of the name>: { name, best, at }.
-  const BOARD = { mode: null, db: null, api: null, canWrite: false, rows: [], ready: null };
+  const BOARD = { mode: null, db: null, api: null, canWrite: false, rows: [], ready: null, taken: '' };
   const NAME_KEY = `${STORE}:name`;
+  // the website's board: a random key this device keeps claims your name there, so nobody else can post under it
+  function deviceKey() {
+    let k = load(`${STORE}:boardkey`, '');
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(k)) {
+      const b = new Uint8Array(18);
+      crypto.getRandomValues(b);
+      k = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+      save(`${STORE}:boardkey`, k);
+    }
+    return BOARD.key || (BOARD.key = k);                    // storage off: one key for this visit
+  }
   const myName = () => String(load(NAME_KEY, '') || '').slice(0, 24);
   const slugOf = (name) => `p-${String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'player'}`;
   const redrawBoards = () => document.querySelectorAll('.board').forEach(fillBoard);
   async function apiBoard(method, body) {
     const r = await fetch(`${BOARD.api}/board`, method === 'POST' ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+    if (r.status === 409) return { taken: true, ...(await r.json()) };
     if (!r.ok) throw new Error(`board ${r.status}`);
     return r.json();
   }
@@ -3148,10 +3177,11 @@
     if (!BOARD.mode || !BOARD.canWrite || !name || !(best >= 0 && best < 1000)) return false;
     if (BOARD.mode === 'api') {
       try {
-        const res = await apiBoard('POST', { name, best });
+        const res = await apiBoard('POST', { name, best, key: deviceKey() });
         BOARD.rows = res.rows || BOARD.rows;
+        BOARD.taken = res.taken ? name : '';
         redrawBoards();
-        return res.kept != null ? { kept: res.kept } : { best };
+        return res.taken ? false : res.kept != null ? { kept: res.kept } : { best };
       } catch (e) { return false; }
     }
     try {
@@ -3193,7 +3223,10 @@
       b.append(ol);
     }
     if (BOARD.mode === 'api') {
-      b.append(el('p', 'note', myName() ? `Your best run posts here as ${myName()}.` : 'Set your name on a survivor run’s summary to get on the board.'));
+      const n = myName();
+      b.append(el('p', 'note', !n ? 'Set your name on a survivor run’s summary to get on the board.'
+        : BOARD.taken && BOARD.taken.toLowerCase() === n.toLowerCase() ? `Someone else already plays as ${n} here. Pick another name to get on the board.`
+          : `Your best run posts here as ${n}.`));
     } else if (BOARD.canWrite) {
       const det = el('details', 'addrun');
       det.open = !!BOARD.addOpen;                   // stays open while you add several (the board redraws on each)

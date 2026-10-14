@@ -24,7 +24,7 @@ python scripts/parity_expected.py 2026_05_BUF_LA 8000 && node web/parity_test.js
 node web/game_smoke.js                # daily game: every spot's two real teams, playbook sampling, call ranking, play-by-play log
 node web/game_sweep.js                # daily game: every spot x call x tempo, whole games, football invariants, points to the right team, the called play is the play run (~3 min)
 node web/motion_test.js               # daily game animation: player motion stays in the tracking envelope, routes, coverage
-node board/worker_test.mjs            # the website's survivor leaderboard (Cloudflare Worker), in-memory KV
+node board/worker_test.mjs            # the website's survivor leaderboard (Cloudflare Worker + Durable Object), storage in memory
 ```
 
 ## Rules

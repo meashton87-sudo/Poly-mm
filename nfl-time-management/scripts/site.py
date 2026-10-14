@@ -5,13 +5,17 @@ cli build, webexport.export_engine, dailygame.build).
     python scripts/site.py [out_dir, default _site] [--domain 2mindrill.bashton.xyz] [--board-api https://...]
 
 --domain writes the CNAME file for a custom domain; --board-api points the survivor leaderboard at its backend
-(board/worker.js); without it the site has no leaderboard.
+(board/worker.js); without it the site has no leaderboard. version.json says when the site was built and from which
+commit (an uptime check can alert when "built" gets old: a failing build leaves the last site up).
 """
 from __future__ import annotations
 
 import argparse
 import html
+import json
 import shutil
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -44,6 +48,14 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None) ->
     if domain:
         (out / "CNAME").write_text(domain.strip() + "\n")
     (out / ".nojekyll").write_text("")          # serve the files as they are
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=WEB, capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        commit = ""
+    game = json.loads((WEB / "game.json").read_text())
+    (out / "version.json").write_text(json.dumps({
+        "built": datetime.now(timezone.utc).isoformat(timespec="seconds"), "commit": commit or None,
+        "spots": len(game.get("spots", [])) if isinstance(game, dict) else None}, indent=1) + "\n")
     return out
 
 

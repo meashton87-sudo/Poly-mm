@@ -579,5 +579,5 @@ def export(lib: pd.DataFrame, path) -> dict:
         "oob_odds": oob_odds(lib).round(3).tolist(),
         "seasons": list(SEASONS),
     }
-    path.write_text(json.dumps(out, separators=(",", ":")))
+    path.write_text(json.dumps(out, separators=(",", ":"), allow_nan=False))
     return out

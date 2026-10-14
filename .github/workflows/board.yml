@@ -1,9 +1,10 @@
 name: Two-Minute Drill leaderboard
 
 # Tests and deploys the survivor leaderboard (nfl-time-management/board/worker.js) to Cloudflare Workers.
-# One-time setup: create a KV namespace (`npx wrangler kv namespace create BOARD`), then add the repository secrets
-# CLOUDFLARE_API_TOKEN (a token with "Edit Cloudflare Workers" permission) and CLOUDFLARE_ACCOUNT_ID, and the
-# variable BOARD_KV_ID (the namespace id). Without the secrets the workflow only runs the tests.
+# One-time setup: add the repository secrets CLOUDFLARE_API_TOKEN (a token with "Edit Cloudflare Workers" permission)
+# and CLOUDFLARE_ACCOUNT_ID. The board lives in a Durable Object the deploy creates, so there is nothing else to make.
+# Optional: `npx wrangler secret put ADMIN_TOKEN` (once, from board/) lets you remove rows. Without the secrets the
+# workflow only runs the tests.
 on:
   push:
     branches: [main]
@@ -37,12 +38,10 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          BOARD_KV_ID: ${{ vars.BOARD_KV_ID }}
           SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
         run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$BOARD_KV_ID" ]; then
-            echo "Cloudflare secrets or BOARD_KV_ID not set: tests only, no deploy."; exit 0
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "Cloudflare secrets not set: tests only, no deploy."; exit 0
           fi
-          sed -i "s/REPLACE_WITH_KV_NAMESPACE_ID/$BOARD_KV_ID/" wrangler.toml
           if [ -n "$SITE_DOMAIN" ]; then sed -i "s#^ALLOWED_ORIGINS = .*#ALLOWED_ORIGINS = \"https://$SITE_DOMAIN\"#" wrangler.toml; fi
           npx --yes wrangler@3.114.0 deploy

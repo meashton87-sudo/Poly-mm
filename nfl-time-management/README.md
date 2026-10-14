@@ -337,13 +337,19 @@ sideline routes when trailing in the two-minute drill; quick throws on short yar
 yardage). His button shows his odds on that route from the very real plays the pick draws from (share caught, yards a
 throw, interceptions when they matter), and the last route tap can be undone.
 
-**The website** (2mindrill.bashton.xyz). `.github/workflows/site.yml` rebuilds the data from nflverse (models,
-browser engine, the daily spots and their real rosters), checks the game (smoke, motion and leaderboard tests) and
-publishes it to GitHub Pages with `scripts/site.py`, which wraps `web/game.html` in a full page: on changes to the
-game, every Tuesday after Monday Night Football, and on demand. Its survivor leaderboard is a Cloudflare Worker with
-one KV namespace (`board/worker.js`, deployed by `.github/workflows/board.yml`): every player's best run posts itself
-under the name they set; only a better run replaces it, names are cleaned and capped at 24 characters, posts are
-rate-limited per IP, and only the site's origin may call it.
+**The website** (2mindrill.bashton.xyz). `scripts/site.py` wraps `web/game.html` in a full page (the phone viewport
+and safe-area rules the claude.ai host otherwise adds; serve the built folder, never the bare `game.html`) with the
+scripts, the data and a `version.json` (build time and commit, for an uptime check). `.github/workflows/site.yml`
+rebuilds the data from nflverse, checks the game (smoke, motion and leaderboard tests) and builds the site on changes
+to the game, every Tuesday after Monday Night Football, and on demand; it publishes to GitHub Pages only when the
+repository variable `PAGES_DEPLOY` is `true`, so a site served from your own server never has Pages claiming the
+same hostname. Its survivor leaderboard is a Cloudflare Worker in front of one Durable Object (`board/worker.js`,
+deployed by `.github/workflows/board.yml`; nothing to create first): every player's best run posts itself under the
+name they set, and only a better run replaces it. One object takes every post in turn, so runs posted together are
+never lost and the per-IP limit holds everywhere. The first post under a name claims it for that device (a random
+key the page keeps; the board stores only its hash), so nobody else can post under your name; scores themselves are
+not verified. Names are cleaned and capped at 24 characters, only the site's origin may call it, and with an
+`ADMIN_TOKEN` secret `DELETE /board?name=...` removes a row.
 
 **Survivor leaderboard** (on claude.ai). The artifact's shared database keeps every player's best run (`board/<name>`). Everyone who
 opens the page reads it; only the owner and editors write it, since visitors through a public link can only read

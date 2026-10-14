@@ -101,10 +101,10 @@ self.onmessage = async (ev) => {
   const m = ev.data;
   try {
     if (m.type === 'init') {
-      const [d, pb] = await Promise.all([
-        fetch('engine_data.json').then((r) => { if (!r.ok) throw new Error('engine data ' + r.status); return r.json(); }),
-        fetch('playbook.json').then((r) => { if (!r.ok) throw new Error('playbook ' + r.status); return r.json(); }),
-      ]);
+      // the page fetches the data once and hands each worker its own copy (bytes); on its own, a worker fetches it
+      const get = (buf, url, what) => (buf ? Promise.resolve(JSON.parse(new TextDecoder().decode(buf)))
+        : fetch(url).then((r) => { if (!r.ok) throw new Error(what + ' ' + r.status); return r.json(); }));
+      const [d, pb] = await Promise.all([get(m.engine, 'engine_data.json', 'engine data'), get(m.playbook, 'playbook.json', 'playbook')]);
       eng = new NFLClockEngine(d);
       eng.loadPlaybook(pb);
       self.postMessage({ type: 'ready' });

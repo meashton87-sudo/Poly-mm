@@ -636,7 +636,9 @@ details summary { cursor: pointer; font-weight: 600; }
     const [A, H] = teams();
     $('title').textContent = `${A === 'BUF' ? 'Bills' : A} at ${H === 'LA' ? 'Rams' : H}: live decision engine`;
     const fav = g.home_spread > 0 ? `${H} −${g.home_spread}` : g.home_spread < 0 ? `${A} −${-g.home_spread}` : 'pick';
-    $('gameinfo').textContent = `${g.gameday} ${g.gametime} ET · ${g.stadium} (${g.roof}) · ${fav}, total ${g.total}`;
+    const when = [g.gameday, g.gametime && `${g.gametime} ET`].filter(Boolean).join(' ');
+    const where = g.stadium ? `${g.stadium}${g.roof ? ` (${g.roof})` : ''}` : '';   // blank in nflverse for some venues
+    $('gameinfo').textContent = [when, where, `${fav}, total ${g.total}`].filter(Boolean).join(' · ');
     $('abbr-away').textContent = A; $('abbr-home').textContent = H;
     $('chip-away').style.background = A === 'BUF' ? 'var(--buf)' : 'var(--muted)';
     $('chip-home').style.background = H === 'LA' ? 'var(--la)' : 'var(--muted)';
@@ -692,7 +694,7 @@ details summary { cursor: pointer; font-weight: 600; }
     for (const side of ['away', 'home']) {
       const t = game[side];
       const d = document.createElement('div'); d.className = 't';
-      const b = document.createElement('b'); b.textContent = `${t.team} · ${side === 'home' ? game.home_coach : game.away_coach}`; d.appendChild(b);
+      const b = document.createElement('b'); b.textContent = [t.team, side === 'home' ? game.home_coach : game.away_coach].filter(Boolean).join(' · '); d.appendChild(b);
       const eff = (k) => (t.base[k] + (k === 'off_pass' ? t.qb.adjustment : 0) + t.injury_adjustment[k] + ((manual[t.team] || {})[k] || 0));
       const kv = (a, v) => { const r = document.createElement('div'); r.className = 'kv'; const x = document.createElement('span'); x.textContent = a; const y = document.createElement('span'); y.textContent = v; r.append(x, y); d.appendChild(r); };
       kv(`QB ${t.qb.name}`, `${t.qb.rating >= 0 ? '+' : ''}${t.qb.rating.toFixed(3)} EPA/dropback`);
