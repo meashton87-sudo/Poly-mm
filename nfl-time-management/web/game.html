@@ -122,6 +122,11 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .dot:focus { outline: none; }
 .dot circle.hit { fill: transparent; }
 .dot.st { cursor: default; pointer-events: none; }      /* special-teams units: team colors, not tappable */
+/* jersey numbers on the dots; pre-snap name tags that fade at the snap */
+#field .dot .jn { font: 800 7.6px var(--display); fill: #fff; stroke: rgba(8, 12, 10, .6); stroke-width: 1.5px; paint-order: stroke; text-anchor: middle; pointer-events: none; }
+#field .dot .nm { font: 700 7px var(--body); fill: #fff; stroke: rgba(8, 12, 10, .72); stroke-width: 2px; paint-order: stroke; text-anchor: middle; pointer-events: none; transition: opacity .35s ease; }
+#field .dot .nm.gone { opacity: 0; }
+#field .dot.down .jn { opacity: .5; }
 #field .num { font: 800 11px var(--display); fill: var(--chalk); opacity: .85; }
 #field .ez { font: 900 20px var(--display); letter-spacing: .2em; fill: var(--chalk); }
 #field .tag { font: 700 9px var(--body); letter-spacing: .08em; }

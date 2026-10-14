@@ -69,6 +69,9 @@ class History:
         full = pd.read_parquet(PL._get("players", "players.parquet"), columns=["gsis_id", "display_name", "height", "weight"])
         full = full.drop_duplicates("gsis_id").set_index("gsis_id")
         self.names, self.body = full["display_name"].to_dict(), full[["height", "weight"]]
+        num = pd.read_parquet(PL._get("players", "players.parquet"), columns=["gsis_id", "pfr_id", "jersey_number"]).dropna(subset=["jersey_number"])
+        self.num_now = {**dict(zip(num["pfr_id"].dropna(), num["jersey_number"])), **dict(zip(num["gsis_id"], num["jersey_number"]))}
+        self.jerseys = {}
         cols = ["game_id", "play_id", "season", "week", "posteam", "defteam", "play_type", "kicker_player_id",
                 "punter_player_id", "passer_player_id", "qb_dropback"]
         self.pbp = pd.concat([pd.read_parquet(config.RAW_DIR / f"play_by_play_{s}.parquet", columns=cols)
@@ -155,7 +158,36 @@ class History:
             out["def"] = [(to_gsis.get(p, "pfr:" + p), gr) for p, gr in picks]
         return out
 
-    def _players(self, R, rt, season, team, unit, members) -> list:
+    def _jersey_table(self, season: int) -> dict:
+        """Jersey numbers from nflverse weekly rosters: (id, team, week), then (id, team) for the season; ids are
+        gsis and pfr. Empty when the season's file is not published."""
+        if season not in self.jerseys:
+            out = {}
+            try:
+                w = pd.read_parquet(PL._get("weekly_rosters", f"roster_weekly_{season}.parquet"),
+                                    columns=["week", "team", "gsis_id", "pfr_id", "jersey_number"]).dropna(subset=["jersey_number"])
+            except Exception:                      # not published (yet): fall back to the current numbers
+                w = pd.DataFrame(columns=["week", "team", "gsis_id", "pfr_id", "jersey_number"])
+            for col in ("gsis_id", "pfr_id"):
+                d = w.dropna(subset=[col])
+                out.update({(i, t, int(k)): int(n) for i, t, k, n in zip(d[col], d["team"], d["week"], d["jersey_number"])})
+                last = d.sort_values("week").drop_duplicates([col, "team"], keep="last")
+                out.update({(i, t): int(n) for i, t, n in zip(last[col], last["team"], last["jersey_number"])})
+            self.jerseys[season] = out
+        return self.jerseys[season]
+
+    def _jersey(self, season: int, week: int, team: str, gid: str, pfr) -> int | None:
+        t = self._jersey_table(season)
+        for i in (gid, pfr):
+            if i and (i, team, week) in t:
+                return t[(i, team, week)]
+        for i in (gid, pfr):
+            if i and (i, team) in t:
+                return t[(i, team)]
+        n = self.num_now.get(gid) or (self.num_now.get(pfr) if pfr else None)
+        return int(n) if n is not None and n == n else None
+
+    def _players(self, R, rt, season, team, unit, members, week=None) -> list:
         """Each player as the game shows him: position label, name, rating (40-99), stat line, archetype."""
         meas = self.measures(season)
         recs, cbs = [], 0
@@ -185,6 +217,9 @@ class History:
                 pct, stat = rt["player"].get(pfr, (None, None)) if pfr else (None, None)
             ovr = O.specialist_ovr(float(pct)) if pct is not None else UNRATED_OVR
             rec = {"pos": label, "name": name, "ovr": int(ovr), "stat": stat or "Little NFL playing time yet"}
+            num = self._jersey(season, week, team, gid, pfr)
+            if num is not None:
+                rec["num"] = num
             if pct is not None:
                 rec["pct"] = int(round(float(pct) * 100))
             if label not in OL_SLOTS:
@@ -257,7 +292,8 @@ class History:
             out[side] = {
                 "team": team, "coach": CO.COACH_FIX.get(coaches.get(side), coaches.get(side)), "base": st["base"], "qb": st["qb"],
                 "injury_adjustment": st["injury_adjustment"], "kicker": st["kicker"], "punter": st["punter"],
-                "lineup": {"off": self._players(R, rt, season, team, "off", off), "def": self._players(R, rt, season, team, "def", dfn)},
+                "lineup": {"off": self._players(R, rt, season, team, "off", off, week),
+                           "def": self._players(R, rt, season, team, "def", dfn, week)},
                 "calls": {c: {"off": v["off"], "def": v["def"]} for c, v in P.team_card(card, team).items()},
             }
             league = st["league"]

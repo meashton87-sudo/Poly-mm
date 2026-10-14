@@ -154,7 +154,7 @@
   const groupOf = (label) => (OL.includes(label) || label === 'T' || label === 'G' ? 'OL' : label);
   function shortName(n) {
     const parts = String(n || '').replace(/\s+(Jr\.?|Sr\.?|II|III|IV|V)$/, '').split(/\s+/);
-    return parts.length > 1 ? `${parts[0][0]}.${parts.slice(1).join(' ')}` : (n || '');
+    return parts.length > 1 ? `${parts[0][0]}. ${parts.slice(1).join(' ')}` : (n || '');
   }
   // the end of the first half (t = 1800) reads 0:00 of the 2nd quarter: every spot is late in Q2 or Q4
   function clockOf(t) {
@@ -483,9 +483,11 @@
       if (mode === 'snap' && look != null) showLook(f.def, LOOKS[look], s, fxBall);
       const add = (o, teamI, off) => {
         const team = code(teamI), mine = teamI === G.me;
+        const num = o.p.num != null ? String(o.p.num) : '';
         const g = S('g', { class: `dot ${mine ? 'me' : 'them'}`, tabindex: 0, role: 'button',
-          'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${o.p.name}, rated ${o.p.ovr}` });
-        g.append(S('circle', { class: 'hit', r: 11 }), S('circle', { class: 'c', r: 6.2, fill: rate(o.p.ovr) }));
+          'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${num ? `#${num} ` : ''}${o.p.name}, rated ${o.p.ovr}` });
+        g.append(S('circle', { class: 'hit', r: 11 }), S('circle', { class: 'c', r: 7.2, fill: rate(o.p.ovr) }));
+        if (num) { const t = S('text', { class: 'jn', y: 2.6 }); t.textContent = num; g.append(t); }
         const open = () => { if (passing() && (Date.now() - routeTapAt < 600 || (off && (o.label === 'WR' || o.label === 'TE' || o.label === 'RB')))) return; playerInfo(o.p, o.label, team); };
         g.addEventListener('click', open);
         g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); if (!passTap(a)) open(); } });
@@ -496,6 +498,7 @@
       };
       f.def.forEach((o) => add(o, 1 - offI, false));
       f.off.forEach((o) => add(o, offI, true));
+      sc.named = true;
     }
     if (mode === 'kick') kickoffUnits(sc, r, L, dir);
     const ball = S('g', {}), inner = S('g', { class: 'ballmove' });
@@ -506,7 +509,32 @@
     sc.callLayer = put(S('g', {}));
     if (mode === 'kick') showCall(sc, { text: r.free_kick ? 'Free kick' : 'Kickoff', kind: 'info', slot: 0, x: 180, L: L + dir * 7 });
     place(sc);
+    if (sc.named) nameTags(sc);
     return sc;
+  }
+  // Pre-snap name tags ("J. Allen") on the players you track: the quarterback, backs, receivers and the back seven
+  // (the linemen, five abreast, show their numbers only). Each goes on the far side from the line, or the near side
+  // if that is taken, or is left off; they drop at the snap (animatePlay).
+  const TAG_ORDER = ['QB', 'RB', 'FB', 'WR', 'TE', 'CB', 'S', 'LB'];
+  function nameTags(sc) {
+    const Y = camY(sc), losY = Y(sc.losL), boxes = [];
+    const free = (b, a) => b.x0 >= 2 && b.x1 <= 358 && b.y0 >= 2 && b.y1 <= sc.H - 2      // clear of the dots and tags so far
+      && !boxes.some((o) => o.a !== a && b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+    sc.actors.forEach((a) => boxes.push({ a, x0: a.x - 7.5, x1: a.x + 7.5, y0: Y(a.L) + a.side * GAP * a.w - 7.5, y1: Y(a.L) + a.side * GAP * a.w + 7.5 }));
+    sc.actors.filter((a) => TAG_ORDER.includes(a.label) && a.p && a.p.name)
+      .sort((a, b) => TAG_ORDER.indexOf(a.label) - TAG_ORDER.indexOf(b.label)).forEach((a) => {
+      const text = shortName(a.p.name), w = text.length * 3.7 + 2, ay = Y(a.L) + a.side * GAP * a.w, away = ay >= losY ? 1 : -1;
+      const spots = [[0, away * 13], [0, -away * 13], [-(w / 2 + 4), away * 11], [w / 2 + 4, away * 11], [0, away * 23]];
+      for (const [dx, dy] of spots) {
+        const b = { x0: a.x + dx - w / 2, x1: a.x + dx + w / 2, y0: ay + dy - 4.5, y1: ay + dy + 4.5 };
+        if (!free(b, a)) continue;
+        boxes.push(b);
+        const t = S('text', { class: 'nm', x: dx.toFixed(1), y: (dy + 3).toFixed(1) });
+        t.textContent = text;
+        a.g.append(t);
+        break;
+      }
+    });
   }
   // Kickoff alignment (the 2024 rules): the kicker at the ball, his ten teammates at the receiving 40 (25 yards
   // ahead of the ball), nine of the receiving team in the setup zone 30-35 yards ahead, and two returners deep.
@@ -1862,6 +1890,7 @@
     } catch (err) { console.warn('animation skipped:', err); P = null; }
     scene = sc;
     if (!P) return false;
+    sc.svg.querySelectorAll('.nm').forEach((t) => t.classList.add('gone'));     // the names drop at the snap
     // the clock at the snap: after the runoff, or after a timeout called before it (a kick to win), else as it was
     const k0 = res.log.findIndex((x) => x.ev !== 'runoff' && x.ev !== 'timeout');
     const pre = k0 < 0 ? res.log : res.log.slice(0, k0), ro = pre.find((x) => x.ev === 'runoff');
@@ -3511,7 +3540,7 @@
     const ch = el('div', 'chip-big', String(p.ovr)); ch.style.background = rate(p.ovr);
     top.append(ch);
     const nm = el('div'), g = groupOf(label);
-    nm.append(el('div', 'nm', p.name), el('div', 'ps', `${team ? teamName(team) + ' · ' : ''}${POS_NAME[label] || label}`));
+    nm.append(el('div', 'nm', p.num != null ? `#${p.num} ${p.name}` : p.name), el('div', 'ps', `${team ? teamName(team) + ' · ' : ''}${POS_NAME[label] || label}`));
     if (p.pct != null) nm.append(el('div', 'ps', `Better than ${p.pct}% of NFL ${POS_PLURAL[g] || 'players'} at the time`));
     top.append(nm);
     const nodes = [top];
