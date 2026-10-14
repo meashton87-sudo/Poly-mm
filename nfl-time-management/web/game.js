@@ -437,6 +437,17 @@
     const wpx = svg.parentElement.clientWidth || 360;
     return Math.round((360 * clip(window.innerHeight - 380, 360, 720)) / wpx);
   }
+  // Before the snap the camera frames the play, true to scale (as many yards tall as the field is wide, in the
+  // box's shape): a short way behind the offense and well downfield, where the routes go. Kicks and the final
+  // whistle show the whole field.
+  function preCam(H, L, dir, mode) {
+    if (mode !== 'snap' && mode !== 'pat') return { ...FULL };
+    const span = clip((H - 6) / (360 / 53.333), 50, 120), back = clip(span * 0.22, 12, 20);
+    let lo = dir > 0 ? L - back : L + back - span, hi = lo + span;
+    if (lo < FULL.lo) { hi += FULL.lo - lo; lo = FULL.lo; }
+    if (hi > FULL.hi) { lo -= hi - FULL.hi; hi = FULL.hi; }
+    return { lo: Math.max(lo, FULL.lo), hi: Math.min(hi, FULL.hi) };
+  }
   const camY = (sc) => { const { lo, hi } = sc.cam, k = (sc.H - 6) / (hi - lo); return (L) => sc.H - 3 - (L - lo) * k; };
 
   // the field and the 22 for state r (side: the strong side of this snap); place() draws them for the camera
@@ -475,6 +486,8 @@
     }
     const { L, dir, mode } = spotGeom(r);
     Object.assign(sc, { losL: L, dir, mode });
+    sc.cam = preCam(H, L, dir, mode);
+    sc.cam0 = { ...sc.cam };
     if (mode === 'done') { place(sc); return sc; }
     hline(L, { stroke: 'var(--los)', 'stroke-width': 2.4 });
     if (mode === 'snap' && r.ytg < r.yl - 0.01) hline(L + dir * r.ytg, { stroke: 'var(--chain)', 'stroke-width': 2.4 });
@@ -1900,7 +1913,8 @@
         if (start === null) start = now;
         const t = skip ? total : ((now - start) / 1000) * speed, tt = t - PRE;
         const k = EASE.io(clip(tt / ZI, 0, 1)) * (1 - EASE.io(clip((tt - ZI - P.T - P.hold) / ZO, 0, 1)));
-        sc.cam = { lo: lerp(FULL.lo, P.cam.lo, k), hi: lerp(FULL.hi, P.cam.hi, k) };
+        const c0 = sc.cam0 || FULL;            // from the pre-snap frame into the play's, and back
+        sc.cam = { lo: lerp(c0.lo, P.cam.lo, k), hi: lerp(c0.hi, P.cam.hi, k) };
         const tp = clip(tt - ZI, 0, P.T);
         if (ck) {
           const gt = t < PRE ? lerp(clk.t0, clk.snap, EASE.io(t / PRE)) : lerp(clk.snap, clk.end, clip((tt - ZI) / (P.T + P.hold), 0, 1));
@@ -2558,7 +2572,7 @@
       head.append(undo);
     }
     if (G.look != null) d.append(readLine(G.look));
-    d.append(el('p', 'hint', 'Tap any receiver on the field to change his route. Then pick who gets the ball:'));
+    d.append(el('p', 'hint', 'Tap a receiver on the field to change his route. Tap a name below to throw it to him.'));
     const list = el('div', 'rcvs');
     eligibles(sc).forEach((a, i) => {
       const b = el('button', `rcv${P.target === i ? ' on' : ''}`);
@@ -2567,31 +2581,25 @@
       const od = G.odds && G.odds[pickKey(passOption(sc, i, false).action)];
       b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label), el('span', 'rt', `${routeName(a.label, P.routes[i])}${P.target === i ? ' · the target' : ''}`));
       if (od) b.append(el('span', 'od', oddsText(od)));
-      b.addEventListener('click', () => passPick(i));
+      b.setAttribute('aria-label', `Throw it to ${a.p ? a.p.name : a.label}, ${routeName(a.label, P.routes[i])}`);
+      b.addEventListener('click', () => { if (busy) return; P.target = i; decideCall({ pass: i }); });
       list.append(b);
     });
-    d.append(list);
-    const sw = (label, sub, on, set) => {
-      const tg = el('div', 'toggle');
-      const lab = el('div', 'lab', label);
-      lab.append(el('small', '', sub));
-      const b = el('button', 'sw2');
+    // the options first (they change the odds on the cards), as three small toggles on one line
+    const opt = (label, tip, on, set, id) => {
+      const b = el('button', `chip opt${on ? ' on' : ''}`, label);
       b.type = 'button';
-      b.setAttribute('role', 'switch'); b.setAttribute('aria-checked', String(on)); b.setAttribute('aria-label', label);
+      if (id) b.id = id;
+      b.title = tip;
+      b.setAttribute('aria-pressed', String(on));
       b.addEventListener('click', () => { if (busy) return; set(!on); redrawPass(); });
-      tg.append(lab, b);
-      return tg;
+      return b;
     };
-    d.append(sw('Play action', 'Fake the handoff first: it freezes a loaded box.', P.pa, (v) => { P.pa = v; if (v) P.roll = false; }),
-      sw('Roll out', 'Move the pocket toward your receiver’s side.', P.roll, (v) => { P.roll = v; if (v) P.pa = false; }), oobToggle());
-    const go = el('div', 'keys');
-    go.style.setProperty('--cols', 1);
-    const t = P.target != null ? eligibles(sc)[P.target] : null;
-    const throwKey = key(t ? `Throw it to ${shortName(t.p ? t.p.name : '') || t.label}` : 'Pick a receiver', t ? routeName(t.label, P.routes[P.target]) : null, 'big');
-    throwKey.disabled = !t;
-    throwKey.addEventListener('click', () => { if (!busy && P.target != null) decideCall({ pass: P.target }); });
-    go.append(throwKey);
-    d.append(go);
+    const opts = el('div', 'opts-row');
+    opts.append(opt('Play action', 'Fake the handoff first: it freezes a loaded box.', P.pa, (v) => { P.pa = v; if (v) P.roll = false; }),
+      opt('Roll out', 'Move the pocket toward your receiver’s side.', P.roll, (v) => { P.roll = v; if (v) P.pa = false; }),
+      opt('Out of bounds', 'The ball carrier tries to stop the clock. No guarantee.', ui.oob, (v) => { ui.oob = v; }, 'oobSwitch'));
+    d.append(opts, list);
     const avail = callOptions(r).calls, more = ['hail_mary'].filter((id) => avail.includes(id));
     if (more.length) {
       const row = el('div', 'keys');
@@ -2979,7 +2987,9 @@
     d.textContent = '';
     const cost = decisions.reduce((a, x) => a + x.cost, 0), m = markOf(cost);
     const main = res.log.find((e) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(e.ev));
-    const lines = main ? narrate([main], res.action) : narrate(res.log, res.action).reverse();
+    // the formation and box count stay in the play-by-play; here the matchup line says what the defense did
+    const lines = (main ? narrate([main], res.action) : narrate(res.log, res.action).reverse())
+      .map(([text, ...rest]) => [text.replace(/ \([^)]*\)(?=:)/, ''), ...rest]);
     const wrap = el('div', 'result');
     const top = el('div', 'res-top');
     // the box shows what happened: the swing in your win chance (filled in when it is valued); a timeout, with no
@@ -2994,7 +3004,7 @@
     top.append(sq, txt);
     wrap.append(top);
     const mu = matchupLine(main, res.action);
-    if (mu) wrap.append(el('div', `matchup ${mu.good ? 'won' : 'lost'}`, mu.text));
+    if (mu) wrap.append(el('div', `mline ${mu.good ? 'won' : 'lost'}`, mu.text));
     if (played) {
       const before = decisions[decisions.length - 1].wp;
       winChanceAfter(res.root, res.done).then((after) => {
@@ -3018,6 +3028,7 @@
       else v.append(document.createTextNode(`${GRADE_WORD[xm]}; `), el('b', '', x.bestLabel), document.createTextNode(` was better (${pts(x.cost)}% win chance).`));
     });
     wrap.append(v);
+    const acts = el('div', 'res-acts');
     const det = el('details', 'more');
     det.append(el('summary', '', 'How every option scored'));
     const inn = el('div', 'in');
@@ -3025,13 +3036,14 @@
     const wpa = decisions.reduce((a, x) => a + x.wpa, 0);
     inn.append(el('p', 'note', `Against a typical NFL play-caller here: ${pts(wpa)}% win chance. "NFL" is how often play-callers make that call in this spot.`));
     det.append(inn);
-    wrap.append(det);
     if (G.lastPlay && res.animated) {
-      const again = el('button', 'chip replay', '↻ Replay the play');
+      const again = el('button', 'chip replay', '↻ Replay');
       again.type = 'button';
       again.addEventListener('click', replay);
-      wrap.append(again);
+      acts.append(again);
     }
+    acts.append(det);
+    wrap.append(acts);
     // no extra tap: the result stays on top of your next call (or the final card); only when their plays come
     // next does it wait for "Next play" (advance)
     d.append(wrap);
@@ -3715,18 +3727,29 @@
     ['g', 'y', 'o', 'r'].forEach((m) => ex.append(el('span', `sq ${m}`, GLYPH[m])));
     const ul = el('ul');
     [
+      'You call the plays at the end of a real NFL game. Three new spots every day.',
+      'Pick Run, Pass, RPO or Trick. On a pass, tap a receiver on the field to change his route, then tap his name to throw it.',
+      'Every snap is a real NFL play. Read the defense: a blitz loses to quick throws, a loaded box to play action.',
+      'Beat the real coach, and see how you rank against everyone who played today.',
+    ].forEach((t) => ul.append(el('li', '', t)));
+    const more = el('details', 'more');
+    more.append(el('summary', '', 'More about the game'));
+    const ul2 = el('ul');
+    [
       'You\'re the head coach for the last minutes of a real NFL game. Three new spots every day.',
       'Call Run, Pass or RPO. On a pass, every receiver shows his route: tap any of them on the field to change it, then pick who gets the ball, with play action or a rollout if you like. Timeouts, spikes, kicks and tempo pop up when they matter. On their ball, you call the defense, and when they line up to kick, you choose to go for the block or play it safe.',
       'Every snap is a real NFL play run against your call. Tap the field to skip, or a player to see who he is.',
       'Matchups matter: a blitz beats deep shots but loses to quick passes and screens; a loaded box stuffs runs but gets beaten by play-action and deep shots; playing soft stops deep shots but gives up runs. Read their look before you call, and when you call the defense, they will check into what beats it.',
       'Beat the real coach\'s result, and find out which NFL coach you call it like.',
       'Survivor: random real fourth quarters back to back. Win to keep going; lose once and your run is over. Tied at the end, you play overtime: both teams get the ball, then the next score wins.',
-    ].forEach((t) => ul.append(el('li', '', t)));
+    ].forEach((t) => ul2.append(el('li', '', t)));
+    more.append(ul2);
     openModal('How to play', [
       ul,
-      el('p', '', 'After each snap, the big box is what the play did to your win chance (+12 is 12 points better). The small square grades your call, whatever happened: a great call can get stuffed, and a bad one can still score.'),
+      el('p', '', 'After each snap, the big number is how the play moved your win chance. The small square grades your call, whatever happened:'),
       ex,
       el('p', 'note', 'Calls: green, the best or as good; yellow, close; orange, costly; red, a big miss. Your score and the share grid count the calls.'),
+      more,
     ]);
   }
   function openStats() {
