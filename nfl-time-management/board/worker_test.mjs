@@ -4,19 +4,19 @@ import worker, { Board } from './worker.js';
 
 const store = new Map();
 const storage = { get: async (k) => structuredClone(store.get(k)), put: async (k, v) => { store.set(k, structuredClone(v)); } };
-const env = { ALLOWED_ORIGINS: 'https://2mindrill.bashton.xyz', ADMIN_TOKEN: 'commish-secret-123' };
+const env = { ALLOWED_ORIGINS: 'https://nfl2mindrill.com', ADMIN_TOKEN: 'commish-secret-123' };
 let board = new Board({ storage }, env);
 env.BOARD = { idFromName: (n) => n, get: () => ({ fetch: (req) => board.fetch(req) }) };
 let ip = 1;
 const KEY = { eli: 'eli-device-key-0000000001', matt: 'matt-device-key-000000002', spam: 'spam-device-key-000000003' };
 const call = (method, body, o = {}) => worker.fetch(new Request(`https://w.example${o.path || '/board'}`, { method, body: body && JSON.stringify(body),
-  headers: { 'Content-Type': 'application/json', Origin: o.origin || 'https://2mindrill.bashton.xyz', 'CF-Connecting-IP': o.ip || `10.0.0.${ip++}`,
+  headers: { 'Content-Type': 'application/json', Origin: o.origin || 'https://nfl2mindrill.com', 'CF-Connecting-IP': o.ip || `10.0.0.${ip++}`,
     ...(o.auth ? { Authorization: o.auth } : {}) } }), env);
 const names = async (r) => (await r.json()).rows.map((x) => [x.name, x.best]);
 
 let r = await call('GET');
 assert.deepStrictEqual((await r.json()).rows, [], 'empty board');
-assert.strictEqual(r.headers.get('Access-Control-Allow-Origin'), 'https://2mindrill.bashton.xyz');
+assert.strictEqual(r.headers.get('Access-Control-Allow-Origin'), 'https://nfl2mindrill.com');
 await call('POST', { name: 'Eli', best: 7, key: KEY.eli });
 await call('POST', { name: 'Matt', best: 3, key: KEY.matt });
 r = await call('POST', { name: 'eli', best: 2, key: KEY.eli });          // a worse run, any case: kept
@@ -62,6 +62,38 @@ assert.strictEqual((await worker.fetch(new Request('https://w.example/board?name
 
 assert.strictEqual((await call('OPTIONS')).status, 204);
 r = await call('GET', null, { origin: 'https://evil.example' });
-assert.strictEqual(r.headers.get('Access-Control-Allow-Origin'), 'https://2mindrill.bashton.xyz', 'other origins not echoed');
+assert.strictEqual(r.headers.get('Access-Control-Allow-Origin'), 'https://nfl2mindrill.com', 'other origins not echoed');
 assert.strictEqual((await worker.fetch(new Request('https://w.example/other'), env)).status, 404);
+// the daily game: one result per device per day, the day's histograms, the named top list
+const today = new Date().toISOString().slice(0, 10);
+const day = (body, o) => call('POST', body, { path: '/daily', ...(o || {}) });
+r = await day({ date: today, key: KEY.eli, p: 0.82, spots: [0.1, -0.05, 0.2], name: 'Eli' });
+b = await r.json();
+assert.strictEqual(r.status, 200); assert.strictEqual(b.counted, true); assert.strictEqual(b.n, 1);
+assert.strictEqual(b.hist[82], 1); assert.ok(Math.abs(b.spots[2].avg - 0.2) < 1e-9); assert.strictEqual(b.spots[0].hist[60], 1);
+assert.deepStrictEqual(b.top, [{ name: 'Eli', p: 0.82 }]);
+r = await day({ date: today, key: KEY.eli, p: 0.99, spots: [0.3, 0.3, 0.3] });        // a replay of the day: not counted
+b = await r.json();
+assert.strictEqual(b.counted, false); assert.strictEqual(b.n, 1); assert.strictEqual(b.you.p, 0.82);
+r = await day({ date: today, key: KEY.matt, p: 0.4, spots: [-0.6, 0, 0.6], name: 'eli' });   // Eli's name is Eli's
+b = await r.json();
+assert.strictEqual(b.taken, true); assert.strictEqual(b.n, 2); assert.strictEqual(b.top.length, 1);
+assert.strictEqual(b.spots[0].hist[0], 1, 'clipped at -50'); assert.strictEqual(b.spots[2].hist[100], 1, 'clipped at +50');
+r = await day({ date: today, key: 'anon-device-key-0000001', p: 0.5, spots: [0, 0, 0] });      // no name: counted, not listed
+b = await r.json();
+assert.strictEqual(b.n, 3); assert.strictEqual(b.top.length, 1);
+for (const bad of [{ date: '2001-01-01' }, { date: 'today' }, { p: 1.5 }, { p: -0.1 }, { spots: [0, 0] }, { spots: [0, 2, 0] }, { key: 'short' }]) {
+  r = await day({ date: today, key: 'other-device-key-000001', p: 0.5, spots: [0, 0, 0], ...bad });
+  assert.strictEqual(r.status, 400, JSON.stringify(bad));
+}
+b = await (await day({ date: today, key: 'anon-device-key-0000001', p: 0.9, spots: [0, 0, 0], name: 'Pat' })).json();   // named afterwards
+assert.strictEqual(b.counted, false); assert.strictEqual(b.n, 3); assert.deepStrictEqual(b.top.map((x) => [x.name, x.p]), [['Eli', 0.82], ['Pat', 0.5]]);
+r = await call('GET', null, { path: `/daily?date=${today}` });
+b = await r.json();
+assert.strictEqual(b.n, 3); assert.ok(!JSON.stringify(b).includes('kh'), 'no key hashes out');
+assert.strictEqual((await (await call('GET', null, { path: '/daily?date=2001-01-01' })).json()).n, 0, 'a day nobody played');
+// a name claimed on the daily list is claimed on the survivor board too
+await day({ date: today, key: 'nate-device-key-0000001', p: 0.7, spots: [0, 0, 0], name: 'Nate' });
+assert.strictEqual((await call('POST', { name: 'nate', best: 5, key: KEY.spam })).status, 409);
+assert.strictEqual((await call('POST', { name: 'Nate', best: 5, key: 'nate-device-key-0000001' })).status, 200);
 console.log('board worker ok');

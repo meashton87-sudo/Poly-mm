@@ -73,7 +73,12 @@
     quick_middle: { blitz: 1, load: 0.5, soft: -0.5 }, screen: { blitz: 1, load: 0.5, soft: -0.5 },
     deep_strong: DEEP_M, deep_weak: DEEP_M, deep_middle: DEEP_M, pa_deep: DEEP_M, pa_short: { blitz: -0.5, load: 1, soft: 0 },
     roll_strong: { blitz: -0.5, load: 0.5, soft: 0 }, roll_weak: { blitz: -0.5, load: 0.5, soft: 0 },
-    hail_mary: { blitz: 0, load: 0, soft: 0 }, trick: { blitz: 0, load: 1, soft: -1 },
+    hail_mary: { blitz: 0, load: 0, soft: 0 },
+    // trick plays: the flea-flicker and the receiver pass sell the run (a loaded box bites; a blitz gets home before
+    // the slow throw; soft safeties stay deep); the end-around beats a blitz flowing to the run and loses to a loaded,
+    // disciplined front; the direct snap is a run with an extra blocker
+    trick_flea: { blitz: -1, load: 1, soft: -1 }, trick_pass: { blitz: -1, load: 1, soft: -1 },
+    trick_reverse: { blitz: 1, load: -1, soft: 0 }, trick_direct: { blitz: 0, load: -1, soft: 1 },
   };
   // the defense's call a look stands for (lookBucket: 0 light box, 1 light + blitz, 2 loaded box, 3 loaded + blitz)
   const LOOK_DEF = ['soft', 'blitz', 'load', 'blitz'];
@@ -699,12 +704,12 @@
     }
     _groupRows(c) {
       const P = this.e.pb, id = P.calls[c].id;
-      const g = id.startsWith('pa_') ? 'pa' : id.startsWith('roll') ? 'roll' : id.startsWith('rpo') || id === 'hail_mary' || id === 'trick' ? id : 'drop';
+      const g = id.startsWith('pa_') ? 'pa' : id.startsWith('roll') ? 'roll' : id.startsWith('rpo') || id === 'hail_mary' || id.startsWith('trick') ? id : 'drop';
       P.groupRows = P.groupRows || {};
       if (!P.groupRows[g]) {
         const seen = new Set();
         P.calls.forEach((cc, j) => {
-          const gj = cc.id.startsWith('pa_') ? 'pa' : cc.id.startsWith('roll') ? 'roll' : cc.id.startsWith('rpo') || cc.id === 'hail_mary' || cc.id === 'trick' ? cc.id : 'drop';
+          const gj = cc.id.startsWith('pa_') ? 'pa' : cc.id.startsWith('roll') ? 'roll' : cc.id.startsWith('rpo') || cc.id === 'hail_mary' || cc.id.startsWith('trick') ? cc.id : 'drop';
           if (gj === g && cc.kind === 'pass') this._callRows(j).rows.forEach((r) => seen.add(r));
         });
         P.groupRows[g] = { id: `g${g}`, rows: Int32Array.from(seen) };
@@ -795,14 +800,23 @@
         S.t = root.t; S.pos = root.pos; S.s[0] = root.score[0]; S.s[1] = root.score[1]; S.down = root.down;
         S.ytg = root.ytg; S.yl = root.yl; S.to[0] = root.to[0]; S.to[1] = root.to[1]; S.running = !!root.clock_running;
         S.credit = 0; S.phase = root.phase || SNAP; S.freeKick = false; S.stratActive = !!action.h1; S.plays = 0;
+        S.ot = root.ot ? { c: [root.ot.c[0], root.ot.c[1]], po: !!root.ot.po, n: root.ot.n || 1 } : null;
         let driveOpen = startPhase === SNAP;
         const pos0 = root.pos, pts0 = root.score[pos0];
         for (let step = 0; step < maxSteps && S.phase !== DONE; step++) {
           for (let c = 0; c < 8; c++) u[c] = uni(seed, r, step, c);
           const act = step === 0 ? action : null;
-          if (S.phase === PAT) this._pat(S, g, u, act);
-          if (S.phase === KICKOFF) this._kickoff(S, g, u, act);
-          if (S.phase === SNAP) this._snap(S, g, u, act, action, root.pos);
+          if (S.ot) {                      // overtime: a phase at a time, so each one's end can settle the game
+            const b = { phase: S.phase, pos: S.pos, s: [S.s[0], S.s[1]] };
+            if (S.phase === PAT) this._pat(S, g, u, act);
+            else if (S.phase === KICKOFF) this._kickoff(S, g, u, act);
+            else if (S.phase === SNAP) this._snap(S, g, u, act, action, root.pos);
+            this._otAfter(S, b);
+          } else {
+            if (S.phase === PAT) this._pat(S, g, u, act);
+            if (S.phase === KICKOFF) this._kickoff(S, g, u, act);
+            if (S.phase === SNAP) this._snap(S, g, u, act, action, root.pos);
+          }
           if (driveOpen && (S.pos !== pos0 || S.phase !== SNAP)) {
             const pts = S.s[pos0] - pts0;
             driveEndT += Math.max(S.t - g.halfEnd, 0); driveTd += pts >= 6 ? 1 : 0; driveFg += pts === 3 ? 1 : 0;
@@ -830,15 +844,23 @@
         oobWindow: halfEnd > 0 ? 120 : 300 };
       const S = { t: root.t, pos: root.pos, s: [root.score[0], root.score[1]], down: root.down, ytg: root.ytg, yl: root.yl,
         to: [root.to[0], root.to[1]], running: !!root.clock_running, credit: root.credit || 0, phase: root.phase || SNAP,
-        freeKick: !!root.free_kick, stratActive: false, plays: 0, log: [] };
+        freeKick: !!root.free_kick, stratActive: false, plays: 0, log: [],
+        ot: root.ot ? { c: [root.ot.c[0], root.ot.c[1]], po: !!root.ot.po, n: root.ot.n || 1 } : null };
       const u = new Float64Array(8);
       for (let c = 0; c < 8; c++) u[c] = uni(seed, 0, 0, c);
+      const b = { phase: S.phase, pos: S.pos, s: [S.s[0], S.s[1]] };
       if (S.phase === PAT) this._pat(S, g, u, action);
       else if (S.phase === KICKOFF) this._kickoff(S, g, u, action);
       else if (S.phase === SNAP) this._snap(S, g, u, action, action, root.pos);
+      if (S.ot) {
+        this._otAfter(S, b);
+        if (S.phase === DONE && S.t > g.halfEnd) S.log.push({ ev: 'end', t: S.t, ot: true });
+      }
+      const out = { t: S.t, pos: S.pos, score: [S.s[0], S.s[1]], down: S.down, ytg: S.ytg, yl: S.yl, to: [S.to[0], S.to[1]],
+        clock_running: S.running, phase: S.phase, credit: S.credit, free_kick: S.freeKick };
+      if (S.ot) out.ot = { c: [S.ot.c[0], S.ot.c[1]], po: S.ot.po, n: S.ot.n };
       return {
-        root: { t: S.t, pos: S.pos, score: [S.s[0], S.s[1]], down: S.down, ytg: S.ytg, yl: S.yl, to: [S.to[0], S.to[1]],
-          clock_running: S.running, phase: S.phase, credit: S.credit, free_kick: S.freeKick },
+        root: out,
         log: S.log, done: S.phase === DONE,
       };
     }
@@ -1102,6 +1124,13 @@
         if (tHalf <= 20 && pFg >= 0.2) choice = FG;
         if (tHalf <= 20 && pFg < 0.2 && choice === PUNT && yl < 60) choice = -1;
       }
+      // overtime, once the other team has had its possession: this one decides it. Down 4 or more, only a
+      // touchdown keeps the game going; down 1-3 a field goal ties or wins; tied, a field goal wins.
+      if (S.ot && S.ot.c[d] >= 1) {
+        if (margin <= -4) choice = -1;
+        else if (margin < 0) choice = pFg >= 0.3 ? FG : -1;
+        else if (margin === 0 && pFg >= 0.5) choice = FG;
+      }
       return choice;
     }
 
@@ -1252,6 +1281,28 @@
       S.pos = 1 - S.pos; S.yl = newYl; S.down = 1; S.ytg = Math.min(10, newYl); S.running = false; S.credit = 0;
     }
 
+    // Overtime (the daily game's survivor; NFL rules since 2025): each team gets a possession, then the next score
+    // wins; a safety ends it at once. S.ot.c counts each team's finished possessions; `b` is the state before the
+    // phase just played. A touchdown that wins it needs no try. A regular-season period (10:00) can end in a tie;
+    // the playoffs play another 15:00 from where the ball is (a kickoff after a score), timeouts back to 3 every two.
+    _otAfter(S, b) {
+      if (S.phase === DONE) {
+        if (!S.ot.po || S.t > 0 || S.s[0] !== S.s[1]) return;
+        S.ot.n += 1; S.t = 900; S.running = false; S.credit = 0;
+        S.phase = b.phase === PAT || (b.phase === SNAP && S.s[b.pos] > b.s[b.pos]) ? KICKOFF : SNAP;
+        if (S.ot.n % 2 === 1) S.to[0] = S.to[1] = 3;
+        if (S.log) { S.log = S.log.filter((e) => e.ev !== 'end'); S.log.push({ ev: 'period', n: S.ot.n, t: 900 }); }
+        return;
+      }
+      const c = S.ot.c;
+      if (b.phase === SNAP && (S.pos !== b.pos || S.phase !== SNAP)) c[b.pos] += 1;      // the offense's possession is over
+      if (S.phase === PAT && (b.phase === KICKOFF || S.pos !== b.pos)) c[S.pos] += 1;   // a return touchdown: theirs too
+      if (b.phase === SNAP && S.phase === KICKOFF && S.s[1 - b.pos] > b.s[1 - b.pos]) { S.phase = DONE; return; }   // safety
+      // a touchdown that puts them ahead after the other team has had the ball wins it; otherwise the try decides
+      if (S.phase === PAT) { const o = S.pos; if (S.s[o] > S.s[1 - o] && c[1 - o] >= 1) S.phase = DONE; return; }
+      if (c[0] >= 1 && c[1] >= 1 && S.s[0] !== S.s[1]) S.phase = DONE;
+    }
+
     _endHalfCheck(S, g) {
       if (S.t <= g.halfEnd && (S.phase === SNAP || S.phase === KICKOFF)) S.phase = DONE;
     }
@@ -1264,7 +1315,8 @@
         const w = this.wpFull(o, S.s[o] - S.s[1 - o], S.t, S.down, S.ytg, S.yl, S.to[o], S.to[1 - o]);
         vHome = o === 0 ? w : 1 - w;
       } else if (g.half === 2) {
-        vHome = hm > 0 ? 1 : hm < 0 ? 0 : this.ctx.otWpHome;
+        // tied at the end of overtime: a regular-season tie (half a win); playoffs play on
+        vHome = hm > 0 ? 1 : hm < 0 ? 0 : S.ot && !S.ot.po ? 0.5 : this.ctx.otWpHome;
       } else {
         const r = this.ctx.receive2h;
         const w = this.wpFull(r, r === 0 ? hm : -hm, 1800, 1, 10, KICKOFF_START_YL, 3, 3);

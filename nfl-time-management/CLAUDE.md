@@ -13,7 +13,7 @@ python -m nflclock.cli build          # downloads nflverse play-by-play to data/
 python -m nflclock.cli sync --no-refresh --games 2026_05_BUF_LA        # live game file (Bills at Rams)
 python -c "from nflclock import webexport as w; w.export_engine(); w.export_game('2026_05_BUF_LA')"
 python -c "from nflclock import dailygame as G; print(G.build())"   # daily game data (web/playbook.json, web/game.json)
-python scripts/site.py _site --domain 2mindrill.bashton.xyz --board-api https://...   # the game as a static website
+python scripts/site.py _site --domain nfl2mindrill.com --board-api https://... --ga G-4QQ8N62SMB   # the game as a static website
 ```
 
 ## Checks

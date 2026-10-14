@@ -32,7 +32,12 @@
     NYJ: ['Jets', '#125740'], PHI: ['Eagles', '#004C54'], PIT: ['Steelers', '#FFB612'], SF: ['49ers', '#AA0000'],
     SEA: ['Seahawks', '#69BE28'], TB: ['Buccaneers', '#D50A0A'], TEN: ['Titans', '#4B92DB'], WAS: ['Commanders', '#5A1414'],
   };
-  const FAM = { run: 'Run', pass: 'Pass', rpo: 'RPO' };
+  const FAM = { run: 'Run', pass: 'Pass', rpo: 'RPO', trick: 'Trick' };
+  // the trick plays (playbook.py): what each one is, on its key
+  const TRICK_SUB = { trick_flea: 'Hand off, pitch it back, go deep', trick_reverse: 'Fake one way, a receiver comes back the other',
+    trick_pass: 'A back or receiver throws it', trick_direct: 'Snap it straight to the back' };
+  const TRICK_SAY = { trick_flea: 'run the flea-flicker', trick_reverse: 'run the end-around', trick_pass: 'let a receiver throw it',
+    trick_direct: 'snap it direct to the back' };
   const TEMPOS = ['nohuddle', 'huddle', 'milk'];
   // your defense on their snaps: the looks it shows (the engine draws their play from real plays against it)
   const DEFS = ['blitz', 'load', 'soft'];
@@ -97,7 +102,7 @@
   let dayN = 1, today = [];
   let state = null;               // saved progress: today's three spots, or the survivor run
   // two modes: the daily three spots, or survivor (#survivor): random real fourth-quarter spots back to back, win to
-  // keep going, one loss and the run is over (a tie at the gun goes to overtime, won with the engine's win chance)
+  // keep going, one loss and the run is over (a tie at the gun goes to overtime, played out: see overtime())
   const SURV = location.hash === '#survivor';
   const stateKey = () => (SURV ? `${STORE}:surv` : `${STORE}:day:${dayN}`);
   const saveState = () => save(stateKey(), state);
@@ -154,7 +159,7 @@
   const groupOf = (label) => (OL.includes(label) || label === 'T' || label === 'G' ? 'OL' : label);
   function shortName(n) {
     const parts = String(n || '').replace(/\s+(Jr\.?|Sr\.?|II|III|IV|V)$/, '').split(/\s+/);
-    return parts.length > 1 ? `${parts[0][0]}.${parts.slice(1).join(' ')}` : (n || '');
+    return parts.length > 1 ? `${parts[0][0]}. ${parts.slice(1).join(' ')}` : (n || '');
   }
   // the end of the first half (t = 1800) reads 0:00 of the 2nd quarter: every spot is late in Q2 or Q4
   function clockOf(t) {
@@ -163,6 +168,7 @@
     return { q, s, text: `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` };
   }
   const halfLeft = (t) => t - (t > 1800 ? 1800 : 0);
+  const qLabel = (r) => (r.ot ? (r.ot.n > 1 ? `OT${r.ot.n}` : 'OT') : `Q${clockOf(r.t).q}`);
   // a tempo key (nohuddle, huddle, milk) as the engine's tempo; no-huddle is the engine's own hurry-up when
   // that is the usual tempo here, else 'urgent' inside two minutes of the half and 'hurry' before
   function engineTempo(k, r) {
@@ -482,9 +488,11 @@
       if (mode === 'snap' && look != null) showLook(f.def, LOOKS[look], s, fxBall);
       const add = (o, teamI, off) => {
         const team = code(teamI), mine = teamI === G.me;
+        const num = o.p.num != null ? String(o.p.num) : '';
         const g = S('g', { class: `dot ${mine ? 'me' : 'them'}`, tabindex: 0, role: 'button',
-          'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${o.p.name}, rated ${o.p.ovr}` });
-        g.append(S('circle', { class: 'hit', r: 11 }), S('circle', { class: 'c', r: 6.2, fill: rate(o.p.ovr) }));
+          'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${num ? `#${num} ` : ''}${o.p.name}, rated ${o.p.ovr}` });
+        g.append(S('circle', { class: 'hit', r: 11 }), S('circle', { class: 'c', r: 7.2, fill: rate(o.p.ovr) }));
+        if (num) { const t = S('text', { class: 'jn', y: 2.6 }); t.textContent = num; g.append(t); }
         const open = () => { if (passing() && (Date.now() - routeTapAt < 600 || (off && (o.label === 'WR' || o.label === 'TE' || o.label === 'RB')))) return; playerInfo(o.p, o.label, team); };
         g.addEventListener('click', open);
         g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); if (!passTap(a)) open(); } });
@@ -495,6 +503,7 @@
       };
       f.def.forEach((o) => add(o, 1 - offI, false));
       f.off.forEach((o) => add(o, offI, true));
+      sc.named = true;
     }
     if (mode === 'kick') kickoffUnits(sc, r, L, dir);
     const ball = S('g', {}), inner = S('g', { class: 'ballmove' });
@@ -505,7 +514,32 @@
     sc.callLayer = put(S('g', {}));
     if (mode === 'kick') showCall(sc, { text: r.free_kick ? 'Free kick' : 'Kickoff', kind: 'info', slot: 0, x: 180, L: L + dir * 7 });
     place(sc);
+    if (sc.named) nameTags(sc);
     return sc;
+  }
+  // Pre-snap name tags ("J. Allen") on the players you track: the quarterback, backs, receivers and the back seven
+  // (the linemen, five abreast, show their numbers only). Each goes on the far side from the line, or the near side
+  // if that is taken, or is left off; they drop at the snap (animatePlay).
+  const TAG_ORDER = ['QB', 'RB', 'FB', 'WR', 'TE', 'CB', 'S', 'LB'];
+  function nameTags(sc) {
+    const Y = camY(sc), losY = Y(sc.losL), boxes = [];
+    const free = (b, a) => b.x0 >= 2 && b.x1 <= 358 && b.y0 >= 2 && b.y1 <= sc.H - 2      // clear of the dots and tags so far
+      && !boxes.some((o) => o.a !== a && b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+    sc.actors.forEach((a) => boxes.push({ a, x0: a.x - 7.5, x1: a.x + 7.5, y0: Y(a.L) + a.side * GAP * a.w - 7.5, y1: Y(a.L) + a.side * GAP * a.w + 7.5 }));
+    sc.actors.filter((a) => TAG_ORDER.includes(a.label) && a.p && a.p.name)
+      .sort((a, b) => TAG_ORDER.indexOf(a.label) - TAG_ORDER.indexOf(b.label)).forEach((a) => {
+      const text = shortName(a.p.name), w = text.length * 3.7 + 2, ay = Y(a.L) + a.side * GAP * a.w, away = ay >= losY ? 1 : -1;
+      const spots = [[0, away * 13], [0, -away * 13], [-(w / 2 + 4), away * 11], [w / 2 + 4, away * 11], [0, away * 23]];
+      for (const [dx, dy] of spots) {
+        const b = { x0: a.x + dx - w / 2, x1: a.x + dx + w / 2, y0: ay + dy - 4.5, y1: ay + dy + 4.5 };
+        if (!free(b, a)) continue;
+        boxes.push(b);
+        const t = S('text', { class: 'nm', x: dx.toFixed(1), y: (dy + 3).toFixed(1) });
+        t.textContent = text;
+        a.g.append(t);
+        break;
+      }
+    });
   }
   // Kickoff alignment (the 2024 rules): the kicker at the ball, his ten teammates at the receiving 40 (25 yards
   // ahead of the ball), nine of the receiving team in the setup zone 30-35 yards ahead, and two returners deep.
@@ -736,18 +770,18 @@
     'Offensive Too Many Men on Field', 'Illegal Substitution']);
   const RUN_GAP = { 'Outside run': 92, 'Off-tackle run': 58, 'Inside run': 26, 'Up the middle': 0, 'QB sneak': 0, 'QB keeper': 60, RPO: 30 };
   const AIR = { quick_strong: 5, quick_weak: 5, quick_middle: 7, screen: -2, deep_strong: 24, deep_weak: 24, deep_middle: 22,
-    pa_short: 9, pa_deep: 27, roll_strong: 8, roll_weak: 8, hail_mary: 48, rpo_strong: 4, rpo_weak: 4, trick: 30 };
+    pa_short: 9, pa_deep: 27, roll_strong: 8, roll_weak: 8, hail_mary: 48, rpo_strong: 4, rpo_weak: 4, trick_flea: 30, trick_pass: 16 };
   // Real NFL timing, in seconds after the snap: the snap reaches the QB in a quarter of a second; when the play
   // was not charted, passes come out 1.35 s (RPO) to 4.3 s (Hail Mary) after the snap (Next Gen Stats averages);
   // the ball flies about 24 yards a second (deep balls are lofted, a little slower); handoffs at 0.8-1.2 s.
   const T_SNAP = 0.25;
-  const RELEASE = { quick: 2.3, screen: 1.6, deep: 2.8, pa: 3.0, roll: 3.0, hail: 4.3, rpo: 1.35, trick: 3.6 };
+  const RELEASE = { quick: 2.3, screen: 1.6, deep: 2.8, pa: 3.0, roll: 3.0, hail: 4.3, rpo: 1.35, flea: 3.7, tpass: 3.3 };
   const flight = (air) => (Math.abs(air) + 7) / (25 - 0.09 * clip(air, 0, 60));              // seconds the ball is in the air
   const PLAY_SPEED = 1;        // real time, your snaps and theirs
   // the routes a call's target runs when the real play was not charted, and the routes the rest run
   const CALL_ROUTE = { quick: ['slant', 'out', 'hitch'], quick_middle: ['slant', 'cross', 'in'], screen: ['screen'],
     deep: ['go', 'post', 'corner', 'deep_out', 'in'], deep_middle: ['post', 'in', 'go'], pa: ['in', 'post', 'cross', 'deep_out'],
-    roll: ['out', 'cross', 'corner'], hail: ['go'], rpo: ['slant', 'hitch', 'out'], trick: ['go', 'post'] };
+    roll: ['out', 'cross', 'corner'], hail: ['go'], rpo: ['slant', 'hitch', 'out'], flea: ['go', 'post'], tpass: ['go', 'post', 'corner'] };
   const OTHER_ROUTES = { short: ['hitch', 'out', 'slant', 'cross', 'in'], deep: ['go', 'post', 'in', 'corner', 'deep_out', 'hitch'],
     hail: ['go'] };
   const GROUP = { QB: 'QB', RB: 'RB', WR: 'WR', TE: 'TE', LT: 'OL', LG: 'OL', C: 'OL', RG: 'OL', RT: 'OL', T: 'OL', G: 'OL',
@@ -1063,7 +1097,7 @@
     }
     const passKind = (id) => (id.startsWith('quick') ? 'quick' : id === 'screen' ? 'screen' : id.startsWith('deep') ? 'deep'
       : id.startsWith('pa_') ? 'pa' : id.startsWith('roll') ? 'roll' : id === 'hail_mary' ? 'hail' : id.startsWith('rpo') ? 'rpo'
-        : id === 'trick' ? 'trick' : 'quick');
+        : id === 'trick_flea' ? 'flea' : id === 'trick_pass' ? 'tpass' : 'quick');
     // the coverage shell: as charted, or drawn as often as defenses play each
     function shellOf() {
       if (e.shell && Motion.SHELLS[e.shell]) return e.shell;
@@ -1084,7 +1118,7 @@
     function passShape(o) {
       const { kind, tgt, catchPt, tThrow, tCatch, rushers, shell, side, qbSpot } = o;
       const man = Motion.MAN[shell];
-      const others = K.recv.filter((a) => a !== tgt);
+      const others = K.recv.filter((a) => a !== tgt && a !== o.passer);
       const runners = [];                     // [actor, route plan] for coverage to read
       others.forEach((a, i) => {
         const yours = mine && act && act.routes && eligibles(sc).indexOf(a) >= 0;    // you gave him a route: he runs it
@@ -1103,7 +1137,7 @@
         leg(a, Math.max(tCatch, tThrow + 0.5) + 0.3 + R() * 0.4, 'stand');
       });
       // the back: blocks when they send five or more, else checks out into the flat
-      if (K.rb && K.rb !== tgt && kind !== 'pa' && kind !== 'trick') {
+      if (K.rb && K.rb !== tgt && kind !== 'pa' && kind !== 'flea' && !(kind === 'tpass' && o.passer === K.rb)) {
         if (rushers.length >= 5) {
           const blitzer = rushers[rushers.length - 1];
           leg(K.rb, REACT_OFF, 'track', { gain: 2.6, eff: 0.85, fn: (t) => {
@@ -1182,7 +1216,8 @@
       const q0 = here(qb), deepDrop = kind === 'hail' ? 8.6 : kind === 'deep' || kind === 'pa' ? 7.8 : kind === 'screen' ? 7.6 : 7.2;
       let qpts;
       if (kind === 'roll') qpts = [q0, [inX(q0[0] + side * 3), fwd(L0, -6.6)], [inX(q0[0] + side * 9.5), fwd(L0, -6.2)]];
-      else if (kind === 'pa' || kind === 'trick') qpts = [q0, [q0[0] + (K.rb ? Math.sign(K.rb.b.x - q0[0]) * 1.2 : 0.5), fwd(L0, -5.6)], [q0[0], fwd(L0, -deepDrop)]];
+      else if (kind === 'pa' || kind === 'flea') qpts = [q0, [q0[0] + (K.rb ? Math.sign(K.rb.b.x - q0[0]) * 1.2 : 0.5), fwd(L0, -5.6)], [q0[0], fwd(L0, -deepDrop)]];
+      else if (kind === 'tpass') qpts = [q0, [q0[0] + side * 1.2, fwd(L0, -5.4)]];
       else if (kind === 'rpo') qpts = [q0, [q0[0] + jit(0.4), fwd(L0, -5.6)]];
       else qpts = [q0, [q0[0] + jit(0.3), fwd(L0, -deepDrop)]];
       const qPlan = plan(qb, qpts, { eff: kind === 'roll' ? 0.75 : 0.52, v1: kind === 'roll' ? 2.5 : 0 });
@@ -1192,12 +1227,46 @@
         const e2 = qPlan.end;
         leg(qb, tSet + 0.35, 'go', { x: e2[0] + jit(0.6), y: e2[1] + dir * (0.6 + R() * 0.6), eff: 0.25 });
       }
-      const qbSpot = (t) => Wd.posAt(qb.b, Math.min(t, Wd.t));
+      // trick plays: who throws it. The flea-flicker: the back takes the handoff, gets two steps from the line and
+      // pitches it back to the quarterback. The receiver pass: a receiver comes back behind the line, the
+      // quarterback tosses it to him and he throws.
+      let passer = qb;
+      if (kind === 'flea' && K.rb) {
+        const rb = K.rb, r0 = here(rb), mesh = [q0[0] + Math.sign(r0[0] - q0[0] || 1) * 0.6, fwd(L0, -4.8)];
+        const rp = follow(rb, REACT_OFF, plan(rb, [r0, mesh, [mesh[0] + jit(0.4), fwd(L0, -1.8)]], { eff: 0.8, v1: 0 }));
+        const tH = T_SNAP + 0.6, tP = REACT_OFF + rp.T + 0.15, tBack = tP + 0.4;
+        const at = rp.at(rp.T), qAt = qPlan.at(Math.min(qPlan.T, tBack - T_SNAP));
+        busy.add(rb);
+        hold(tH, rb); ring(tH, qb, false); ring(tH, rb);
+        fly(tP, tBack, px(at[0]), at[1], px(qAt[0]), qAt[1], 0.35);
+        hold(tBack, qb); ring(tBack, rb, false); ring(tBack, qb);
+        say(tBack, 'Flea-flicker!', 'info', { follow: qb });
+        leg(rb, tP + 0.2, 'go', { x: rb.b.x, y: fwd(L0, 0.5), eff: 0.6 });
+        tThrow = Math.max(tThrow, tBack + 1.0);
+      } else if (kind === 'tpass') {
+        const cands = K.recv.filter((a) => a.label === 'WR' || a.label === 'RB');
+        const wr = cands.sort((a, b) => Math.abs(a.b.x - (BX + side * 6)) - Math.abs(b.b.x - (BX + side * 6)))[0] || K.rb;
+        if (wr) {
+          const w0 = here(wr), spot = [inX(BX + side * 4.5), fwd(L0, -4.6)];
+          const wp = follow(wr, REACT_OFF - 0.1, plan(wr, [w0, spot], { eff: 0.9, v1: 0 }));
+          const tL = Math.max(T_SNAP + 0.7, REACT_OFF - 0.1 + wp.T - 0.25), qAt = qPlan.at(Math.min(qPlan.T, tL - T_SNAP)), wAt = wp.at(wp.T);
+          busy.add(wr);
+          fly(tL, tL + 0.35, px(qAt[0]), qAt[1], px(wAt[0]), wAt[1], 0.25);
+          hold(tL + 0.35, wr); ring(tL + 0.35, qb, false); ring(tL + 0.35, wr);
+          say(tL + 0.35, 'Trick play!', 'info', { follow: wr });
+          leg(wr, tL + 0.5, 'go', { x: wAt[0] - side * 1.5, y: fwd(L0, -6.2), eff: 0.45 });
+          leg(qb, tL + 0.45, 'go', { x: inX(q0[0] - side * 5), y: fwd(L0, -2), eff: 0.6 });
+          passer = wr;
+          tThrow = Math.max(tThrow, tL + 1.3);
+        }
+      }
+      const qbSpot = (t) => Wd.posAt(passer.b, Math.min(t, Wd.t));
       // the target and the catch: his route (as charted, else the call's), to the depth of the real throw, there
       // when the ball is
       // your pick (a receiver and his route): him, on that route, and the others on the routes you saw
       const pick = mine && act && act.target != null ? eligibles(sc)[act.target] : null;
-      const tgt = pick || pickTarget(id, sign) || K.rb;
+      let tgt = pick || pickTarget(id, sign) || K.rb;
+      if (tgt === passer) tgt = K.recv.filter((a) => a !== passer && a.label !== 'TE').sort((a, b) => Math.abs(b.b.x - BX) - Math.abs(a.b.x - BX))[0] || K.recv.find((a) => a !== passer);
       if (!tgt) return;
       busy.add(tgt);
       const routeName = thrownAway ? 'out' : pick && act.route ? act.route : (e.route && Motion.route(e.route, air, 1, 0.5) ? e.route
@@ -1216,20 +1285,20 @@
       const rushers = rushersOf(nRush);
       lineplay('pass', side, rushers.filter((d) => K.rush.includes(d)));
       const blitzers = rushers.filter((d) => !K.rush.includes(d));
-      blitzers.forEach((d, i) => leg(d, REACT_DEF + 0.1, 'chase', { who: qb.b, gap: 1.6 + i * 0.6, eff: 0.95, lead: 0.2 }));
+      blitzers.forEach((d, i) => leg(d, REACT_DEF + 0.1, 'chase', { who: passer.b, gap: 1.6 + i * 0.6, eff: 0.95, lead: 0.2 }));
       // pressure: one rusher beats his man and is on the passer as he throws
       if (e.pressure) {
         const w = pickOf(rushers);
-        leg(w, Math.max(REACT_DEF + 0.4, tThrow - 1.1), 'chase', { who: qb.b, gap: 1.1, eff: 1, lead: 0.3 });
+        leg(w, Math.max(REACT_DEF + 0.4, tThrow - 1.1), 'chase', { who: passer.b, gap: 1.1, eff: 1, lead: 0.3 });
       }
-      const cov = passShape({ kind, tgt, catchPt, tThrow, tCatch, rushers, shell: shellOf(), side, qbSpot });
+      const cov = passShape({ kind, tgt, catchPt, tThrow, tCatch, rushers, shell: shellOf(), side, qbSpot, passer });
       // the throw
       Wd.run(tThrow);
-      const qT = here(qb);
+      const qT = here(passer);
       if (thrownAway) catchPt = [sidelineX(qT[0] + side * 10) + Math.sign(qT[0] - FW / 2 || side) * 2.5, inL(fwd(L0, Math.max(3, air)))];
       fly(tThrow, tCatch, px(qT[0]) + 4, qT[1], px(catchPt[0]), catchPt[1], Math.min(2.4, 0.35 + Math.abs(air) * 0.05));
-      ring(tThrow, qb, false);
-      leg(qb, tThrow + 0.15, 'go', { x: qT[0] + jit(1), y: qT[1] + dir * 1.2, eff: 0.25 });
+      ring(tThrow, passer, false);
+      leg(passer, tThrow + 0.15, 'go', { x: qT[0] + jit(1), y: qT[1] + dir * 1.2, eff: 0.25 });
       // the defense breaks on the ball a beat after it is out: the nearest two to where it is going
       const breakers = cov.cover.slice().sort((a, b) => dist(here(a), catchPt) - dist(here(b), catchPt)).slice(0, 2);
       const intc = e.evt === 'interception' || e.evt === 'pick_six';
@@ -1292,19 +1361,27 @@
     // ---- the run
     function run(c, id, sign) {
       const carrier = (id === 'qb_sneak' || id === 'qb_run' || e.who === 'QB') ? qb
-        : (id === 'trick' && e.who === 'WR') ? K.recv.filter((a) => a.label === 'WR').sort((a, b) => Math.abs(a.x0 - (bx - (sign || 1) * 120)) - Math.abs(b.x0 - (bx - (sign || 1) * 120)))[0] : (K.rb || qb);
+        : id === 'trick_reverse' ? (K.recv.filter((a) => a.label === 'WR').sort((a, b) => Math.abs(a.x0 - (bx - (sign || 1) * 120)) - Math.abs(b.x0 - (bx - (sign || 1) * 120)))[0] || K.rb || qb)
+        : (K.rb || qb);
+      const direct = id === 'trick_direct' && carrier !== qb, reverse = id === 'trick_reverse' && carrier !== K.rb;
       if (!carrier) return;
       const gap = RUN_GAP[c ? c.base : ''] ?? 26;
       const sg = sign || (id === 'qb_run' ? sc.s * dir : 0) || 0;
       const hole = [inX(BX + (sg * gap) / XYD), fwd(L0, 0.6)];
-      snapToQb();
+      if (direct) { fly(0, T_SNAP, bx, L0, carrier.x0, carrier.L0, 0.15); hold(T_SNAP, carrier); } else snapToQb();
       busy.add(carrier);
       // one continuous run from his stance through the mesh to the hole, flat out: across the QB's face when the
       // play goes away from his side, downhill when it goes his way; the handoff is when he gets to the mesh
       // (tracking: backs reach the line about 2.5 s after the snap)
       const c0 = here(carrier), q0 = qb ? here(qb) : c0;
       let tMesh = T_SNAP + 0.05, tLos;
-      if (carrier === qb) {
+      if (direct) {
+        // the direct snap: he takes it himself and goes; the quarterback slides out as a decoy
+        const pl = follow(carrier, T_SNAP + 0.05, plan(carrier, [c0, hole], { eff: 0.92 }));
+        tLos = T_SNAP + 0.05 + pl.T;
+        if (qb) leg(qb, T_SNAP, 'go', { x: inX(q0[0] - (sg || 1) * 6), y: fwd(L0, -2.5), eff: 0.6 });
+        say(T_SNAP + 0.2, 'Direct snap', 'info', { follow: carrier });
+      } else if (carrier === qb) {
         const pl = follow(qb, T_SNAP + 0.05, plan(qb, [q0, id === 'qb_sneak' ? [BX, fwd(L0, 0.4)] : hole], { eff: 0.92 }));
         tLos = T_SNAP + 0.05 + pl.T;
       } else {
@@ -1326,11 +1403,16 @@
         }
       }
       ring(tMesh, carrier);
+      if (reverse && K.rb) {         // the back fakes it the other way first; the second level bites
+        leg(K.rb, REACT_OFF, 'go', { x: inX(BX - (sg || 1) * 6), y: fwd(L0, -1), eff: 0.85 });
+        say(tMesh, 'End-around!', 'info', { follow: carrier });
+      }
       lineplay('run', sg, K.rush);
       // the second level: linebackers read, then fill toward the hole; safeties come down; corners hold, then come up
       K.def.forEach((d) => {
         if (K.rush.includes(d)) return;
-        if (d.label === 'LB') leg(d, REACT_DEF + 0.25, 'go', { x: hole[0] + jit(2.5), y: fwd(L0, 3 + R() * 1.5), eff: 0.7 });
+        if (reverse && d.label === 'LB') leg(d, REACT_DEF, 'go', { x: d.b.x - (sg || 1) * 3, y: fwd(L0, 3), eff: 0.7 });
+        if (d.label === 'LB') leg(d, REACT_DEF + 0.25 + (reverse ? 0.7 : 0), 'go', { x: hole[0] + jit(2.5), y: fwd(L0, 3 + R() * 1.5), eff: 0.7 });
         else if (d.label === 'S') leg(d, 0.9 + R() * 0.3, 'go', { x: d.b.x + (hole[0] - d.b.x) * 0.5, y: fwd(L0, 6 + R() * 3), eff: 0.75 });
         else leg(d, 1.1 + R() * 0.3, 'go', { x: d.b.x + (hole[0] - d.b.x) * 0.3, y: fwd(L0, 5 + R() * 2), eff: 0.7 });
       });
@@ -1526,7 +1608,7 @@
       else if (e.evt === 'scramble') scramble();
       else {
         const thrown = e.air !== undefined || e.incomplete || ['interception', 'pick_six', 'drop', 'near_pick', 'throwaway'].includes(e.evt);
-        if (e.kind === PASS && (thrown || !['rpo_strong', 'rpo_weak', 'trick'].includes(id))) pass(c, id, sign);
+        if (e.kind === PASS && (thrown || !['rpo_strong', 'rpo_weak'].includes(id))) pass(c, id, sign);
         else run(c, id, sign);
       }
       bake(P.T + 0.2);
@@ -1861,6 +1943,7 @@
     } catch (err) { console.warn('animation skipped:', err); P = null; }
     scene = sc;
     if (!P) return false;
+    sc.svg.querySelectorAll('.nm').forEach((t) => t.classList.add('gone'));     // the names drop at the snap
     // the clock at the snap: after the runoff, or after a timeout called before it (a kick to win), else as it was
     const k0 = res.log.findIndex((x) => x.ev !== 'runoff' && x.ev !== 'timeout');
     const pre = k0 < 0 ? res.log : res.log.slice(0, k0), ro = pre.find((x) => x.ev === 'runoff');
@@ -1958,7 +2041,11 @@
       const g = state.games, from = Math.max(0, g.length - 7);
       t.setAttribute('aria-label', `Survivor: ${state.won} win${state.won === 1 ? '' : 's'}`);
       if (from) t.append(el('span', 'more', `+${from}`));
-      g.slice(from).forEach((x) => { const b = el('span', `done sq ${x.w ? 'g' : 'r'}`, x.w ? 'W' : 'L'); b.title = `${x.tag}: ${x.w ? 'won' : 'lost'} ${x.mine}–${x.theirs}`; t.append(b); });
+      g.slice(from).forEach((x) => {
+        const b = el('span', `done sq ${x.w ? 'g' : x.tie ? 'y' : 'r'}`, x.w ? 'W' : x.tie ? 'T' : 'L');
+        b.title = `${x.tag}: ${x.w ? 'won' : x.tie ? 'tied' : 'lost'} ${x.mine}–${x.theirs}${x.ot ? ' in overtime' : ''}`;
+        t.append(b);
+      });
       if (!state.out && G) { const b = el('span', 'on', String(g.length + 1)); b.title = `Game ${g.length + 1}: playing`; t.append(b); }
       return;
     }
@@ -1993,10 +2080,10 @@
     };
     const ck = clockOf(r.t), over = r.phase === DONE;
     const mid = el('span', 'mid');
-    mid.append(el('span', 'q', over ? (r.t >= 1800 ? 'HALF' : 'FINAL') : `Q${ck.q}`),
+    mid.append(el('span', 'q', over ? (r.t >= 1800 ? 'HALF' : r.ot ? 'FINAL/OT' : needsOvertime(r) ? 'END Q4' : 'FINAL') : qLabel(r)),
       el('span', `clk${r.clock_running && !over ? ' run' : ''}`, over ? '0:00' : ck.text));
     b.append(side(1, false), mid, side(0, true));
-    b.setAttribute('aria-label', `${code(1)} ${r.score[1]}, ${code(0)} ${r.score[0]}, ${ck.text} left in the ${ordinal(ck.q)} quarter. Game details`);
+    b.setAttribute('aria-label', `${code(1)} ${r.score[1]}, ${code(0)} ${r.score[0]}, ${ck.text} left in ${r.ot ? 'overtime' : `the ${ordinal(ck.q)} quarter`}. Game details`);
     const dd = $('dd');
     dd.textContent = '';
     if (r.phase === SNAP) dd.append(el('b', '', ddText(r)), document.createTextNode(` · ball ${onSpot(r)} · clock ${r.clock_running ? 'running' : 'stopped'}`));
@@ -2071,7 +2158,7 @@
     } else if (e.call >= 0) {
       const c = idx.calls[e.call];
       const actor = c.id.startsWith('rb_') ? nm.rb : nm.qb;
-      what = `${c.id === 'trick' ? `The ${who} run a trick play` : `${actor || `The ${who}`} ${c.say}`}${e.row >= 0 ? lookText(e.look) : ''}`;
+      what = `${TRICK_SAY[c.id] ? `The ${who} ${TRICK_SAY[c.id]}` : `${actor || `The ${who}`} ${c.say}`}${e.row >= 0 ? lookText(e.look) : ''}`;
     } else what = `${nm.qb || who} ${e.kind === RUN ? 'hands off' : 'drops back'}`;
     const y = Math.round(e.td && !e.turnover ? e.yl : e.yards);      // a touchdown gains the distance to the goal line
     const gain = y > 0 ? `${y} yard${y === 1 ? '' : 's'}` : y < 0 ? `loss of ${-y}` : 'no gain';
@@ -2123,7 +2210,8 @@
         case 'pat': text = e.two ? `Two-point try ${e.good ? 'good' : 'fails'}` : `Extra point ${e.good ? 'good' : 'no good'}`; break;
         case 'kickoff': text = e.onside ? `Onside kick, recovered by the ${teamName(code(e.recovered ? e.team : 1 - e.team))}` :
           e.retTd ? 'Kickoff returned for a touchdown' : `Kickoff${e.tb ? (Math.round(e.yl) === 60 ? ', short of the landing zone' : ', touchback') : ''}: the ${teamName(code(1 - e.team))} start at their own ${Math.round(100 - e.yl)}`; break;
-        case 'end': text = (e.t ?? G.root.t) >= 1800 ? 'Halftime' : 'End of regulation'; break;
+        case 'end': text = (e.t ?? G.root.t) >= 1800 ? 'Halftime' : e.ot ? 'Ballgame' : G.root.ot ? 'End of overtime' : 'End of regulation'; break;
+        case 'period': text = `End of the period, still tied: on to OT${e.n}`; break;
         default: break;
       }
       if (text) out.push([text, t, e.team === G.me]);
@@ -2212,7 +2300,7 @@
     box.append(facts);
     const rc = (sc.real || {}).coach;
     box.append(el('div', 'who', `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
-    if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over.'));
+    if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
     const go = el('button', 'btn', 'Next');
     go.type = 'button';
     go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
@@ -2354,7 +2442,7 @@
       if (G.look != null) d.append(readLine(G.look));
       if (r.clock_running) d.append(tempoPicker(r));
       const fam = el('div', 'keys');
-      fam.style.setProperty('--cols', 3);
+      fam.style.setProperty('--cols', 4);
       Object.entries(FAM).forEach(([f, label], i) => {
         const b = key(label, null, 'big', i);
         b.addEventListener('click', () => {
@@ -2410,6 +2498,17 @@
     const order = (c) => ({ weak: s > 0 ? 0 : 2, middle: 1, strong: s > 0 ? 2 : 0 }[c.side] ?? 1);
     const sideText = (c) => (c.side === 'strong' ? (s > 0 ? 'Strong →' : '← Strong') : c.side === 'weak' ? (s > 0 ? '← Weak' : 'Weak →') :
       c.side === 'middle' ? 'Middle' : 'Call it');
+    if (ui.fam === 'trick') {
+      const keys = el('div', 'keys');
+      keys.style.setProperty('--cols', 2);
+      rows.forEach((row, k) => row.calls.forEach((c) => {
+        const b = key(row.base, TRICK_SUB[c.id] || null, 'big def', k);
+        b.addEventListener('click', () => { if (!busy) decideCall({ call: c.id }); });
+        keys.append(b);
+      }));
+      d.append(keys);
+      return;
+    }
     const list = el('div', 'plays');
     let i = 0;
     rows.forEach((row) => {
@@ -2493,7 +2592,7 @@
     throwKey.addEventListener('click', () => { if (!busy && P.target != null) decideCall({ pass: P.target }); });
     go.append(throwKey);
     d.append(go);
-    const avail = callOptions(r).calls, more = ['hail_mary', 'trick'].filter((id) => avail.includes(id));
+    const avail = callOptions(r).calls, more = ['hail_mary'].filter((id) => avail.includes(id));
     if (more.length) {
       const row = el('div', 'keys');
       row.style.setProperty('--cols', more.length);
@@ -2588,7 +2687,7 @@
     return w;
   }
 
-  function situation(r) { return `${clockOf(r.t).text} Q${clockOf(r.t).q}, ${ddText(r)} ${onSpot(r)}`; }
+  function situation(r) { return `${clockOf(r.t).text} ${qLabel(r)}, ${ddText(r)} ${onSpot(r)}`; }
   function clockSpec(r, chosen, seq) {
     const me = G.me, lead = r.score[me] - r.score[1 - me];
     const opts = clockOptions(r).map((k) => ({ key: k, label: CLOCK[k].label, action: clockAct(k, r) }));
@@ -2823,7 +2922,7 @@
         busy = true;
         try {
           await snapThenGrade([{ kind, family: spec.family, r, opts: spec.opts.map((x) => ({ key: x.key, label: x.label, action: x.action })),
-            chosen: o.key, q: spec.q(), situation: `${clockOf(r.t).text} Q${clockOf(r.t).q}`, seed: hash(kind, seedKey(), G.si, G.seq) }], o.action);
+            chosen: o.key, q: spec.q(), situation: `${clockOf(r.t).text} ${qLabel(r)}`, seed: hash(kind, seedKey(), G.si, G.seq) }], o.action);
         } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
         busy = false;
       });
@@ -3004,7 +3103,46 @@
     return { el: box, name: c.name };
   }
 
+  // Survivor overtime (NFL rules since 2025, engine.js _otAfter): tied at the end of regulation, a coin toss, then
+  // 10:00 (15:00 in the playoffs, which play on until someone wins) with two timeouts each (three in the playoffs).
+  // Both teams get the ball, then the next score wins; a regular-season overtime can end tied, which keeps the run
+  // alive without a win. The toss is seeded, so a reload lands on the same one.
+  const isPlayoff = (sc) => !!ROUND[(sc.real || {}).type];
+  const needsOvertime = (r) => SURV && r.phase === DONE && r.t <= 0 && !r.ot && r.score[0] === r.score[1];
+  function overtime() {
+    const r = G.root, po = isPlayoff(G.scen), d = $('dock'), them = teamName(code(1 - G.me));
+    const won = rng(hash('toss', seedKey(), G.si))() < 0.5;
+    drawAll();
+    d.textContent = '';
+    takeBanner(d);
+    const head = el('div', 'ask');
+    head.append(el('h2', '', `Tied ${r.score[G.me]}–${r.score[1 - G.me]}: overtime`),
+      el('span', 'sub', `${po ? 15 : 10} minutes, ${po ? 3 : 2} timeouts each. Both teams get the ball, then the next score wins.${
+        po ? ' Playoffs: it goes on until someone wins.' : ' Still tied after that, it’s a tie: you stay alive, without a win.'}`));
+    d.append(head);
+    d.append(el('p', 'note toss', won ? 'You won the coin toss.' : `The ${them} won the coin toss and will receive.`));
+    const start = (kicker) => {
+      if (busy) return;
+      G.root = { t: po ? 900 : 600, pos: kicker, score: [r.score[0], r.score[1]], down: 1, ytg: 10, yl: 65, to: po ? [3, 3] : [2, 2],
+        clock_running: false, phase: KICKOFF, credit: 0, free_kick: false, ot: { c: [0, 0], po, n: 1 } };
+      G.over = false; G.result = null;
+      addLog(kicker === G.me ? `Overtime: you kick off to the ${them}` : `Overtime: the ${them} kick off to you`, G.root.t, true);
+      persist();
+      advance();
+    };
+    const keys = el('div', 'keys');
+    const opts = won ? [['Receive', 'Get the ball first', 1 - G.me], ['Kick off', 'Know what you need', G.me]] : [['Kick off', null, G.me]];
+    keys.style.setProperty('--cols', opts.length);
+    opts.forEach(([label, sub, kicker], i) => {
+      const b = key(label, sub, 'big', i);
+      b.addEventListener('click', () => start(kicker));
+      keys.append(b);
+    });
+    d.append(keys);
+  }
+
   async function finishSpot() {
+    if (!G.result && needsOvertime(G.root)) return overtime();
     if (!G.result || (G.result.half === 1 && G.result.v !== 2)) {      // v2: halftime valued at halftime
       status('Final whistle…');
       const r = G.root;
@@ -3017,25 +3155,30 @@
     }
     drawAll();
     const res = G.result, sc = G.scen, d = $('dock');
-    if (SURV && res.ot == null) {           // survivor: a tie goes to overtime, won with the engine's win chance
-      res.ot = res.mine !== res.theirs ? 0 : rng(hash('ot', seedKey()))() < res.wp ? 1 : -1;
-      const w = res.mine > res.theirs || res.ot > 0;
+    // (res.ot: a result from before overtime was played, settled with the win chance)
+    const inOT = !!G.root.ot, tie = res.mine === res.theirs;
+    if (SURV && res.ot == null && !res.counted) {   // survivor: a win counts, a loss ends the run, a tie after overtime neither
+      res.counted = true;
+      const w = res.mine > res.theirs;
       state.games.push({ id: sc.id, tag: gameTag(sc), me: sc.player, op: sc.player === sc.home ? sc.away : sc.home,
-        mine: res.mine, theirs: res.theirs, ot: res.ot !== 0, w });
-      if (w) state.won += 1; else state.out = true;
+        mine: res.mine, theirs: res.theirs, ot: inOT, w, tie });
+      if (w) state.won += 1; else if (!tie) state.out = true;
       persist();
     }
     d.textContent = '';
     takeBanner(d);
     const card = el('div', 'endcard');
+    const ot = inOT ? ' in overtime' : '';
     const head = res.half === 1 ? `Halftime: ${res.mine}–${res.theirs}` :
-      res.mine > res.theirs ? `You win ${res.mine}–${res.theirs}` : res.mine < res.theirs ? `You lose ${res.mine}–${res.theirs}` :
-      SURV ? `Tied ${res.mine}–${res.theirs}: you ${res.ot > 0 ? 'win' : 'lose'} in overtime` : `Tied ${res.mine}–${res.theirs}: overtime`;
+      res.mine > res.theirs ? `You win ${res.mine}–${res.theirs}${ot}` : res.mine < res.theirs ? `You lose ${res.mine}–${res.theirs}${ot}` :
+      inOT ? `Tie ${res.mine}–${res.theirs} after overtime` :
+      SURV && res.ot ? `Tied ${res.mine}–${res.theirs}: you ${res.ot > 0 ? 'win' : 'lose'} in overtime` : `Tied ${res.mine}–${res.theirs}: overtime`;
     card.append(el('h2', '', head));
     if (SURV && res.ot) card.append(el('p', 'note', `Your overtime win chance was ${wpTxt(res.wp)}.`));
-    else if (res.half === 1 || res.mine === res.theirs) card.append(el('p', 'note', `Your win chance from here: ${wpTxt(res.wp)}.`));
+    else if (inOT && tie) card.append(el('p', 'note', 'Nobody won it. A tie keeps your run alive, but it doesn’t count as a win.'));
+    else if (res.half === 1 || (tie && !inOT)) card.append(el('p', 'note', `Your win chance from here: ${wpTxt(res.wp)}.`));
     if (SURV) card.append(el('p', `alive ${state.out ? 'out' : 'in'}`, state.out ? `Eliminated after ${state.won} win${state.won === 1 ? '' : 's'}.` :
-      `${state.won} straight. You're still alive.`));
+      inOT && tie ? `Still alive: ${state.won} win${state.won === 1 ? '' : 's'}.` : `${state.won} straight. You're still alive.`));
     card.append(squaresOf(G.decisions));
     const hh = headToHead(G.si, res);
     if (hh) card.append(hhCard(hh));
@@ -3253,14 +3396,14 @@
       b.append(det);
     } else b.append(el('p', 'note', 'To get on the board, send your share text to whoever shared this game with you.'));
   }
-  function nameInput() {
+  function nameInput(onSet) {
     const w = el('label', 'myname');
     w.append(el('span', '', 'Your name on the board'));
     const inp = el('input');
     inp.maxLength = 24;
     inp.value = myName();
     inp.placeholder = 'e.g. Eli';
-    inp.addEventListener('change', () => { save(NAME_KEY, inp.value.trim().slice(0, 24)); renderSurvSummary(true); });
+    inp.addEventListener('change', () => { save(NAME_KEY, inp.value.trim().slice(0, 24)); if (onSet) onSet(); else renderSurvSummary(true); });
     w.append(inp);
     return w;
   }
@@ -3325,8 +3468,8 @@
       el('p', 'verdict', !st.best ? 'One loss and it\'s over. Run it back.' : n >= st.best ? 'Your best run yet.' : `Your best run: ${st.best} win${st.best === 1 ? '' : 's'}.`));
     const list = el('ol', 'runlist');
     state.games.forEach((g) => {
-      const li = el('li', g.w ? 'w' : 'l');
-      li.append(el('span', 'res', `${g.w ? 'W' : 'L'} ${g.mine}–${g.theirs}${g.ot ? ' OT' : ''}`),
+      const li = el('li', g.w ? 'w' : g.tie ? 't' : 'l');
+      li.append(el('span', 'res', `${g.w ? 'W' : g.tie ? 'T' : 'L'} ${g.mine}–${g.theirs}${g.ot ? ' OT' : ''}`),
         el('span', 'm', `${teamName(g.me)} vs ${teamName(g.op)}`), el('span', 'tag', g.tag));
       list.append(li);
     });
@@ -3347,7 +3490,7 @@
       box.append(how);
     }
     const nm = myName();
-    const text = `Two-Minute Drill Survivor${nm ? ` · ${nm}` : ''}\nSurvived ${n} game${n === 1 ? '' : 's'}\n${state.games.map((g) => (g.w ? SQ.g : SQ.r)).join('')}`;
+    const text = `Two-Minute Drill Survivor${nm ? ` · ${nm}` : ''}\nSurvived ${n} game${n === 1 ? '' : 's'}\n${state.games.map((g) => (g.w ? SQ.g : g.tie ? SQ.y : SQ.r)).join('')}`;
     const pre = el('div', 'grid-share', text);
     const share = el('button', 'btn alt', 'Share');
     share.type = 'button';
@@ -3403,6 +3546,7 @@
       el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers`));
     if (cc) box.append(cc.el);
     box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller across today's three spots.`));
+    box.append(dailyBox(p, [0, 1, 2].map((i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0))));
     const rec = [0, 0, 0];             // against the real coaches: better, worse, the same (a W-L-T record)
     const rows = [0, 1, 2].map((i) => {
       const s = state.spots[i]; if (!s) return '';
@@ -3429,6 +3573,82 @@
       catch (e) { const sel = window.getSelection(); const rg = document.createRange(); rg.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(rg); toast('Selected: copy it'); }
     });
     box.append(btn, countdown());
+  }
+  // Everyone who played today (the website: board/worker.js /daily). Your first result of the day counts once;
+  // the box shows where it ranks among the day's players, how they spread, each spot against the average, and the
+  // day's top named players. On claude.ai (no backend) there is no box.
+  const localDate = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  function dailyBox(p, spotW) {
+    const box = el('div', 'board daily');
+    box.hidden = true;
+    const post = async () => {
+      const res = await fetch(`${BOARD.api}/daily`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: localDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)), ...(myName() ? { name: myName() } : {}) }) });
+      if (!res.ok) throw new Error(`daily ${res.status}`);
+      return res.json();
+    };
+    const refresh = async (force) => {
+      try { fillDaily(box, await post(), p, spotW, () => refresh(true)); } catch (e) { if (force) toast('Could not reach today’s stats'); }
+    };
+    (BOARD.ready || Promise.resolve()).then(() => { if (BOARD.mode === 'api') refresh(false); });
+    return box;
+  }
+  function fillDaily(box, d, p, spotW, again) {
+    box.textContent = '';
+    box.hidden = false;
+    const you = d.you ? d.you.p : p, pt = Math.round(you * 100), others = d.n - 1;
+    let below = 0, ties = -1;
+    d.hist.forEach((c, k) => { if (k < pt) below += c; else if (k === pt) ties += c; });
+    const beat = others > 0 ? (below + Math.max(0, ties) / 2) / others : null;
+    box.append(el('div', 'k', 'Everyone today'));
+    box.append(el('p', 'daily-head', beat == null ? 'You’re the first to finish today. Check back later to see how you stack up.'
+      : `Better than ${Math.round(beat * 100)}% of the ${others.toLocaleString()} other player${others === 1 ? '' : 's'} today`));
+    if (d.counted === false && d.you && Math.abs(d.you.p - p) > 0.005) box.append(el('p', 'note', `Your first finish today counts: ${Math.round(d.you.p * 100)}.`));
+    // the day's scores, in the buckets your own stats use; yours highlighted
+    const dist = el('div', 'dist');
+    dist.setAttribute('role', 'img');
+    const buckets = [[80, 101, '80–100'], [60, 80, '60–79'], [40, 60, '40–59'], [20, 40, '20–39'], [0, 20, '0–19']];
+    const counts = buckets.map(([lo, hi]) => d.hist.slice(lo, Math.min(hi, 101)).reduce((a, c) => a + c, 0));
+    const mx = Math.max(1, ...counts);
+    dist.setAttribute('aria-label', `Today's scores: ${buckets.map(([, , lab], i) => `${lab}: ${counts[i]}`).join(', ')}. Yours: ${pt}.`);
+    buckets.forEach(([lo, hi, lab], i) => {
+      const r = el('div', 'r');
+      const bar = el('div', `bar2${pt >= lo && pt < hi ? ' hi' : ''}`, String(counts[i]));
+      bar.style.width = `${Math.max(8, (counts[i] / mx) * 100)}%`;
+      r.title = `${lab}: ${counts[i].toLocaleString()} player${counts[i] === 1 ? '' : 's'} (${Math.round((counts[i] / Math.max(1, d.n)) * 100)}%)${pt >= lo && pt < hi ? ', you' : ''}`;
+      r.append(el('span', '', lab), bar);
+      dist.append(r);
+    });
+    box.append(dist);
+    // each spot: your win chance against a typical play-caller, and the day's average
+    const yourW = d.you ? d.you.spots : spotW;
+    const sp = el('div', 'dspots');
+    d.spots.forEach((x, i) => {
+      if (!today[i]) return;
+      let lower = 0;
+      const yp = clip(Math.round(yourW[i] * 100) + 50, 0, 100);
+      x.hist.forEach((c, k) => { if (k < yp) lower += c; });
+      const row = el('div', 'dsp');
+      row.append(el('b', '', `Spot ${i + 1} · ${today[i].player}`),
+        el('span', '', `You ${pts(yourW[i])}% · everyone ${pts(x.avg)}%${x.n > 1 ? ` · better than ${Math.round((lower / (x.n - 1 || 1)) * 100)}%` : ''}`));
+      sp.append(row);
+    });
+    box.append(sp);
+    if (d.top && d.top.length) {
+      const ol = el('ol', 'brows'), me = myName().toLowerCase();
+      d.top.forEach((r, i) => {
+        const li = el('li', String(r.name).toLowerCase() === me ? 'me' : '');
+        li.append(el('span', 'n', String(i + 1)), el('span', 'nm', String(r.name)), el('b', '', String(Math.round(r.p * 100))));
+        ol.append(li);
+      });
+      box.append(el('div', 'k sub', 'Today’s best'), ol);
+    }
+    if (d.taken) box.append(el('p', 'note', `Someone else already plays as ${myName()} here. Pick another name to get on the list.`));
+    if (!myName() || d.taken) box.append(nameInput(again));
+    const btn = el('button', 'chip', 'Refresh');
+    btn.type = 'button';
+    btn.addEventListener('click', again);
+    box.append(btn);
   }
   function countdown() {
     const w = el('div', 'countdown');
@@ -3461,7 +3681,7 @@
     const ch = el('div', 'chip-big', String(p.ovr)); ch.style.background = rate(p.ovr);
     top.append(ch);
     const nm = el('div'), g = groupOf(label);
-    nm.append(el('div', 'nm', p.name), el('div', 'ps', `${team ? teamName(team) + ' · ' : ''}${POS_NAME[label] || label}`));
+    nm.append(el('div', 'nm', p.num != null ? `#${p.num} ${p.name}` : p.name), el('div', 'ps', `${team ? teamName(team) + ' · ' : ''}${POS_NAME[label] || label}`));
     if (p.pct != null) nm.append(el('div', 'ps', `Better than ${p.pct}% of NFL ${POS_PLURAL[g] || 'players'} at the time`));
     top.append(nm);
     const nodes = [top];
@@ -3500,7 +3720,7 @@
       'Every snap is a real NFL play run against your call. Tap the field to skip, or a player to see who he is.',
       'Matchups matter: a blitz beats deep shots but loses to quick passes and screens; a loaded box stuffs runs but gets beaten by play-action and deep shots; playing soft stops deep shots but gives up runs. Read their look before you call, and when you call the defense, they will check into what beats it.',
       'Beat the real coach\'s result, and find out which NFL coach you call it like.',
-      'Survivor: random real fourth quarters back to back. Win to keep going; lose once and your run is over.',
+      'Survivor: random real fourth quarters back to back. Win to keep going; lose once and your run is over. Tied at the end, you play overtime: both teams get the ball, then the next score wins.',
     ].forEach((t) => ul.append(el('li', '', t)));
     openModal('How to play', [
       ul,

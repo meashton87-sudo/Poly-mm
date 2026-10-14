@@ -69,7 +69,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .runlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; text-align: left; }
 .runlist li { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; padding: 8px 10px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); }
 .runlist .res { grid-row: span 2; align-self: center; font: 900 18px var(--display); letter-spacing: .03em; font-variant-numeric: tabular-nums; }
-.runlist li.w .res { color: var(--sq-g); } .runlist li.l .res { color: var(--sq-r); }
+.runlist li.w .res { color: var(--sq-g); } .runlist li.l .res { color: var(--sq-r); } .runlist li.t .res { color: var(--sq-y); }
 .runlist .m { font-weight: 700; min-width: 0; } .runlist .tag { font-size: 12.5px; color: var(--muted); }
 
 /* the scenario card */
@@ -122,6 +122,11 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .dot:focus { outline: none; }
 .dot circle.hit { fill: transparent; }
 .dot.st { cursor: default; pointer-events: none; }      /* special-teams units: team colors, not tappable */
+/* jersey numbers on the dots; pre-snap name tags that fade at the snap */
+#field .dot .jn { font: 800 7.6px var(--display); fill: #fff; stroke: rgba(8, 12, 10, .6); stroke-width: 1.5px; paint-order: stroke; text-anchor: middle; pointer-events: none; }
+#field .dot .nm { font: 700 7px var(--body); fill: #fff; stroke: rgba(8, 12, 10, .72); stroke-width: 2px; paint-order: stroke; text-anchor: middle; pointer-events: none; transition: opacity .35s ease; }
+#field .dot .nm.gone { opacity: 0; }
+#field .dot.down .jn { opacity: .5; }
 #field .num { font: 800 11px var(--display); fill: var(--chalk); opacity: .85; }
 #field .ez { font: 900 20px var(--display); letter-spacing: .2em; fill: var(--chalk); }
 #field .tag { font: 700 9px var(--body); letter-spacing: .08em; }
@@ -370,6 +375,11 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
 .dist .r { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12px; font-variant-numeric: tabular-nums; }
 .dist .bar2 { background: var(--key); color: var(--key-ink); font-weight: 700; padding: 2px 6px; text-align: right; border-radius: 2px; min-width: 22px; }
 .dist .bar2.hi { background: var(--sq-g); color: var(--sq-ink); }
+/* everyone today (the website's daily stats) */
+.board.daily .daily-head { margin: 2px 0 4px; font-weight: 700; font-size: 15px; text-wrap: balance; }
+.board.daily .dspots { display: grid; gap: 6px; text-align: left; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.board.daily .dsp { display: grid; gap: 1px; } .board.daily .dsp span { color: var(--muted); }
+.board.daily .k.sub { margin-top: 4px; }
 .ex { display: flex; gap: 4px; margin: 6px 0 10px; }
 .ex .sq { width: 30px; height: 30px; font-size: 14px; }
 .facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; font-size: 13.5px; margin: 0 0 10px; }

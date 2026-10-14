@@ -64,15 +64,21 @@ CALLS = [   # id, call-sheet label, engine kind, what the play-by-play says
     ("roll_strong", "QB rollout, strong side", "pass", "rolls out to the strong side"),
     ("roll_weak", "QB rollout, weak side", "pass", "rolls out to the weak side"),
     ("hail_mary", "Hail Mary", "pass", "heaves a Hail Mary"),
-    ("trick", "Trick play (reverse, flea-flicker)", "pass", "dials up a trick play"),
+    # trick plays, each its own real pool (labeled_plays): the FTN trick flag alone also marks ordinary throws
+    ("trick_flea", "Flea-flicker", "pass", "runs the flea-flicker"),
+    ("trick_reverse", "End-around", "run", "runs the end-around"),
+    ("trick_pass", "Receiver pass", "pass", "has a non-quarterback throw it"),
+    ("trick_direct", "Direct snap", "run", "snaps it direct to the back"),
 ]
 CALL_IDS = [c[0] for c in CALLS]
 # how the game's call sheet groups them: Run / Pass / RPO first, then the play and the side
-FAMILY = {c: "rpo" if c.startswith("rpo") else "run" if c.startswith(("rb_", "qb_")) else "pass" for c in CALL_IDS}
+FAMILY = {c: "rpo" if c.startswith("rpo") else "trick" if c.startswith("trick") else "run" if c.startswith(("rb_", "qb_"))
+          else "pass" for c in CALL_IDS}
 BASE = {"rb_out": "Outside run", "rb_tackle": "Off-tackle run", "rb_inside": "Inside run", "rb_middle": "Up the middle",
         "qb_sneak": "QB sneak", "qb_run": "QB keeper", "rpo": "RPO", "quick": "Quick pass", "deep": "Deep shot",
         "screen": "Screen", "pa_short": "Play-action short", "pa_deep": "Play-action deep", "roll": "Rollout",
-        "hail_mary": "Hail Mary", "trick": "Trick play"}
+        "hail_mary": "Hail Mary", "trick_flea": "Flea-flicker", "trick_reverse": "End-around",
+        "trick_pass": "Receiver pass", "trick_direct": "Direct snap"}
 
 
 def base_side(call_id: str) -> tuple[str, str | None]:
@@ -120,7 +126,8 @@ PRIOR_SEASON_WEIGHT = 0.35   # last season's plays count this much next to this 
 OOB_FAMILIES = {             # calls that share an out-of-bounds effect (pooled for sample size)
     "outside_run": ["rb_out_strong", "rb_out_weak", "rb_tackle_strong", "rb_tackle_weak"],
     "inside_run": ["rb_inside_strong", "rb_inside_weak", "rb_middle", "qb_sneak", "qb_run", "rpo_strong", "rpo_weak"],
-    "outside_short": ["quick_strong", "quick_weak", "roll_strong", "roll_weak", "screen", "pa_short", "trick"],
+    "outside_short": ["quick_strong", "quick_weak", "roll_strong", "roll_weak", "screen", "pa_short", "trick_pass"],
+    "trick_run": ["trick_reverse", "trick_direct"], "trick_deep": ["trick_flea"],
     "middle_short": ["quick_middle"], "deep_outside": ["deep_strong", "deep_weak", "pa_deep"],
     "deep_middle": ["deep_middle", "hail_mary"],
 }
@@ -246,7 +253,20 @@ def labeled_plays(seasons=SEASONS, seed: int = 11) -> pd.DataFrame:
     known = lambda m: m & (call < 0)
     C = CALL_INDEX
     call[known(run & sneak)] = C["qb_sneak"]
-    call[known((run | drop) & ~pen & trick)] = C["trick"]
+    # trick plays: a flea-flicker (a charted trick play the quarterback throws 15+ yards), a pass by a running back
+    # or receiver, a direct snap (wildcat), an end-around (any handoff to a wide receiver)
+    from . import players as PL      # players imports this module
+    ppos = pd.read_parquet(PL._get("players", "players.parquet"), columns=["gsis_id", "position"]).drop_duplicates("gsis_id")
+    ppos = dict(zip(ppos["gsis_id"], ppos["position"]))
+    passer_pos = s["passer_player_id"].map(ppos).to_numpy()
+    rusher_pos = s["rusher_player_id"].map(ppos).to_numpy()
+    desc_ = s["desc"].fillna("")
+    direct = run & desc_.str.contains("Direct snap", case=False).to_numpy()
+    deep_trick = trick & ((s["air_yards"].fillna(0).to_numpy() >= 15) | desc_.str.contains("flea", case=False).to_numpy())
+    call[known(drop & ~pen & deep_trick & (passer_pos == "QB"))] = C["trick_flea"]
+    call[known(drop & ~pen & np.isin(passer_pos, ["RB", "WR", "TE", "FB"]))] = C["trick_pass"]
+    call[known(direct)] = C["trick_direct"]
+    call[known(run & (rusher_pos == "WR"))] = C["trick_reverse"]
     call[known(hail)] = C["hail_mary"]
     for st in ("strong", "weak"):
         call[known((run | drop) & ~pen & rpo & (strong == st))] = C[f"rpo_{st}"]
@@ -524,7 +544,7 @@ def call_ratings(lib: pd.DataFrame, season: int, week: int) -> pd.DataFrame:
     return out
 
 
-UNRATED = {"hail_mary", "trick"}   # a team runs a handful a season: too few to rate teams on
+UNRATED = {"hail_mary", "trick_flea", "trick_reverse", "trick_pass", "trick_direct"}   # a team runs a handful a season: too few to rate teams on
 
 
 def team_card(ratings: pd.DataFrame, team: str) -> dict:

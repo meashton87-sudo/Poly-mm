@@ -32,7 +32,7 @@ function rootOf(sp) {
 const halfLeftOf = (t) => t - (t > 1800 ? 1800 : 0);
 function check(before, r, tag) {
   const a = before, b = r.root, halfEnd = a.t > 1800 ? 1800 : 0;
-  if (!(b.t <= a.t + 1e-9)) flag('clock went up', `${tag} ${a.t} -> ${b.t}`);
+  if (!(b.t <= a.t + 1e-9) && !r.log.some((e) => e.ev === 'period')) flag('clock went up', `${tag} ${a.t} -> ${b.t}`);
   if (b.t < halfEnd - 1e-9) flag('clock past the half', `${tag} ${b.t}`);
   if (b.phase === 0 && !r.done) {
     if (!(b.down >= 1 && b.down <= 4)) flag('bad down', `${tag} ${b.down}`);
@@ -57,7 +57,9 @@ function check(before, r, tag) {
     // a leading team late, deep in its own end, may run backward to burn the clock (even into a safety): real plays
     const burn = a.score[e.team] > a.score[1 - e.team] && halfLeftOf(a.t) <= 150 && e.yl >= 60;
     if (e.kind === 0 && !e.penalty && !/fumble|bad_snap/.test(ev) && y < -15) {
-      if (burn) count('clock-burn runs backward'); else flag('run lost 15+', `${tag} ${y} ${calls[e.call] || 'core'} ${ev}`);
+      // a blown-up end-around can lose that much: 2 of the 1,910 real ones (2022-26) did
+      if (burn) count('clock-burn runs backward'); else if (calls[e.call] === 'trick_reverse') count('end-around lost 15+');
+      else flag('run lost 15+', `${tag} ${y} ${calls[e.call] || 'core'} ${ev}`);
     }
     if (e.kind === 1 && /sack/.test(ev) && (y > 0 || y < -30)) flag('odd sack', `${tag} ${y}`);
     if (e.incomplete && y !== 0 && !e.penalty) flag('incomplete with yards', `${tag} ${y}`);
@@ -91,7 +93,7 @@ function attrib(before, r, tag) {
 // the play called is the play run: unless the half ran out first, a spike is a spike, a kneel a kneel, a field goal a
 // field goal, a punt a punt, a call that call, and a timeout is taken when the clock is running and one is left
 function honored(before, action, r, tag) {
-  if (before.phase !== 0 || r.log.some((e) => e.ev === 'end')) return;
+  if (before.phase !== 0 || r.log.some((e) => e.ev === 'end' || e.ev === 'period')) return;     // the clock ran out first
   const o = before.pos, e = r.log.find((x) => x.ev === 'play' || x.ev === 'fg' || x.ev === 'punt');
   if (action.to_off && before.clock_running && before.to[o] > 0 && !r.log.some((x) => x.ev === 'timeout'))
     flag('timeout not taken', `${tag}`);
@@ -221,7 +223,68 @@ idx.spots.forEach((sp, si) => {
     games++;
   }
 });
-console.log(`${steps} steps, ${games} games (${stuck} never ended) in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+// 3) overtime (survivor) from every other spot's two teams: tied, a 10-minute period (15 in the playoffs),
+// kicking off. Checked against the rules, not the engine's own bookkeeping: an early end is never a tie and comes
+// only after both teams have had the ball (a snap, or taking it away: a pick-six on the first drive ends it) or on
+// a safety; a team ahead never gets the ball back once the other has had it; a touchdown that wins it gets no try;
+// a team that has to score does not punt (their calls, not ours).
+let otGames = 0;
+idx.spots.forEach((sp, si) => {
+  if (si % 2) return;
+  const sim = eng.simulator(eng.makeContext(scen(sp), { receive2h: sp.start.receive2h }));
+  const po = sp.real && ['WC', 'DIV', 'CON', 'SB'].includes(sp.real.type);
+  const tie = Math.max(...sp.start.score);
+  let cur = { t: po ? 900 : 600, pos: si % 4 ? 0 : 1, score: [tie, tie], down: 1, ytg: 10, yl: 65, to: po ? [3, 3] : [2, 2],
+    clock_running: false, phase: 2, credit: 0, free_kick: false, ot: { c: [0, 0], po, n: 1 } };
+  const me = (si >> 1) % 2, had = [false, false];
+  let n = 0, end = null;
+  while (n++ < 300) {
+    let action = {};
+    if (cur.phase === 0 && cur.pos === me) {
+      const ci = (si * 7 + n * 5) % calls.length;
+      action = n % 9 === 0 && cur.down === 4 && cur.yl >= 35 ? { to_off: false, play: 'punt' } : n % 5 === 0 ? routePick(n + si)
+        : { to_off: false, play: P.calls[ci].kind, call: calls[ci], oob: n % 2 === 0, tempo: cur.clock_running ? ['urgent', 'hurry', 'normal', 'milk'][n % 4] : undefined };
+    } else if (cur.phase === 0) action = { to_def: false, def: ['blitz', 'load', 'soft'][n % 3] };
+    else if (cur.phase === 1 && cur.pos === me) action = { pat: n % 4 ? 'xp' : 'two' };
+    else if (cur.phase === 2 && cur.pos === me) action = { kick: ['return', 'touchback', 'deep'][n % 3] };
+    const before = JSON.parse(JSON.stringify(cur)), tag = `ot ${si} step ${n}`;
+    const tiedSD = before.phase === 0 && had[0] && had[1] && before.score[0] === before.score[1];
+    if (before.phase === 0) had[before.pos] = true;
+    const r = sim.step(cur, { action, seed: 991 + si * 53 + n });
+    steps++;
+    check(before, r, tag); attrib(before, r, tag);
+    if (before.pos === me) honored(before, action, r, tag);
+    const b = r.root, lead = b.score[0] - b.score[1];
+    if (before.phase === 0 && b.pos !== before.pos) had[b.pos] = true;      // they got the ball: a turnover, a punt, a return score
+    if (!b.ot) flag('overtime state lost', tag);
+    if (r.log.some((e) => e.ev === 'period')) {
+      count('overtime: another playoff period');
+      if (!(po && b.t === 900 && b.score[0] === b.score[1] && before.t - 0 <= 900)) flag('odd new overtime period', `${tag} ${JSON.stringify(b)}`);
+    }
+    for (const e of r.log) {
+      if (e.ev !== 'punt' || e.team === me) continue;
+      const m = before.score[e.team] - before.score[1 - e.team];
+      if (had[1 - e.team] && m <= -4) flag('punted in overtime when only a touchdown would do', `${tag} down ${-m}`);
+    }
+    const safety = r.log.some((e) => e.ev === 'play' && e.safety);
+    if (b.phase === 1 && !r.done && had[1 - b.pos] && b.score[b.pos] > b.score[1 - b.pos]) flag('a winning overtime touchdown went to a try', tag);
+    if (r.done) {
+      if (b.t > 0) {
+        if (lead === 0) flag('overtime ended early in a tie', tag);
+        if (!(had[0] && had[1]) && !safety) flag('overtime ended before both teams had the ball', `${tag} ${before.score} -> ${b.score} ${r.log.map((e) => e.ev + (e.td ? ':td' : '') + (e.turnover ? ':turnover' : '') + (e.retTd ? ':returnTd' : '') + (e.blocked ? ':blocked' : '')).join(',')}`);
+        end = safety ? 'safety' : tiedSD ? 'sudden death' : had[0] && had[1] && Math.abs(lead) >= 1 ? 'after both possessions' : 'other';
+      } else end = lead === 0 ? 'tie after the period' : 'won at the gun';
+      if (po && lead === 0) flag('a playoff overtime ended in a tie', tag);
+      break;
+    }
+    if (b.phase === 0 && had[0] && had[1] && b.score[b.pos] > b.score[1 - b.pos]) flag('overtime went on with the leader getting the ball back', `${tag} ${b.score}`);
+    cur = b;
+  }
+  if (!end) flag('overtime never ended', `ot ${si}`);
+  else count(`overtime: ${end}`);
+  otGames++;
+});
+console.log(`${steps} steps, ${games} games (${stuck} never ended), ${otGames} overtimes in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
 console.log('seen:', JSON.stringify(seen));
 const keys = Object.keys(bad);
 if (!keys.length) console.log('NO VIOLATIONS');

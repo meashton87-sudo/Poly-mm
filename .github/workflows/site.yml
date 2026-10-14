@@ -8,7 +8,7 @@ name: Two-Minute Drill website
 # The build and the checks run on every trigger; publishing to Pages is opt-in, so a site hosted elsewhere (a server
 # building with scripts/site.py) never has Pages claiming its hostname. To publish here: Settings > Pages > Source:
 # "GitHub Actions", and the repository variable PAGES_DEPLOY = true (Settings > Secrets and variables > Actions >
-# Variables). Optional variables: SITE_DOMAIN (custom domain, e.g. 2mindrill.bashton.xyz; set only on the one host
+# Variables). Optional variables: SITE_DOMAIN (custom domain, e.g. nfl2mindrill.com; set only on the one host
 # that serves it) and BOARD_API (the leaderboard Worker's URL; see board.yml).
 on:
   push:
@@ -74,7 +74,7 @@ jobs:
           node board/worker_test.mjs
 
       - name: Assemble the site
-        run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --board-api "${{ vars.BOARD_API }}"
+        run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --board-api "${{ vars.BOARD_API }}" --ga "${{ vars.GA_ID || 'G-4QQ8N62SMB' }}"
 
       - if: vars.PAGES_DEPLOY == 'true'
         uses: actions/upload-pages-artifact@v3
