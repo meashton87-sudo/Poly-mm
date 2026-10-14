@@ -32,7 +32,12 @@
     NYJ: ['Jets', '#125740'], PHI: ['Eagles', '#004C54'], PIT: ['Steelers', '#FFB612'], SF: ['49ers', '#AA0000'],
     SEA: ['Seahawks', '#69BE28'], TB: ['Buccaneers', '#D50A0A'], TEN: ['Titans', '#4B92DB'], WAS: ['Commanders', '#5A1414'],
   };
-  const FAM = { run: 'Run', pass: 'Pass', rpo: 'RPO' };
+  const FAM = { run: 'Run', pass: 'Pass', rpo: 'RPO', trick: 'Trick' };
+  // the trick plays (playbook.py): what each one is, on its key
+  const TRICK_SUB = { trick_flea: 'Hand off, pitch it back, go deep', trick_reverse: 'Fake one way, a receiver comes back the other',
+    trick_pass: 'A back or receiver throws it', trick_direct: 'Snap it straight to the back' };
+  const TRICK_SAY = { trick_flea: 'run the flea-flicker', trick_reverse: 'run the end-around', trick_pass: 'let a receiver throw it',
+    trick_direct: 'snap it direct to the back' };
   const TEMPOS = ['nohuddle', 'huddle', 'milk'];
   // your defense on their snaps: the looks it shows (the engine draws their play from real plays against it)
   const DEFS = ['blitz', 'load', 'soft'];
@@ -765,18 +770,18 @@
     'Offensive Too Many Men on Field', 'Illegal Substitution']);
   const RUN_GAP = { 'Outside run': 92, 'Off-tackle run': 58, 'Inside run': 26, 'Up the middle': 0, 'QB sneak': 0, 'QB keeper': 60, RPO: 30 };
   const AIR = { quick_strong: 5, quick_weak: 5, quick_middle: 7, screen: -2, deep_strong: 24, deep_weak: 24, deep_middle: 22,
-    pa_short: 9, pa_deep: 27, roll_strong: 8, roll_weak: 8, hail_mary: 48, rpo_strong: 4, rpo_weak: 4, trick: 30 };
+    pa_short: 9, pa_deep: 27, roll_strong: 8, roll_weak: 8, hail_mary: 48, rpo_strong: 4, rpo_weak: 4, trick_flea: 30, trick_pass: 16 };
   // Real NFL timing, in seconds after the snap: the snap reaches the QB in a quarter of a second; when the play
   // was not charted, passes come out 1.35 s (RPO) to 4.3 s (Hail Mary) after the snap (Next Gen Stats averages);
   // the ball flies about 24 yards a second (deep balls are lofted, a little slower); handoffs at 0.8-1.2 s.
   const T_SNAP = 0.25;
-  const RELEASE = { quick: 2.3, screen: 1.6, deep: 2.8, pa: 3.0, roll: 3.0, hail: 4.3, rpo: 1.35, trick: 3.6 };
+  const RELEASE = { quick: 2.3, screen: 1.6, deep: 2.8, pa: 3.0, roll: 3.0, hail: 4.3, rpo: 1.35, flea: 3.7, tpass: 3.3 };
   const flight = (air) => (Math.abs(air) + 7) / (25 - 0.09 * clip(air, 0, 60));              // seconds the ball is in the air
   const PLAY_SPEED = 1;        // real time, your snaps and theirs
   // the routes a call's target runs when the real play was not charted, and the routes the rest run
   const CALL_ROUTE = { quick: ['slant', 'out', 'hitch'], quick_middle: ['slant', 'cross', 'in'], screen: ['screen'],
     deep: ['go', 'post', 'corner', 'deep_out', 'in'], deep_middle: ['post', 'in', 'go'], pa: ['in', 'post', 'cross', 'deep_out'],
-    roll: ['out', 'cross', 'corner'], hail: ['go'], rpo: ['slant', 'hitch', 'out'], trick: ['go', 'post'] };
+    roll: ['out', 'cross', 'corner'], hail: ['go'], rpo: ['slant', 'hitch', 'out'], flea: ['go', 'post'], tpass: ['go', 'post', 'corner'] };
   const OTHER_ROUTES = { short: ['hitch', 'out', 'slant', 'cross', 'in'], deep: ['go', 'post', 'in', 'corner', 'deep_out', 'hitch'],
     hail: ['go'] };
   const GROUP = { QB: 'QB', RB: 'RB', WR: 'WR', TE: 'TE', LT: 'OL', LG: 'OL', C: 'OL', RG: 'OL', RT: 'OL', T: 'OL', G: 'OL',
@@ -1092,7 +1097,7 @@
     }
     const passKind = (id) => (id.startsWith('quick') ? 'quick' : id === 'screen' ? 'screen' : id.startsWith('deep') ? 'deep'
       : id.startsWith('pa_') ? 'pa' : id.startsWith('roll') ? 'roll' : id === 'hail_mary' ? 'hail' : id.startsWith('rpo') ? 'rpo'
-        : id === 'trick' ? 'trick' : 'quick');
+        : id === 'trick_flea' ? 'flea' : id === 'trick_pass' ? 'tpass' : 'quick');
     // the coverage shell: as charted, or drawn as often as defenses play each
     function shellOf() {
       if (e.shell && Motion.SHELLS[e.shell]) return e.shell;
@@ -1113,7 +1118,7 @@
     function passShape(o) {
       const { kind, tgt, catchPt, tThrow, tCatch, rushers, shell, side, qbSpot } = o;
       const man = Motion.MAN[shell];
-      const others = K.recv.filter((a) => a !== tgt);
+      const others = K.recv.filter((a) => a !== tgt && a !== o.passer);
       const runners = [];                     // [actor, route plan] for coverage to read
       others.forEach((a, i) => {
         const yours = mine && act && act.routes && eligibles(sc).indexOf(a) >= 0;    // you gave him a route: he runs it
@@ -1132,7 +1137,7 @@
         leg(a, Math.max(tCatch, tThrow + 0.5) + 0.3 + R() * 0.4, 'stand');
       });
       // the back: blocks when they send five or more, else checks out into the flat
-      if (K.rb && K.rb !== tgt && kind !== 'pa' && kind !== 'trick') {
+      if (K.rb && K.rb !== tgt && kind !== 'pa' && kind !== 'flea' && !(kind === 'tpass' && o.passer === K.rb)) {
         if (rushers.length >= 5) {
           const blitzer = rushers[rushers.length - 1];
           leg(K.rb, REACT_OFF, 'track', { gain: 2.6, eff: 0.85, fn: (t) => {
@@ -1211,7 +1216,8 @@
       const q0 = here(qb), deepDrop = kind === 'hail' ? 8.6 : kind === 'deep' || kind === 'pa' ? 7.8 : kind === 'screen' ? 7.6 : 7.2;
       let qpts;
       if (kind === 'roll') qpts = [q0, [inX(q0[0] + side * 3), fwd(L0, -6.6)], [inX(q0[0] + side * 9.5), fwd(L0, -6.2)]];
-      else if (kind === 'pa' || kind === 'trick') qpts = [q0, [q0[0] + (K.rb ? Math.sign(K.rb.b.x - q0[0]) * 1.2 : 0.5), fwd(L0, -5.6)], [q0[0], fwd(L0, -deepDrop)]];
+      else if (kind === 'pa' || kind === 'flea') qpts = [q0, [q0[0] + (K.rb ? Math.sign(K.rb.b.x - q0[0]) * 1.2 : 0.5), fwd(L0, -5.6)], [q0[0], fwd(L0, -deepDrop)]];
+      else if (kind === 'tpass') qpts = [q0, [q0[0] + side * 1.2, fwd(L0, -5.4)]];
       else if (kind === 'rpo') qpts = [q0, [q0[0] + jit(0.4), fwd(L0, -5.6)]];
       else qpts = [q0, [q0[0] + jit(0.3), fwd(L0, -deepDrop)]];
       const qPlan = plan(qb, qpts, { eff: kind === 'roll' ? 0.75 : 0.52, v1: kind === 'roll' ? 2.5 : 0 });
@@ -1221,12 +1227,46 @@
         const e2 = qPlan.end;
         leg(qb, tSet + 0.35, 'go', { x: e2[0] + jit(0.6), y: e2[1] + dir * (0.6 + R() * 0.6), eff: 0.25 });
       }
-      const qbSpot = (t) => Wd.posAt(qb.b, Math.min(t, Wd.t));
+      // trick plays: who throws it. The flea-flicker: the back takes the handoff, gets two steps from the line and
+      // pitches it back to the quarterback. The receiver pass: a receiver comes back behind the line, the
+      // quarterback tosses it to him and he throws.
+      let passer = qb;
+      if (kind === 'flea' && K.rb) {
+        const rb = K.rb, r0 = here(rb), mesh = [q0[0] + Math.sign(r0[0] - q0[0] || 1) * 0.6, fwd(L0, -4.8)];
+        const rp = follow(rb, REACT_OFF, plan(rb, [r0, mesh, [mesh[0] + jit(0.4), fwd(L0, -1.8)]], { eff: 0.8, v1: 0 }));
+        const tH = T_SNAP + 0.6, tP = REACT_OFF + rp.T + 0.15, tBack = tP + 0.4;
+        const at = rp.at(rp.T), qAt = qPlan.at(Math.min(qPlan.T, tBack - T_SNAP));
+        busy.add(rb);
+        hold(tH, rb); ring(tH, qb, false); ring(tH, rb);
+        fly(tP, tBack, px(at[0]), at[1], px(qAt[0]), qAt[1], 0.35);
+        hold(tBack, qb); ring(tBack, rb, false); ring(tBack, qb);
+        say(tBack, 'Flea-flicker!', 'info', { follow: qb });
+        leg(rb, tP + 0.2, 'go', { x: rb.b.x, y: fwd(L0, 0.5), eff: 0.6 });
+        tThrow = Math.max(tThrow, tBack + 1.0);
+      } else if (kind === 'tpass') {
+        const cands = K.recv.filter((a) => a.label === 'WR' || a.label === 'RB');
+        const wr = cands.sort((a, b) => Math.abs(a.b.x - (BX + side * 6)) - Math.abs(b.b.x - (BX + side * 6)))[0] || K.rb;
+        if (wr) {
+          const w0 = here(wr), spot = [inX(BX + side * 4.5), fwd(L0, -4.6)];
+          const wp = follow(wr, REACT_OFF - 0.1, plan(wr, [w0, spot], { eff: 0.9, v1: 0 }));
+          const tL = Math.max(T_SNAP + 0.7, REACT_OFF - 0.1 + wp.T - 0.25), qAt = qPlan.at(Math.min(qPlan.T, tL - T_SNAP)), wAt = wp.at(wp.T);
+          busy.add(wr);
+          fly(tL, tL + 0.35, px(qAt[0]), qAt[1], px(wAt[0]), wAt[1], 0.25);
+          hold(tL + 0.35, wr); ring(tL + 0.35, qb, false); ring(tL + 0.35, wr);
+          say(tL + 0.35, 'Trick play!', 'info', { follow: wr });
+          leg(wr, tL + 0.5, 'go', { x: wAt[0] - side * 1.5, y: fwd(L0, -6.2), eff: 0.45 });
+          leg(qb, tL + 0.45, 'go', { x: inX(q0[0] - side * 5), y: fwd(L0, -2), eff: 0.6 });
+          passer = wr;
+          tThrow = Math.max(tThrow, tL + 1.3);
+        }
+      }
+      const qbSpot = (t) => Wd.posAt(passer.b, Math.min(t, Wd.t));
       // the target and the catch: his route (as charted, else the call's), to the depth of the real throw, there
       // when the ball is
       // your pick (a receiver and his route): him, on that route, and the others on the routes you saw
       const pick = mine && act && act.target != null ? eligibles(sc)[act.target] : null;
-      const tgt = pick || pickTarget(id, sign) || K.rb;
+      let tgt = pick || pickTarget(id, sign) || K.rb;
+      if (tgt === passer) tgt = K.recv.filter((a) => a !== passer && a.label !== 'TE').sort((a, b) => Math.abs(b.b.x - BX) - Math.abs(a.b.x - BX))[0] || K.recv.find((a) => a !== passer);
       if (!tgt) return;
       busy.add(tgt);
       const routeName = thrownAway ? 'out' : pick && act.route ? act.route : (e.route && Motion.route(e.route, air, 1, 0.5) ? e.route
@@ -1245,20 +1285,20 @@
       const rushers = rushersOf(nRush);
       lineplay('pass', side, rushers.filter((d) => K.rush.includes(d)));
       const blitzers = rushers.filter((d) => !K.rush.includes(d));
-      blitzers.forEach((d, i) => leg(d, REACT_DEF + 0.1, 'chase', { who: qb.b, gap: 1.6 + i * 0.6, eff: 0.95, lead: 0.2 }));
+      blitzers.forEach((d, i) => leg(d, REACT_DEF + 0.1, 'chase', { who: passer.b, gap: 1.6 + i * 0.6, eff: 0.95, lead: 0.2 }));
       // pressure: one rusher beats his man and is on the passer as he throws
       if (e.pressure) {
         const w = pickOf(rushers);
-        leg(w, Math.max(REACT_DEF + 0.4, tThrow - 1.1), 'chase', { who: qb.b, gap: 1.1, eff: 1, lead: 0.3 });
+        leg(w, Math.max(REACT_DEF + 0.4, tThrow - 1.1), 'chase', { who: passer.b, gap: 1.1, eff: 1, lead: 0.3 });
       }
-      const cov = passShape({ kind, tgt, catchPt, tThrow, tCatch, rushers, shell: shellOf(), side, qbSpot });
+      const cov = passShape({ kind, tgt, catchPt, tThrow, tCatch, rushers, shell: shellOf(), side, qbSpot, passer });
       // the throw
       Wd.run(tThrow);
-      const qT = here(qb);
+      const qT = here(passer);
       if (thrownAway) catchPt = [sidelineX(qT[0] + side * 10) + Math.sign(qT[0] - FW / 2 || side) * 2.5, inL(fwd(L0, Math.max(3, air)))];
       fly(tThrow, tCatch, px(qT[0]) + 4, qT[1], px(catchPt[0]), catchPt[1], Math.min(2.4, 0.35 + Math.abs(air) * 0.05));
-      ring(tThrow, qb, false);
-      leg(qb, tThrow + 0.15, 'go', { x: qT[0] + jit(1), y: qT[1] + dir * 1.2, eff: 0.25 });
+      ring(tThrow, passer, false);
+      leg(passer, tThrow + 0.15, 'go', { x: qT[0] + jit(1), y: qT[1] + dir * 1.2, eff: 0.25 });
       // the defense breaks on the ball a beat after it is out: the nearest two to where it is going
       const breakers = cov.cover.slice().sort((a, b) => dist(here(a), catchPt) - dist(here(b), catchPt)).slice(0, 2);
       const intc = e.evt === 'interception' || e.evt === 'pick_six';
@@ -1321,19 +1361,27 @@
     // ---- the run
     function run(c, id, sign) {
       const carrier = (id === 'qb_sneak' || id === 'qb_run' || e.who === 'QB') ? qb
-        : (id === 'trick' && e.who === 'WR') ? K.recv.filter((a) => a.label === 'WR').sort((a, b) => Math.abs(a.x0 - (bx - (sign || 1) * 120)) - Math.abs(b.x0 - (bx - (sign || 1) * 120)))[0] : (K.rb || qb);
+        : id === 'trick_reverse' ? (K.recv.filter((a) => a.label === 'WR').sort((a, b) => Math.abs(a.x0 - (bx - (sign || 1) * 120)) - Math.abs(b.x0 - (bx - (sign || 1) * 120)))[0] || K.rb || qb)
+        : (K.rb || qb);
+      const direct = id === 'trick_direct' && carrier !== qb, reverse = id === 'trick_reverse' && carrier !== K.rb;
       if (!carrier) return;
       const gap = RUN_GAP[c ? c.base : ''] ?? 26;
       const sg = sign || (id === 'qb_run' ? sc.s * dir : 0) || 0;
       const hole = [inX(BX + (sg * gap) / XYD), fwd(L0, 0.6)];
-      snapToQb();
+      if (direct) { fly(0, T_SNAP, bx, L0, carrier.x0, carrier.L0, 0.15); hold(T_SNAP, carrier); } else snapToQb();
       busy.add(carrier);
       // one continuous run from his stance through the mesh to the hole, flat out: across the QB's face when the
       // play goes away from his side, downhill when it goes his way; the handoff is when he gets to the mesh
       // (tracking: backs reach the line about 2.5 s after the snap)
       const c0 = here(carrier), q0 = qb ? here(qb) : c0;
       let tMesh = T_SNAP + 0.05, tLos;
-      if (carrier === qb) {
+      if (direct) {
+        // the direct snap: he takes it himself and goes; the quarterback slides out as a decoy
+        const pl = follow(carrier, T_SNAP + 0.05, plan(carrier, [c0, hole], { eff: 0.92 }));
+        tLos = T_SNAP + 0.05 + pl.T;
+        if (qb) leg(qb, T_SNAP, 'go', { x: inX(q0[0] - (sg || 1) * 6), y: fwd(L0, -2.5), eff: 0.6 });
+        say(T_SNAP + 0.2, 'Direct snap', 'info', { follow: carrier });
+      } else if (carrier === qb) {
         const pl = follow(qb, T_SNAP + 0.05, plan(qb, [q0, id === 'qb_sneak' ? [BX, fwd(L0, 0.4)] : hole], { eff: 0.92 }));
         tLos = T_SNAP + 0.05 + pl.T;
       } else {
@@ -1355,11 +1403,16 @@
         }
       }
       ring(tMesh, carrier);
+      if (reverse && K.rb) {         // the back fakes it the other way first; the second level bites
+        leg(K.rb, REACT_OFF, 'go', { x: inX(BX - (sg || 1) * 6), y: fwd(L0, -1), eff: 0.85 });
+        say(tMesh, 'End-around!', 'info', { follow: carrier });
+      }
       lineplay('run', sg, K.rush);
       // the second level: linebackers read, then fill toward the hole; safeties come down; corners hold, then come up
       K.def.forEach((d) => {
         if (K.rush.includes(d)) return;
-        if (d.label === 'LB') leg(d, REACT_DEF + 0.25, 'go', { x: hole[0] + jit(2.5), y: fwd(L0, 3 + R() * 1.5), eff: 0.7 });
+        if (reverse && d.label === 'LB') leg(d, REACT_DEF, 'go', { x: d.b.x - (sg || 1) * 3, y: fwd(L0, 3), eff: 0.7 });
+        if (d.label === 'LB') leg(d, REACT_DEF + 0.25 + (reverse ? 0.7 : 0), 'go', { x: hole[0] + jit(2.5), y: fwd(L0, 3 + R() * 1.5), eff: 0.7 });
         else if (d.label === 'S') leg(d, 0.9 + R() * 0.3, 'go', { x: d.b.x + (hole[0] - d.b.x) * 0.5, y: fwd(L0, 6 + R() * 3), eff: 0.75 });
         else leg(d, 1.1 + R() * 0.3, 'go', { x: d.b.x + (hole[0] - d.b.x) * 0.3, y: fwd(L0, 5 + R() * 2), eff: 0.7 });
       });
@@ -1555,7 +1608,7 @@
       else if (e.evt === 'scramble') scramble();
       else {
         const thrown = e.air !== undefined || e.incomplete || ['interception', 'pick_six', 'drop', 'near_pick', 'throwaway'].includes(e.evt);
-        if (e.kind === PASS && (thrown || !['rpo_strong', 'rpo_weak', 'trick'].includes(id))) pass(c, id, sign);
+        if (e.kind === PASS && (thrown || !['rpo_strong', 'rpo_weak'].includes(id))) pass(c, id, sign);
         else run(c, id, sign);
       }
       bake(P.T + 0.2);
@@ -2105,7 +2158,7 @@
     } else if (e.call >= 0) {
       const c = idx.calls[e.call];
       const actor = c.id.startsWith('rb_') ? nm.rb : nm.qb;
-      what = `${c.id === 'trick' ? `The ${who} run a trick play` : `${actor || `The ${who}`} ${c.say}`}${e.row >= 0 ? lookText(e.look) : ''}`;
+      what = `${TRICK_SAY[c.id] ? `The ${who} ${TRICK_SAY[c.id]}` : `${actor || `The ${who}`} ${c.say}`}${e.row >= 0 ? lookText(e.look) : ''}`;
     } else what = `${nm.qb || who} ${e.kind === RUN ? 'hands off' : 'drops back'}`;
     const y = Math.round(e.td && !e.turnover ? e.yl : e.yards);      // a touchdown gains the distance to the goal line
     const gain = y > 0 ? `${y} yard${y === 1 ? '' : 's'}` : y < 0 ? `loss of ${-y}` : 'no gain';
@@ -2389,7 +2442,7 @@
       if (G.look != null) d.append(readLine(G.look));
       if (r.clock_running) d.append(tempoPicker(r));
       const fam = el('div', 'keys');
-      fam.style.setProperty('--cols', 3);
+      fam.style.setProperty('--cols', 4);
       Object.entries(FAM).forEach(([f, label], i) => {
         const b = key(label, null, 'big', i);
         b.addEventListener('click', () => {
@@ -2445,6 +2498,17 @@
     const order = (c) => ({ weak: s > 0 ? 0 : 2, middle: 1, strong: s > 0 ? 2 : 0 }[c.side] ?? 1);
     const sideText = (c) => (c.side === 'strong' ? (s > 0 ? 'Strong →' : '← Strong') : c.side === 'weak' ? (s > 0 ? '← Weak' : 'Weak →') :
       c.side === 'middle' ? 'Middle' : 'Call it');
+    if (ui.fam === 'trick') {
+      const keys = el('div', 'keys');
+      keys.style.setProperty('--cols', 2);
+      rows.forEach((row, k) => row.calls.forEach((c) => {
+        const b = key(row.base, TRICK_SUB[c.id] || null, 'big def', k);
+        b.addEventListener('click', () => { if (!busy) decideCall({ call: c.id }); });
+        keys.append(b);
+      }));
+      d.append(keys);
+      return;
+    }
     const list = el('div', 'plays');
     let i = 0;
     rows.forEach((row) => {
@@ -2528,7 +2592,7 @@
     throwKey.addEventListener('click', () => { if (!busy && P.target != null) decideCall({ pass: P.target }); });
     go.append(throwKey);
     d.append(go);
-    const avail = callOptions(r).calls, more = ['hail_mary', 'trick'].filter((id) => avail.includes(id));
+    const avail = callOptions(r).calls, more = ['hail_mary'].filter((id) => avail.includes(id));
     if (more.length) {
       const row = el('div', 'keys');
       row.style.setProperty('--cols', more.length);
@@ -3332,14 +3396,14 @@
       b.append(det);
     } else b.append(el('p', 'note', 'To get on the board, send your share text to whoever shared this game with you.'));
   }
-  function nameInput() {
+  function nameInput(onSet) {
     const w = el('label', 'myname');
     w.append(el('span', '', 'Your name on the board'));
     const inp = el('input');
     inp.maxLength = 24;
     inp.value = myName();
     inp.placeholder = 'e.g. Eli';
-    inp.addEventListener('change', () => { save(NAME_KEY, inp.value.trim().slice(0, 24)); renderSurvSummary(true); });
+    inp.addEventListener('change', () => { save(NAME_KEY, inp.value.trim().slice(0, 24)); if (onSet) onSet(); else renderSurvSummary(true); });
     w.append(inp);
     return w;
   }
@@ -3482,6 +3546,7 @@
       el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers`));
     if (cc) box.append(cc.el);
     box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller across today's three spots.`));
+    box.append(dailyBox(p, [0, 1, 2].map((i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0))));
     const rec = [0, 0, 0];             // against the real coaches: better, worse, the same (a W-L-T record)
     const rows = [0, 1, 2].map((i) => {
       const s = state.spots[i]; if (!s) return '';
@@ -3508,6 +3573,82 @@
       catch (e) { const sel = window.getSelection(); const rg = document.createRange(); rg.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(rg); toast('Selected: copy it'); }
     });
     box.append(btn, countdown());
+  }
+  // Everyone who played today (the website: board/worker.js /daily). Your first result of the day counts once;
+  // the box shows where it ranks among the day's players, how they spread, each spot against the average, and the
+  // day's top named players. On claude.ai (no backend) there is no box.
+  const localDate = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  function dailyBox(p, spotW) {
+    const box = el('div', 'board daily');
+    box.hidden = true;
+    const post = async () => {
+      const res = await fetch(`${BOARD.api}/daily`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: localDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)), ...(myName() ? { name: myName() } : {}) }) });
+      if (!res.ok) throw new Error(`daily ${res.status}`);
+      return res.json();
+    };
+    const refresh = async (force) => {
+      try { fillDaily(box, await post(), p, spotW, () => refresh(true)); } catch (e) { if (force) toast('Could not reach today’s stats'); }
+    };
+    (BOARD.ready || Promise.resolve()).then(() => { if (BOARD.mode === 'api') refresh(false); });
+    return box;
+  }
+  function fillDaily(box, d, p, spotW, again) {
+    box.textContent = '';
+    box.hidden = false;
+    const you = d.you ? d.you.p : p, pt = Math.round(you * 100), others = d.n - 1;
+    let below = 0, ties = -1;
+    d.hist.forEach((c, k) => { if (k < pt) below += c; else if (k === pt) ties += c; });
+    const beat = others > 0 ? (below + Math.max(0, ties) / 2) / others : null;
+    box.append(el('div', 'k', 'Everyone today'));
+    box.append(el('p', 'daily-head', beat == null ? 'You’re the first to finish today. Check back later to see how you stack up.'
+      : `Better than ${Math.round(beat * 100)}% of the ${others.toLocaleString()} other player${others === 1 ? '' : 's'} today`));
+    if (d.counted === false && d.you && Math.abs(d.you.p - p) > 0.005) box.append(el('p', 'note', `Your first finish today counts: ${Math.round(d.you.p * 100)}.`));
+    // the day's scores, in the buckets your own stats use; yours highlighted
+    const dist = el('div', 'dist');
+    dist.setAttribute('role', 'img');
+    const buckets = [[80, 101, '80–100'], [60, 80, '60–79'], [40, 60, '40–59'], [20, 40, '20–39'], [0, 20, '0–19']];
+    const counts = buckets.map(([lo, hi]) => d.hist.slice(lo, Math.min(hi, 101)).reduce((a, c) => a + c, 0));
+    const mx = Math.max(1, ...counts);
+    dist.setAttribute('aria-label', `Today's scores: ${buckets.map(([, , lab], i) => `${lab}: ${counts[i]}`).join(', ')}. Yours: ${pt}.`);
+    buckets.forEach(([lo, hi, lab], i) => {
+      const r = el('div', 'r');
+      const bar = el('div', `bar2${pt >= lo && pt < hi ? ' hi' : ''}`, String(counts[i]));
+      bar.style.width = `${Math.max(8, (counts[i] / mx) * 100)}%`;
+      r.title = `${lab}: ${counts[i].toLocaleString()} player${counts[i] === 1 ? '' : 's'} (${Math.round((counts[i] / Math.max(1, d.n)) * 100)}%)${pt >= lo && pt < hi ? ', you' : ''}`;
+      r.append(el('span', '', lab), bar);
+      dist.append(r);
+    });
+    box.append(dist);
+    // each spot: your win chance against a typical play-caller, and the day's average
+    const yourW = d.you ? d.you.spots : spotW;
+    const sp = el('div', 'dspots');
+    d.spots.forEach((x, i) => {
+      if (!today[i]) return;
+      let lower = 0;
+      const yp = clip(Math.round(yourW[i] * 100) + 50, 0, 100);
+      x.hist.forEach((c, k) => { if (k < yp) lower += c; });
+      const row = el('div', 'dsp');
+      row.append(el('b', '', `Spot ${i + 1} · ${today[i].player}`),
+        el('span', '', `You ${pts(yourW[i])}% · everyone ${pts(x.avg)}%${x.n > 1 ? ` · better than ${Math.round((lower / (x.n - 1 || 1)) * 100)}%` : ''}`));
+      sp.append(row);
+    });
+    box.append(sp);
+    if (d.top && d.top.length) {
+      const ol = el('ol', 'brows'), me = myName().toLowerCase();
+      d.top.forEach((r, i) => {
+        const li = el('li', String(r.name).toLowerCase() === me ? 'me' : '');
+        li.append(el('span', 'n', String(i + 1)), el('span', 'nm', String(r.name)), el('b', '', String(Math.round(r.p * 100))));
+        ol.append(li);
+      });
+      box.append(el('div', 'k sub', 'Today’s best'), ol);
+    }
+    if (d.taken) box.append(el('p', 'note', `Someone else already plays as ${myName()} here. Pick another name to get on the list.`));
+    if (!myName() || d.taken) box.append(nameInput(again));
+    const btn = el('button', 'chip', 'Refresh');
+    btn.type = 'button';
+    btn.addEventListener('click', again);
+    box.append(btn);
   }
   function countdown() {
     const w = el('div', 'countdown');

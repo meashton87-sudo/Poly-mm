@@ -57,7 +57,9 @@ function check(before, r, tag) {
     // a leading team late, deep in its own end, may run backward to burn the clock (even into a safety): real plays
     const burn = a.score[e.team] > a.score[1 - e.team] && halfLeftOf(a.t) <= 150 && e.yl >= 60;
     if (e.kind === 0 && !e.penalty && !/fumble|bad_snap/.test(ev) && y < -15) {
-      if (burn) count('clock-burn runs backward'); else flag('run lost 15+', `${tag} ${y} ${calls[e.call] || 'core'} ${ev}`);
+      // a blown-up end-around can lose that much: 2 of the 1,910 real ones (2022-26) did
+      if (burn) count('clock-burn runs backward'); else if (calls[e.call] === 'trick_reverse') count('end-around lost 15+');
+      else flag('run lost 15+', `${tag} ${y} ${calls[e.call] || 'core'} ${ev}`);
     }
     if (e.kind === 1 && /sack/.test(ev) && (y > 0 || y < -30)) flag('odd sack', `${tag} ${y}`);
     if (e.incomplete && y !== 0 && !e.penalty) flag('incomplete with yards', `${tag} ${y}`);
@@ -91,7 +93,7 @@ function attrib(before, r, tag) {
 // the play called is the play run: unless the half ran out first, a spike is a spike, a kneel a kneel, a field goal a
 // field goal, a punt a punt, a call that call, and a timeout is taken when the clock is running and one is left
 function honored(before, action, r, tag) {
-  if (before.phase !== 0 || r.log.some((e) => e.ev === 'end')) return;
+  if (before.phase !== 0 || r.log.some((e) => e.ev === 'end' || e.ev === 'period')) return;     // the clock ran out first
   const o = before.pos, e = r.log.find((x) => x.ev === 'play' || x.ev === 'fg' || x.ev === 'punt');
   if (action.to_off && before.clock_running && before.to[o] > 0 && !r.log.some((x) => x.ev === 'timeout'))
     flag('timeout not taken', `${tag}`);

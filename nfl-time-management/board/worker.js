@@ -4,12 +4,21 @@
 //   GET    /board                       -> { rows: [{ name, best, at }] }   the top 25 best runs
 //   POST   /board  { name, best, key }  -> { rows, kept? }                  a player's best (only a better run replaces it)
 //   DELETE /board?name=Eli  (Authorization: Bearer <ADMIN_TOKEN>)          remove a row (no ADMIN_TOKEN secret: off)
+//   GET    /daily?date=2026-10-14                         -> that day's players: { n, hist, spots, top }
+//   POST   /daily  { date, key, p, spots: [w, w, w], name? } -> the same, after counting your result
+// The daily game: every device's first result of a day counts once (a replay of the day changes nothing). p is the
+// day's score (0-1, better than that share of NFL play-callers), spots each spot's win chance against a typical
+// play-caller (-1 to 1). The day keeps a histogram of scores in whole points (hist[0..100]), each spot's histogram
+// in points of win chance (-50..50, clipped) and its average, and the top 10 named players (name optional; a name
+// is claimed the same way as on the survivor board, one claim across both). date is the player's local date, so
+// one within a day of the server's.
 // Players are identified by name (a game among friends): trimmed, control characters dropped, 1-24 characters,
 // matched case-insensitively. The first post under a name claims it for that device's key (a random string the page
 // keeps; only its SHA-256 is stored), so nobody else can overwrite your score. Scores are not checked against the
 // runs that made them. Posts are limited per IP (RATE_PER_MIN a minute). The page may be served from another host,
 // so responses carry CORS headers for ALLOWED_ORIGINS (comma-separated; "*" = any).
-const TOP = 25, KEEP = 500, RATE_PER_MIN = 10;
+const TOP = 25, KEEP = 500, RATE_PER_MIN = 10, DAY_TOP = 10;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const clean = (name) => String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
 const KEY_RE = /^[A-Za-z0-9_-]{16,128}$/;
@@ -31,10 +40,90 @@ async function sha256(s) {
 // constant-time enough for a bearer token compared once per request
 const same = (a, b) => a.length === b.length && [...a].reduce((x, c, i) => x | (c.charCodeAt(0) ^ b.charCodeAt(i)), 0) === 0;
 
+const limited = (req, hits) => {
+  const ip = req.headers.get('CF-Connecting-IP') || 'local', min = Math.floor(Date.now() / 60000);
+  for (const [k, v] of hits) if (v.min !== min) hits.delete(k);
+  const hit = hits.get(ip) || { min, n: 0 };
+  if (hit.n >= RATE_PER_MIN) return true;
+  hits.set(ip, { min, n: hit.n + 1 });
+  return false;
+};
+// who owns a name: its claim, or the survivor row that holds it from before claims were kept
+async function ownerOf(storage, lower) {
+  const claims = (await storage.get('claims')) || {};
+  if (claims[lower]) return { claims, owner: claims[lower] };
+  const runs = (await storage.get('runs')) || [];
+  const row = runs.find((r) => String(r.name).toLowerCase() === lower);
+  return { claims, owner: row && row.kh ? row.kh : null };
+}
+const emptyDay = () => ({ n: 0, hist: new Array(101).fill(0), spots: [0, 1, 2].map(() => ({ n: 0, sum: 0, hist: new Array(101).fill(0) })), top: [] });
+const dayView = (d) => ({ n: d.n, hist: d.hist, spots: d.spots.map((x) => ({ n: x.n, avg: x.n ? x.sum / x.n : 0, hist: x.hist })),
+  top: d.top.map(({ name, p }) => ({ name, p })) });
+function dateOk(date, now = Date.now()) {
+  if (!DATE_RE.test(date)) return false;
+  const t = Date.parse(date + 'T12:00:00Z');
+  return Number.isFinite(t) && Math.abs(t - now) <= 36 * 3600e3;        // any time zone's today
+}
+
+async function daily(req, env, storage, hits, h, url) {
+  if (req.method === 'GET') {
+    const date = String(url.searchParams.get('date') || '');
+    if (!DATE_RE.test(date)) return json({ error: 'date (YYYY-MM-DD) wanted' }, 400, h);
+    return json(dayView((await storage.get(`day:${date}`)) || emptyDay()), 200, h);
+  }
+  if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
+  if (limited(req, hits)) return json({ error: 'slow down' }, 429, h);
+  let body;
+  try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
+  const date = String((body && body.date) || ''), p = Number(body && body.p), devKey = String((body && body.key) || '');
+  const spots = Array.isArray(body && body.spots) ? body.spots.map(Number) : null, name = clean(body && body.name);
+  if (!dateOk(date)) return json({ error: 'date (YYYY-MM-DD, today) wanted' }, 400, h);
+  if (!(p >= 0 && p <= 1)) return json({ error: 'p (0-1) wanted' }, 400, h);
+  if (!spots || spots.length !== 3 || !spots.every((w) => w >= -1 && w <= 1)) return json({ error: 'spots (three, -1 to 1) wanted' }, 400, h);
+  if (!KEY_RE.test(devKey)) return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
+  const kh = await sha256(devKey);                 // before the reads: from here to the writes is storage only
+  const mine = `dk:${date}:${kh}`;
+  const day = (await storage.get(`day:${date}`)) || emptyDay();
+  const prev = await storage.get(mine);
+  let taken = false, claims = null;
+  if (name && !(prev && prev.name)) {
+    const o = await ownerOf(storage, name.toLowerCase());
+    taken = !!(o.owner && o.owner !== kh);
+    if (!taken && !o.owner) { claims = o.claims; claims[name.toLowerCase()] = kh; }
+  }
+  if (prev) {           // the day's first result stands; a name given afterwards puts that result on the list
+    if (name && !prev.name && !taken) {
+      prev.name = name;
+      day.top.push({ name, p: prev.p, kh });
+      day.top.sort((a, b) => b.p - a.p);
+      day.top = day.top.slice(0, DAY_TOP);
+      await storage.put(mine, prev);
+      await storage.put(`day:${date}`, day);
+      if (claims) await storage.put('claims', claims);
+    }
+    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots }, ...(taken ? { taken: true } : {}) }, 200, h);
+  }
+  const pt = Math.round(p * 100);
+  day.n += 1;
+  day.hist[pt] += 1;
+  spots.forEach((w, i) => { const x = day.spots[i]; x.n += 1; x.sum += w; x.hist[Math.max(0, Math.min(100, Math.round(w * 100) + 50))] += 1; });
+  if (name && !taken) {
+    day.top.push({ name, p, kh });
+    day.top.sort((a, b) => b.p - a.p);
+    day.top = day.top.slice(0, DAY_TOP);
+  }
+  const you = { p, spots };
+  await storage.put(mine, { ...you, ...(name && !taken ? { name } : {}) });
+  await storage.put(`day:${date}`, day);
+  if (claims) await storage.put('claims', claims);
+  return json({ ...dayView(day), counted: true, you, ...(taken ? { taken: true } : {}) }, 200, h);
+}
+
 // The board itself: `storage` is the Durable Object's (get/put), `hits` its in-memory per-IP counts.
 export async function handle(req, env, storage, hits) {
   const h = cors(req, env), url = new URL(req.url);
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: h });
+  if (url.pathname === '/daily') return daily(req, env, storage, hits, h, url);
   if (url.pathname !== '/board') return json({ error: 'not found' }, 404, h);
   const readAll = async () => { const all = await storage.get('runs'); return Array.isArray(all) ? all : []; };
   if (req.method === 'GET') return json({ rows: ranked(await readAll()) }, 200, h);
@@ -49,11 +138,7 @@ export async function handle(req, env, storage, hits) {
   }
   if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
 
-  const ip = req.headers.get('CF-Connecting-IP') || 'local', min = Math.floor(Date.now() / 60000);
-  for (const [k, v] of hits) if (v.min !== min) hits.delete(k);
-  const hit = hits.get(ip) || { min, n: 0 };
-  if (hit.n >= RATE_PER_MIN) return json({ error: 'slow down' }, 429, h);
-  hits.set(ip, { min, n: hit.n + 1 });
+  if (limited(req, hits)) return json({ error: 'slow down' }, 429, h);
 
   let body;
   try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
@@ -62,7 +147,9 @@ export async function handle(req, env, storage, hits) {
   if (!KEY_RE.test(devKey)) return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
   const kh = await sha256(devKey);                 // before the read: from here to the write is storage only
   const all = await readAll(), lower = name.toLowerCase(), i = all.findIndex((r) => String(r.name).toLowerCase() === lower);
-  if (i >= 0 && all[i].kh && all[i].kh !== kh) return json({ error: 'name taken', rows: ranked(all) }, 409, h);
+  const { claims, owner } = await ownerOf(storage, lower);
+  if (owner && owner !== kh) return json({ error: 'name taken', rows: ranked(all) }, 409, h);
+  if (!claims[lower]) { claims[lower] = kh; await storage.put('claims', claims); }
   if (i >= 0 && all[i].best >= best) {
     if (!all[i].kh) { all[i].kh = kh; await storage.put('runs', all); }       // a row from before names were claimed
     return json({ rows: ranked(all), kept: all[i].best }, 200, h);
@@ -82,7 +169,7 @@ export class Board {
 export default {
   fetch(req, env) {
     const url = new URL(req.url);
-    if (req.method === 'OPTIONS' || url.pathname !== '/board') return handle(req, env, null, null);
+    if (req.method === 'OPTIONS' || (url.pathname !== '/board' && url.pathname !== '/daily')) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },
 };

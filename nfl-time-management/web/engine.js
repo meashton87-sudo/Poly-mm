@@ -73,7 +73,12 @@
     quick_middle: { blitz: 1, load: 0.5, soft: -0.5 }, screen: { blitz: 1, load: 0.5, soft: -0.5 },
     deep_strong: DEEP_M, deep_weak: DEEP_M, deep_middle: DEEP_M, pa_deep: DEEP_M, pa_short: { blitz: -0.5, load: 1, soft: 0 },
     roll_strong: { blitz: -0.5, load: 0.5, soft: 0 }, roll_weak: { blitz: -0.5, load: 0.5, soft: 0 },
-    hail_mary: { blitz: 0, load: 0, soft: 0 }, trick: { blitz: 0, load: 1, soft: -1 },
+    hail_mary: { blitz: 0, load: 0, soft: 0 },
+    // trick plays: the flea-flicker and the receiver pass sell the run (a loaded box bites; a blitz gets home before
+    // the slow throw; soft safeties stay deep); the end-around beats a blitz flowing to the run and loses to a loaded,
+    // disciplined front; the direct snap is a run with an extra blocker
+    trick_flea: { blitz: -1, load: 1, soft: -1 }, trick_pass: { blitz: -1, load: 1, soft: -1 },
+    trick_reverse: { blitz: 1, load: -1, soft: 0 }, trick_direct: { blitz: 0, load: -1, soft: 1 },
   };
   // the defense's call a look stands for (lookBucket: 0 light box, 1 light + blitz, 2 loaded box, 3 loaded + blitz)
   const LOOK_DEF = ['soft', 'blitz', 'load', 'blitz'];
@@ -699,12 +704,12 @@
     }
     _groupRows(c) {
       const P = this.e.pb, id = P.calls[c].id;
-      const g = id.startsWith('pa_') ? 'pa' : id.startsWith('roll') ? 'roll' : id.startsWith('rpo') || id === 'hail_mary' || id === 'trick' ? id : 'drop';
+      const g = id.startsWith('pa_') ? 'pa' : id.startsWith('roll') ? 'roll' : id.startsWith('rpo') || id === 'hail_mary' || id.startsWith('trick') ? id : 'drop';
       P.groupRows = P.groupRows || {};
       if (!P.groupRows[g]) {
         const seen = new Set();
         P.calls.forEach((cc, j) => {
-          const gj = cc.id.startsWith('pa_') ? 'pa' : cc.id.startsWith('roll') ? 'roll' : cc.id.startsWith('rpo') || cc.id === 'hail_mary' || cc.id === 'trick' ? cc.id : 'drop';
+          const gj = cc.id.startsWith('pa_') ? 'pa' : cc.id.startsWith('roll') ? 'roll' : cc.id.startsWith('rpo') || cc.id === 'hail_mary' || cc.id.startsWith('trick') ? cc.id : 'drop';
           if (gj === g && cc.kind === 'pass') this._callRows(j).rows.forEach((r) => seen.add(r));
         });
         P.groupRows[g] = { id: `g${g}`, rows: Int32Array.from(seen) };

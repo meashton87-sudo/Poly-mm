@@ -1,6 +1,6 @@
 name: Two-Minute Drill leaderboard
 
-# Tests and deploys the survivor leaderboard (nfl-time-management/board/worker.js) to Cloudflare Workers.
+# Tests and deploys the leaderboards and daily stats (nfl-time-management/board/worker.js) to Cloudflare Workers.
 # One-time setup: add the repository secrets CLOUDFLARE_API_TOKEN (a token with "Edit Cloudflare Workers" permission)
 # and CLOUDFLARE_ACCOUNT_ID. The board lives in a Durable Object the deploy creates, so there is nothing else to make.
 # Optional: `npx wrangler secret put ADMIN_TOKEN` (once, from board/) lets you remove rows. Without the secrets the
@@ -43,5 +43,5 @@ jobs:
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
             echo "Cloudflare secrets not set: tests only, no deploy."; exit 0
           fi
-          if [ -n "$SITE_DOMAIN" ]; then sed -i "s#^ALLOWED_ORIGINS = .*#ALLOWED_ORIGINS = \"https://$SITE_DOMAIN\"#" wrangler.toml; fi
+          if [ -n "$SITE_DOMAIN" ]; then sed -i "s#^ALLOWED_ORIGINS = .*#ALLOWED_ORIGINS = \"https://$SITE_DOMAIN,https://www.$SITE_DOMAIN\"#" wrangler.toml; fi
           npx --yes wrangler@3.114.0 deploy

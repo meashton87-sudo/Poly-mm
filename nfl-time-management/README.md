@@ -257,12 +257,18 @@ node web/parity_test.js
 `web/game.html` is a Wordle-style daily game built on the same engine. Every day it serves three real
 late-game spots from 2023-26 (a two-minute drill, protecting a lead, a tied game or the end of a half),
 and the player calls every play for one team until the game ends: tempo, timeouts, spikes, kneels,
-field goals, punts, two-point tries and onside kicks, plus 23 play calls:
+field goals, punts, two-point tries and onside kicks, plus 26 play calls:
 
 * runs: outside, off-tackle and inside, each to the strong or weak side; up the middle; QB sneak; QB
   designed run; RPO
 * passes: quick and deep to the strong side, weak side or middle; screen; play-action short and deep;
-  rollouts to either side; trick plays; the Hail Mary (as a half runs out)
+  rollouts to either side; the Hail Mary (as a half runs out)
+* trick plays, each from its own real plays: the flea-flicker (a charted trick play the quarterback throws 15+
+  yards: 80 plays), the end-around (any handoff to a wide receiver: 1,849), the receiver pass (thrown by a back or
+  receiver: 163) and the direct snap (wildcat: 446). FTN's trick-play flag alone also marks ordinary throws, so it
+  only picks the flea-flickers. Each has its own matchup (a loaded box bites on the flea-flicker and the receiver
+  pass, a blitz gets home before the slow throw; the end-around beats a blitz flowing to the run) and its own
+  animation (the pitch back, the toss to the receiver who throws, the fake one way, the snap straight to the back)
 * a **Get out of bounds** toggle on any call, which raises the odds of stopping the clock by what NFL
   ball carriers actually achieve when they need it (it never guarantees it)
 
@@ -337,7 +343,7 @@ sideline routes when trailing in the two-minute drill; quick throws on short yar
 yardage). His button shows his odds on that route from the very real plays the pick draws from (share caught, yards a
 throw, interceptions when they matter), and the last route tap can be undone.
 
-**The website** (2mindrill.bashton.xyz). `scripts/site.py` wraps `web/game.html` in a full page (the phone viewport
+**The website** (nfl2mindrill.com). `scripts/site.py` wraps `web/game.html` in a full page (the phone viewport
 and safe-area rules the claude.ai host otherwise adds; serve the built folder, never the bare `game.html`) with the
 scripts, the data and a `version.json` (build time and commit, for an uptime check). `.github/workflows/site.yml`
 rebuilds the data from nflverse, checks the game (smoke, motion and leaderboard tests) and builds the site on changes
@@ -350,6 +356,12 @@ never lost and the per-IP limit holds everywhere. The first post under a name cl
 key the page keeps; the board stores only its hash), so nobody else can post under your name; scores themselves are
 not verified. Names are cleaned and capped at 24 characters, only the site's origin may call it, and with an
 `ADMIN_TOKEN` secret `DELETE /board?name=...` removes a row.
+
+**Everyone today** (the website's daily stats, `board/worker.js` `/daily`). When you finish the day's three spots,
+your score and each spot's win chance post once (your first finish of the day counts; a replay changes nothing) and
+the summary shows how you compare with everyone who played that day: the share of players you beat, the day's
+scores in the same buckets as your own stats, each spot against the day's average, and the day's top ten named
+players (a name is claimed the same way as on the survivor board). The day is the player's local date.
 
 **Survivor leaderboard** (on claude.ai). The artifact's shared database keeps every player's best run (`board/<name>`). Everyone who
 opens the page reads it; only the owner and editors write it, since visitors through a public link can only read

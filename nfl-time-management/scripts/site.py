@@ -2,7 +2,7 @@
 index.html, with the scripts and the generated data next to it. The data must be built first (see CLAUDE.md:
 cli build, webexport.export_engine, dailygame.build).
 
-    python scripts/site.py [out_dir, default _site] [--domain 2mindrill.bashton.xyz] [--board-api https://...]
+    python scripts/site.py [out_dir, default _site] [--domain nfl2mindrill.com] [--board-api https://...]
 
 --domain writes the CNAME file for a custom domain; --board-api points the survivor leaderboard at its backend
 (board/worker.js); without it the site has no leaderboard. version.json says when the site was built and from which
