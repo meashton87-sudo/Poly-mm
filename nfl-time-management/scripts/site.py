@@ -20,7 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 WEB = Path(__file__).resolve().parents[1] / "web"
-FILES = ["game.js", "motion.js", "engine.js", "game_worker.js", "game.json", "playbook.json", "engine_data.json"]
+FILES = ["game.js", "motion.js", "engine.js", "game_worker.js", "game.json", "playbook.json", "engine_data.json",
+         "og.png", "icon.svg", "icon-180.png"]      # the link preview card (og_card.html, drawn at 1200x630) and the icons
 # the same skeleton the claude.ai artifact host wraps the page in: charset, a viewport that reaches the phone's
 # edges, the safe-area padding and a small reset
 HEAD = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
@@ -35,14 +36,31 @@ GA_TAG = ("<script async src=\"https://www.googletagmanager.com/gtag/js?id={id}\
           "gtag('js',new Date());gtag('config','{id}');</script>")
 
 
-def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None) -> Path:
+def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
+    """The link preview (X, iMessage, Slack...) and the icons; the image needs the site's full address."""
+    e = lambda x: html.escape(x, quote=True)
+    base = site_url.rstrip("/")
+    return (f'<link rel="icon" href="icon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="icon-180.png">'
+            f'<meta name="theme-color" content="#2c7549">'
+            f'<meta property="og:type" content="website"><meta property="og:site_name" content="Two-Minute Drill">'
+            f'<meta property="og:title" content="{e(title)}"><meta property="og:description" content="{e(desc)}">'
+            f'<meta property="og:url" content="{e(base + "/" + path)}"><meta property="og:image" content="{e(base)}/og.png">'
+            f'<meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">'
+            f'<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="{e(title)}">'
+            f'<meta name="twitter:description" content="{e(desc)}"><meta name="twitter:image" content="{e(base)}/og.png">')
+
+
+def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
+          site_url: str | None = None) -> Path:
     missing = [f for f in FILES + ["stats.html"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
     if missing:
         raise SystemExit(f"build the game data first; missing in web/: {', '.join(missing)}")
     if out.exists():
         shutil.rmtree(out)
     (out / "spots").mkdir(parents=True)
-    extra = "<meta name=\"description\" content=\"Call the plays in real late-game NFL spots.\">"
+    site_url = site_url or f"https://{(domain or 'nfl2mindrill.com').strip()}"
+    desc = "Call the plays in real NFL endings. One drive a day: beat the real coach and see how you rank."
+    extra = f"<meta name=\"description\" content=\"{desc}\">" + share_tags(site_url, "Two-Minute Drill: call the plays in real NFL endings", desc)
     if ga:                                   # Google Analytics (gtag.js), as Google gives it, at the top of <head>
         if not re.fullmatch(r"G-[A-Z0-9]{4,16}", ga):
             raise SystemExit(f"--ga wants a measurement id like G-XXXXXXX, not {ga!r}")
@@ -61,7 +79,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         page = page.replace(f'<script src="{js}"></script>', f'<script src="{js}?v={stamp}"></script>')
     (out / "index.html").write_text(HEAD.format(extra=extra) + page + "</body></html>\n")
     # the stats page (/stats): its own document; the same analytics tag and backend address
-    stats_head = (GA_TAG.format(id=ga) if ga else "") + (
+    stats_head = (GA_TAG.format(id=ga) if ga else "") + share_tags(site_url, "Two-Minute Drill stats",
+        "How everyone did on the daily drive: players per day, the score spread and the top ten.", "stats") + (
         f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else "")
     (out / "stats.html").write_text((WEB / "stats.html").read_text().replace("<!--SITE-HEAD-->", stats_head))
     for f in FILES:
@@ -84,8 +103,9 @@ if __name__ == "__main__":
     ap.add_argument("--domain")
     ap.add_argument("--board-api")
     ap.add_argument("--ga", help="Google Analytics measurement id (G-...)")
+    ap.add_argument("--site-url", help="the site's address for link previews (default https://<domain>, else nfl2mindrill.com)")
     a = ap.parse_args()
-    o = build(Path(a.out), a.domain, a.board_api, a.ga)
+    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6
     print(f"site in {o}: {n} files, {size:.1f} MB")

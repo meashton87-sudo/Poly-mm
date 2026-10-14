@@ -28,6 +28,9 @@
   // next changes follow the data. Event names and fields are listed in the README.
   const track = (name, params) => { try { if (typeof window.gtag === 'function') window.gtag('event', name, params || {}); } catch (e) { /* never in the way */ } };
   const modeName = () => (SURV ? 'survivor' : 'daily');
+  // every share ends with the address, so a posted score brings its readers to the game (the website's own host;
+  // on claude.ai, where the page has no build stamp, the site's name)
+  const SITE = BUILD && location.host ? location.host.replace(/^www\./, '') : 'nfl2mindrill.com';
   // Share: the phone's share sheet where there is one (a group chat in a tap), else the clipboard, else select it
   async function shareText(text, pre, what) {
     if (navigator.share && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
@@ -3539,7 +3542,7 @@
       box.append(how);
     }
     const nm = myName();
-    const text = `Two-Minute Drill Survivor${nm ? ` · ${nm}` : ''}\nSurvived ${n} game${n === 1 ? '' : 's'}\n${state.games.map((g) => (g.w ? SQ.g : g.tie ? SQ.y : SQ.r)).join('')}`;
+    const text = `Two-Minute Drill Survivor${nm ? ` · ${nm}` : ''}\nSurvived ${n} game${n === 1 ? '' : 's'}\n${state.games.map((g) => (g.w ? SQ.g : g.tie ? SQ.y : SQ.r)).join('')}\n${SITE}${SURV ? '/#survivor' : ''}`;
     const pre = el('div', 'grid-share', text);
     const share = el('button', 'btn alt', 'Share');
     share.type = 'button';
@@ -3618,7 +3621,7 @@
         el('span', 'sub', `${rec[0]} better, ${rec[1]} worse${rec[2] ? `, ${rec[2]} the same` : ''}`));
       box.insertBefore(v, box.children[3] || null);
     }
-    const text = `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}\n${rows.join('\n')}`;
+    const text = `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}\n${rows.join('\n')}\n${SITE}`;
     const pre = el('div', 'grid-share', text);
     box.append(pre);
     const btn = el('button', 'btn alt', 'Share');
