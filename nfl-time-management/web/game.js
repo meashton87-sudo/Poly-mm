@@ -2460,7 +2460,10 @@
       return true;
     });
     const specials = [];
-    if (G.info.pFg >= 0.05 && (r.down === 4 || th <= 40)) specials.push('fg');
+    // the kick: rushing the unit on takes 7-12 s with the clock running (engine.js FIRE_DRILL), so under 7 s it needs
+    // a timeout first; a try on 4th down in range, in the last 20 s, or a likely make on 3rd down late
+    const p = G.info.pFg, kickable = !r.clock_running || th >= 7;
+    if (kickable && ((r.down === 4 && p >= 0.05) || (th <= 20 && p >= 0.2) || (r.down === 3 && th <= 40 && p >= 0.4))) specials.push('fg');
     if (r.down === 4 && r.yl >= 30) specials.push('punt');
     if (!r.clock_running && canKneel(r)) specials.push('kneel');
     return { calls, specials };
@@ -2496,7 +2499,7 @@
         clockOptions(r).filter((k) => !TEMPOS.includes(k)).forEach((k) => extra.push([k, CLOCK[k].label, k === 'timeout' ? `${r.to[me]} left` : null]));
       }
       const { specials } = callOptions(r);
-      specials.forEach((k) => extra.push([k, specialLabel(k), k === 'fg' ? `${Math.round(G.info.fgDist)} yards` : null]));
+      specials.forEach((k) => extra.push([k, specialLabel(k), k === 'fg' ? `${Math.round(G.info.fgDist)} yards${r.clock_running && halfLeft(r.t) < 12 ? ' · a rush to get it off' : ''}` : null]));
       if (extra.length) {
         const row = el('div', 'keys');
         row.style.setProperty('--cols', Math.min(extra.length, 4));
@@ -2807,7 +2810,9 @@
     const r = G.root, me = G.me;
     try {
       const seq = G.seq, tempo = ui.tempo;
-      const { calls, specials } = callOptions(r);
+      // the gadget plays are graded against when you call one, never offered as the better call otherwise (their
+      // real plays are the ones that were worth charting: too rosy to recommend)
+      const all = callOptions(r), specials = all.specials, calls = all.calls.filter((id) => !id.startsWith('trick') || id === pick.call);
       const opts = calls.map((id) => ({ key: id, label: CALL[id].label, action: callAction(id, false) }));
       if (pick.call && ui.oob) opts.push({ key: `${pick.call}+oob`, label: `${CALL[pick.call].label}, get out of bounds`, action: callAction(pick.call, true) });
       const passPick = pick.pass != null ? passOption(scene, pick.pass, ui.oob) : null;
@@ -2966,7 +2971,7 @@
   }
 
   // ------------------------------------------------------- after the snap ---
-  const KIND_NAME = { clock: 'Clock', call: 'Play call', deftime: 'Timeout', defcall: 'Defense', pat: 'Try', kick: 'Kickoff', freekick: 'Free kick',
+  const KIND_NAME = { clock: 'Before the snap', call: 'Play call', deftime: 'Timeout', defcall: 'Defense', pat: 'Try', kick: 'Kickoff', freekick: 'Free kick',
     fgdef: 'Field goal defense', puntdef: 'Punt defense' };
   function optionTable(x) {
     const t = el('table', 'opts');
@@ -2990,22 +2995,25 @@
     return v.now;
   }
   // the matchup behind a snap (engine.js MATCH): your call against their look, or their call against your defense
-  const LOOK_NAME = ['the extra men in coverage', 'the blitz', 'a loaded box', 'the blitz'];
+  const LOOK_NAME = ['the light box (extra men back in coverage)', 'the blitz', 'the loaded box', 'the blitz'];
   const DEF_NAME = { blitz: 'blitz', load: 'loaded box', soft: 'soft coverage' };
   function matchupLine(e, action) {
     if (!e || e.ev !== 'play' || !e.match || Math.abs(e.match) < 0.5 || e.call < 0 || !idx.calls[e.call]) return null;
     const call = e.team === G.me && action && action.route && action.targetName
       ? `${routeSay(action.targetPos, action.route)} to ${shortName(action.targetName) || action.targetPos}` : idx.calls[e.call].label.toLowerCase();
+    // how it went for the offense: a big play, or nothing (no gain, an incompletion, a turnover)
+    const big = (e.td && !e.turnover) || e.yards >= 10, none = e.turnover || e.incomplete || e.yards <= 0;
     if (e.team === G.me) {
       const b = action && action.looks ? Math.round(Math.log2(action.looks)) : -1;
       if (!(b >= 0 && b < 4)) return null;
-      return e.match > 0 ? { good: true, text: `Good read: ${call} against ${LOOK_NAME[b]}.` }
-        : { good: false, text: `${LOOK_NAME[b][0].toUpperCase()}${LOOK_NAME[b].slice(1)} ${b === 0 ? 'were' : 'was'} waiting for ${call}.` };
+      const Look = `${LOOK_NAME[b][0].toUpperCase()}${LOOK_NAME[b].slice(1)}`;
+      if (e.match > 0) return { good: true, text: none ? `Good read: ${call} against ${LOOK_NAME[b]}. It just didn't work this time.` : `Good read: ${call} against ${LOOK_NAME[b]}.` };
+      return { good: false, text: big ? `${Look} was set up to stop ${call}, but you made the play anyway.` : `${Look} was set up to stop ${call}.` };
     }
     const d = action && DEF_NAME[action.def];
     if (!d) return null;
-    return e.match < 0 ? { good: true, text: `Your ${d} won the matchup: they ran ${call} into it.` }
-      : { good: false, text: `They checked into ${call} against your ${d}.` };
+    if (e.match < 0) return { good: true, text: big ? `Your ${d} was the right call against ${call}, but they made the play anyway.` : `Your ${d} won the matchup: they ran ${call} into it.` };
+    return { good: false, text: none ? `They checked into ${call} against your ${d}, and you still stopped it.` : `They checked into ${call} against your ${d}.` };
   }
   function showResult(decisions, res, head) {
     drawAll();
@@ -3035,9 +3043,10 @@
       const before = decisions[decisions.length - 1].wp;
       winChanceAfter(res.root, res.done).then((after) => {
         const dw = after - before, om = outcomeMark(dw);
+        const shown = Math.round(after * 100) - Math.round(before * 100);     // what the two percentages say
         sq.className = `sq swing ${om}`;
-        sq.textContent = signed(dw);
-        sq.setAttribute('aria-label', `Your win chance ${dw >= 0 ? 'up' : 'down'} ${Math.abs(Math.round(dw * 100))} points`);
+        sq.textContent = `${shown >= 0 ? '+' : '−'}${Math.abs(shown)}`;
+        sq.setAttribute('aria-label', `Your win chance ${shown >= 0 ? 'up' : 'down'} ${Math.abs(shown)} point${Math.abs(shown) === 1 ? '' : 's'}`);
         wc.textContent = `Win chance ${Math.round(before * 100)}% → ${Math.round(after * 100)}%`;
       }).catch(() => { sq.className = `sq ${m}`; sq.textContent = GLYPH[m]; });
     }
@@ -3254,7 +3263,7 @@
     const sc = today[si], rl = sc.real || {}, me = sc.player === sc.home ? 0 : 1;
     if (!result || !rl.coach) return null;
     const who = rl.coach.split(' ').slice(-1)[0];
-    const net = (n) => (n > 0 ? `+${n} points` : n < 0 ? `${n} points` : 'no points');
+    const net = (n) => (n === 0 ? 'no points' : `${n > 0 ? '+' : ''}${n} point${Math.abs(n) === 1 ? '' : 's'}`);
     if (result.half === 1) {
       const s0 = startRoot(sc).score;
       const you = result.mine - s0[me] - (result.theirs - s0[1 - me]);
