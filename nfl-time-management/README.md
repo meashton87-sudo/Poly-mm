@@ -318,7 +318,24 @@ After each snap the result box shows what the play did to your win chance (green
 is a separate chip, so a touchdown on a call that was not the very best still shows as a touchdown. Grading values
 every option 600 times, then the top three and your call again 3,000 times on fresh games: the best of many noisy
 options valued on the games that picked it is lucky, and at 600 games alone 15% of the calls shown red were really
-green or yellow (none are now, against a 12,000-game reference). When they have the ball you **call the defense**: blitz, load the box
+green or yellow (none are now, against a 12,000-game reference). The snap goes at once and the grading runs while the play
+does (the snap jumps the worker queue): about 0.3 s from tap to snap with the CPU slowed to a phone's, down from 2.3 s.
+
+**The defense adapts to you.** The looks it shows lean toward the ones that beat your recent calls (this game's, and
+the day's or the survivor run's before it: the last 12, recent ones counting more), more so the more of your calls it
+has seen: after six runs a loaded box shows 87% of the time in a spot where it shows 60%. A mix of calls keeps it
+honest, and the read says what they are keying on once it is a real lean on a real habit.
+
+**Passing extras.** Each receiver starts on a route that fits the spot (a fade, a slant and an out at the goal line;
+sideline routes when trailing in the two-minute drill; quick throws on short yardage; a go, a dig and a post on long
+yardage). His button shows his odds on that route from the very real plays the pick draws from (share caught, yards a
+throw, interceptions when they matter), and the last route tap can be undone.
+
+**Survivor leaderboard.** The artifact's shared database keeps every player's best run (`board/<name>`). Everyone who
+opens the page reads it; only the owner and editors write it, since visitors through a public link can only read
+shared data. The owner's runs post themselves under the name set on the run summary, and the owner adds a friend's by
+pasting the share text the friend sends (it carries their name). A run ends with the three costliest calls of the game
+you lost. When they have the ball you **call the defense**: blitz, load the box
 or play it soft (with a timeout first when it matters), and their play is drawn from real plays against
 that look; or let the coordinator call the drive. Your **kickoffs** go to the returner (a real kick
 into the landing zone: returned, short at the 40 or bounced in to the 20), through the end zone for a
