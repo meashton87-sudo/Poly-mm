@@ -5,6 +5,7 @@
 //   POST   /board  { name, best, key }  -> { rows, kept? }                  a player's best (only a better run replaces it)
 //   DELETE /board?name=Eli  (Authorization: Bearer <ADMIN_TOKEN>)          remove a row (no ADMIN_TOKEN secret: off)
 //   GET    /daily?date=2026-10-14                         -> that day's players: { n, hist, spots, top }
+//   GET    /days                                           -> every day played: { days: [{ date, n, avg, best }] }
 //   POST   /daily  { date, key, p, spots: [w, ...], name? }  -> the same, after counting your result (1-3 spots: the
 //                                                             day's drive, or the three spots days had before)
 // The daily game: every device's first result of a day counts once (a replay of the day changes nothing). p is the
@@ -66,6 +67,20 @@ function dateOk(date, now = Date.now()) {
   return Number.isFinite(t) && Math.abs(t - now) <= 36 * 3600e3;        // any time zone's today
 }
 
+// every day anyone played, oldest first: players, average score (0-1) and the best score, from the day's histogram
+async function days(storage, h) {
+  const all = await storage.list({ prefix: 'day:' });
+  const out = [];
+  for (const [k, d] of all) {
+    if (!d || !d.n) continue;
+    let sum = 0, best = 0;
+    d.hist.forEach((c, pt) => { sum += c * pt; if (c) best = pt; });
+    out.push({ date: k.slice(4), n: d.n, avg: sum / d.n / 100, best: best / 100 });
+  }
+  out.sort((a, b) => a.date.localeCompare(b.date));
+  return json({ days: out }, 200, h);
+}
+
 async function daily(req, env, storage, hits, h, url) {
   if (req.method === 'GET') {
     const date = String(url.searchParams.get('date') || '');
@@ -125,6 +140,7 @@ export async function handle(req, env, storage, hits) {
   const h = cors(req, env), url = new URL(req.url);
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: h });
   if (url.pathname === '/daily') return daily(req, env, storage, hits, h, url);
+  if (url.pathname === '/days') return req.method === 'GET' ? days(storage, h) : json({ error: 'method' }, 405, h);
   if (url.pathname !== '/board') return json({ error: 'not found' }, 404, h);
   const readAll = async () => { const all = await storage.get('runs'); return Array.isArray(all) ? all : []; };
   if (req.method === 'GET') return json({ rows: ranked(await readAll()) }, 200, h);
@@ -170,7 +186,7 @@ export class Board {
 export default {
   fetch(req, env) {
     const url = new URL(req.url);
-    if (req.method === 'OPTIONS' || (url.pathname !== '/board' && url.pathname !== '/daily')) return handle(req, env, null, null);
+    if (req.method === 'OPTIONS' || !['/board', '/daily', '/days'].includes(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },
 };

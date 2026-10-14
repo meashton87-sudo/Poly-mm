@@ -3671,7 +3671,11 @@
     const btn = el('button', 'chip', 'Refresh');
     btn.type = 'button';
     btn.addEventListener('click', again);
-    box.append(btn);
+    const all = el('a', 'chip', 'Every day’s stats ›');
+    all.href = 'stats';
+    const row = el('div', 'res-acts');
+    row.append(btn, all);
+    box.append(row);
   }
   function countdown() {
     const w = el('div', 'countdown');

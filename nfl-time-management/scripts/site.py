@@ -36,7 +36,7 @@ GA_TAG = ("<script async src=\"https://www.googletagmanager.com/gtag/js?id={id}\
 
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None) -> Path:
-    missing = [f for f in FILES if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
+    missing = [f for f in FILES + ["stats.html"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
     if missing:
         raise SystemExit(f"build the game data first; missing in web/: {', '.join(missing)}")
     if out.exists():
@@ -60,6 +60,10 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     for js in ("motion.js", "game.js"):
         page = page.replace(f'<script src="{js}"></script>', f'<script src="{js}?v={stamp}"></script>')
     (out / "index.html").write_text(HEAD.format(extra=extra) + page + "</body></html>\n")
+    # the stats page (/stats): its own document; the same analytics tag and backend address
+    stats_head = (GA_TAG.format(id=ga) if ga else "") + (
+        f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else "")
+    (out / "stats.html").write_text((WEB / "stats.html").read_text().replace("<!--SITE-HEAD-->", stats_head))
     for f in FILES:
         shutil.copy2(WEB / f, out / f)
     for f in sorted((WEB / "spots").glob("s*.json")):
