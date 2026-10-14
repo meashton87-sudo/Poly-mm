@@ -236,8 +236,9 @@
     if (p) { if (m.type === 'error') p.reject(new Error(m.message)); else p.resolve(m); }
     pump();
   }
-  function send(msg) {
-    return new Promise((resolve, reject) => { msg.id = ++reqId; pending.set(msg.id, { resolve, reject }); queue.push(msg); pump(); });
+  // urgent: the snap itself and the facts for a call go ahead of any grading still queued
+  function send(msg, urgent) {
+    return new Promise((resolve, reject) => { msg.id = ++reqId; pending.set(msg.id, { resolve, reject }); if (urgent) queue.unshift(msg); else queue.push(msg); pump(); });
   }
   const simScen = () => ({ id: G.scen.id, game: G.scen.game, start: { receive2h: G.scen.start.receive2h } });
   async function evaluate(root, options, seed, n = N_EVAL) {
@@ -250,7 +251,7 @@
       opts.forEach((o) => { out[o.key] = res.reduce((a, r) => a + r.out.find((x) => x.key === o.key).mean, 0) / W; });
       return out;
     }
-    const k = Math.min(W, options.length);
+    const k = Math.min(W * 3, options.length);          // small jobs: a worker is soon free for the snap
     const chunks = Array.from({ length: k }, () => []);
     opts.forEach((o, i) => chunks[i % k].push(o));
     const res = await Promise.all(chunks.map((c) => send({ type: 'eval', scen: sc, root, options: c, n, persp: G.me, seed })));
@@ -313,7 +314,7 @@
     else keys.forEach((k) => { out[k] /= s; });
     return out;
   }
-  function decisionFrom(kind, family, options, vals, chosen, q, situation) {
+  function decisionFrom(kind, family, options, vals, chosen, q, situation, snap = G.snapN) {
     const wps = options.map((o) => ({ key: o.key, label: o.label, wp: vals[o.key] }));
     const best = wps.reduce((a, b) => (b.wp > a.wp ? b : a));
     const mine = wps.find((w) => w.key === chosen);
@@ -321,7 +322,7 @@
     const typical = wps.reduce((a, w) => a + qq[w.key] * w.wp, 0);
     const cost = Math.max(0, best.wp - mine.wp);
     return { kind, family, situation, wps, chosen, chosenLabel: mine.label, best: best.key, bestLabel: best.label,
-      bestWp: best.wp, wp: mine.wp, cost, q: qq, typical, wpa: mine.wp - typical, snap: G.snapN };
+      bestWp: best.wp, wp: mine.wp, cost, q: qq, typical, wpa: mine.wp - typical, snap };
   }
 
   // ---------------------------------------------------------- formations ---
@@ -2161,7 +2162,7 @@
   async function stepWith(action) {
     const seed = hash('step', seedKey(), G.si, G.seq++);
     const before = G.root, side = G.side;
-    const res = (await send({ type: 'step', scen: simScen(), root: G.root, action, seed })).res;
+    const res = (await send({ type: 'step', scen: simScen(), root: G.root, action, seed }, true)).res;
     res.action = action;
     narrate(res.log, action).forEach(([text, t, mine]) => addLog(text, t, mine));
     G.root = res.root;
@@ -2185,7 +2186,7 @@
   async function promptOffense() {
     const r = G.root;
     status('Breaking the huddle…');
-    G.info = (await send({ type: 'info', scen: simScen(), root: r })).info;
+    G.info = (await send({ type: 'info', scen: simScen(), root: r }, true)).info;
     G.fast = false;
     G.look = pickLook(G.info.looks, hash('look', seedKey(), G.si, G.seq));
     ui = { step: 'family', fam: null, oob: false, tempo: tempoKeyOf(G.info.tempo) };
@@ -2421,18 +2422,35 @@
   }
 
   function situation(r) { return `${clockOf(r.t).text} Q${clockOf(r.t).q}, ${ddText(r)} ${onSpot(r)}`; }
-  async function clockDecision(r, chosen) {
+  async function clockDecision(r, chosen, seq = G.seq, snap = G.snapN) {
     const me = G.me, lead = r.score[me] - r.score[1 - me];
     const opts = clockOptions(r).map((k) => ({ key: k, label: CLOCK[k].label, action: clockAct(k, r) }));
-    status('Simulating every clock option 600 times…');
-    const vals = await evaluateGraded(r, opts, hash('clock', seedKey(), G.si, G.seq), chosen);
+    const vals = await evaluateGraded(r, opts, hash('clock', seedKey(), G.si, seq), chosen);
     let q = coachProbs('off_clock_stop', r, me);
     if (lead > 0 && r.t <= 1800) q = { play: 0.9, timeout: 0.03, kneel: 0.07 };
     else if (q) q = { play: q.hurry || 0, timeout: q.timeout || 0, spike: q.spike || 0 };
     else q = { play: 0.8, timeout: 0.14, spike: 0.06 };
     q[tempoKeyOf(G.info.tempo)] = q.play;          // snapping it, a typical play-caller goes at the usual tempo here
     delete q.play;
-    return decisionFrom('clock', 'off_clock_stop', opts, vals, chosen, q, situation(r));
+    return decisionFrom('clock', 'off_clock_stop', opts, vals, chosen, q, situation(r), snap);
+  }
+  // a call: the snap goes at once and the grading (thousands of simulated games) runs while the play does; the result
+  // card waits for it only if the play was skipped before it finished
+  async function snapThenGrade(grade, action) {
+    const snap = G.snapN;
+    G.snapN += 1;
+    const graded = grade(snap);
+    graded.catch(() => {});
+    status('Snap…', reduced() ? null : 'Tap the field to skip');
+    const res = await stepWith(action);
+    let done = false;
+    graded.then(() => { done = true; }, () => { done = true; });
+    await Promise.resolve();
+    if (!done) status('Grading your call…');
+    const decisions = await graded;
+    decisions.forEach((x) => G.decisions.push(x));
+    persist();
+    showResult(decisions, res);
   }
   async function decideTimeout() {
     if (busy) return;
@@ -2456,12 +2474,8 @@
     busy = true;
     const r = G.root;
     try {
-      const x = await clockDecision(r, k);
-      G.decisions.push(x);
-      G.snapN += 1;
-      status('Snap…', reduced() ? null : 'Tap the field to skip');
-      const res = await stepWith(CLOCK[k].act);
-      showResult([x], res);
+      const seq = G.seq;
+      await snapThenGrade(async (snap) => [await clockDecision(r, k, seq, snap)], CLOCK[k].act);
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
     busy = false;
   }
@@ -2474,17 +2488,14 @@
     busy = true;
     const r = G.root, me = G.me;
     try {
-      const decisions = [];
-      if (r.clock_running) decisions.push(await clockDecision(r, ui.tempo));
+      const seq = G.seq, tempo = ui.tempo;
       const { calls, specials } = callOptions(r);
       const opts = calls.map((id) => ({ key: id, label: CALL[id].label, action: callAction(id, false) }));
       if (pick.call && ui.oob) opts.push({ key: `${pick.call}+oob`, label: `${CALL[pick.call].label}, get out of bounds`, action: callAction(pick.call, true) });
       const passPick = pick.pass != null ? passOption(scene, pick.pass, ui.oob) : null;
       if (passPick) opts.push(passPick);
       specials.forEach((k) => opts.push({ key: k, label: specialLabel(k), action: withTempo({ to_off: false, play: k }) }));
-      status(`Simulating all ${opts.length} calls 600 times each…`);
       const chosen = passPick ? passPick.key : pick.call ? (ui.oob ? `${pick.call}+oob` : pick.call) : pick.special;
-      const vals = await evaluateGraded(r, opts, hash('call', seedKey(), G.si, G.seq), chosen);
       const q = {};
       const freq = {}, byLook = G.info.lookByCall;
       G.info.calls.forEach((c, ci) => { freq[c.id] = c.freq * (G.look != null && byLook ? byLook[ci][G.look] : 1); });
@@ -2496,12 +2507,13 @@
       if (specials.includes('kneel')) { const qk = r.score[me] > r.score[1 - me] ? 0.5 : 0.1; q.kneel = qk; goShare *= 1 - qk; }
       const fs = calls.reduce((a, id) => a + (freq[id] || 0), 0) || 1;
       calls.forEach((id) => { q[id] = goShare * (freq[id] || 0) / fs; });
-      decisions.push(decisionFrom('call', r.down === 4 ? 'fourth_down' : 'play_select', opts, vals, chosen, q, situation(r)));
-      decisions.forEach((x) => G.decisions.push(x));
-      G.snapN += 1;
-      status('Snap…', reduced() ? null : 'Tap the field to skip');
-      const res = await stepWith(opts.find((o) => o.key === chosen).action);
-      showResult(decisions, res);
+      await snapThenGrade(async (snap) => {
+        const ds = [];
+        if (r.clock_running) ds.push(await clockDecision(r, tempo, seq, snap));
+        const vals = await evaluateGraded(r, opts, hash('call', seedKey(), G.si, seq), chosen);
+        ds.push(decisionFrom('call', r.down === 4 ? 'fourth_down' : 'play_select', opts, vals, chosen, q, situation(r), snap));
+        return ds;
+      }, opts.find((o) => o.key === chosen).action);
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
     busy = false;
   }
@@ -2511,7 +2523,7 @@
   async function promptDefense() {
     const r = G.root;
     status('Their huddle…');
-    G.dinfo = (await send({ type: 'info', scen: simScen(), root: r })).info;
+    G.dinfo = (await send({ type: 'info', scen: simScen(), root: r }, true)).info;
     G.fast = false;
     ui = { step: 'defense', to: false };
     drawDefDock();
@@ -2552,24 +2564,21 @@
     busy = true;
     const r = G.root, me = G.me;
     try {
-      const decisions = [], useTo = !!(ui.to && defTimeoutOk(r));
-      if (defTimeoutOk(r)) {
-        const to = [{ key: 'timeout', label: 'Timeout', action: { to_def: true, def: k } }, { key: 'no_timeout', label: 'Let it run', action: { to_def: false, def: k } }];
-        status('Simulating both clock options 600 times…');
-        const tv = await evaluateGraded(r, to, hash('deftime', seedKey(), G.si, G.seq), useTo ? 'timeout' : 'no_timeout');
-        decisions.push(decisionFrom('deftime', 'def_timeout', to, tv, useTo ? 'timeout' : 'no_timeout',
-          coachProbs('def_timeout', r, me) || { timeout: 0.15, no_timeout: 0.85 }, situation(r)));
-      }
+      const useTo = !!(ui.to && defTimeoutOk(r)), askTo = defTimeoutOk(r), seq = G.seq;
       const opts = DEFS.map((x) => ({ key: x, label: DEF[x].label, action: { to_def: useTo, def: x } }));
-      status('Simulating all three defensive calls 600 times each…');
-      const vals = await evaluateGraded(r, opts, hash('def', seedKey(), G.si, G.seq), k);
       const L = (G.dinfo && G.dinfo.looks) || [0.25, 0.25, 0.25, 0.25];
-      decisions.push(decisionFrom('defcall', 'def_call', opts, vals, k, { blitz: L[1] + L[3], load: L[2], soft: L[0] }, situation(r)));
-      decisions.forEach((x) => G.decisions.push(x));
-      G.snapN += 1;
-      status('Snap…', reduced() ? null : 'Tap the field to skip');
-      const res = await stepWith(opts.find((o) => o.key === k).action);
-      showResult(decisions, res);
+      await snapThenGrade(async (snap) => {
+        const ds = [];
+        if (askTo) {
+          const to = [{ key: 'timeout', label: 'Timeout', action: { to_def: true, def: k } }, { key: 'no_timeout', label: 'Let it run', action: { to_def: false, def: k } }];
+          const tv = await evaluateGraded(r, to, hash('deftime', seedKey(), G.si, seq), useTo ? 'timeout' : 'no_timeout');
+          ds.push(decisionFrom('deftime', 'def_timeout', to, tv, useTo ? 'timeout' : 'no_timeout',
+            coachProbs('def_timeout', r, me) || { timeout: 0.15, no_timeout: 0.85 }, situation(r), snap));
+        }
+        const vals = await evaluateGraded(r, opts, hash('def', seedKey(), G.si, seq), k);
+        ds.push(decisionFrom('defcall', 'def_call', opts, vals, k, { blitz: L[1] + L[3], load: L[2], soft: L[0] }, situation(r), snap));
+        return ds;
+      }, opts.find((o) => o.key === k).action);
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
     busy = false;
   }
@@ -2611,13 +2620,11 @@
         if (busy) return;
         busy = true;
         try {
-          status(`Simulating ${spec.opts.length > 2 ? 'every option' : 'both options'} 600 times…`);
-          const vals = await evaluateGraded(r, spec.opts, hash(kind, seedKey(), G.si, G.seq), o.key);
-          const x = decisionFrom(kind, spec.family, spec.opts, vals, o.key, spec.q(), `${clockOf(r.t).text} Q${clockOf(r.t).q}`);
-          G.decisions.push(x);
-          G.snapN += 1;
-          const res = await stepWith(o.action);
-          showResult([x], res);
+          const seq = G.seq, qq = spec.q();
+          await snapThenGrade(async (snap) => {
+            const vals = await evaluateGraded(r, spec.opts, hash(kind, seedKey(), G.si, seq), o.key);
+            return [decisionFrom(kind, spec.family, spec.opts, vals, o.key, qq, `${clockOf(r.t).text} Q${clockOf(r.t).q}`, snap)];
+          }, o.action);
         } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
         busy = false;
       });
