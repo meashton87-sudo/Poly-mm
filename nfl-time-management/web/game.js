@@ -3560,16 +3560,26 @@
     for (let i = 0; i < today.length; i++) { const s = state.spots[i]; if (s && s.decisions) out.push(...s.decisions); }
     return out;
   }
+  // The day's score: the share of simulated NFL play-callers whose drive costs more win chance than yours. Each one
+  // calls like the league (NFL frequencies q) but, like a real coach, mostly sees the look: an option's weight drops
+  // by e for every PCT_TAU of win chance it gives up against the best. Callers by frequency alone (the first days)
+  // ignore the look, so anyone who reads it scored 90+; at 1 point typical players land near 50, sharp ones 90+.
+  const PCT_TAU = 0.01, PCT_FROM = 4;                    // day 4 (Oct 15, 2026) on; earlier days keep their scale
   function percentileVsNFL(decs) {
     const my = decs.reduce((a, x) => a + x.cost, 0);
     const R = rng(hash('pct', dayN)), N = 4000;
+    const ws = decs.map((x) => {
+      const w = x.wps.map((o) => (x.q[o.key] || 0) * (dayN >= PCT_FROM ? Math.exp((o.wp - x.bestWp) / PCT_TAU) : 1));
+      const t = w.reduce((a, b) => a + b, 0);
+      return t > 0 ? w.map((v) => v / t) : w;
+    });
     let better = 0;
     for (let s = 0; s < N; s++) {
       let tot = 0;
-      for (const x of decs) {
-        const u = R();
+      for (let i = 0; i < decs.length; i++) {
+        const x = decs[i], u = R();
         let acc = 0, pick = x.wps[x.wps.length - 1];
-        for (const w of x.wps) { acc += x.q[w.key] || 0; if (u <= acc) { pick = w; break; } }
+        for (let j = 0; j < x.wps.length; j++) { acc += ws[i][j]; if (u <= acc) { pick = x.wps[j]; break; } }
         tot += Math.max(0, x.bestWp - pick.wp);
       }
       if (tot > my + 1e-9) better += 1; else if (Math.abs(tot - my) <= 1e-9) better += 0.5;

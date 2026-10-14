@@ -441,7 +441,10 @@ against what a typical NFL play-caller does there. Each spot and the day end wit
 late-game calls look most like yours ("You called this one like Nick Sirianni"), from 59 coaches'
 2016-26 fingerprints: passes, deep shots, fourth-down tries and two-point tries, each over what the
 league does in the same spots (`coaches.py`). The day's score is a percentile against NFL play-callers
-on the same drive, with a share grid of one square per snap.
+on the same drive, with a share grid of one square per snap. The simulated callers call like the league but mostly
+see the look (an option's weight falls by e for each point of win chance it gives up), so a typical player scores
+near 50 and only sharp ones reach 90+ (from day 4; the first days compared against frequency-only callers, and
+nearly everyone scored 90+).
 
 **Survivor** (the Survivor tab, or `game.html#survivor`) plays random real fourth quarters back to back from
 the same pool: the 430 spots that start in the fourth quarter, so every one is played to the final gun. Win
