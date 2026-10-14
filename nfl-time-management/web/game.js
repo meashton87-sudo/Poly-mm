@@ -97,7 +97,7 @@
   let dayN = 1, today = [];
   let state = null;               // saved progress: today's three spots, or the survivor run
   // two modes: the daily three spots, or survivor (#survivor): random real fourth-quarter spots back to back, win to
-  // keep going, one loss and the run is over (a tie at the gun goes to overtime, won with the engine's win chance)
+  // keep going, one loss and the run is over (a tie at the gun goes to overtime, played out: see overtime())
   const SURV = location.hash === '#survivor';
   const stateKey = () => (SURV ? `${STORE}:surv` : `${STORE}:day:${dayN}`);
   const saveState = () => save(stateKey(), state);
@@ -163,6 +163,7 @@
     return { q, s, text: `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` };
   }
   const halfLeft = (t) => t - (t > 1800 ? 1800 : 0);
+  const qLabel = (r) => (r.ot ? (r.ot.n > 1 ? `OT${r.ot.n}` : 'OT') : `Q${clockOf(r.t).q}`);
   // a tempo key (nohuddle, huddle, milk) as the engine's tempo; no-huddle is the engine's own hurry-up when
   // that is the usual tempo here, else 'urgent' inside two minutes of the half and 'hurry' before
   function engineTempo(k, r) {
@@ -1958,7 +1959,11 @@
       const g = state.games, from = Math.max(0, g.length - 7);
       t.setAttribute('aria-label', `Survivor: ${state.won} win${state.won === 1 ? '' : 's'}`);
       if (from) t.append(el('span', 'more', `+${from}`));
-      g.slice(from).forEach((x) => { const b = el('span', `done sq ${x.w ? 'g' : 'r'}`, x.w ? 'W' : 'L'); b.title = `${x.tag}: ${x.w ? 'won' : 'lost'} ${x.mine}–${x.theirs}`; t.append(b); });
+      g.slice(from).forEach((x) => {
+        const b = el('span', `done sq ${x.w ? 'g' : x.tie ? 'y' : 'r'}`, x.w ? 'W' : x.tie ? 'T' : 'L');
+        b.title = `${x.tag}: ${x.w ? 'won' : x.tie ? 'tied' : 'lost'} ${x.mine}–${x.theirs}${x.ot ? ' in overtime' : ''}`;
+        t.append(b);
+      });
       if (!state.out && G) { const b = el('span', 'on', String(g.length + 1)); b.title = `Game ${g.length + 1}: playing`; t.append(b); }
       return;
     }
@@ -1993,10 +1998,10 @@
     };
     const ck = clockOf(r.t), over = r.phase === DONE;
     const mid = el('span', 'mid');
-    mid.append(el('span', 'q', over ? (r.t >= 1800 ? 'HALF' : 'FINAL') : `Q${ck.q}`),
+    mid.append(el('span', 'q', over ? (r.t >= 1800 ? 'HALF' : r.ot ? 'FINAL/OT' : needsOvertime(r) ? 'END Q4' : 'FINAL') : qLabel(r)),
       el('span', `clk${r.clock_running && !over ? ' run' : ''}`, over ? '0:00' : ck.text));
     b.append(side(1, false), mid, side(0, true));
-    b.setAttribute('aria-label', `${code(1)} ${r.score[1]}, ${code(0)} ${r.score[0]}, ${ck.text} left in the ${ordinal(ck.q)} quarter. Game details`);
+    b.setAttribute('aria-label', `${code(1)} ${r.score[1]}, ${code(0)} ${r.score[0]}, ${ck.text} left in ${r.ot ? 'overtime' : `the ${ordinal(ck.q)} quarter`}. Game details`);
     const dd = $('dd');
     dd.textContent = '';
     if (r.phase === SNAP) dd.append(el('b', '', ddText(r)), document.createTextNode(` · ball ${onSpot(r)} · clock ${r.clock_running ? 'running' : 'stopped'}`));
@@ -2123,7 +2128,8 @@
         case 'pat': text = e.two ? `Two-point try ${e.good ? 'good' : 'fails'}` : `Extra point ${e.good ? 'good' : 'no good'}`; break;
         case 'kickoff': text = e.onside ? `Onside kick, recovered by the ${teamName(code(e.recovered ? e.team : 1 - e.team))}` :
           e.retTd ? 'Kickoff returned for a touchdown' : `Kickoff${e.tb ? (Math.round(e.yl) === 60 ? ', short of the landing zone' : ', touchback') : ''}: the ${teamName(code(1 - e.team))} start at their own ${Math.round(100 - e.yl)}`; break;
-        case 'end': text = (e.t ?? G.root.t) >= 1800 ? 'Halftime' : 'End of regulation'; break;
+        case 'end': text = (e.t ?? G.root.t) >= 1800 ? 'Halftime' : e.ot ? 'Ballgame' : G.root.ot ? 'End of overtime' : 'End of regulation'; break;
+        case 'period': text = `End of the period, still tied: on to OT${e.n}`; break;
         default: break;
       }
       if (text) out.push([text, t, e.team === G.me]);
@@ -2212,7 +2218,7 @@
     box.append(facts);
     const rc = (sc.real || {}).coach;
     box.append(el('div', 'who', `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
-    if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over.'));
+    if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
     const go = el('button', 'btn', 'Next');
     go.type = 'button';
     go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
@@ -2588,7 +2594,7 @@
     return w;
   }
 
-  function situation(r) { return `${clockOf(r.t).text} Q${clockOf(r.t).q}, ${ddText(r)} ${onSpot(r)}`; }
+  function situation(r) { return `${clockOf(r.t).text} ${qLabel(r)}, ${ddText(r)} ${onSpot(r)}`; }
   function clockSpec(r, chosen, seq) {
     const me = G.me, lead = r.score[me] - r.score[1 - me];
     const opts = clockOptions(r).map((k) => ({ key: k, label: CLOCK[k].label, action: clockAct(k, r) }));
@@ -2823,7 +2829,7 @@
         busy = true;
         try {
           await snapThenGrade([{ kind, family: spec.family, r, opts: spec.opts.map((x) => ({ key: x.key, label: x.label, action: x.action })),
-            chosen: o.key, q: spec.q(), situation: `${clockOf(r.t).text} Q${clockOf(r.t).q}`, seed: hash(kind, seedKey(), G.si, G.seq) }], o.action);
+            chosen: o.key, q: spec.q(), situation: `${clockOf(r.t).text} ${qLabel(r)}`, seed: hash(kind, seedKey(), G.si, G.seq) }], o.action);
         } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
         busy = false;
       });
@@ -3004,7 +3010,46 @@
     return { el: box, name: c.name };
   }
 
+  // Survivor overtime (NFL rules since 2025, engine.js _otAfter): tied at the end of regulation, a coin toss, then
+  // 10:00 (15:00 in the playoffs, which play on until someone wins) with two timeouts each (three in the playoffs).
+  // Both teams get the ball, then the next score wins; a regular-season overtime can end tied, which keeps the run
+  // alive without a win. The toss is seeded, so a reload lands on the same one.
+  const isPlayoff = (sc) => !!ROUND[(sc.real || {}).type];
+  const needsOvertime = (r) => SURV && r.phase === DONE && r.t <= 0 && !r.ot && r.score[0] === r.score[1];
+  function overtime() {
+    const r = G.root, po = isPlayoff(G.scen), d = $('dock'), them = teamName(code(1 - G.me));
+    const won = rng(hash('toss', seedKey(), G.si))() < 0.5;
+    drawAll();
+    d.textContent = '';
+    takeBanner(d);
+    const head = el('div', 'ask');
+    head.append(el('h2', '', `Tied ${r.score[G.me]}–${r.score[1 - G.me]}: overtime`),
+      el('span', 'sub', `${po ? 15 : 10} minutes, ${po ? 3 : 2} timeouts each. Both teams get the ball, then the next score wins.${
+        po ? ' Playoffs: it goes on until someone wins.' : ' Still tied after that, it’s a tie: you stay alive, without a win.'}`));
+    d.append(head);
+    d.append(el('p', 'note toss', won ? 'You won the coin toss.' : `The ${them} won the coin toss and will receive.`));
+    const start = (kicker) => {
+      if (busy) return;
+      G.root = { t: po ? 900 : 600, pos: kicker, score: [r.score[0], r.score[1]], down: 1, ytg: 10, yl: 65, to: po ? [3, 3] : [2, 2],
+        clock_running: false, phase: KICKOFF, credit: 0, free_kick: false, ot: { c: [0, 0], po, n: 1 } };
+      G.over = false; G.result = null;
+      addLog(kicker === G.me ? `Overtime: you kick off to the ${them}` : `Overtime: the ${them} kick off to you`, G.root.t, true);
+      persist();
+      advance();
+    };
+    const keys = el('div', 'keys');
+    const opts = won ? [['Receive', 'Get the ball first', 1 - G.me], ['Kick off', 'Know what you need', G.me]] : [['Kick off', null, G.me]];
+    keys.style.setProperty('--cols', opts.length);
+    opts.forEach(([label, sub, kicker], i) => {
+      const b = key(label, sub, 'big', i);
+      b.addEventListener('click', () => start(kicker));
+      keys.append(b);
+    });
+    d.append(keys);
+  }
+
   async function finishSpot() {
+    if (!G.result && needsOvertime(G.root)) return overtime();
     if (!G.result || (G.result.half === 1 && G.result.v !== 2)) {      // v2: halftime valued at halftime
       status('Final whistle…');
       const r = G.root;
@@ -3017,25 +3062,30 @@
     }
     drawAll();
     const res = G.result, sc = G.scen, d = $('dock');
-    if (SURV && res.ot == null) {           // survivor: a tie goes to overtime, won with the engine's win chance
-      res.ot = res.mine !== res.theirs ? 0 : rng(hash('ot', seedKey()))() < res.wp ? 1 : -1;
-      const w = res.mine > res.theirs || res.ot > 0;
+    // (res.ot: a result from before overtime was played, settled with the win chance)
+    const inOT = !!G.root.ot, tie = res.mine === res.theirs;
+    if (SURV && res.ot == null && !res.counted) {   // survivor: a win counts, a loss ends the run, a tie after overtime neither
+      res.counted = true;
+      const w = res.mine > res.theirs;
       state.games.push({ id: sc.id, tag: gameTag(sc), me: sc.player, op: sc.player === sc.home ? sc.away : sc.home,
-        mine: res.mine, theirs: res.theirs, ot: res.ot !== 0, w });
-      if (w) state.won += 1; else state.out = true;
+        mine: res.mine, theirs: res.theirs, ot: inOT, w, tie });
+      if (w) state.won += 1; else if (!tie) state.out = true;
       persist();
     }
     d.textContent = '';
     takeBanner(d);
     const card = el('div', 'endcard');
+    const ot = inOT ? ' in overtime' : '';
     const head = res.half === 1 ? `Halftime: ${res.mine}–${res.theirs}` :
-      res.mine > res.theirs ? `You win ${res.mine}–${res.theirs}` : res.mine < res.theirs ? `You lose ${res.mine}–${res.theirs}` :
-      SURV ? `Tied ${res.mine}–${res.theirs}: you ${res.ot > 0 ? 'win' : 'lose'} in overtime` : `Tied ${res.mine}–${res.theirs}: overtime`;
+      res.mine > res.theirs ? `You win ${res.mine}–${res.theirs}${ot}` : res.mine < res.theirs ? `You lose ${res.mine}–${res.theirs}${ot}` :
+      inOT ? `Tie ${res.mine}–${res.theirs} after overtime` :
+      SURV && res.ot ? `Tied ${res.mine}–${res.theirs}: you ${res.ot > 0 ? 'win' : 'lose'} in overtime` : `Tied ${res.mine}–${res.theirs}: overtime`;
     card.append(el('h2', '', head));
     if (SURV && res.ot) card.append(el('p', 'note', `Your overtime win chance was ${wpTxt(res.wp)}.`));
-    else if (res.half === 1 || res.mine === res.theirs) card.append(el('p', 'note', `Your win chance from here: ${wpTxt(res.wp)}.`));
+    else if (inOT && tie) card.append(el('p', 'note', 'Nobody won it. A tie keeps your run alive, but it doesn’t count as a win.'));
+    else if (res.half === 1 || (tie && !inOT)) card.append(el('p', 'note', `Your win chance from here: ${wpTxt(res.wp)}.`));
     if (SURV) card.append(el('p', `alive ${state.out ? 'out' : 'in'}`, state.out ? `Eliminated after ${state.won} win${state.won === 1 ? '' : 's'}.` :
-      `${state.won} straight. You're still alive.`));
+      inOT && tie ? `Still alive: ${state.won} win${state.won === 1 ? '' : 's'}.` : `${state.won} straight. You're still alive.`));
     card.append(squaresOf(G.decisions));
     const hh = headToHead(G.si, res);
     if (hh) card.append(hhCard(hh));
@@ -3325,8 +3375,8 @@
       el('p', 'verdict', !st.best ? 'One loss and it\'s over. Run it back.' : n >= st.best ? 'Your best run yet.' : `Your best run: ${st.best} win${st.best === 1 ? '' : 's'}.`));
     const list = el('ol', 'runlist');
     state.games.forEach((g) => {
-      const li = el('li', g.w ? 'w' : 'l');
-      li.append(el('span', 'res', `${g.w ? 'W' : 'L'} ${g.mine}–${g.theirs}${g.ot ? ' OT' : ''}`),
+      const li = el('li', g.w ? 'w' : g.tie ? 't' : 'l');
+      li.append(el('span', 'res', `${g.w ? 'W' : g.tie ? 'T' : 'L'} ${g.mine}–${g.theirs}${g.ot ? ' OT' : ''}`),
         el('span', 'm', `${teamName(g.me)} vs ${teamName(g.op)}`), el('span', 'tag', g.tag));
       list.append(li);
     });
@@ -3347,7 +3397,7 @@
       box.append(how);
     }
     const nm = myName();
-    const text = `Two-Minute Drill Survivor${nm ? ` · ${nm}` : ''}\nSurvived ${n} game${n === 1 ? '' : 's'}\n${state.games.map((g) => (g.w ? SQ.g : SQ.r)).join('')}`;
+    const text = `Two-Minute Drill Survivor${nm ? ` · ${nm}` : ''}\nSurvived ${n} game${n === 1 ? '' : 's'}\n${state.games.map((g) => (g.w ? SQ.g : g.tie ? SQ.y : SQ.r)).join('')}`;
     const pre = el('div', 'grid-share', text);
     const share = el('button', 'btn alt', 'Share');
     share.type = 'button';
@@ -3500,7 +3550,7 @@
       'Every snap is a real NFL play run against your call. Tap the field to skip, or a player to see who he is.',
       'Matchups matter: a blitz beats deep shots but loses to quick passes and screens; a loaded box stuffs runs but gets beaten by play-action and deep shots; playing soft stops deep shots but gives up runs. Read their look before you call, and when you call the defense, they will check into what beats it.',
       'Beat the real coach\'s result, and find out which NFL coach you call it like.',
-      'Survivor: random real fourth quarters back to back. Win to keep going; lose once and your run is over.',
+      'Survivor: random real fourth quarters back to back. Win to keep going; lose once and your run is over. Tied at the end, you play overtime: both teams get the ball, then the next score wins.',
     ].forEach((t) => ul.append(el('li', '', t)));
     openModal('How to play', [
       ul,

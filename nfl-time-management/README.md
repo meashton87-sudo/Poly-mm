@@ -421,8 +421,13 @@ in the same three spots, with a share grid of one square per snap.
 **Survivor** (the Survivor tab, or `game.html#survivor`) plays random real fourth quarters back to back from
 the same pool: the 430 spots that start in the fourth quarter, so every one is played to the final gun. Win
 and the next game is drawn (none twice in a run until all have been played); lose and the run is over. A tie
-at the gun goes to overtime, won or lost with the engine's win chance for the tied game. The run survives a
-reload, and the best run is kept.
+at the gun goes to a coin toss and an overtime you play, under the rules since 2025 (`engine.js` `_otAfter`, on
+only when the starting state carries `ot`, so the clock-management engine and parity are untouched): 10 minutes
+and two timeouts each (15 and three in the playoffs), both teams get the ball, then the next score wins; a safety
+ends it, and a touchdown that wins it needs no try. A team that has to score on its possession goes for it on
+fourth down rather than punt or kick a field goal that loses. A regular-season overtime can end tied, which keeps
+the run alive without a win; the playoffs play another period from where the ball is. The sweep plays 369
+overtimes and checks them against the rules. The run survives a reload, and the best run is kept.
 
 Every spot is a real late-game drive from the last four seasons (2023-2026, playoffs included), and the
 card names the game ("2024 Week 12, PHI at LA" or "2025 Divisional, HOU at KC"). The two teams are the ones
@@ -576,7 +581,8 @@ pytest                              # unit tests (clock rules, kneel-out math, i
   no timeouts late). Otherwise "pass" means the situational pass distribution, not a specific concept.
 * Penalties are sampled from real penalty plays. The 10-second runoff and untimed downs after defensive
   fouls are not modelled.
-* Overtime is valued as a strength-adjusted coin flip rather than simulated.
+* Overtime is valued as a strength-adjusted coin flip rather than simulated (the daily game's survivor plays
+  it out; the clock-management analysis does not).
 * A "mistake" can reflect information the model lacks, such as an injured kicker, a specific scheme
   or weather inside the stadium. Team-games with an emergency kicker are excluded automatically.
 * Rollout policy is a strong heuristic, not a solved game; the opponent does not adapt beyond it.
