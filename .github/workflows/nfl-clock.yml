@@ -1,0 +1,71 @@
+name: nflclock tests
+
+# Automated tester for nfl-time-management: unit tests, a full model build from public nflverse data,
+# and the parity check that the browser engine (web/engine.js) reproduces the Python simulator.
+on:
+  push:
+    branches: [main]   # feature branches are covered by their pull request
+    paths: ["nfl-time-management/**", ".github/workflows/nfl-clock.yml"]
+  pull_request:
+    paths: ["nfl-time-management/**", ".github/workflows/nfl-clock.yml"]
+
+concurrency:
+  group: nfl-clock-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: nfl-time-management
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: nfl-time-management/pyproject.toml
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Unit tests (clock rules, parsing, grading helpers)
+        run: python -m pytest -q
+
+      - name: Syntax-check the browser engine
+        run: node --check web/engine.js && node --check web/worker.js
+
+      - id: week
+        run: echo "w=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache nflverse downloads (refreshed weekly)
+        uses: actions/cache@v4
+        with:
+          path: nfl-time-management/data/raw
+          key: nflverse-${{ steps.week.outputs.w }}
+
+      - name: Build models from nflverse play-by-play
+        run: python -m nflclock.cli build
+
+      - name: Unit tests with the model bundle (simulator invariants, endgame policy)
+        run: python -m pytest -q
+
+      - name: Export the live game and the browser engine
+        run: |
+          python -m nflclock.cli sync --no-refresh --games 2026_05_BUF_LA
+          python -c "from nflclock import webexport as w; w.export_engine(); w.export_game('2026_05_BUF_LA')"
+
+      - name: Browser engine parity (JavaScript vs. Python on 27 game situations)
+        run: |
+          python scripts/parity_expected.py 2026_05_BUF_LA 4000
+          node web/parity_test.js 4000

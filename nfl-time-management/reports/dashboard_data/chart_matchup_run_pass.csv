@@ -1,0 +1,6 @@
+matchup,run_minus_pass,se,wp_run,wp_pass
+elite run O vs weak run D,0.00633,0.00475,0.90675,0.90042
+average vs average,0.00425,0.00501,0.89233,0.88808
+elite pass O vs weak pass D,-0.00317,0.00447,0.91292,0.91608
+weak pass O vs elite pass D,0.00392,0.00528,0.8755,0.87158
+elite pass O vs elite run D,-0.00458,0.00466,0.89875,0.90333

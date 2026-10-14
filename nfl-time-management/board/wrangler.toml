@@ -1,0 +1,17 @@
+# The survivor leaderboard Worker (board/worker.js): `npx wrangler deploy` (or the board workflow in
+# .github/workflows/board.yml). The board lives in one SQLite-backed Durable Object, which the Workers free plan
+# includes; nothing to create first. Optional: `npx wrangler secret put ADMIN_TOKEN` turns on removing rows.
+name = "two-minute-drill-board"
+main = "worker.js"
+compatibility_date = "2025-06-01"
+
+[vars]
+ALLOWED_ORIGINS = "https://2mindrill.bashton.xyz"
+
+[[durable_objects.bindings]]
+name = "BOARD"
+class_name = "Board"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Board"]

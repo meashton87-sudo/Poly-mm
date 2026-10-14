@@ -1,0 +1,93 @@
+name: Two-Minute Drill website
+
+# Builds the daily game's data from public nflverse data (models, browser engine, the daily spots and their real
+# rosters) and publishes the game to GitHub Pages (nfl-time-management/scripts/site.py). Runs when the game changes,
+# every Tuesday (after Monday Night Football, to pick up the week's games) and on demand. Generated data is never
+# committed: it lives only in the Pages artifact.
+#
+# The build and the checks run on every trigger; publishing to Pages is opt-in, so a site hosted elsewhere (a server
+# building with scripts/site.py) never has Pages claiming its hostname. To publish here: Settings > Pages > Source:
+# "GitHub Actions", and the repository variable PAGES_DEPLOY = true (Settings > Secrets and variables > Actions >
+# Variables). Optional variables: SITE_DOMAIN (custom domain, e.g. 2mindrill.bashton.xyz; set only on the one host
+# that serves it) and BOARD_API (the leaderboard Worker's URL; see board.yml).
+on:
+  push:
+    branches: [main]
+    paths: ["nfl-time-management/web/**", "nfl-time-management/src/**", "nfl-time-management/scripts/site.py", ".github/workflows/site.yml"]
+  schedule:
+    - cron: "17 9 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: nfl-time-management
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: nfl-time-management/pyproject.toml
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - id: week
+        run: echo "w=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache nflverse downloads (refreshed weekly)
+        uses: actions/cache@v4
+        with:
+          path: nfl-time-management/data/raw
+          key: site-nflverse-${{ steps.week.outputs.w }}
+
+      - name: Build models from nflverse play-by-play
+        run: python -m nflclock.cli build
+
+      - name: Export the browser engine and the daily game (spots, real rosters, playbook)
+        run: |
+          python -c "from nflclock import webexport as w; w.export_engine()"
+          python -c "from nflclock import dailygame as G; print(G.build())"
+
+      - name: Check the game before it ships
+        run: |
+          node web/game_smoke.js
+          node web/motion_test.js
+          node board/worker_test.mjs
+
+      - name: Assemble the site
+        run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --board-api "${{ vars.BOARD_API }}"
+
+      - if: vars.PAGES_DEPLOY == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: nfl-time-management/_site
+
+  deploy:
+    needs: build
+    if: vars.PAGES_DEPLOY == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
