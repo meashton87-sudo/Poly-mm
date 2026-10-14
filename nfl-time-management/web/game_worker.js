@@ -97,12 +97,36 @@ function describe(row) {
   return out;
 }
 
+const CTORS = { int8: Int8Array, uint8: Uint8Array, int16: Int16Array, uint16: Uint16Array, int32: Int32Array,
+  uint32: Uint32Array, float32: Float32Array, float64: Float64Array };
+// The website's packed data (scripts/site.py pack, already gunzipped by the page): "NFCP", the header's length, the
+// header (the JSON with each array as {dtype, n, enc, off, len}) and the arrays' bytes. enc: s = byte planes
+// shuffled, d = differences (summed back with the typed array's own wraparound), ds = both.
+function unpack(buf) {
+  const u8 = new Uint8Array(buf), dv = new DataView(buf);
+  if (String.fromCharCode(u8[0], u8[1], u8[2], u8[3]) !== 'NFCP') throw new Error('bad data pack');
+  const hl = dv.getUint32(4, true), base = 8 + hl;
+  const walk = (x) => {
+    if (Array.isArray(x)) return x.map(walk);
+    if (!x || typeof x !== 'object') return x;
+    if (x.off == null || !x.dtype) { const o = {}; for (const k in x) o[k] = walk(x[k]); return o; }
+    const C = CTORS[x.dtype], k = C.BYTES_PER_ELEMENT, n = x.n, src = u8.subarray(base + x.off, base + x.off + x.len);
+    const bytes = new Uint8Array(n * k);
+    if (x.enc.includes('s')) { for (let j = 0; j < k; j++) { const p = j * n; for (let i = 0; i < n; i++) bytes[i * k + j] = src[p + i]; } }
+    else bytes.set(src);
+    const a = new C(bytes.buffer, 0, n);
+    if (x.enc.includes('d')) for (let i = 1; i < n; i++) a[i] += a[i - 1];
+    return { dtype: x.dtype, n, arr: a };
+  };
+  return walk(JSON.parse(new TextDecoder().decode(u8.subarray(8, base))));
+}
+
 self.onmessage = async (ev) => {
   const m = ev.data;
   try {
     if (m.type === 'init') {
       // the page fetches the data once and hands each worker its own copy (bytes); on its own, a worker fetches it
-      const get = (buf, url, what) => (buf ? Promise.resolve(JSON.parse(new TextDecoder().decode(buf)))
+      const get = (buf, url, what) => (buf ? Promise.resolve(m.packed ? unpack(buf) : JSON.parse(new TextDecoder().decode(buf)))
         : fetch(url).then((r) => { if (!r.ok) throw new Error(what + ' ' + r.status); return r.json(); }));
       const [d, pb] = await Promise.all([get(m.engine, 'engine_data.json', 'engine data'), get(m.playbook, 'playbook.json', 'playbook')]);
       eng = new NFLClockEngine(d);

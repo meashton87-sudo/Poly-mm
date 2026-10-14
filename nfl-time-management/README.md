@@ -368,9 +368,17 @@ players (a name is claimed the same way as on the survivor board). The day is th
 `drive_start` (mode, kind of spot, day), `play_call` (mode, family, call, routes changed, out of bounds),
 `defense_call` (call), `daily_finish` (day, kind, score, better/worse/same than the real coach, snaps),
 `survivor_game` (win/loss/tie, overtime, streak), `overtime`, `share` (daily or survivor; share sheet, copy or
-select), `help_open`, `stats_open`, `stats_page_link`, `replay`, `name_set`. Share opens the phone's share sheet
+select), `help_open` (auto: shown on a first visit), `sim_ready` (packed data or JSON, ms since load, ms a player
+sat waiting on it), `drive_leave` (the page went to the background mid-drive: calls made, seconds in, still
+loading), `stats_open`, `stats_page_link`, `replay`, `name_set`. Share opens the phone's share sheet
 where there is one. In Google Analytics: Reports, Engagement, Events (custom fields need registering as custom
 dimensions under Admin, Custom definitions, to show in reports).
+
+**Packed data**: on the website the simulator's data ships as `engine_data.pack` and `playbook.pack`
+(`scripts/site.py pack`: the same typed arrays as raw bytes, index arrays as differences, multi-byte arrays
+byte-plane shuffled, gzipped; 3.7 MB instead of 5.6 MB gzipped JSON). `game.js` gunzips them with
+DecompressionStream and `game_worker.js` unpacks them; without a pack (claude.ai, a local copy) or without
+DecompressionStream it loads the JSON. The first snap shows the download's progress while it waits.
 
 **The stats page** (`web/stats.html`, nfl2mindrill.com/stats; `board/worker.js` `/days`): players per day, today's
 count and average, the all-time total, and any day up close (its score spread, the drive's average and the top
@@ -441,7 +449,10 @@ against what a typical NFL play-caller does there. Each spot and the day end wit
 late-game calls look most like yours ("You called this one like Nick Sirianni"), from 59 coaches'
 2016-26 fingerprints: passes, deep shots, fourth-down tries and two-point tries, each over what the
 league does in the same spots (`coaches.py`). The day's score is a percentile against NFL play-callers
-on the same drive, with a share grid of one square per snap.
+on the same drive, with a share grid of one square per snap. The simulated callers call like the league but mostly
+see the look (an option's weight falls by e for each point of win chance it gives up), so a typical player scores
+near 50 and only sharp ones reach 90+ (from day 4; the first days compared against frequency-only callers, and
+nearly everyone scored 90+).
 
 **Survivor** (the Survivor tab, or `game.html#survivor`) plays random real fourth quarters back to back from
 the same pool: the 430 spots that start in the fourth quarter, so every one is played to the final gun. Win

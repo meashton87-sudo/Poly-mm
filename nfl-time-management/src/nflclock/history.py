@@ -159,24 +159,27 @@ class History:
         return out
 
     def _jersey_table(self, season: int) -> dict:
-        """Jersey numbers from nflverse weekly rosters: (id, team, week), then (id, team) for the season; ids are
-        gsis and pfr. Empty when the season's file is not published."""
+        """Jersey numbers and names from nflverse weekly rosters: (id, team, week), then (id, team) for the season, as
+        (number, name); ids are gsis and pfr. Empty when the season's file is not published. The name is the one he
+        went by then (the players table has the current one: Zach Tom is Zach Bako-Bewele from 2026)."""
         if season not in self.jerseys:
             out = {}
             try:
                 w = pd.read_parquet(PL._get("weekly_rosters", f"roster_weekly_{season}.parquet"),
-                                    columns=["week", "team", "gsis_id", "pfr_id", "jersey_number"]).dropna(subset=["jersey_number"])
+                                    columns=["week", "team", "gsis_id", "pfr_id", "jersey_number", "full_name"]).dropna(subset=["jersey_number"])
             except Exception:                      # not published (yet): fall back to the current numbers
-                w = pd.DataFrame(columns=["week", "team", "gsis_id", "pfr_id", "jersey_number"])
+                w = pd.DataFrame(columns=["week", "team", "gsis_id", "pfr_id", "jersey_number", "full_name"])
+            names = w["full_name"].where(w["full_name"].notna(), None)
             for col in ("gsis_id", "pfr_id"):
-                d = w.dropna(subset=[col])
-                out.update({(i, t, int(k)): int(n) for i, t, k, n in zip(d[col], d["team"], d["week"], d["jersey_number"])})
+                d = w.assign(nm=names).dropna(subset=[col])
+                out.update({(i, t, int(k)): (int(n), m) for i, t, k, n, m in zip(d[col], d["team"], d["week"], d["jersey_number"], d["nm"])})
                 last = d.sort_values("week").drop_duplicates([col, "team"], keep="last")
-                out.update({(i, t): int(n) for i, t, n in zip(last[col], last["team"], last["jersey_number"])})
+                out.update({(i, t): (int(n), m) for i, t, n, m in zip(last[col], last["team"], last["jersey_number"], last["nm"])})
             self.jerseys[season] = out
         return self.jerseys[season]
 
-    def _jersey(self, season: int, week: int, team: str, gid: str, pfr) -> int | None:
+    def _jersey(self, season: int, week: int, team: str, gid: str, pfr) -> tuple:
+        """(number, name) as of that week; the season's, else the current number and no name."""
         t = self._jersey_table(season)
         for i in (gid, pfr):
             if i and (i, team, week) in t:
@@ -185,7 +188,7 @@ class History:
             if i and (i, team) in t:
                 return t[(i, team)]
         n = self.num_now.get(gid) or (self.num_now.get(pfr) if pfr else None)
-        return int(n) if n is not None and n == n else None
+        return (int(n) if n is not None and n == n else None), None
 
     def _players(self, R, rt, season, team, unit, members, week=None) -> list:
         """Each player as the game shows him: position label, name, rating (40-99), stat line, archetype."""
@@ -216,8 +219,10 @@ class History:
             else:
                 pct, stat = rt["player"].get(pfr, (None, None)) if pfr else (None, None)
             ovr = O.specialist_ovr(float(pct)) if pct is not None else UNRATED_OVR
+            num, then = self._jersey(season, week, team, gid, pfr)
+            if isinstance(then, str) and then.strip():
+                name = then.strip()
             rec = {"pos": label, "name": name, "ovr": int(ovr), "stat": stat or "Little NFL playing time yet"}
-            num = self._jersey(season, week, team, gid, pfr)
             if num is not None:
                 rec["num"] = num
             if pct is not None:

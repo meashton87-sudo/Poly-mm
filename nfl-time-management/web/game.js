@@ -28,6 +28,18 @@
   // next changes follow the data. Event names and fields are listed in the README.
   const track = (name, params) => { try { if (typeof window.gtag === 'function') window.gtag('event', name, params || {}); } catch (e) { /* never in the way */ } };
   const modeName = () => (SURV ? 'survivor' : 'daily');
+  // a drive left half-played: when the page goes to the background mid-drive (closed, or switched away from), once
+  // a page load, with how far in it was and whether it was still waiting on the simulator's data
+  const drive = { on: false, calls: 0, t0: 0, kind: null, left: false };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'hidden' || !drive.on || drive.left) return;
+    drive.left = true;
+    track('drive_leave', { mode: modeName(), kind: drive.kind, calls: drive.calls, secs: Math.round((performance.now() - drive.t0) / 1000),
+      loading: readyCount === 0, transport_type: 'beacon' });
+  });
+  // every share ends with the address, so a posted score brings its readers to the game (the website's own host;
+  // on claude.ai, where the page has no build stamp, the site's name)
+  const SITE = BUILD && location.host ? location.host.replace(/^www\./, '') : 'nfl2mindrill.com';
   // Share: the phone's share sheet where there is one (a group chat in a tap), else the clipboard, else select it
   async function shareText(text, pre, what) {
     if (navigator.share && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
@@ -235,10 +247,37 @@
   let reqId = 0, readyCount = 0;
   // The data downloads once here; the first worker starts at once and the rest once it is ready, so the first snap
   // isn't waiting on several workers parsing at the same time.
-  let dataBytes = null;
+  // On the website the data comes packed (scripts/site.py pack): half the bytes of the JSON, gunzipped here.
+  // Anywhere without the packed files (the claude.ai artifact, a local copy) or without DecompressionStream: the JSON.
+  let dataBytes = null, packed = false;
+  const dl = { got: 0, total: 0 };                 // download progress, shown while the first snap waits on it
+  async function fetchBytes(url, what, size) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`${what} ${r.status}`);
+    const len = +r.headers.get('content-length') || size;
+    dl.total += len;
+    if (!r.body || !r.body.getReader) { const b = await r.arrayBuffer(); dl.got += len; return b; }
+    const rd = r.body.getReader(), parts = [];
+    for (;;) {
+      const { done, value } = await rd.read();
+      if (done) break;
+      parts.push(value); dl.got += value.length;
+    }
+    return new Blob(parts).arrayBuffer();
+  }
+  async function fetchPacked(name, size) {
+    const zipped = await fetchBytes(asset(name), name, size);
+    const out = await new Response(new Blob([zipped]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+    const h = new Uint8Array(out, 0, 4);
+    if (String.fromCharCode(h[0], h[1], h[2], h[3]) !== 'NFCP') throw new Error('not a data pack');
+    return out;
+  }
   function startWorkers() {
-    const get = (url, what) => fetch(url).then((r) => { if (!r.ok) throw new Error(`${what} ${r.status}`); return r.arrayBuffer(); });
-    dataBytes = Promise.all([get(asset('engine_data.json'), 'engine data'), get(asset('playbook.json'), 'playbook')]);
+    const json = () => Promise.all([fetchBytes(asset('engine_data.json'), 'engine data', 5.5e6), fetchBytes(asset('playbook.json'), 'playbook', 6.1e6)]);
+    const pk = BUILD && typeof DecompressionStream === 'function'
+      ? Promise.all([fetchPacked('engine_data.pack', 1.6e6), fetchPacked('playbook.pack', 1.7e6)]).then((b) => { packed = true; return b; })
+      : Promise.reject(new Error('no pack'));
+    dataBytes = pk.catch(() => { dl.got = 0; dl.total = 0; packed = false; return json(); });
     dataBytes.catch((e) => fatal('The simulator could not load (' + e.message + '). Check your connection and reload.'));
     startWorker();
   }
@@ -250,7 +289,7 @@
     pool.push(slot);
     dataBytes.then(([eng, pb]) => {
       const engine = eng.slice(0), playbook = pb.slice(0);      // a copy each, moved into the worker
-      w.postMessage({ type: 'init', engine, playbook }, [engine, playbook]);
+      w.postMessage({ type: 'init', engine, playbook, packed }, [engine, playbook]);
     }, () => {});
   }
   function pump() {
@@ -265,6 +304,10 @@
   function onMsg(slot, m) {
     if (m.type === 'ready') {
       slot.ready = true; readyCount++;
+      if (readyCount === 1) {              // how long the simulator took, and how long a player sat waiting on it
+        const now = performance.now();
+        track('sim_ready', { mode: modeName(), packed, ms: Math.round(now), waited_ms: huddleT0 ? Math.round(now - huddleT0) : 0 });
+      }
       if (readyCount === 1) for (let i = 1; i < POOL; i++) startWorker();
       if (readyCount === POOL) dataBytes = null;               // every worker has its copy: let the bytes go
       pump(); return;
@@ -2336,7 +2379,10 @@
     const go = el('button', 'btn', 'Next');
     go.type = 'button';
     go.addEventListener('click', () => {
-      if (!G.started) track('drive_start', { mode: modeName(), kind: sc.category, day: dayN });
+      if (!G.started) {
+        track('drive_start', { mode: modeName(), kind: sc.category, day: dayN });
+        Object.assign(drive, { on: true, calls: 0, t0: performance.now(), kind: sc.category });
+      }
       G.started = true; persist(); enterField();
     });
     box.append(go);
@@ -2420,10 +2466,25 @@
     try { await animatePlay(lp.before, lp.res, lp.side, true, lp.look); } finally { busy = false; drawBar(); drawField(); }
   }
 
+  // the first huddle can wait on the simulator's data: say how far along it is, not just a spinner
+  let huddleT0 = 0;
+  function huddle(text) {
+    status(text);
+    if (readyCount) return;
+    if (!huddleT0) huddleT0 = performance.now();
+    const sp = $('dock').querySelector('.status span:last-child');
+    const tick = () => {
+      if (readyCount || !sp || !sp.isConnected) return;
+      sp.textContent = dl.total && dl.got >= dl.total ? 'Setting up the simulator…'
+        : `Loading the playbook… ${dl.total ? Math.min(99, Math.round((100 * dl.got) / dl.total)) : 0}%`;
+      setTimeout(tick, 200);
+    };
+    tick();
+  }
   // your ball: Run / Pass / RPO, plus a timeout, spike, kneel or kick when it matters
   async function promptOffense() {
     const r = G.root;
-    status('Breaking the huddle…');
+    huddle('Breaking the huddle…');
     G.info = (await send({ type: 'info', scen: simScen(), root: r }, true)).info;
     G.fast = false;
     G.odds = {};
@@ -2460,7 +2521,10 @@
       return true;
     });
     const specials = [];
-    if (G.info.pFg >= 0.05 && (r.down === 4 || th <= 40)) specials.push('fg');
+    // the kick: rushing the unit on takes 7-12 s with the clock running (engine.js FIRE_DRILL), so under 7 s it needs
+    // a timeout first; a try on 4th down in range, in the last 20 s, or a likely make on 3rd down late
+    const p = G.info.pFg, kickable = !r.clock_running || th >= 7;
+    if (kickable && ((r.down === 4 && p >= 0.05) || (th <= 20 && p >= 0.2) || (r.down === 3 && th <= 40 && p >= 0.4))) specials.push('fg');
     if (r.down === 4 && r.yl >= 30) specials.push('punt');
     if (!r.clock_running && canKneel(r)) specials.push('kneel');
     return { calls, specials };
@@ -2496,7 +2560,7 @@
         clockOptions(r).filter((k) => !TEMPOS.includes(k)).forEach((k) => extra.push([k, CLOCK[k].label, k === 'timeout' ? `${r.to[me]} left` : null]));
       }
       const { specials } = callOptions(r);
-      specials.forEach((k) => extra.push([k, specialLabel(k), k === 'fg' ? `${Math.round(G.info.fgDist)} yards` : null]));
+      specials.forEach((k) => extra.push([k, specialLabel(k), k === 'fg' ? `${Math.round(G.info.fgDist)} yards${r.clock_running && halfLeft(r.t) < 12 ? ' · a rush to get it off' : ''}` : null]));
       if (extra.length) {
         const row = el('div', 'keys');
         row.style.setProperty('--cols', Math.min(extra.length, 4));
@@ -2807,7 +2871,9 @@
     const r = G.root, me = G.me;
     try {
       const seq = G.seq, tempo = ui.tempo;
-      const { calls, specials } = callOptions(r);
+      // the gadget plays are graded against when you call one, never offered as the better call otherwise (their
+      // real plays are the ones that were worth charting: too rosy to recommend)
+      const all = callOptions(r), specials = all.specials, calls = all.calls.filter((id) => !id.startsWith('trick') || id === pick.call);
       const opts = calls.map((id) => ({ key: id, label: CALL[id].label, action: callAction(id, false) }));
       if (pick.call && ui.oob) opts.push({ key: `${pick.call}+oob`, label: `${CALL[pick.call].label}, get out of bounds`, action: callAction(pick.call, true) });
       const passPick = pick.pass != null ? passOption(scene, pick.pass, ui.oob) : null;
@@ -2817,6 +2883,7 @@
       const chosen = passPick ? passPick.key : pick.call ? (ui.oob ? `${pick.call}+oob` : pick.call) : pick.special;
       remember(opts.find((o) => o.key === chosen).action.call);
       const cid = passPick ? passPick.action.call : pick.call;
+      drive.calls++;
       track('play_call', { mode: modeName(), family: pick.special || (passPick ? 'pass' : (CALL[cid] || {}).family || 'other'), call: cid || pick.special,
         routes_changed: passPick ? ((ui.pass && ui.pass.hist) || []).length : 0, oob: !!ui.oob });
       const q = {};
@@ -2843,7 +2910,7 @@
   const defTimeoutOk = (r) => r.clock_running && r.to[G.me] > 0 && defChoice(r);
   async function promptDefense() {
     const r = G.root;
-    status('Their huddle…');
+    huddle('Their huddle…');
     G.dinfo = (await send({ type: 'info', scen: simScen(), root: r }, true)).info;
     // are they kicking? The snap as it will be played (the same seed stepWith will use), left alone: a field goal or a
     // punt gets your special-teams call instead of the defense
@@ -2888,6 +2955,7 @@
   async function decideDefense(k) {
     if (busy) return;
     busy = true;
+    drive.calls++;
     track('defense_call', { mode: modeName(), call: k });
     const r = G.root, me = G.me;
     try {
@@ -2966,7 +3034,7 @@
   }
 
   // ------------------------------------------------------- after the snap ---
-  const KIND_NAME = { clock: 'Clock', call: 'Play call', deftime: 'Timeout', defcall: 'Defense', pat: 'Try', kick: 'Kickoff', freekick: 'Free kick',
+  const KIND_NAME = { clock: 'Before the snap', call: 'Play call', deftime: 'Timeout', defcall: 'Defense', pat: 'Try', kick: 'Kickoff', freekick: 'Free kick',
     fgdef: 'Field goal defense', puntdef: 'Punt defense' };
   function optionTable(x) {
     const t = el('table', 'opts');
@@ -2990,22 +3058,25 @@
     return v.now;
   }
   // the matchup behind a snap (engine.js MATCH): your call against their look, or their call against your defense
-  const LOOK_NAME = ['the extra men in coverage', 'the blitz', 'a loaded box', 'the blitz'];
+  const LOOK_NAME = ['the light box (extra men back in coverage)', 'the blitz', 'the loaded box', 'the blitz'];
   const DEF_NAME = { blitz: 'blitz', load: 'loaded box', soft: 'soft coverage' };
   function matchupLine(e, action) {
     if (!e || e.ev !== 'play' || !e.match || Math.abs(e.match) < 0.5 || e.call < 0 || !idx.calls[e.call]) return null;
     const call = e.team === G.me && action && action.route && action.targetName
       ? `${routeSay(action.targetPos, action.route)} to ${shortName(action.targetName) || action.targetPos}` : idx.calls[e.call].label.toLowerCase();
+    // how it went for the offense: a big play, or nothing (no gain, an incompletion, a turnover)
+    const big = (e.td && !e.turnover) || e.yards >= 10, none = e.turnover || e.incomplete || e.yards <= 0;
     if (e.team === G.me) {
       const b = action && action.looks ? Math.round(Math.log2(action.looks)) : -1;
       if (!(b >= 0 && b < 4)) return null;
-      return e.match > 0 ? { good: true, text: `Good read: ${call} against ${LOOK_NAME[b]}.` }
-        : { good: false, text: `${LOOK_NAME[b][0].toUpperCase()}${LOOK_NAME[b].slice(1)} ${b === 0 ? 'were' : 'was'} waiting for ${call}.` };
+      const Look = `${LOOK_NAME[b][0].toUpperCase()}${LOOK_NAME[b].slice(1)}`;
+      if (e.match > 0) return { good: true, text: none ? `Good read: ${call} against ${LOOK_NAME[b]}. It just didn't work this time.` : `Good read: ${call} against ${LOOK_NAME[b]}.` };
+      return { good: false, text: big ? `${Look} was set up to stop ${call}, but you made the play anyway.` : `${Look} was set up to stop ${call}.` };
     }
     const d = action && DEF_NAME[action.def];
     if (!d) return null;
-    return e.match < 0 ? { good: true, text: `Your ${d} won the matchup: they ran ${call} into it.` }
-      : { good: false, text: `They checked into ${call} against your ${d}.` };
+    if (e.match < 0) return { good: true, text: big ? `Your ${d} was the right call against ${call}, but they made the play anyway.` : `Your ${d} won the matchup: they ran ${call} into it.` };
+    return { good: false, text: none ? `They checked into ${call} against your ${d}, and you still stopped it.` : `They checked into ${call} against your ${d}.` };
   }
   function showResult(decisions, res, head) {
     drawAll();
@@ -3035,9 +3106,10 @@
       const before = decisions[decisions.length - 1].wp;
       winChanceAfter(res.root, res.done).then((after) => {
         const dw = after - before, om = outcomeMark(dw);
+        const shown = Math.round(after * 100) - Math.round(before * 100);     // what the two percentages say
         sq.className = `sq swing ${om}`;
-        sq.textContent = signed(dw);
-        sq.setAttribute('aria-label', `Your win chance ${dw >= 0 ? 'up' : 'down'} ${Math.abs(Math.round(dw * 100))} points`);
+        sq.textContent = `${shown >= 0 ? '+' : '−'}${Math.abs(shown)}`;
+        sq.setAttribute('aria-label', `Your win chance ${shown >= 0 ? 'up' : 'down'} ${Math.abs(shown)} point${Math.abs(shown) === 1 ? '' : 's'}`);
         wc.textContent = `Win chance ${Math.round(before * 100)}% → ${Math.round(after * 100)}%`;
       }).catch(() => { sq.className = `sq ${m}`; sq.textContent = GLYPH[m]; });
     }
@@ -3202,7 +3274,8 @@
       state.games.push({ id: sc.id, tag: gameTag(sc), me: sc.player, op: sc.player === sc.home ? sc.away : sc.home,
         mine: res.mine, theirs: res.theirs, ot: inOT, w, tie });
       if (w) state.won += 1; else if (!tie) state.out = true;
-      track('survivor_game', { result: w ? 'win' : tie ? 'tie' : 'loss', overtime: inOT, streak: state.won });
+      drive.on = false;
+    track('survivor_game', { result: w ? 'win' : tie ? 'tie' : 'loss', overtime: inOT, streak: state.won });
       persist();
     }
     d.textContent = '';
@@ -3254,7 +3327,7 @@
     const sc = today[si], rl = sc.real || {}, me = sc.player === sc.home ? 0 : 1;
     if (!result || !rl.coach) return null;
     const who = rl.coach.split(' ').slice(-1)[0];
-    const net = (n) => (n > 0 ? `+${n} points` : n < 0 ? `${n} points` : 'no points');
+    const net = (n) => (n === 0 ? 'no points' : `${n > 0 ? '+' : ''}${n} point${Math.abs(n) === 1 ? '' : 's'}`);
     if (result.half === 1) {
       const s0 = startRoot(sc).score;
       const you = result.mine - s0[me] - (result.theirs - s0[1 - me]);
@@ -3530,7 +3603,7 @@
       box.append(how);
     }
     const nm = myName();
-    const text = `Two-Minute Drill Survivor${nm ? ` · ${nm}` : ''}\nSurvived ${n} game${n === 1 ? '' : 's'}\n${state.games.map((g) => (g.w ? SQ.g : g.tie ? SQ.y : SQ.r)).join('')}`;
+    const text = `Two-Minute Drill Survivor${nm ? ` · ${nm}` : ''}\nSurvived ${n} game${n === 1 ? '' : 's'}\n${state.games.map((g) => (g.w ? SQ.g : g.tie ? SQ.y : SQ.r)).join('')}\n${SITE}${SURV ? '/#survivor' : ''}`;
     const pre = el('div', 'grid-share', text);
     const share = el('button', 'btn alt', 'Share');
     share.type = 'button';
@@ -3548,16 +3621,26 @@
     for (let i = 0; i < today.length; i++) { const s = state.spots[i]; if (s && s.decisions) out.push(...s.decisions); }
     return out;
   }
+  // The day's score: the share of simulated NFL play-callers whose drive costs more win chance than yours. Each one
+  // calls like the league (NFL frequencies q) but, like a real coach, mostly sees the look: an option's weight drops
+  // by e for every PCT_TAU of win chance it gives up against the best. Callers by frequency alone (the first days)
+  // ignore the look, so anyone who reads it scored 90+; at 1 point typical players land near 50, sharp ones 90+.
+  const PCT_TAU = 0.01, PCT_FROM = 4;                    // day 4 (Oct 15, 2026) on; earlier days keep their scale
   function percentileVsNFL(decs) {
     const my = decs.reduce((a, x) => a + x.cost, 0);
     const R = rng(hash('pct', dayN)), N = 4000;
+    const ws = decs.map((x) => {
+      const w = x.wps.map((o) => (x.q[o.key] || 0) * (dayN >= PCT_FROM ? Math.exp((o.wp - x.bestWp) / PCT_TAU) : 1));
+      const t = w.reduce((a, b) => a + b, 0);
+      return t > 0 ? w.map((v) => v / t) : w;
+    });
     let better = 0;
     for (let s = 0; s < N; s++) {
       let tot = 0;
-      for (const x of decs) {
-        const u = R();
+      for (let i = 0; i < decs.length; i++) {
+        const x = decs[i], u = R();
         let acc = 0, pick = x.wps[x.wps.length - 1];
-        for (const w of x.wps) { acc += x.q[w.key] || 0; if (u <= acc) { pick = w; break; } }
+        for (let j = 0; j < x.wps.length; j++) { acc += ws[i][j]; if (u <= acc) { pick = x.wps[j]; break; } }
         tot += Math.max(0, x.bestWp - pick.wp);
       }
       if (tot > my + 1e-9) better += 1; else if (Math.abs(tot - my) <= 1e-9) better += 0.5;
@@ -3584,7 +3667,8 @@
       el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers`));
     if (cc) box.append(cc.el);
     box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller ${today.length > 1 ? 'across today’s spots' : 'on today’s drive'}.`));
-    box.append(dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0))));
+    const dbox = dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0)));
+    box.append(dbox);
     const rec = [0, 0, 0];             // against the real coaches: better, worse, the same (a W-L-T record)
     const rows = today.map((_, i) => {
       const s = state.spots[i]; if (!s) return '';
@@ -3594,6 +3678,7 @@
       return `${today[i].player} ${r} ${squeeze(s.decisions || []).map((m) => SQ[m]).join('')}`;
     });
     const met = rec[0] + rec[1] + rec[2], recTxt = `${rec[0]}-${rec[1]}${rec[2] ? `-${rec[2]}` : ''}`;
+    drive.on = false;
     if (firstFinish) track('daily_finish', { day: dayN, kind: today[0] && today[0].category, score: Math.round(p * 100),
       vs_coach: rec[0] ? 'better' : rec[1] ? 'worse' : met ? 'same' : 'none', snaps: decs.length });
     // one drive: a sentence, not a record
@@ -3609,13 +3694,15 @@
         el('span', 'sub', `${rec[0]} better, ${rec[1]} worse${rec[2] ? `, ${rec[2]} the same` : ''}`));
       box.insertBefore(v, box.children[3] || null);
     }
-    const text = `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}\n${rows.join('\n')}`;
+    const text = `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}\n${rows.join('\n')}\n${SITE}`;
+    // sharing is how new players find the game: the button sits right under the result, not below the standings
     const pre = el('div', 'grid-share', text);
-    box.append(pre);
-    const btn = el('button', 'btn alt', 'Share');
+    const btn = el('button', 'btn', 'Share your score');
     btn.type = 'button';
     btn.addEventListener('click', () => shareText(text, pre, 'daily'));
-    box.append(btn, countdown());
+    box.insertBefore(pre, dbox);
+    box.insertBefore(btn, dbox);
+    box.append(countdown());
   }
   // Everyone who played today (the website: board/worker.js /daily). Your first result of the day counts once;
   // the box shows where it ranks among the day's players, how they spread, each spot against the average, and the
@@ -3758,8 +3845,8 @@
     });
     openModal('This game', [dl, el('p', 'note', `The players who were on the field in that game (${gameTag(sc)}), each rated against his position as of that week, and the real point spread.`)]);
   }
-  function openHelp() {
-    track('help_open');
+  function openHelp(auto) {
+    track('help_open', { auto: auto === true });     // auto: shown on a first visit (not a tap on ?)
     const ex = el('div', 'ex');
     ['g', 'y', 'o', 'r'].forEach((m) => ex.append(el('span', `sq ${m}`, GLYPH[m])));
     const ul = el('ul');
@@ -3855,7 +3942,7 @@
       dayN = Math.max(1, Math.floor((now - launch) / 864e5) + 1);
       if (SURV) {
         state = load(stateKey(), null) || newRun();
-        if (!load(`${STORE}:seen`, false)) { openHelp(); save(`${STORE}:seen`, true); }
+        if (!load(`${STORE}:seen`, false)) { openHelp(true); save(`${STORE}:seen`, true); }
         startWorkers();
         if (state.out) renderSurvSummary(); else await survOpen();
         return;
@@ -3870,7 +3957,7 @@
       $('dayLabel').textContent = `No. ${dayN} · ${now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
     } catch (e) { $('boot').textContent = 'Today\'s spots did not load (' + e.message + '). Check your connection and reload.'; return; }
     state = load(`${STORE}:day:${dayN}`, null) || { spots: [], current: 0, done: false };
-    if (!load(`${STORE}:seen`, false)) { openHelp(); save(`${STORE}:seen`, true); }
+    if (!load(`${STORE}:seen`, false)) { openHelp(true); save(`${STORE}:seen`, true); }
     drawTiles();
     startWorkers();
     if (state.done) renderSummary();
