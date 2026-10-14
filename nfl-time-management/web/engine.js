@@ -562,19 +562,8 @@
       const P = this.e.pb, cdf = oob ? this.pbCdf[team].cdfOob : this.pbCdf[team].cdf;
       const pool = P.poolOf[callIdx * P.nFine + fk];
       if (route && P.ngs) {
-        const ri = P.routeNames.indexOf(route);
-        if (ri > 0) {
-          const coarse = [];
-          if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (lp !== pool && !coarse.includes(lp)) coarse.push(lp); }
-          // the route always; then the position, then the look the defense showed, before the situation: the
-          // situation's pool, the call's coarser pools, every situation of this call, then of every call of its kind
-          // (a dropback, play action, a rollout)
-          const sets = [this._callRows(callIdx), this._groupRows(callIdx)];
-          for (const w of who ? [who, 0] : [0]) for (const lk of looks ? [looks, 0] : [0]) {
-            for (const pl of [pool, ...coarse]) { const r = this._sampleLook(cdf, pl, u, lk, s, ri, w, true); if (r >= 0) return r; }
-            for (const set of sets) { const r = this._sampleSet(set, u, lk, s, ri, w); if (r >= 0) return r; }
-          }
-        }
+        const r = this._pickT(this.routeSet(team, callIdx, fk, oob, looks, s, route, who), u);
+        if (r >= 0) return r;
       }
       if (looks && P.lookB) {
         let r = this._sampleLook(cdf, pool, u, looks, s);
@@ -589,6 +578,38 @@
       const target = pool + u;
       while (lo < hi) { const mid = (lo + hi) >> 1; if (cdf[mid] < target) lo = mid + 1; else hi = mid; }
       return P.items[lo];
+    }
+
+    // the real plays a pick (a receiver's route) draws from, with their weights: the route always; then the position,
+    // then the look the defense showed, before the situation: the situation's pool, the call's coarser pools, every
+    // situation of this call, then of every call of its kind (a dropback, play action, a rollout). null: none
+    routeSet(team, callIdx, fk, oob, looks, s, route, who) {
+      const P = this.e.pb, cdf = oob ? this.pbCdf[team].cdfOob : this.pbCdf[team].cdf;
+      const ri = P.ngs ? P.routeNames.indexOf(route) : -1;
+      if (!(ri > 0)) return null;
+      const pool = P.poolOf[callIdx * P.nFine + fk], coarse = [];
+      if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (lp !== pool && !coarse.includes(lp)) coarse.push(lp); }
+      const sets = [this._callRows(callIdx), this._groupRows(callIdx)];
+      for (const w of who ? [who, 0] : [0]) for (const lk of looks ? [looks, 0] : [0]) {
+        for (const pl of [pool, ...coarse]) { const T = this._lookT(cdf, pl, lk, s, ri, w, true); if (T) return T; }
+        for (const set of sets) { const T = this._setT(set, lk, s, ri, w); if (T) return T; }
+      }
+      return null;
+    }
+    // what a pick tends to do here: the share of throws caught, yards a throw, interceptions (weighted real plays)
+    routeOdds(team, callIdx, fk, looks, route, who) {
+      const P = this.e.pb, s = this.matchOf(callIdx, this.defOfLooks(looks));
+      const T = this.routeSet(team, callIdx, fk, false, looks, s, route, WHO_CODE[who] || 0);
+      if (!T) return null;
+      let w0 = 0, caught = 0, yds = 0, picks = 0;
+      T.items.forEach((r, i) => {
+        const w = T.cum[i] - (i ? T.cum[i - 1] : 0), f = P.flags[r], ev = P.eventNames[P.event[r]] || '';
+        if (f & 1) return;                                             // penalties aside
+        w0 += w; yds += w * P.yards[r];
+        if (!(f & 4) && !(f & 64) && !/sack|scramble|throwaway/.test(ev)) caught += w;
+        if ((f & 64) && /interception|pick_six/.test(ev)) picks += w;
+      });
+      return w0 > 0 ? { caught: caught / w0, yds: yds / w0, picks: picks / w0, n: T.items.length } : null;
     }
 
     // daily game: a call of this kind ('run' or 'pass'), as often as NFL play-callers make each in situation fk; against
@@ -620,6 +641,16 @@
     // of its plays pass the filters (any filter set: looks or, with need, a route). The filtered, tilted weights are
     // built once per pool and filter (a simulation draws the root play once, the same way thousands of times)
     _sampleLook(cdf, pool, u, looks, s, ri, who, need) {
+      return this._pickT(this._lookT(cdf, pool, looks, s, ri, who, need), u);
+    }
+    _pickT(T, u) {
+      if (!T) return -1;
+      const target = u * T.tot, c = T.cum;
+      let a = 0, b = c.length - 1;
+      while (a < b) { const m = (a + b) >> 1; if (c[m] < target) a = m + 1; else b = m; }
+      return T.items[a];
+    }
+    _lookT(cdf, pool, looks, s, ri, who, need) {
       const key = `${pool}|${looks}|${s || 0}|${ri || 0}|${who || 0}`;
       this._pick = this._pick || new WeakMap();
       let byKey = this._pick.get(cdf);
@@ -641,11 +672,7 @@
         T = ((looks || need) && items.length < PB_LOOK_MIN) || !(tot > 0) ? null : { items, cum, tot };
         byKey.set(key, T);
       }
-      if (!T) return -1;
-      const target = u * T.tot, c = T.cum;
-      let a = 0, b = c.length - 1;
-      while (a < b) { const m = (a + b) >> 1; if (c[m] < target) a = m + 1; else b = m; }
-      return T.items[a];
+      return T;
     }
 
     // every play of call c, in any situation, once; and of every call of its kind (dropback, play action, rollout)
@@ -677,7 +704,8 @@
       return P.groupRows[g];
     }
     // a play from a set of rows (equal weights), with the same filters and matchup tilt as _sampleLook
-    _sampleSet(set, u, looks, s, ri, who) {
+    _sampleSet(set, u, looks, s, ri, who) { return this._pickT(this._setT(set, looks, s, ri, who), u); }
+    _setT(set, looks, s, ri, who) {
       const key = `${set.id}|${looks}|${s || 0}|${ri || 0}|${who || 0}`;
       this._setPick = this._setPick || new Map();
       let T = this._setPick.get(key);
@@ -701,11 +729,7 @@
         T = rows.length < PB_LOOK_MIN ? null : { items: rows, cum, tot };
         this._setPick.set(key, T);
       }
-      if (!T) return -1;
-      const target = u * T.tot, c = T.cum;
-      let a = 0, b = c.length - 1;
-      while (a < b) { const m = (a + b) >> 1; if (c[m] < target) a = m + 1; else b = m; }
-      return T.items[a];
+      return T;
     }
 
     // the variance of a pool's (capped) EPA, by its weights: an exponential tilt k shifts the mean by about k * var

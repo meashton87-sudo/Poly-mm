@@ -144,10 +144,16 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .rcvs { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
 .rcv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 8px; align-items: center; text-align: left; padding: 8px 10px; border-radius: 8px;
   border: 1px solid var(--line); background: var(--card); cursor: pointer; min-height: 44px; }
-.rcv .pos { grid-row: span 2; font: 900 15px var(--display); letter-spacing: .04em; color: var(--muted); }
+.rcv .pos { grid-row: span 3; font: 900 15px var(--display); letter-spacing: .04em; color: var(--muted); }
 .rcv .nm { font-weight: 700; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rcv .rt { font-size: 12.5px; color: var(--muted); }
 .rcv.on { border: 2px solid var(--chain); padding: 7px 9px; }
+.rcv .od { grid-column: 2; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.howlost { display: grid; gap: 8px; text-align: left; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--card); }
+.howlost .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.howlost .r { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; }
+.howlost .sq { width: 24px; height: 24px; font-size: 14px; }
+.howlost .t { display: grid; font-size: 13px; } .howlost .t b { font-size: 12px; color: var(--muted); font-weight: 700; }
 .rcv.on .pos, .rcv.on .rt { color: var(--ink); }
 .key:disabled { opacity: .45; cursor: default; }
 #field .posts { fill: none; stroke: var(--chain); stroke-width: 2.6; stroke-linecap: round; }

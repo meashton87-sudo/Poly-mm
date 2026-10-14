@@ -549,11 +549,29 @@
   // ---- passing: the receivers you can throw to, their routes on the field, your pick
   const eligibles = (sc) => sc.actors.filter((a) => a.off && (a.label === 'WR' || a.label === 'TE' || a.label === 'RB'));
   const passing = () => ui && ui.step === 'pass' && G && G.root.pos === G.me && G.root.phase === SNAP;
-  // every receiver starts on a route: the widest receivers go deep and run the out, the slot the slant, the TE the
-  // crosser, the back the flat
+  // every receiver starts on a route that fits the spot (you change them with a tap): the widest receivers first, then
+  // the slot, the tight end and the back. At the goal line a fade, a slant and an out to the corner; trailing in the
+  // two-minute drill, routes to the sideline to stop the clock; short yardage, quick throws; long yardage, a go, a dig
+  // and a post; otherwise a go, an out, a slant, the crosser and the flat
+  const SITU_ROUTES = {
+    goal: { WR: ['go', 'slant', 'out', 'hitch'], TE: 'flat', RB: 'flat' },
+    sideline: { WR: ['out', 'corner', 'out', 'hitch'], TE: 'out', RB: 'flat' },
+    short: { WR: ['slant', 'hitch', 'out', 'slant'], TE: 'flat', RB: 'flat' },
+    long: { WR: ['go', 'in', 'post', 'in'], TE: 'in', RB: 'angle' },
+    base: { WR: ['go', 'out', 'slant', 'hitch'], TE: 'cross', RB: 'flat' },
+  };
+  function spotKind(r) {
+    const lead = r.score[G.me] - r.score[1 - G.me];
+    if (r.yl <= 10) return 'goal';
+    if (r.clock_running && halfLeft(r.t) <= 120 && (lead <= 0 || r.t > 1800)) return 'sideline';
+    if (r.ytg <= 3) return 'short';
+    if (r.ytg >= 10) return 'long';
+    return 'base';
+  }
   function defaultRoutes(sc) {
     const E = eligibles(sc), wr = E.filter((a) => a.label === 'WR').sort((a, b) => Math.abs(b.x0 - sc.bx) - Math.abs(a.x0 - sc.bx));
-    return E.map((a) => (a.label === 'WR' ? ['go', 'out', 'slant', 'hitch'][wr.indexOf(a)] || 'hitch' : a.label === 'TE' ? 'cross' : 'flat'));
+    const R = SITU_ROUTES[spotKind(G.root)];
+    return E.map((a) => (a.label === 'WR' ? R.WR[wr.indexOf(a)] || 'hitch' : a.label === 'TE' ? R.TE : R.RB));
   }
   // toward his own sideline; the same on the field and in the animation
   const outOf = (sc, a) => Math.sign(a.x0 - sc.bx) || sc.s * sc.dir || 1;
@@ -582,10 +600,32 @@
     const i = eligibles(scene).indexOf(a);
     if (i < 0) return false;
     const list = ROUTES[a.label], P = ui.pass;
+    (P.hist = P.hist || []).push([i, P.routes[i]]);
     P.routes[i] = list[(list.indexOf(P.routes[i]) + 1) % list.length];
     redrawPass();
     return true;
   }
+  function undoRoute() {
+    const P = ui.pass, h = P && P.hist && P.hist.pop();
+    if (!h) return;
+    P.routes[h[0]] = h[1];
+    redrawPass();
+  }
+  // each receiver's odds on his current route, from the real plays it would draw (worker 'odds'), cached per snap
+  function pickKey(a) { return `${a.call}|${a.route}|${a.who}|${a.looks}`; }
+  async function fetchOdds() {
+    if (!passing() || !scene) return;
+    G.odds = G.odds || {};
+    const picks = eligibles(scene).map((_, i) => passOption(scene, i, false).action).filter((a) => !(pickKey(a) in G.odds));
+    if (!picks.length) return;
+    picks.forEach((a) => { G.odds[pickKey(a)] = null; });
+    try {
+      const res = await send({ type: 'odds', scen: simScen(), root: G.root, picks: picks.map((a) => ({ call: a.call, route: a.route, who: a.who, looks: a.looks })) }, true);
+      picks.forEach((a, k) => { G.odds[pickKey(a)] = res.out[k]; });
+    } catch (e) { return; }
+    if (passing()) { const y = window.scrollY; drawDock(); window.scrollTo(0, y); }
+  }
+  const oddsText = (o) => (o ? `${Math.round(o.caught * 100)}% caught · ${o.yds.toFixed(1)} yds a throw${o.picks >= 0.03 ? ` · ${Math.round(o.picks * 100)}% picked` : ''}` : '');
   // the field takes the tap itself (phones do not always send taps on small SVG shapes): a quick touch, not a scroll,
   // anywhere near a receiver's dot or along his route changes that route
   let routeTapAt = 0;                 // when the field last used a tap for a route (the dot under it then stays shut)
@@ -2188,6 +2228,7 @@
     status('Breaking the huddle…');
     G.info = (await send({ type: 'info', scen: simScen(), root: r }, true)).info;
     G.fast = false;
+    G.odds = {};
     const ad = adaptLooks(G.info.looks);
     G.look = pickLook(ad.p, hash('look', seedKey(), G.si, G.seq));
     G.lookNote = G.look != null ? ad.note : null;
@@ -2337,6 +2378,12 @@
     back.type = 'button';
     back.addEventListener('click', () => { ui.step = 'family'; drawField(); drawDock(); });
     head.append(back);
+    if (P.hist && P.hist.length) {
+      const undo = el('button', 'chip', '↶ Undo route');
+      undo.type = 'button';
+      undo.addEventListener('click', undoRoute);
+      head.append(undo);
+    }
     if (G.look != null) d.append(readLine(G.look));
     d.append(el('p', 'hint', 'Tap any receiver on the field to change his route. Then pick who gets the ball:'));
     const list = el('div', 'rcvs');
@@ -2344,7 +2391,9 @@
       const b = el('button', `rcv${P.target === i ? ' on' : ''}`);
       b.type = 'button';
       b.setAttribute('aria-pressed', String(P.target === i));
+      const od = G.odds && G.odds[pickKey(passOption(sc, i, false).action)];
       b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label), el('span', 'rt', `${routeName(a.label, P.routes[i])}${P.target === i ? ' · the target' : ''}`));
+      if (od) b.append(el('span', 'od', oddsText(od)));
       b.addEventListener('click', () => passPick(i));
       list.append(b);
     });
@@ -2377,6 +2426,7 @@
       more.forEach((id, i) => { const b = key(CALL[id].label.replace(/ \(.*\)$/, ''), null, 'alt', i); b.addEventListener('click', () => { if (!busy) decideCall({ call: id }); }); row.append(b); });
       d.append(row);
     }
+    fetchOdds();
     // only on the way in: after that the page stays put while you change routes
     if (P.fresh) { P.fresh = false; requestAnimationFrame(() => list.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' })); }
   }
@@ -3020,6 +3070,21 @@
       list.append(li);
     });
     box.append(list);
+    // how it ended: the costliest calls of the game you lost
+    const last = (state.spots[0] && state.spots[0].decisions || []).filter((x) => x.cost >= 0.005).sort((a, b) => b.cost - a.cost).slice(0, 3);
+    if (last.length) {
+      const how = el('div', 'howlost');
+      how.append(el('div', 'k', 'How you lost'));
+      last.forEach((x) => {
+        const row = el('div', 'r');
+        row.append(el('span', `sq ${markOf(x.cost)}`, GLYPH[markOf(x.cost)]));
+        const t = el('div', 't');
+        t.append(el('b', '', x.situation || ''), el('span', '', `You: ${x.chosenLabel}. Better: ${x.bestLabel} (${pts(x.cost)}% win chance).`));
+        row.append(t);
+        how.append(row);
+      });
+      box.append(how);
+    }
     const text = `Two-Minute Drill Survivor\nSurvived ${n} game${n === 1 ? '' : 's'}\n${state.games.map((g) => (g.w ? SQ.g : SQ.r)).join('')}`;
     const pre = el('div', 'grid-share', text);
     const share = el('button', 'btn alt', 'Share');

@@ -117,6 +117,11 @@ self.onmessage = async (ev) => {
         return { key: o.key, mean: r.mean, values: r.values };
       });
       self.postMessage({ type: 'eval', id: m.id, out }, out.map((o) => o.values.buffer));
+    } else if (m.type === 'odds') {         // each pick's odds here (a receiver's route): caught, yards a throw, picks
+      const sim = simFor(m.scen), r = m.root, half = r.t > 1800 ? 1 : 2, ht = r.t - (half === 1 ? 1800 : 0);
+      const fk = fineKey(gameMode(half, ht, r.score[r.pos] - r.score[1 - r.pos]), r.down, r.ytg, r.yl);
+      const out = m.picks.map((q) => sim.routeOdds(r.pos, eng.pb.callIndex[q.call], fk, q.looks || 0, q.route, q.who));
+      self.postMessage({ type: 'odds', id: m.id, out });
     } else if (m.type === 'step') {
       const r = simFor(m.scen).step(m.root, { action: m.action, seed: m.seed });
       r.log.forEach((e) => { if (e.ev === 'play' && e.row >= 0) Object.assign(e, describe(e.row)); });
