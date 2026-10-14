@@ -228,12 +228,19 @@
   }
   const simScen = () => ({ id: G.scen.id, game: G.scen.game, start: { receive2h: G.scen.start.receive2h } });
   async function evaluate(root, options, seed, n = N_EVAL) {
-    const k = Math.min(Math.max(1, readyCount), options.length);
+    const W = Math.max(1, readyCount), sc = simScen(), out = {};
+    const opts = options.map((o) => ({ key: o.key, action: o.action }));
+    if (options.length < 2 * W && W > 1) {
+      // few options: every worker plays all of them, each on its own share of the games (its own seed)
+      const m = Math.ceil(n / W);
+      const res = await Promise.all(Array.from({ length: W }, (_, j) => send({ type: 'eval', scen: sc, root, options: opts, n: m, persp: G.me, seed: (seed + j * 7919) >>> 0 })));
+      opts.forEach((o) => { out[o.key] = res.reduce((a, r) => a + r.out.find((x) => x.key === o.key).mean, 0) / W; });
+      return out;
+    }
+    const k = Math.min(W, options.length);
     const chunks = Array.from({ length: k }, () => []);
-    options.forEach((o, i) => chunks[i % k].push({ key: o.key, action: o.action }));
-    const sc = simScen();
+    opts.forEach((o, i) => chunks[i % k].push(o));
     const res = await Promise.all(chunks.map((c) => send({ type: 'eval', scen: sc, root, options: c, n, persp: G.me, seed })));
-    const out = {};
     res.forEach((r) => r.out.forEach((o) => { out[o.key] = o.mean; }));
     return out;
   }
