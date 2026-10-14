@@ -364,6 +364,14 @@ the summary shows how you compare with everyone who played that day: the share o
 scores in the same buckets as your own stats, each spot against the day's average, and the day's top ten named
 players (a name is claimed the same way as on the survivor board). The day is the player's local date.
 
+**Analytics events** (the website's Google tag only; `track()` in `game.js`), for deciding what to improve:
+`drive_start` (mode, kind of spot, day), `play_call` (mode, family, call, routes changed, out of bounds),
+`defense_call` (call), `daily_finish` (day, kind, score, better/worse/same than the real coach, snaps),
+`survivor_game` (win/loss/tie, overtime, streak), `overtime`, `share` (daily or survivor; share sheet, copy or
+select), `help_open`, `stats_open`, `stats_page_link`, `replay`, `name_set`. Share opens the phone's share sheet
+where there is one. In Google Analytics: Reports, Engagement, Events (custom fields need registering as custom
+dimensions under Admin, Custom definitions, to show in reports).
+
 **The stats page** (`web/stats.html`, nfl2mindrill.com/stats; `board/worker.js` `/days`): players per day, today's
 count and average, the all-time total, and any day up close (its score spread, the drive's average and the top
 ten).
