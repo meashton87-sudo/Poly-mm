@@ -103,7 +103,19 @@ function honored(before, action, r, tag) {
   if (what !== wantWhat) flag(`called ${p}, got ${what}`, `${tag} ${JSON.stringify(before)} -> ${JSON.stringify(r.log)}`);
   else if (p === 'spike' && (e.yards !== 0 || !e.incomplete || e.td || e.turnover)) flag('spike with a result', `${tag} ${JSON.stringify(e)}`);
   else if (action.call !== undefined && e.call !== P.callIndex[action.call]) flag('a different call was run', `${tag} called ${action.call}, ran ${calls[e.call]}`);
+  else if (action.route && !e.penalty) {      // the route you picked, by a receiver at the position you picked
+    const ran = P.routeNames[P.ngs.route[e.row]], pos = ['', 'QB', 'RB', 'WR', 'TE'][P.carry[e.row] & 7];
+    if (ran !== action.route) flag('picked route not run', `${tag} picked ${action.route}, ran ${ran}`); else count('picked route run');
+    if (pos === action.who) count('picked position run'); else count('picked position: another (incomplete, uncharted)');
+  }
   if (e && e.ev === 'play' && e.team !== o) flag('the wrong team ran the play', `${tag}`);
+}
+// a pass to a receiver you picked, on a route you picked (game.js passCallOf maps it to the call whose plays it draws)
+const PICKS = [['WR', 'slant', 'quick_strong'], ['WR', 'go', 'deep_weak'], ['WR', 'post', 'deep_middle'], ['WR', 'in', 'quick_middle'],
+  ['TE', 'flat', 'quick_strong'], ['TE', 'go', 'deep_strong'], ['RB', 'wheel', 'deep_weak'], ['RB', 'screen', 'screen'], ['WR', 'out', 'pa_short'], ['WR', 'corner', 'roll_weak']];
+function routePick(k) {
+  const [who, route, call] = PICKS[k % PICKS.length];
+  return { to_off: false, play: 'pass', call, route, who, looks: k % 2 ? 1 << (k % 4) : 0 };
 }
 // a play drawn against a look (a mask of lookBucket values) should have been run against it, unless the call has too
 // few such plays here and the engine falls back to all of them
@@ -178,6 +190,7 @@ idx.spots.forEach((sp, si) => {
         const pick = (si + g + n) % 11;
         action = pick === 0 && cur.clock_running ? { to_off: true } : pick === 1 && cur.down <= 3 ? { to_off: false, play: 'spike' } : pick === 2 && cur.down === 4 && sim.fourthInfo(cur).pFg >= 0.05 ? { to_off: false, play: 'fg' }
           : pick === 3 && cur.down === 4 && cur.yl >= 35 ? { to_off: false, play: 'punt' } : pick === 4 && cur.down <= 3 && n % 3 === 0 ? { to_off: false, play: 'kneel' }
+          : pick >= 5 && pick <= 7 ? routePick(n + g + si)
           : { to_off: false, play: P.calls[ci].kind, call: calls[ci], oob: n % 2 === 0, tempo: cur.clock_running ? ['urgent', 'hurry', 'normal', 'milk'][n % 4] : undefined };
       } else if (cur.phase === 0) action = { to_def: n % 5 === 0, def: n % 4 ? ['blitz', 'load', 'soft'][n % 3] : undefined };
       else if (cur.phase === 1 && cur.pos === me) action = { pat: n % 3 ? 'xp' : 'two' };

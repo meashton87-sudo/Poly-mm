@@ -67,6 +67,19 @@
   const POS_PLURAL = { QB: 'quarterbacks', RB: 'running backs', WR: 'wide receivers', TE: 'tight ends', OL: 'offensive linemen',
     EDGE: 'edge rushers', DL: 'interior linemen', LB: 'linebackers', CB: 'cornerbacks', S: 'safeties', K: 'kickers', P: 'punters' };
   const OL = ['LT', 'LG', 'C', 'RG', 'RT'];
+  // passing: pick a receiver and his route. The routes each position runs (tap him again for the next), how deep each
+  // is drawn (NGS median catch depths), and what it is called. The snap is a real play where a receiver at that
+  // position ran that route (engine.js samplePlaybook)
+  const ROUTES = { WR: ['slant', 'hitch', 'out', 'in', 'post', 'corner', 'go', 'screen'], TE: ['flat', 'hitch', 'out', 'cross', 'in', 'go'],
+    RB: ['flat', 'angle', 'screen', 'wheel'] };
+  const ROUTE_DEPTH = { go: 24, post: 16, corner: 19, out: 4, deep_out: 13, in: 12, slant: 6, cross: 4, hitch: 5, screen: -3, flat: -2, wheel: 16, angle: 3 };
+  const ROUTE_NAME = { go: 'Go', post: 'Post', corner: 'Corner', out: 'Quick out', in: 'Dig', slant: 'Slant', cross: 'Crosser', hitch: 'Hitch',
+    screen: 'Screen', flat: 'Flat', wheel: 'Wheel', angle: 'Angle' };
+  const ROUTE_SAY = { go: 'a go route', post: 'a post', corner: 'a corner route', out: 'a quick out', in: 'a dig', slant: 'a slant', cross: 'a crosser',
+    hitch: 'a hitch', screen: 'a screen', flat: 'a route to the flat', wheel: 'a wheel route', angle: 'an angle route' };
+  const routeName = (lab, rt) => (lab === 'TE' && rt === 'go' ? 'Seam' : ROUTE_NAME[rt]);
+  const routeSay = (lab, rt) => (lab === 'TE' && rt === 'go' ? 'a seam route' : ROUTE_SAY[rt]);
+  const DEEP_ROUTES = new Set(['go', 'post', 'corner', 'wheel']);
   const DEEP = new Set(['deep_strong', 'deep_weak', 'deep_middle', 'pa_deep', 'hail_mary']);
   const SQ = { g: '🟩', y: '🟨', o: '🟧', r: '🟥' };
   const GLYPH = { g: '✓', y: '≈', o: '!', r: '✗' };
@@ -454,7 +467,7 @@
         const g = S('g', { class: `dot ${mine ? 'me' : 'them'}`, tabindex: 0, role: 'button',
           'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${o.p.name}, rated ${o.p.ovr}` });
         g.append(S('circle', { class: 'hit', r: 11 }), S('circle', { class: 'c', r: 6.2, fill: rate(o.p.ovr) }));
-        const open = () => playerInfo(o.p, o.label, team);
+        const open = () => { if (!passTap(a)) playerInfo(o.p, o.label, team); };
         g.addEventListener('click', open);
         g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } });
         sc.layer.append(g);
@@ -532,9 +545,77 @@
     sc.calls.push({ ...c, g, w });
   }
 
+  // ---- passing: the receivers you can throw to, their routes on the field, your pick
+  const eligibles = (sc) => sc.actors.filter((a) => a.off && (a.label === 'WR' || a.label === 'TE' || a.label === 'RB'));
+  const passing = () => ui && ui.step === 'pass' && G && G.root.pos === G.me && G.root.phase === SNAP;
+  // every receiver starts on a route: the widest receivers go deep and run the out, the slot the slant, the TE the
+  // crosser, the back the flat
+  function defaultRoutes(sc) {
+    const E = eligibles(sc), wr = E.filter((a) => a.label === 'WR').sort((a, b) => Math.abs(b.x0 - sc.bx) - Math.abs(a.x0 - sc.bx));
+    return E.map((a) => (a.label === 'WR' ? ['go', 'out', 'slant', 'hitch'][wr.indexOf(a)] || 'hitch' : a.label === 'TE' ? 'cross' : 'flat'));
+  }
+  // toward his own sideline; the same on the field and in the animation
+  const outOf = (sc, a) => Math.sign(a.x0 - sc.bx) || sc.s * sc.dir || 1;
+  function drawRoutes(sc) {
+    const P = ui.pass, E = eligibles(sc), Y = camY(sc), g = S('g', { class: 'routes' });
+    E.forEach((a, i) => {
+      const rt = P.routes[i], r = Motion.routeOnField(rt, ROUTE_DEPTH[rt], (a.x0 - SX0) / XYD, outOf(sc, a), sc.dir, sc.losL, Math.abs(a.L0 - sc.losL), 0.5);
+      const pts = r.pts.map((q) => [clip(SX0 + q[0] * XYD, SX0 + 2, SX1 - 2), Y(clip(q[1], -9, 109))]);
+      const tgt = P.target === i, d = pts.map((q, k) => `${k ? 'L' : 'M'}${q[0].toFixed(1)} ${q[1].toFixed(1)}`).join('');
+      if (tgt) g.append(S('path', { class: 'route halo', d }));
+      g.append(S('path', { class: `route${tgt ? ' tgt' : ''}`, d }));
+      const e = pts[pts.length - 1], q = pts[pts.length - 2], ang = Math.atan2(e[1] - q[1], e[0] - q[0]);
+      const head = [[e[0], e[1]], [e[0] - 6 * Math.cos(ang - 0.5), e[1] - 6 * Math.sin(ang - 0.5)], [e[0] - 6 * Math.cos(ang + 0.5), e[1] - 6 * Math.sin(ang + 0.5)]];
+      g.append(S('path', { class: `route-head${tgt ? ' tgt' : ''}`, d: `M${head.map((h) => h.map((v) => v.toFixed(1)).join(' ')).join('L')}Z` }));
+      if (tgt) a.g.classList.add('target');
+    });
+    sc.svg.insertBefore(g, sc.layer);
+  }
+  // a tap on a receiver while you pick a pass: throw to him, or (already him) his next route
+  function passTap(a) {
+    if (!passing() || !scene || !a.off) return false;
+    const i = eligibles(scene).indexOf(a);
+    if (i < 0) return false;
+    passPick(i);
+    return true;
+  }
+  // by his place in the list (the field may be redrawn under the buttons: a resize, the phone's address bar)
+  function passPick(i) {
+    if (!passing() || !scene) return;
+    const a = eligibles(scene)[i], P = ui.pass;
+    if (!a) return;
+    if (P.target === i) { const list = ROUTES[a.label]; P.routes[i] = list[(list.indexOf(P.routes[i]) + 1) % list.length]; }
+    else P.target = i;
+    drawField();
+    drawDock();
+  }
+  // the engine call a pick stands for (its pools hold the real plays): a screen, play action, a rollout, a deep shot
+  // (the post down the middle), a throw over the middle (dig, crosser, angle) or a quick throw, to the receiver's side
+  function passCallOf(sc, a, rt, pa, roll) {
+    const side = outOf(sc, a) === sc.s * sc.dir ? 'strong' : 'weak';
+    if (rt === 'screen') return 'screen';
+    if (pa) return DEEP_ROUTES.has(rt) ? 'pa_deep' : 'pa_short';
+    if (roll) return `roll_${side}`;
+    if (DEEP_ROUTES.has(rt)) return rt === 'post' ? 'deep_middle' : `deep_${side}`;
+    if (rt === 'in' || rt === 'cross' || rt === 'angle') return 'quick_middle';
+    return `quick_${side}`;
+  }
+  // the option your pick is graded as, and the action the engine plays it with
+  function passOption(sc, i, oob) {
+    const P = ui.pass, a = eligibles(sc)[i], rt = P.routes[i], call = passCallOf(sc, a, rt, P.pa, P.roll);
+    const name = a.p ? a.p.name : a.label;
+    return { key: `pass:${i}:${rt}${P.pa ? ':pa' : P.roll ? ':roll' : ''}${oob ? '+oob' : ''}`,
+      label: `${routeName(a.label, rt)} to ${shortName(name) || a.label}${P.pa ? ', play action' : P.roll ? ', rollout' : ''}${oob ? ', get out of bounds' : ''}`,
+      action: withTempo({ to_off: false, play: 'pass', call, oob: !!oob, looks: G.look != null ? 1 << G.look : 0, route: rt, who: a.label,
+        target: i, routes: P.routes.slice(), targetName: name, targetPos: a.label, pa: !!P.pa, roll: !!P.roll }) };
+  }
   function drawField() {
     const sc = makeScene(G.root, G.side);
     scene = sc;
+    if (passing()) {
+      if (!ui.pass.routes || ui.pass.routes.length !== eligibles(sc).length) ui.pass.routes = defaultRoutes(sc);
+      drawRoutes(sc);
+    }
     if (fadeNext || lastBall) sc.layer && sc.layer.classList.add('movefade');
     fadeNext = false;
     const b = sc.ball;
@@ -608,6 +689,7 @@
 
   function choreograph(sc, e, res, two) {
     const P = { T: 1, hold: 0.6, segs: [], calls: [], fx: [] };
+    const act = res && res.action, mine = e.team === G.me;
     const dir = sc.dir, L0 = sc.losL, bx = sc.bx;
     const fwd = (L, y) => L + dir * y;
     const R = rng(hash('anim', e.row, e.t, e.yards, e.ev));
@@ -909,14 +991,16 @@
       const others = K.recv.filter((a) => a !== tgt);
       const runners = [];                     // [actor, route plan] for coverage to read
       others.forEach((a, i) => {
-        if (a.label === 'TE' && (rushers.length >= 6 || R() < 0.3)) {        // stays in to block
+        const yours = mine && act && act.routes && eligibles(sc).indexOf(a) >= 0;    // you gave him a route: he runs it
+        if (a.label === 'TE' && (rushers.length >= 6 || (!yours && R() < 0.3))) {        // stays in to block
           const edge = nearest(K.rush, here(a));
           leg(a, REACT_OFF, 'track', { gain: 3, eff: 0.8, fn: (t) => { const q = edge ? Wd.posAt(edge.b, t) : here(a); return [q[0], q[1] - dir * 0.95]; } });
           return;
         }
-        const name = kind === 'hail' ? 'go' : pickOf(kind === 'deep' || kind === 'pa' ? OTHER_ROUTES.deep : OTHER_ROUTES.short);
-        const D = { go: 26, post: 18, corner: 18, deep_out: 13, in: 11, hitch: 6, out: 4, slant: 6, cross: 5 }[name] + jit(2);
-        const out = Math.sign(a.b.x - BX) || side || 1;
+        const ei = mine && act && act.routes ? eligibles(sc).indexOf(a) : -1;
+        const name = ei >= 0 && act.routes[ei] ? act.routes[ei] : kind === 'hail' ? 'go' : pickOf(kind === 'deep' || kind === 'pa' ? OTHER_ROUTES.deep : OTHER_ROUTES.short);
+        const D = (ROUTE_DEPTH[name] ?? 6) + (name === 'go' ? 2 : name === 'post' || name === 'corner' ? 1 : 0) + jit(2);
+        const out = ei >= 0 ? outOf(sc, a) : Math.sign(a.b.x - BX) || side || 1;
         const r = Motion.routeOnField(name, D, a.b.x, out, dir, L0, Math.abs(a.b.y - L0), R());
         const pl = follow(a, REACT_OFF, plan(a, r.pts.map((p) => [inX(p[0]), inL(p[1])]), { eff: 0.86 + R() * 0.1 }));
         runners.push([a, pl]);
@@ -931,8 +1015,10 @@
             return [Q[0] + (q[0] - Q[0]) * 0.5, Q[1] + (q[1] - Q[1]) * 0.5];
           } });
         } else {
-          const out = Math.sign(K.rb.b.x - BX) || side;
-          const r = Motion.routeOnField('flat', 0, K.rb.b.x, out, dir, L0, Math.abs(K.rb.b.y - L0), R());
+          const ei = mine && act && act.routes ? eligibles(sc).indexOf(K.rb) : -1;
+          const rbRoute = ei >= 0 && act.routes[ei] ? act.routes[ei] : 'flat';
+          const out = ei >= 0 ? outOf(sc, K.rb) : Math.sign(K.rb.b.x - BX) || side;
+          const r = Motion.routeOnField(rbRoute, ROUTE_DEPTH[rbRoute] ?? 0, K.rb.b.x, out, dir, L0, Math.abs(K.rb.b.y - L0), R());
           follow(K.rb, 1.3, plan(K.rb, r.pts.map((p) => [inX(p[0]), p[1]]), { eff: 0.75 }));
         }
       }
@@ -1013,12 +1099,14 @@
       const qbSpot = (t) => Wd.posAt(qb.b, Math.min(t, Wd.t));
       // the target and the catch: his route (as charted, else the call's), to the depth of the real throw, there
       // when the ball is
-      const tgt = pickTarget(id, sign) || K.rb;
+      // your pick (a receiver and his route): him, on that route, and the others on the routes you saw
+      const pick = mine && act && act.target != null ? eligibles(sc)[act.target] : null;
+      const tgt = pick || pickTarget(id, sign) || K.rb;
       if (!tgt) return;
       busy.add(tgt);
-      const routeName = thrownAway ? 'out' : (e.route && Motion.route(e.route, air, 1, 0.5) ? e.route
+      const routeName = thrownAway ? 'out' : pick && act.route ? act.route : (e.route && Motion.route(e.route, air, 1, 0.5) ? e.route
         : tgt === K.rb ? (kind === 'screen' ? 'screen' : pickOf(['flat', 'angle', 'flat'])) : pickOf(CALL_ROUTE[id === 'quick_middle' ? 'quick_middle' : id === 'deep_middle' ? 'deep_middle' : kind] || ['hitch']));
-      const out = tgt === K.rb ? side : (Math.sign(tgt.b.x - BX) || side);
+      const out = pick ? outOf(sc, tgt) : tgt === K.rb ? side : (Math.sign(tgt.b.x - BX) || side);
       const r = Motion.routeOnField(routeName, air, tgt.b.x, out, dir, L0, Math.abs(tgt.b.y - L0), R());
       let catchPt = [inX(r.catchAt[0]), inL(fwd(L0, air))];
       let tCatch = tThrow + flight(air);
@@ -1832,7 +1920,10 @@
     if (e.kind === SPIKE) return `${who} spike it, clock stopped`;
     if (e.kind === KNEEL) return `${who} kneel, clock ${e.running ? 'running' : 'stopped'}`;
     let what;
-    if (e.call >= 0) {
+    if (mine && act && act.targetName && act.route && e.call >= 0) {       // your pass: to the receiver you picked, on his route
+      const to = shortName(act.targetName) || act.targetPos;
+      what = `${nm.qb || `The ${who}`} ${act.pa ? 'fakes the handoff, then looks for' : act.roll ? 'rolls out and looks for' : 'looks for'} ${to} on ${routeSay(act.targetPos, act.route)}${e.row >= 0 ? lookText(e.look) : ''}`;
+    } else if (e.call >= 0) {
       const c = idx.calls[e.call];
       const actor = c.id.startsWith('rb_') ? nm.rb : nm.qb;
       what = `${c.id === 'trick' ? `The ${who} run a trick play` : `${actor || `The ${who}`} ${c.say}`}${e.row >= 0 ? lookText(e.look) : ''}`;
@@ -2111,7 +2202,13 @@
       fam.style.setProperty('--cols', 3);
       Object.entries(FAM).forEach(([f, label], i) => {
         const b = key(label, null, 'big', i);
-        b.addEventListener('click', () => { if (busy) return; ui.fam = f; ui.step = 'detail'; drawDock(); });
+        b.addEventListener('click', () => {
+          if (busy) return;
+          ui.fam = f;
+          if (f === 'pass') { ui.step = 'pass'; ui.pass = { target: null, routes: null, pa: false, roll: false }; drawField(); }
+          else ui.step = 'detail';
+          drawDock();
+        });
         fam.append(b);
       });
       d.append(fam);
@@ -2138,6 +2235,7 @@
       }
       return;
     }
+    if (ui.step === 'pass') return drawPassDock(head);
     // the plays in the chosen family: one row per play, a key per side (arrows match the field)
     head.append(el('h2', '', FAM[ui.fam]));
     if (r.clock_running) head.append(el('span', 'sub', CLOCK[ui.tempo].short));
@@ -2174,6 +2272,13 @@
       list.append(pr);
     });
     d.append(list);
+    const tg = oobToggle();
+    d.append(tg);
+    requestAnimationFrame(() => tg.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' }));
+  }
+
+  // a pass: your receivers and their routes (tap one on the field or here), play action or a rollout, then throw
+  function oobToggle() {
     const tg = el('div', 'toggle');
     const lab = el('div', 'lab', 'Get out of bounds');
     lab.append(el('small', '', 'The ball carrier tries to stop the clock. No guarantee.'));
@@ -2182,8 +2287,57 @@
     sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(ui.oob)); sw.setAttribute('aria-label', 'Get out of bounds');
     sw.addEventListener('click', () => { ui.oob = !ui.oob; sw.setAttribute('aria-checked', String(ui.oob)); });
     tg.append(lab, sw);
-    d.append(tg);
-    requestAnimationFrame(() => tg.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' }));
+    return tg;
+  }
+  function drawPassDock(head) {
+    const r = G.root, d = $('dock'), P = ui.pass, sc = scene;
+    head.append(el('h2', '', 'Pass'));
+    if (r.clock_running) head.append(el('span', 'sub', CLOCK[ui.tempo].short));
+    const back = el('button', 'chip', '◀ Back');
+    back.type = 'button';
+    back.addEventListener('click', () => { ui.step = 'family'; drawField(); drawDock(); });
+    head.append(back);
+    if (G.look != null) d.append(readLine(G.look));
+    d.append(el('p', 'hint', P.target == null ? 'Tap a receiver to throw to him. Tap him again to change his route.' : 'Tap him again to change his route, or pick someone else.'));
+    const list = el('div', 'rcvs');
+    eligibles(sc).forEach((a, i) => {
+      const b = el('button', `rcv${P.target === i ? ' on' : ''}`);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(P.target === i));
+      b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label), el('span', 'rt', routeName(a.label, P.routes[i])));
+      b.addEventListener('click', () => passPick(i));
+      list.append(b);
+    });
+    d.append(list);
+    const sw = (label, sub, on, set) => {
+      const tg = el('div', 'toggle');
+      const lab = el('div', 'lab', label);
+      lab.append(el('small', '', sub));
+      const b = el('button', 'sw2');
+      b.type = 'button';
+      b.setAttribute('role', 'switch'); b.setAttribute('aria-checked', String(on)); b.setAttribute('aria-label', label);
+      b.addEventListener('click', () => { set(!on); drawDock(); });
+      tg.append(lab, b);
+      return tg;
+    };
+    d.append(sw('Play action', 'Fake the handoff first: it freezes a loaded box.', P.pa, (v) => { P.pa = v; if (v) P.roll = false; }),
+      sw('Roll out', 'Move the pocket toward your receiver’s side.', P.roll, (v) => { P.roll = v; if (v) P.pa = false; }), oobToggle());
+    const go = el('div', 'keys');
+    go.style.setProperty('--cols', 1);
+    const t = P.target != null ? eligibles(sc)[P.target] : null;
+    const throwKey = key(t ? `Throw it to ${shortName(t.p ? t.p.name : '') || t.label}` : 'Pick a receiver', t ? routeName(t.label, P.routes[P.target]) : null, 'big');
+    throwKey.disabled = !t;
+    throwKey.addEventListener('click', () => { if (!busy && P.target != null) decideCall({ pass: P.target }); });
+    go.append(throwKey);
+    d.append(go);
+    const avail = callOptions(r).calls, more = ['hail_mary', 'trick'].filter((id) => avail.includes(id));
+    if (more.length) {
+      const row = el('div', 'keys');
+      row.style.setProperty('--cols', more.length);
+      more.forEach((id, i) => { const b = key(CALL[id].label.replace(/ \(.*\)$/, ''), null, 'alt', i); b.addEventListener('click', () => { if (!busy) decideCall({ call: id }); }); row.append(b); });
+      d.append(row);
+    }
+    requestAnimationFrame(() => go.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' }));
   }
 
   // how fast to get to the next snap while the clock runs: no-huddle, huddle or milk it
@@ -2287,9 +2441,11 @@
       const { calls, specials } = callOptions(r);
       const opts = calls.map((id) => ({ key: id, label: CALL[id].label, action: callAction(id, false) }));
       if (pick.call && ui.oob) opts.push({ key: `${pick.call}+oob`, label: `${CALL[pick.call].label}, get out of bounds`, action: callAction(pick.call, true) });
+      const passPick = pick.pass != null ? passOption(scene, pick.pass, ui.oob) : null;
+      if (passPick) opts.push(passPick);
       specials.forEach((k) => opts.push({ key: k, label: specialLabel(k), action: withTempo({ to_off: false, play: k }) }));
       status(`Simulating all ${opts.length} calls 600 times each…`);
-      const chosen = pick.call ? (ui.oob ? `${pick.call}+oob` : pick.call) : pick.special;
+      const chosen = passPick ? passPick.key : pick.call ? (ui.oob ? `${pick.call}+oob` : pick.call) : pick.special;
       const vals = await evaluateGraded(r, opts, hash('call', seedKey(), G.si, G.seq), chosen);
       const q = {};
       const freq = {}, byLook = G.info.lookByCall;
@@ -2456,16 +2612,17 @@
     return v.now;
   }
   // the matchup behind a snap (engine.js MATCH): your call against their look, or their call against your defense
-  const LOOK_NAME = ['a light box', 'the blitz', 'a loaded box', 'the blitz'];
+  const LOOK_NAME = ['the extra men in coverage', 'the blitz', 'a loaded box', 'the blitz'];
   const DEF_NAME = { blitz: 'blitz', load: 'loaded box', soft: 'soft coverage' };
   function matchupLine(e, action) {
     if (!e || e.ev !== 'play' || !e.match || Math.abs(e.match) < 0.5 || e.call < 0 || !idx.calls[e.call]) return null;
-    const call = idx.calls[e.call].label.toLowerCase();
+    const call = e.team === G.me && action && action.route && action.targetName
+      ? `${routeSay(action.targetPos, action.route)} to ${shortName(action.targetName) || action.targetPos}` : idx.calls[e.call].label.toLowerCase();
     if (e.team === G.me) {
       const b = action && action.looks ? Math.round(Math.log2(action.looks)) : -1;
       if (!(b >= 0 && b < 4)) return null;
       return e.match > 0 ? { good: true, text: `Good read: ${call} against ${LOOK_NAME[b]}.` }
-        : { good: false, text: `${LOOK_NAME[b][0].toUpperCase()}${LOOK_NAME[b].slice(1)} was waiting for ${call}.` };
+        : { good: false, text: `${LOOK_NAME[b][0].toUpperCase()}${LOOK_NAME[b].slice(1)} ${b === 0 ? 'were' : 'was'} waiting for ${call}.` };
     }
     const d = action && DEF_NAME[action.def];
     if (!d) return null;
@@ -2923,7 +3080,7 @@
     const ul = el('ul');
     [
       'You\'re the head coach for the last minutes of a real NFL game. Three new spots every day.',
-      'Call Run, Pass or RPO, then the play. Timeouts, spikes, kicks and tempo pop up when they matter. On their ball, you call the defense.',
+      'Call Run, Pass or RPO. On a pass, every receiver shows his route: tap one to throw to him, tap him again to change his route, and add play action or a rollout. Timeouts, spikes, kicks and tempo pop up when they matter. On their ball, you call the defense.',
       'Every snap is a real NFL play run against your call. Tap the field to skip, or a player to see who he is.',
       'Matchups matter: a blitz beats deep shots but loses to quick passes and screens; a loaded box stuffs runs but gets beaten by play-action and deep shots; playing soft stops deep shots but gives up runs. Read their look before you call, and when you call the defense, they will check into what beats it.',
       'Beat the real coach\'s result, and find out which NFL coach you call it like.',

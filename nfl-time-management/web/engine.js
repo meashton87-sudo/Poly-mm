@@ -75,6 +75,7 @@
   };
   // the defense's call a look stands for (lookBucket: 0 light box, 1 light + blitz, 2 loaded box, 3 loaded + blitz)
   const LOOK_DEF = ['soft', 'blitz', 'load', 'blitz'];
+  const WHO_CODE = { RB: 2, WR: 3, TE: 4 };            // the target's position in the playbook's carry codes
   const PB_LOOK_MIN = 15;             // daily game: a call's plays against one defensive look are used when at least this many
                                       // (playbook.py LOOK_MIN)
   // daily game: a defensive look as a bucket: 0 light box (6 or fewer), 1 light with a blitz, 2 loaded box (7 or more),
@@ -553,10 +554,28 @@
     // a play of the chosen call from the playbook (daily game); oob = the ball carrier tries to get out; looks = a
     // bit mask of defensive looks (lookBucket): only plays run against those, from the situation's pool when it has
     // PB_LOOK_MIN of them, else from the coarser pool built for that look; else any look
-    // s: the matchup (MATCH) of the call against the defense's call, tilting the draw
-    samplePlaybook(team, callIdx, fk, u, oob, looks, s) {
+    // s: the matchup (MATCH) of the call against the defense's call, tilting the draw. route / who (daily game, a pass
+    // to a receiver you picked): only plays where the target ran that route (NGS / FTN charting) and played that
+    // position (2 RB, 3 WR, 4 TE), from the situation's pool, then the call's coarser pools, then any position,
+    // against the look when there are PB_LOOK_MIN such plays; else the call's plays as before
+    samplePlaybook(team, callIdx, fk, u, oob, looks, s, route, who) {
       const P = this.e.pb, cdf = oob ? this.pbCdf[team].cdfOob : this.pbCdf[team].cdf;
       const pool = P.poolOf[callIdx * P.nFine + fk];
+      if (route && P.ngs) {
+        const ri = P.routeNames.indexOf(route);
+        if (ri > 0) {
+          const coarse = [];
+          if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (lp !== pool && !coarse.includes(lp)) coarse.push(lp); }
+          // the route always; then the position, then the look the defense showed, before the situation: the
+          // situation's pool, the call's coarser pools, every situation of this call, then of every call of its kind
+          // (a dropback, play action, a rollout)
+          const sets = [this._callRows(callIdx), this._groupRows(callIdx)];
+          for (const w of who ? [who, 0] : [0]) for (const lk of looks ? [looks, 0] : [0]) {
+            for (const pl of [pool, ...coarse]) { const r = this._sampleLook(cdf, pl, u, lk, s, ri, w, true); if (r >= 0) return r; }
+            for (const set of sets) { const r = this._sampleSet(set, u, lk, s, ri, w); if (r >= 0) return r; }
+          }
+        }
+      }
       if (looks && P.lookB) {
         let r = this._sampleLook(cdf, pool, u, looks, s);
         for (let b = 0; r < 0 && P.lookPool && b < 4; b++) {
@@ -596,29 +615,97 @@
       return null;
     }
 
-    // a play of pool `pool` run against one of the looks in mask `looks` (0: any look), by the pool's weights tilted by
-    // the matchup s; -1 when fewer than PB_LOOK_MIN of its plays were run against those looks
-    _sampleLook(cdf, pool, u, looks, s) {
-      const P = this.e.pb, lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1, k = s ? (MATCH_SHIFT * s) / this._poolVar(cdf, pool) : 0;
-      const ok = (i) => { if (!looks) return true; const b = P.lookB[P.items[i]]; return b < 8 && (looks >> b) & 1; };
-      const wt = (i) => {
-        const w = cdf[i] - (i > lo ? cdf[i - 1] : pool);
-        if (!k) return w;
-        const e = P.epa[P.items[i]];
-        return Number.isFinite(e) ? w * Math.exp(k * clip(e, -MATCH_EPA_CAP, MATCH_EPA_CAP)) : w;
-      };
-      let tot = 0, m = 0;
-      for (let i = lo; i <= hi; i++) if (ok(i)) { tot += wt(i); m++; }
-      if ((looks && m < PB_LOOK_MIN) || !(tot > 0)) return -1;
-      const target = u * tot;
-      let acc = 0, last = -1;
-      for (let i = lo; i <= hi; i++) {
-        if (!ok(i)) continue;
-        acc += wt(i);
-        last = i;
-        if (acc >= target) return P.items[i];
+    // a play of pool `pool` run against one of the looks in mask `looks` (0: any look), with the target's route ri and
+    // position who when given (0: any), by the pool's weights tilted by the matchup s; -1 when fewer than PB_LOOK_MIN
+    // of its plays pass the filters (any filter set: looks or, with need, a route). The filtered, tilted weights are
+    // built once per pool and filter (a simulation draws the root play once, the same way thousands of times)
+    _sampleLook(cdf, pool, u, looks, s, ri, who, need) {
+      const key = `${pool}|${looks}|${s || 0}|${ri || 0}|${who || 0}`;
+      this._pick = this._pick || new WeakMap();
+      let byKey = this._pick.get(cdf);
+      if (!byKey) { byKey = new Map(); this._pick.set(cdf, byKey); }
+      let T = byKey.get(key);
+      if (T === undefined) {
+        const P = this.e.pb, lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1, k = s ? (MATCH_SHIFT * s) / this._poolVar(cdf, pool) : 0;
+        const items = [], cum = [];
+        let tot = 0;
+        for (let i = lo; i <= hi; i++) {
+          const r = P.items[i];
+          if (looks) { const b = P.lookB[r]; if (!(b < 8 && (looks >> b) & 1)) continue; }
+          if (ri && P.ngs.route[r] !== ri) continue;
+          if (who && (P.carry[r] & 7) !== who) continue;
+          let w = cdf[i] - (i > lo ? cdf[i - 1] : pool);
+          if (k) { const e = P.epa[r]; if (Number.isFinite(e)) w *= Math.exp(k * clip(e, -MATCH_EPA_CAP, MATCH_EPA_CAP)); }
+          tot += w; items.push(r); cum.push(tot);
+        }
+        T = ((looks || need) && items.length < PB_LOOK_MIN) || !(tot > 0) ? null : { items, cum, tot };
+        byKey.set(key, T);
       }
-      return P.items[last];
+      if (!T) return -1;
+      const target = u * T.tot, c = T.cum;
+      let a = 0, b = c.length - 1;
+      while (a < b) { const m = (a + b) >> 1; if (c[m] < target) a = m + 1; else b = m; }
+      return T.items[a];
+    }
+
+    // every play of call c, in any situation, once; and of every call of its kind (dropback, play action, rollout)
+    _callRows(c) {
+      const P = this.e.pb;
+      P.callRows = P.callRows || [];
+      if (!P.callRows[c]) {
+        const seen = new Set();
+        for (let fk = 0; fk < P.nFine; fk++) {
+          const pool = P.poolOf[c * P.nFine + fk];
+          for (let i = P.offsets[pool]; i < P.offsets[pool + 1]; i++) seen.add(P.items[i]);
+        }
+        P.callRows[c] = { id: `c${c}`, rows: Int32Array.from(seen) };
+      }
+      return P.callRows[c];
+    }
+    _groupRows(c) {
+      const P = this.e.pb, id = P.calls[c].id;
+      const g = id.startsWith('pa_') ? 'pa' : id.startsWith('roll') ? 'roll' : id.startsWith('rpo') || id === 'hail_mary' || id === 'trick' ? id : 'drop';
+      P.groupRows = P.groupRows || {};
+      if (!P.groupRows[g]) {
+        const seen = new Set();
+        P.calls.forEach((cc, j) => {
+          const gj = cc.id.startsWith('pa_') ? 'pa' : cc.id.startsWith('roll') ? 'roll' : cc.id.startsWith('rpo') || cc.id === 'hail_mary' || cc.id === 'trick' ? cc.id : 'drop';
+          if (gj === g && cc.kind === 'pass') this._callRows(j).rows.forEach((r) => seen.add(r));
+        });
+        P.groupRows[g] = { id: `g${g}`, rows: Int32Array.from(seen) };
+      }
+      return P.groupRows[g];
+    }
+    // a play from a set of rows (equal weights), with the same filters and matchup tilt as _sampleLook
+    _sampleSet(set, u, looks, s, ri, who) {
+      const key = `${set.id}|${looks}|${s || 0}|${ri || 0}|${who || 0}`;
+      this._setPick = this._setPick || new Map();
+      let T = this._setPick.get(key);
+      if (T === undefined) {
+        const P = this.e.pb, rows = [];
+        for (const r of set.rows) {
+          if (looks) { const b = P.lookB[r]; if (!(b < 8 && (looks >> b) & 1)) continue; }
+          if (ri && P.ngs.route[r] !== ri) continue;
+          if (who && (P.carry[r] & 7) !== who) continue;
+          rows.push(r);
+        }
+        let k = 0;
+        if (s && rows.length) {
+          let m1 = 0, m2 = 0;
+          rows.forEach((r) => { const x = clip(Number.isFinite(P.epa[r]) ? P.epa[r] : 0, -MATCH_EPA_CAP, MATCH_EPA_CAP); m1 += x; m2 += x * x; });
+          k = (MATCH_SHIFT * s) / Math.max(m2 / rows.length - (m1 / rows.length) ** 2, 0.3);
+        }
+        const cum = [];
+        let tot = 0;
+        rows.forEach((r) => { const e = P.epa[r]; tot += k && Number.isFinite(e) ? Math.exp(k * clip(e, -MATCH_EPA_CAP, MATCH_EPA_CAP)) : 1; cum.push(tot); });
+        T = rows.length < PB_LOOK_MIN ? null : { items: rows, cum, tot };
+        this._setPick.set(key, T);
+      }
+      if (!T) return -1;
+      const target = u * T.tot, c = T.cum;
+      let a = 0, b = c.length - 1;
+      while (a < b) { const m = (a + b) >> 1; if (c[m] < target) a = m + 1; else b = m; }
+      return T.items[a];
     }
 
     // the variance of a pool's (capped) EPA, by its weights: an exponential tilt k shifts the mean by about k * var
@@ -902,7 +989,8 @@
           // your call, against the look the defense showed: the matchup tilts the draw
           callIdx = this.e.pb.callIndex[act.call];
           match = this.matchOf(callIdx, this.defOfLooks(act.looks));
-          pbRow = this.samplePlaybook(o, callIdx, fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl), u[2], !!act.oob, act.looks, match);
+          pbRow = this.samplePlaybook(o, callIdx, fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl), u[2], !!act.oob, act.looks, match,
+            act.route, act.route ? (WHO_CODE[act.who] || 0) : undefined);
         } else if (act && act.def && DEF_LOOKS[act.def] && this.pbCdf && (kind === RUN || kind === PASS)) {
           // daily game: you called the defense; the offense runs a play of the kind it chose, a call as often as
           // play-callers make it here (more often one that beats your call: it checks into it), drawn from real plays

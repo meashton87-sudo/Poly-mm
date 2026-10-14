@@ -283,7 +283,14 @@ field: **Player ratings** (or a tap on any dot) shows each player's overall rati
 see below), how much better he was than the league at his position that week, his stat line and his type (a mobile
 or pocket quarterback, a blocking, possession or vertical-threat tight end, a power, elusive or receiving
 back, and so on), each type assigned by a rule on the stat that defines it (`archetypes.py`).
-Play-calling is a pop-up of **Run**, **Pass** and **RPO**, then the play and its side; a timeout,
+Play-calling is a pop-up of **Run**, **Pass** and **RPO**. A run or RPO is then the play and its side; a pass is
+drawn on the field: every receiver (the wide receivers, the tight end and the back) shows a route, you tap one to
+throw to him and tap him again to change his route (wide receivers: slant, hitch, quick out, dig, post, corner, go,
+screen; tight ends: flat, hitch, out, crosser, dig, seam; backs: flat, angle, screen, wheel), with play action or a
+rollout. The snap is a real play where a receiver at that position ran that route against the look the defense
+showed (NGS and FTN charting give the target's route on 75,000 passes): from the situation's plays, then coarser
+situations, then that kind of pass in any situation, so the route, the position and the look always match; the
+animation runs your receiver on your route and the others on the routes you saw. A timeout,
 spike, kneel, field goal or punt only appears when it matters. With the clock running you also pick the
 **tempo**: no-huddle (about 16 s between snaps), huddle (about 34 s) or milk it (about 38 s), the engine's
 measured gaps between snaps; the usual tempo for the spot is preselected, and the tempo is graded with
@@ -296,7 +303,22 @@ one (seven or more), with or without a blitz, as often as defenses show each in 
 then drawn from real plays of your call run against that look. When the exact situation has fewer than
 15 such plays, the pool widens to coarser situations (down and field zone, then zone) until it has
 them, so a blitz look matters even on rarer calls: 95% of reads change the draw, and 61-71% of blitz
-reads (28-43% without the widening). When they have the ball you **call the defense**: blitz, load the box
+reads (28-43% without the widening).
+
+**Matchups** (`engine.js` `MATCH`) make the call against the defense's call decide more than the real gaps would
+(a run into a loaded box is worth about 0.05 points less than into a light box in real plays: too small to feel). A
+blitz beats deep shots and loses to quick passes, screens and RPOs; a loaded box beats runs and loses to play
+action, deep shots and RPOs; playing soft stops deep shots and gives up runs. The play is still a real one, but the
+odds tilt toward better or worse real outcomes by about 0.45 expected points a play (scaled by each call's spread of
+outcomes): a run into a loaded box gets stuffed about a third of the time instead of a fifth. When you call their
+defense, the offense checks into calls that beat it, so a blitz against a quick-passing offense gets burned. The
+result card says who won the matchup.
+
+After each snap the result box shows what the play did to your win chance (green when it helped); the call's grade
+is a separate chip, so a touchdown on a call that was not the very best still shows as a touchdown. Grading values
+every option 600 times, then the top three and your call again 3,000 times on fresh games: the best of many noisy
+options valued on the games that picked it is lucky, and at 600 games alone 15% of the calls shown red were really
+green or yellow (none are now, against a 12,000-game reference). When they have the ball you **call the defense**: blitz, load the box
 or play it soft (with a timeout first when it matters), and their play is drawn from real plays against
 that look; or let the coordinator call the drive. Your **kickoffs** go to the returner (a real kick
 into the landing zone: returned, short at the 40 or bounced in to the 20), through the end zone for a

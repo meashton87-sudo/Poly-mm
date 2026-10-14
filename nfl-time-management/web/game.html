@@ -131,6 +131,24 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 #field.playing .dot { pointer-events: none; }
 #field .dot.down circle.c { opacity: .45; }
 #field .dot.carrier circle.c { stroke: var(--chain); stroke-width: 2.8; }
+/* passing: every receiver's route, yours in the first-down yellow, and the receiver you picked ringed */
+#field .routes { pointer-events: none; }
+#field .route { fill: none; stroke: var(--chalk); stroke-width: 1.6; stroke-dasharray: 4 3; stroke-linecap: round; stroke-linejoin: round; }
+#field .route-head { fill: var(--chalk); }
+#field .route.halo { stroke: rgba(8, 14, 10, .55); stroke-width: 6.4; stroke-dasharray: none; }
+#field .route.tgt { stroke: #ffffff; stroke-width: 3.4; stroke-dasharray: none; }
+#field .route-head.tgt { fill: #ffffff; stroke: rgba(8, 14, 10, .55); stroke-width: 1.2; }
+#field .dot.target circle.c { stroke: #ffffff; stroke-width: 3.6; }
+.hint { margin: 0; font-size: 13px; color: var(--muted); }
+.rcvs { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
+.rcv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 8px; align-items: center; text-align: left; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--card); cursor: pointer; min-height: 44px; }
+.rcv .pos { grid-row: span 2; font: 900 15px var(--display); letter-spacing: .04em; color: var(--muted); }
+.rcv .nm { font-weight: 700; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcv .rt { font-size: 12.5px; color: var(--muted); }
+.rcv.on { border: 2px solid var(--chain); padding: 7px 9px; }
+.rcv.on .pos, .rcv.on .rt { color: var(--ink); }
+.key:disabled { opacity: .45; cursor: default; }
 #field .posts { fill: none; stroke: var(--chain); stroke-width: 2.6; stroke-linecap: round; }
 #field .call text { font: 900 14px var(--display); letter-spacing: .07em; text-transform: uppercase; fill: var(--sq-ink); }
 #field .call text.big { font-size: 20px; }
