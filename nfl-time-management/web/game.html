@@ -113,7 +113,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 
 /* the field */
 .fieldbox { position: relative; border-radius: 12px; overflow: hidden; background: var(--turf); line-height: 0; }
-#field { width: 100%; display: block; }
+#field { width: 100%; display: block; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .dot { cursor: pointer; }
 .dot circle.c { stroke-width: 1.6; }
 .dot.me circle.c { stroke: #ffffff; }

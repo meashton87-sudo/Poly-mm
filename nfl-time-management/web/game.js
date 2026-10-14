@@ -467,7 +467,7 @@
         const g = S('g', { class: `dot ${mine ? 'me' : 'them'}`, tabindex: 0, role: 'button',
           'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${o.p.name}, rated ${o.p.ovr}` });
         g.append(S('circle', { class: 'hit', r: 11 }), S('circle', { class: 'c', r: 6.2, fill: rate(o.p.ovr) }));
-        const open = () => { if (!passTap(a)) playerInfo(o.p, o.label, team); };
+        const open = () => { if (passing() && (Date.now() - routeTapAt < 600 || (off && (o.label === 'WR' || o.label === 'TE' || o.label === 'RB')))) return; playerInfo(o.p, o.label, team); };
         g.addEventListener('click', open);
         g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } });
         sc.layer.append(g);
@@ -558,9 +558,11 @@
   const outOf = (sc, a) => Math.sign(a.x0 - sc.bx) || sc.s * sc.dir || 1;
   function drawRoutes(sc) {
     const P = ui.pass, E = eligibles(sc), Y = camY(sc), g = S('g', { class: 'routes' });
+    sc.routePts = [];
     E.forEach((a, i) => {
       const rt = P.routes[i], r = Motion.routeOnField(rt, ROUTE_DEPTH[rt], (a.x0 - SX0) / XYD, outOf(sc, a), sc.dir, sc.losL, Math.abs(a.L0 - sc.losL), 0.5);
       const pts = r.pts.map((q) => [clip(SX0 + q[0] * XYD, SX0 + 2, SX1 - 2), Y(clip(q[1], -9, 109))]);
+      sc.routePts[i] = [[a.x0, Y(a.L0)], ...pts];
       const tgt = P.target === i, d = pts.map((q, k) => `${k ? 'L' : 'M'}${q[0].toFixed(1)} ${q[1].toFixed(1)}`).join('');
       if (tgt) g.append(S('path', { class: 'route halo', d }));
       g.append(S('path', { class: `route${tgt ? ' tgt' : ''}`, d }));
@@ -582,6 +584,33 @@
     P.routes[i] = list[(list.indexOf(P.routes[i]) + 1) % list.length];
     redrawPass();
     return true;
+  }
+  // the field takes the tap itself (phones do not always send taps on small SVG shapes): a quick touch, not a scroll,
+  // anywhere near a receiver's dot or along his route changes that route
+  let routeTapAt = 0;                 // when the field last used a tap for a route (the dot under it then stays shut)
+  function fieldTaps() {
+    const svg = $('field');
+    let down = null;
+    svg.addEventListener('pointerdown', (ev) => { down = { x: ev.clientX, y: ev.clientY, t: Date.now() }; });
+    svg.addEventListener('pointerup', (ev) => {
+      const d0 = down; down = null;
+      if (!d0 || !passing() || !scene || !scene.routePts) return;
+      if (Math.hypot(ev.clientX - d0.x, ev.clientY - d0.y) > 12 || Date.now() - d0.t > 700) return;
+      const m = svg.getScreenCTM();
+      if (!m) return;
+      const q = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
+      const segD = (p, a, b) => {
+        const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy, u = L ? clip(((p.x - a[0]) * dx + (p.y - a[1]) * dy) / L, 0, 1) : 0;
+        return Math.hypot(p.x - a[0] - u * dx, p.y - a[1] - u * dy);
+      };
+      let best = -1, bd = Infinity;
+      scene.routePts.forEach((pts, i) => {
+        let dd = Math.hypot(q.x - pts[0][0], q.y - pts[0][1]) - 6;             // his dot counts a little more
+        for (let k = 1; k < pts.length; k++) dd = Math.min(dd, segD(q, pts[k - 1], pts[k]));
+        if (dd < bd) { bd = dd; best = i; }
+      });
+      if (best >= 0 && bd <= 22) { ev.preventDefault(); routeTapAt = Date.now(); passTap(eligibles(scene)[best]); }
+    });
   }
   // who gets the ball, by his place in the list (the field may be redrawn under the buttons: a resize, the phone's
   // address bar)
@@ -3139,6 +3168,7 @@
     const topH = () => document.documentElement.style.setProperty('--top-h', `${document.querySelector('.top').offsetHeight}px`);
     topH(); addEventListener('resize', topH);
     $('helpBtn').addEventListener('click', openHelp);
+    fieldTaps();
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
     $(SURV ? 'modeSurv' : 'modeDaily').setAttribute('aria-current', 'page');
     $('statsBtn').addEventListener('click', openStats);
