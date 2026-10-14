@@ -69,6 +69,7 @@
   const DEEP = new Set(['deep_strong', 'deep_weak', 'deep_middle', 'pa_deep', 'hail_mary']);
   const SQ = { g: '🟩', y: '🟨', o: '🟧', r: '🟥' };
   const GLYPH = { g: '✓', y: '≈', o: '!', r: '✗' };
+  const GRADE_WORD = { g: 'good', y: 'close', o: 'costly', r: 'a big miss' };
   const WHY = {
     pass: ['throw it more than most in these spots', 'lean on the run late'],
     deep: ['take your deep shots', 'keep the ball short'],
@@ -2424,6 +2425,15 @@
     });
     return t;
   }
+  // what a play did to your win chance: the outcome's color (green when it helped), apart from the grade of the call
+  const outcomeMark = (dw) => (dw >= 0.02 ? 'g' : dw > -0.02 ? 'y' : dw > -0.08 ? 'o' : 'r');
+  const signed = (dw) => `${dw >= 0 ? '+' : '−'}${Math.abs(Math.round(dw * 100))}`;
+  // the win chance after a play: the end of the game is a result, the end of the half its halftime value
+  async function winChanceAfter(root, done) {
+    const r = done && root.t >= 1800 ? { ...root, t: 1800.01 } : root;
+    const v = await evaluate(r, [{ key: 'now', action: {} }], hash('after', seedKey(), G.si, G.seq));
+    return v.now;
+  }
   function showResult(decisions, res, head) {
     drawAll();
     const d = $('dock');
@@ -2433,18 +2443,38 @@
     const lines = main ? narrate([main], res.action) : narrate(res.log, res.action).reverse();
     const wrap = el('div', 'result');
     const top = el('div', 'res-top');
-    const sq = el('div', `sq ${m} flip`, GLYPH[m]);
-    sq.setAttribute('aria-label', { g: 'Best call or close to it', y: 'A little worse than the best call', o: 'Costly', r: 'A big mistake' }[m]);
+    // the box shows what happened: the swing in your win chance (filled in when it is valued); a timeout, with no
+    // play, shows the grade of the call
+    const played = !!main && decisions.length > 0;
+    const sq = played ? el('div', 'sq swing pending flip', '…') : el('div', `sq ${m} flip`, GLYPH[m]);
+    if (!played) sq.setAttribute('aria-label', { g: 'Best call or close to it', y: 'A little worse than the best call', o: 'Costly', r: 'A big mistake' }[m]);
     const txt = el('div', 'res-play');
     txt.append(el('span', 'yd', head || headline(main, res.log)), document.createTextNode(lines.length ? lines[0][0] : `You stop the clock with ${clockOf(G.root.t).text} left.`));
+    const wc = el('span', 'wc');
+    if (played) txt.append(wc);
     top.append(sq, txt);
     wrap.append(top);
+    if (played) {
+      const before = decisions[decisions.length - 1].wp;
+      winChanceAfter(res.root, res.done).then((after) => {
+        const dw = after - before, om = outcomeMark(dw);
+        sq.className = `sq swing ${om}`;
+        sq.textContent = signed(dw);
+        sq.setAttribute('aria-label', `Your win chance ${dw >= 0 ? 'up' : 'down'} ${Math.abs(Math.round(dw * 100))} points`);
+        wc.textContent = `Win chance ${Math.round(before * 100)}% → ${Math.round(after * 100)}%`;
+      }).catch(() => { sq.className = `sq ${m}`; sq.textContent = GLYPH[m]; });
+    }
+    // the call, graded apart from how the play turned out: a small chip, and the better call when there was one
     const v = el('div', 'verdict');
     decisions.forEach((x, i) => {
       if (i) v.append(el('br'));
-      const what = decisions.length > 1 ? `${KIND_NAME[x.kind]}: ` : '';
-      if (x.cost < 0.0005 || x.best === x.chosen) { v.append(document.createTextNode(what)); v.append(el('b', '', 'Best call.')); }
-      else { v.append(document.createTextNode(`${what}${what ? 'best' : 'Best'} was `), el('b', '', x.bestLabel), document.createTextNode(` (${pts(x.cost)}% win chance).`)); }
+      const xm = markOf(x.cost);
+      const chip = el('span', `chip-g sq ${xm}`, GLYPH[xm]);
+      chip.setAttribute('aria-hidden', 'true');
+      v.append(chip, document.createTextNode(decisions.length > 1 ? `${KIND_NAME[x.kind]}: ` : 'Your call: '));
+      if (x.cost < 0.0005 || x.best === x.chosen) v.append(el('b', '', 'the best one.'));
+      else if (xm === 'g') v.append(el('b', '', 'as good as any'), document.createTextNode(` (${x.bestLabel} ${pts(x.cost)}%).`));
+      else v.append(document.createTextNode(`${GRADE_WORD[xm]}; `), el('b', '', x.bestLabel), document.createTextNode(` was better (${pts(x.cost)}% win chance).`));
     });
     wrap.append(v);
     const det = el('details', 'more');
@@ -2860,9 +2890,9 @@
     ].forEach((t) => ul.append(el('li', '', t)));
     openModal('How to play', [
       ul,
-      el('p', '', 'After each snap, how your call ranked:'),
+      el('p', '', 'After each snap, the big box is what the play did to your win chance (+12 is 12 points better). The small square grades your call, whatever happened: a great call can get stuffed, and a bad one can still score.'),
       ex,
-      el('p', 'note', 'Green: the best call. Yellow: close. Orange: costly. Red: a big mistake.'),
+      el('p', 'note', 'Calls: green, the best or as good; yellow, close; orange, costly; red, a big miss. Your score and the share grid count the calls.'),
     ]);
   }
   function openStats() {
