@@ -368,9 +368,17 @@ players (a name is claimed the same way as on the survivor board). The day is th
 `drive_start` (mode, kind of spot, day), `play_call` (mode, family, call, routes changed, out of bounds),
 `defense_call` (call), `daily_finish` (day, kind, score, better/worse/same than the real coach, snaps),
 `survivor_game` (win/loss/tie, overtime, streak), `overtime`, `share` (daily or survivor; share sheet, copy or
-select), `help_open`, `stats_open`, `stats_page_link`, `replay`, `name_set`. Share opens the phone's share sheet
+select), `help_open` (auto: shown on a first visit), `sim_ready` (packed data or JSON, ms since load, ms a player
+sat waiting on it), `drive_leave` (the page went to the background mid-drive: calls made, seconds in, still
+loading), `stats_open`, `stats_page_link`, `replay`, `name_set`. Share opens the phone's share sheet
 where there is one. In Google Analytics: Reports, Engagement, Events (custom fields need registering as custom
 dimensions under Admin, Custom definitions, to show in reports).
+
+**Packed data**: on the website the simulator's data ships as `engine_data.pack` and `playbook.pack`
+(`scripts/site.py pack`: the same typed arrays as raw bytes, index arrays as differences, multi-byte arrays
+byte-plane shuffled, gzipped; 3.7 MB instead of 5.6 MB gzipped JSON). `game.js` gunzips them with
+DecompressionStream and `game_worker.js` unpacks them; without a pack (claude.ai, a local copy) or without
+DecompressionStream it loads the JSON. The first snap shows the download's progress while it waits.
 
 **The stats page** (`web/stats.html`, nfl2mindrill.com/stats; `board/worker.js` `/days`): players per day, today's
 count and average, the all-time total, and any day up close (its score spread, the drive's average and the top

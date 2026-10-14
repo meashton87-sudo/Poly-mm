@@ -11,13 +11,19 @@ commit (an uptime check can alert when "built" gets old: a failing build leaves 
 from __future__ import annotations
 
 import argparse
+import base64
+import gzip
 import html
+import struct
+import zlib
 import re
 import json
 import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+
+import numpy as np
 
 WEB = Path(__file__).resolve().parents[1] / "web"
 FILES = ["game.js", "motion.js", "engine.js", "game_worker.js", "game.json", "playbook.json", "engine_data.json",
@@ -29,6 +35,51 @@ HEAD = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "{extra}"
         "<style>:root{{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}}"
         "body{{margin:0;font:14px system-ui,sans-serif}}img{{max-width:100%}}[hidden]{{display:none!important}}</style></head><body>")
+
+
+# The simulator's data (engine_data.json, playbook.json: typed arrays as base64 in JSON) re-packed for phones: the
+# same arrays as raw bytes, the integer index arrays as differences and every multi-byte array byte-plane shuffled
+# (both lossless, both gzip much better), gzipped. Half the download before the first snap. game_worker.js unpacks
+# it (DecompressionStream); browsers without one, and the claude.ai artifact, still load the JSON.
+PACKED = {"engine_data.json": "engine_data.pack", "playbook.json": "playbook.pack"}
+
+
+def _encode(spec: dict) -> tuple[dict, bytes]:
+    a = np.frombuffer(base64.b64decode(spec["b64"]), dtype=spec["dtype"])[: spec["n"]]
+    shuffle = lambda x: x.view(np.uint8).reshape(-1, x.itemsize).T.tobytes() if x.itemsize > 1 else x.tobytes()
+    cands = {"": a.tobytes()}
+    if a.itemsize > 1:
+        cands["s"] = shuffle(a)
+    if a.dtype.kind in "iu" and a.size:
+        d = np.diff(a.astype(np.int64), prepend=0).astype(a.dtype)       # wraps like the typed array does
+        cands["d"] = d.tobytes()
+        if a.itemsize > 1:
+            cands["ds"] = shuffle(d)
+    enc = min(cands, key=lambda k: (len(zlib.compress(cands[k], 6)), len(k)))
+    return {"dtype": spec["dtype"], "n": int(spec["n"]), "enc": enc}, cands[enc]
+
+
+def pack(src: Path, dst: Path) -> int:
+    """src JSON -> dst: gzip("NFCP", uint32 header length, header JSON, blob); each base64 array in the JSON becomes
+    {dtype, n, enc, off, len} pointing into the blob."""
+    blob = bytearray()
+
+    def walk(x):
+        if isinstance(x, dict):
+            if "b64" in x and "dtype" in x:
+                head, raw = _encode(x)
+                head.update(off=len(blob), len=len(raw))
+                blob.extend(raw)
+                return head
+            return {k: walk(v) for k, v in x.items()}
+        if isinstance(x, list):
+            return [walk(v) for v in x]
+        return x
+
+    header = json.dumps(walk(json.loads(src.read_text())), separators=(",", ":"), allow_nan=False).encode()
+    data = b"NFCP" + struct.pack("<I", len(header)) + header + bytes(blob)
+    dst.write_bytes(gzip.compress(data, 9, mtime=0))
+    return dst.stat().st_size
 
 
 GA_TAG = ("<script async src=\"https://www.googletagmanager.com/gtag/js?id={id}\"></script>"
@@ -85,6 +136,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     (out / "stats.html").write_text((WEB / "stats.html").read_text().replace("<!--SITE-HEAD-->", stats_head))
     for f in FILES:
         shutil.copy2(WEB / f, out / f)
+    for f, p in PACKED.items():
+        pack(WEB / f, out / p)
     for f in sorted((WEB / "spots").glob("s*.json")):
         shutil.copy2(f, out / "spots" / f.name)
     if domain:

@@ -24,6 +24,7 @@
     return new Uint8Array(Buffer.from(b64, 'base64'));
   }
   function decode(spec) {
+    if (spec.arr) return spec.arr;       // already unpacked from the website's packed data (game_worker.js)
     const bytes = b64ToBytes(spec.b64);
     const C = CTORS[spec.dtype];
     const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
