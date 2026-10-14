@@ -572,22 +572,30 @@
     sc.svg.insertBefore(g, sc.layer);
   }
   // a tap on a receiver while you pick a pass: throw to him, or (already him) his next route
+  // a tap on a receiver on the field: his next route (any receiver: set them all up, then pick who gets the ball).
+  // The page stays where it is, so the field and every route stay in view while you tap
   function passTap(a) {
     if (!passing() || !scene || !a.off) return false;
     const i = eligibles(scene).indexOf(a);
     if (i < 0) return false;
-    passPick(i);
+    const list = ROUTES[a.label], P = ui.pass;
+    P.routes[i] = list[(list.indexOf(P.routes[i]) + 1) % list.length];
+    redrawPass();
     return true;
   }
-  // by his place in the list (the field may be redrawn under the buttons: a resize, the phone's address bar)
+  // who gets the ball, by his place in the list (the field may be redrawn under the buttons: a resize, the phone's
+  // address bar)
   function passPick(i) {
-    if (!passing() || !scene) return;
-    const a = eligibles(scene)[i], P = ui.pass;
-    if (!a) return;
-    if (P.target === i) { const list = ROUTES[a.label]; P.routes[i] = list[(list.indexOf(P.routes[i]) + 1) % list.length]; }
-    else P.target = i;
+    if (!passing() || !scene || !eligibles(scene)[i]) return;
+    ui.pass.target = i;
+    redrawPass();
+  }
+  function redrawPass() {
+    const y = window.scrollY;
+    lastBall = null;                  // the same snap: no fade-in, no ball move
     drawField();
     drawDock();
+    window.scrollTo(0, y);
   }
   // the engine call a pick stands for (its pools hold the real plays): a screen, play action, a rollout, a deep shot
   // (the post down the middle), a throw over the middle (dig, crosser, angle) or a quick throw, to the receiver's side
@@ -2205,7 +2213,7 @@
         b.addEventListener('click', () => {
           if (busy) return;
           ui.fam = f;
-          if (f === 'pass') { ui.step = 'pass'; ui.pass = { target: null, routes: null, pa: false, roll: false }; drawField(); }
+          if (f === 'pass') { ui.step = 'pass'; ui.pass = { target: null, routes: null, pa: false, roll: false, fresh: true }; drawField(); }
           else ui.step = 'detail';
           drawDock();
         });
@@ -2298,13 +2306,13 @@
     back.addEventListener('click', () => { ui.step = 'family'; drawField(); drawDock(); });
     head.append(back);
     if (G.look != null) d.append(readLine(G.look));
-    d.append(el('p', 'hint', P.target == null ? 'Tap a receiver to throw to him. Tap him again to change his route.' : 'Tap him again to change his route, or pick someone else.'));
+    d.append(el('p', 'hint', 'Tap any receiver on the field to change his route. Then pick who gets the ball:'));
     const list = el('div', 'rcvs');
     eligibles(sc).forEach((a, i) => {
       const b = el('button', `rcv${P.target === i ? ' on' : ''}`);
       b.type = 'button';
       b.setAttribute('aria-pressed', String(P.target === i));
-      b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label), el('span', 'rt', routeName(a.label, P.routes[i])));
+      b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label), el('span', 'rt', `${routeName(a.label, P.routes[i])}${P.target === i ? ' · the target' : ''}`));
       b.addEventListener('click', () => passPick(i));
       list.append(b);
     });
@@ -2316,7 +2324,7 @@
       const b = el('button', 'sw2');
       b.type = 'button';
       b.setAttribute('role', 'switch'); b.setAttribute('aria-checked', String(on)); b.setAttribute('aria-label', label);
-      b.addEventListener('click', () => { set(!on); drawDock(); });
+      b.addEventListener('click', () => { set(!on); redrawPass(); });
       tg.append(lab, b);
       return tg;
     };
@@ -2337,7 +2345,8 @@
       more.forEach((id, i) => { const b = key(CALL[id].label.replace(/ \(.*\)$/, ''), null, 'alt', i); b.addEventListener('click', () => { if (!busy) decideCall({ call: id }); }); row.append(b); });
       d.append(row);
     }
-    requestAnimationFrame(() => go.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' }));
+    // only on the way in: after that the page stays put while you change routes
+    if (P.fresh) { P.fresh = false; requestAnimationFrame(() => list.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' })); }
   }
 
   // how fast to get to the next snap while the clock runs: no-huddle, huddle or milk it
@@ -3080,7 +3089,7 @@
     const ul = el('ul');
     [
       'You\'re the head coach for the last minutes of a real NFL game. Three new spots every day.',
-      'Call Run, Pass or RPO. On a pass, every receiver shows his route: tap one to throw to him, tap him again to change his route, and add play action or a rollout. Timeouts, spikes, kicks and tempo pop up when they matter. On their ball, you call the defense.',
+      'Call Run, Pass or RPO. On a pass, every receiver shows his route: tap any of them on the field to change it, then pick who gets the ball, with play action or a rollout if you like. Timeouts, spikes, kicks and tempo pop up when they matter. On their ball, you call the defense.',
       'Every snap is a real NFL play run against your call. Tap the field to skip, or a player to see who he is.',
       'Matchups matter: a blitz beats deep shots but loses to quick passes and screens; a loaded box stuffs runs but gets beaten by play-action and deep shots; playing soft stops deep shots but gives up runs. Read their look before you call, and when you call the defense, they will check into what beats it.',
       'Beat the real coach\'s result, and find out which NFL coach you call it like.',

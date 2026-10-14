@@ -285,7 +285,7 @@ or pocket quarterback, a blocking, possession or vertical-threat tight end, a po
 back, and so on), each type assigned by a rule on the stat that defines it (`archetypes.py`).
 Play-calling is a pop-up of **Run**, **Pass** and **RPO**. A run or RPO is then the play and its side; a pass is
 drawn on the field: every receiver (the wide receivers, the tight end and the back) shows a route, you tap one to
-throw to him and tap him again to change his route (wide receivers: slant, hitch, quick out, dig, post, corner, go,
+change his route with a tap on the field (any receiver, as often as you like, the page staying put), then pick who gets the ball (wide receivers: slant, hitch, quick out, dig, post, corner, go,
 screen; tight ends: flat, hitch, out, crosser, dig, seam; backs: flat, angle, screen, wheel), with play action or a
 rollout. The snap is a real play where a receiver at that position ran that route against the look the defense
 showed (NGS and FTN charting give the target's route on 75,000 passes): from the situation's plays, then coarser
