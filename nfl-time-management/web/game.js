@@ -495,7 +495,9 @@
   function fieldHeight() {
     const svg = $('field');
     const wpx = svg.parentElement.clientWidth || 360;
-    return Math.round((360 * clip(window.innerHeight - 380, 360, 720)) / wpx);
+    // room left for the field: the header, the score bar and the dock below it; beside it on wide screens (game.html)
+    const side = window.matchMedia && window.matchMedia('(min-width: 1000px)').matches;
+    return Math.round((360 * clip(window.innerHeight - (side ? 280 : 380), 360, side ? 860 : 720)) / wpx);
   }
   // Before the snap the camera frames the play, true to scale (as many yards tall as the field is wide, in the
   // box's shape): a short way behind the offense and well downfield, where the routes go. Kicks and the final
