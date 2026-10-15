@@ -3664,20 +3664,16 @@
     return { el: box, name: c.name };
   }
 
-  // The rare one: John Madden (no play-by-play from his years, so never a match on tendencies). He is the coach of a
-  // perfect day: every call of the day's drive graded green (the best, or within half a point of win chance of it), at
-  // least MADDEN_MIN of them, and no game lost (a win, or the half ending on a first-half spot)
-  const MADDEN_MIN = 6;
-  function maddenDay(decs) {
-    if (decs.length < MADDEN_MIN || !decs.every((x) => markOf(x.cost) === 'g')) return false;
-    return today.every((_, i) => { const r = state.spots[i] && state.spots[i].result; return r && (r.half === 1 || r.mine > r.theirs); });
-  }
+  // The rare one: John Madden (no play-by-play from his years, so never a match on tendencies): one finished daily
+  // drive in MADDEN_ODDS, by a draw fixed for this device and day (a reload or a replay of the day never redraws it)
+  const MADDEN_ODDS = 50000;
+  const maddenDay = () => rng(hash('madden', deviceKey(), dayN))() < 1 / MADDEN_ODDS;
   function maddenCard() {
     const box = el('div', 'coach madden');
     box.append(el('div', 'rare', '★ Rare'), el('div', 'k', 'Today you coached like'), el('div', 'name', 'John Madden'),
-      el('div', 'why', 'Every call you made was the right one, and you won. Boom!'),
+      el('div', 'why', 'The rarest coach in the game: about 1 in 50,000 drives. Boom!'),
       el('div', 'meta', 'Raiders · 1969–1978 · 103–32–7 · Super Bowl XI champion · never a losing season'));
-    box.title = 'The rare one: every call of the day graded green, at least six calls, and no loss.';
+    box.title = 'The rare one: about 1 in 50,000 finished daily drives.';
     return { el: box, name: 'John Madden', rare: true };
   }
 
@@ -4151,7 +4147,7 @@
     const p = decs.length ? percentileVsNFL(decs) : 0;
     const wpa = decs.reduce((a, x) => a + x.wpa, 0);
     const st = load(`${STORE}:stats`, { days: {} });
-    const cc = maddenDay(decs) ? maddenCard() : coachCard(decs, 'Today you coached like');
+    const cc = maddenDay() ? maddenCard() : coachCard(decs, 'Today you coached like');
     st.days[dayN] = { p, wpa, coach: cc ? cc.name : null };
     save(`${STORE}:stats`, st);
     const firstFinish = !state.done;
