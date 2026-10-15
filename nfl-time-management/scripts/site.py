@@ -27,7 +27,7 @@ import numpy as np
 
 WEB = Path(__file__).resolve().parents[1] / "web"
 FILES = ["game.js", "motion.js", "engine.js", "game_worker.js", "game.json", "playbook.json", "engine_data.json",
-         "og.png", "icon.svg", "icon-180.png", "midlogo.png", "favicon.ico"]      # the link preview card (og_card.html, drawn at 1200x630) and the icons
+         "og.png", "icon.svg", "icon-180.png", "icon-48.png", "icon-192.png", "icon-512.png", "midlogo.png", "favicon.ico"]      # the link preview card (og_card.html, drawn at 1200x630) and the icons
 # the same skeleton the claude.ai artifact host wraps the page in: charset, a viewport that reaches the phone's
 # edges, the safe-area padding and a small reset
 HEAD = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
@@ -119,6 +119,12 @@ FOOT = ('<footer class="sitefoot"><nav aria-label="Site">'
         '<p>© 2026 Two-Minute Drill</p></footer>')
 
 
+# The site's icon (the 2MD logo): what Google shows next to the site in search results (a square of 48 px or more,
+# linked from the page, /favicon.ico at the root too), the browser tab, a phone's home screen
+ICONS = ('<link rel="icon" href="/favicon.ico" sizes="48x48"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">'
+         '<link rel="apple-touch-icon" href="/icon-180.png"><link rel="manifest" href="/site.webmanifest">')
+
+
 def canonical(site_url: str, path: str) -> str:
     return f'<link rel="canonical" href="{html.escape(site_url.rstrip("/") + "/" + path, quote=True)}">'
 
@@ -127,7 +133,7 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
     """The link preview (X, iMessage, Slack...) and the icons; the image needs the site's full address."""
     e = lambda x: html.escape(x, quote=True)
     base = site_url.rstrip("/")
-    return (f'<link rel="icon" href="icon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="icon-180.png">'
+    return (ICONS +
             f'<meta name="theme-color" content="#2c7549">'
             f'<meta property="og:type" content="website"><meta property="og:site_name" content="Two-Minute Drill">'
             f'<meta property="og:title" content="{e(title)}"><meta property="og:description" content="{e(desc)}">'
@@ -187,8 +193,11 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
                                   "An independent, fan-made NFL play-calling game built on public nflverse data.")):
         fill(name, (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, title, d, path), path)
     # the privacy page (AdSense wants one): the analytics tag only, no ads on it
-    fill("privacy.html", (GA_TAG.format(id=ga) if ga else "") + '<link rel="icon" href="icon.svg" type="image/svg+xml">'
-         '<link rel="apple-touch-icon" href="icon-180.png">', "privacy")
+    fill("privacy.html", (GA_TAG.format(id=ga) if ga else "") + ICONS, "privacy")
+    (out / "site.webmanifest").write_text(json.dumps({"name": "Two-Minute Drill", "short_name": "2MD", "start_url": "/",
+        "display": "standalone", "background_color": "#0c1d42", "theme_color": "#0c1d42", "icons": [
+            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"}]}, indent=1) + "\n")
     # for crawlers: every page allowed, and the sitemap of the site's pages
     base = site_url.rstrip("/")
     (out / "robots.txt").write_text(f"User-agent: *\nAllow: /\n\nSitemap: {base}/sitemap.xml\n")
