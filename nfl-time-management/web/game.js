@@ -129,6 +129,8 @@
 
   let idx = null;                 // game.json
   let dayN = 1, today = [];
+  // the day number of a date: day 1 is the launch (round: a day with a DST change is 23 or 25 hours)
+  const dayOf = (d) => { const a = new Date(idx.launch + 'T00:00:00'), b = new Date(d); b.setHours(0, 0, 0, 0); return Math.max(1, Math.round((b - a) / 864e5) + 1); };
   let state = null;               // saved progress: today's drive, or the survivor run
   // two modes: the daily three spots, or survivor (#survivor): random real fourth-quarter spots back to back, win to
   // keep going, one loss and the run is over (a tie at the gun goes to overtime, played out: see overtime())
@@ -748,7 +750,14 @@
       const res = await send({ type: 'odds', scen: simScen(), root: G.root, picks: picks.map((a) => ({ call: a.call, route: a.route, who: a.who, looks: a.looks })) }, true);
       picks.forEach((a, k) => { G.odds[pickKey(a)] = res.out[k]; });
     } catch (e) { picks.forEach((a) => { delete G.odds[pickKey(a)]; }); return; }      // asked again on the next redraw
-    if (passing() && !busy) { const y = window.scrollY; drawDock(); window.scrollTo(0, y); }
+    // into the cards already up, not a redrawn dock: a redraw between a finger's down and up would eat the throw
+    if (passing() && !busy) {
+      $('dock').querySelectorAll('button.rcv').forEach((b) => {
+        const od = G.odds[b.dataset.k];
+        if (!od || b.querySelector('.od')) return;
+        b.append(el('span', 'od', oddsText(od)));
+      });
+    }
   }
   const oddsText = (o) => (o ? `${Math.round(o.caught * 100)}% caught · ${o.yds.toFixed(1)} yds a throw${o.picks >= 0.03 ? ` · ${Math.round(o.picks * 100)}% picked` : ''}` : '');
   // the field takes the tap itself (phones do not always send taps on small SVG shapes): a quick touch, not a scroll,
@@ -2029,6 +2038,7 @@
     return new Promise((resolve) => {
       let start = null, skip = false;
       const onTap = () => { skip = true; };
+      cutAnim = onTap;
       sc.calls.forEach((c) => c.g.remove());        // a pre-play label ("Kickoff") gives way to the play's own call-outs
       sc.calls = [];
       sc.svg.classList.add('playing');
@@ -2051,6 +2061,7 @@
         P.fx.forEach((f) => { if (!f.done && tp >= f.t) { f.done = true; f.f(); } });
         place(sc);
         if (t >= total) {
+          if (cutAnim === onTap) cutAnim = null;
           sc.svg.removeEventListener('click', onTap);
           sc.svg.classList.remove('playing');
           if (ck) ck.classList.remove('tick');
@@ -2063,6 +2074,7 @@
 
   // play one snap on the field: `before` is the state it was snapped from, `side` its strong side
   async function animatePlay(before, res, side, replay, look) {
+    if (!replay) await cutReplay();
     if (reduced() || (G.fast && !replay) || $('play').hidden) return false;
     const e = res.log.find((x) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(x.ev));
     if (!e) return false;
@@ -2385,13 +2397,14 @@
       seq: 0, snapN: 0, over: false, result: null, side: 1, fast: false, started: false };
   }
   function persist() {
-    state.spots[G.si] = { root: G.root, decisions: G.decisions, log: G.log, seq: G.seq, snapN: G.snapN, over: G.over,
+    state.spots[G.si] = { id: G.scen.id, root: G.root, decisions: G.decisions, log: G.log, seq: G.seq, snapN: G.snapN, over: G.over,
       result: G.result, started: G.started, pending: G.pending || null };
     saveState();
   }
   function resumeSpot(i) {
     G = newSpot(i);
-    const s = state.spots[i];
+    let s = state.spots[i];
+    if (s && s.id && s.id !== G.scen.id) s = state.spots[i] = null;   // saved on another game (a changed schedule): start fresh
     if (s) Object.assign(G, { root: s.root, decisions: s.decisions || [], log: s.log || [], seq: s.seq || 0, snapN: s.snapN || 0,
       over: s.over, result: s.result, started: !!s.started, pending: s.pending || null });
     G.side = sideFor(G.seq);
@@ -2461,7 +2474,9 @@
     drawAll();
     if (G.pending) {
       busy = true;
-      try { await finishPending(); } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); return; }
+      // a saved grade that can't be redone (an error, or a call from an older build) is dropped, not retried on
+      // every reload: the drive goes on without that one call's grade
+      try { await finishPending(); } catch (e) { G.pending = null; persist(); }
       finally { busy = false; }
       drawTiles();
     }
@@ -2485,7 +2500,8 @@
         const b = G.banner, d = $('dock'), btn = el('button', 'btn', 'Next play');
         G.banner = null;
         btn.type = 'button';
-        btn.addEventListener('click', () => { if (!busy) advance(); });
+        let went = false;                // once: the await below leaves room for a second tap
+        btn.addEventListener('click', async () => { if (went) return; went = true; await cutReplay(); if (!busy) advance(); else went = false; });
         b.append(btn);
         d.textContent = '';
         d.append(b);
@@ -2522,12 +2538,21 @@
     G.look = null;
     return res;
   }
-  async function replay() {
+  // a replay never holds up the game: a call, Next play or Next game tapped during it cuts it short (cutReplay)
+  let replaying = null, cutAnim = null;
+  function replay() {
     track('replay');
     const lp = G.lastPlay;
-    if (busy || !lp) return;
-    busy = true;
-    try { await animatePlay(lp.before, lp.res, lp.side, true, lp.look); } finally { busy = false; drawBar(); drawField(); }
+    if (busy || replaying || !lp) return;
+    const g = G;
+    replaying = (async () => {
+      try { await animatePlay(lp.before, lp.res, lp.side, true, lp.look); } finally { replaying = null; if (G === g) { drawBar(); drawField(); } }
+    })();
+  }
+  async function cutReplay() {
+    if (!replaying) return;
+    if (cutAnim) cutAnim();
+    await replaying;
   }
 
   // the first huddle can wait on the simulator's data: say how far along it is, not just a spinner
@@ -2728,7 +2753,8 @@
       const b = el('button', `rcv${P.target === i ? ' on' : ''}`);
       b.type = 'button';
       b.setAttribute('aria-pressed', String(P.target === i));
-      const od = G.odds && G.odds[pickKey(passOption(sc, i, false).action)];
+      const pk = pickKey(passOption(sc, i, false).action), od = G.odds && G.odds[pk];
+      b.dataset.k = pk;
       b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label), el('span', 'rt', `${routeName(a.label, P.routes[i])}${P.target === i ? ' · the target' : ''}`));
       if (od) b.append(el('span', 'od', oddsText(od)));
       b.setAttribute('aria-label', `Throw it to ${a.p ? a.p.name : a.label}, ${routeName(a.label, P.routes[i])}`);
@@ -3369,7 +3395,11 @@
     card.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller in this spot.`));
     const btn = el('button', 'btn', SURV ? (state.out ? 'Your run' : 'Next game') : G.si < today.length - 1 ? 'Next spot' : "Today's score");
     btn.type = 'button';
-    btn.addEventListener('click', () => {
+    let went = false;                  // once: the await below leaves room for a second tap
+    btn.addEventListener('click', async () => {
+      if (went) return;
+      went = true;
+      await cutReplay();
       if (SURV) {
         if (state.out) return renderSurvSummary();
         state.pick = null;
@@ -3606,10 +3636,17 @@
     return teams;
   }
   async function survOpen() {
+    // a game picked on an older build: find it again by id (the spot list can change between builds), else a new one
+    if (state.pick != null && state.pickId && (idx.spots[state.pick] || {}).id !== state.pickId) {
+      const k = idx.spots.findIndex((sp) => sp.id === state.pickId);
+      if (k >= 0) state.pick = k; else { state.pick = null; state.spots = []; }
+    }
+    if (state.pick != null && !idx.spots[state.pick]) { state.pick = null; state.spots = []; }
     if (state.pick == null) {
       const seen = new Set(state.played), all = survPool(), left = all.filter((i) => !seen.has(i));
       const from = left.length ? left : all;
       state.pick = from[Math.floor(Math.random() * from.length)];
+      state.pickId = idx.spots[state.pick].id;
       state.played.push(state.pick);
       state.spots = [];
       state.current = 0;
@@ -3802,17 +3839,24 @@
   // Everyone who played today (the website: board/worker.js /daily). Your first result of the day counts once;
   // the box shows where it ranks among the day's players, how they spread, each spot against the average, and the
   // day's top named players. On claude.ai (no backend) there is no box.
-  const localDate = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  // the date of the drive played (not the clock's: a drive started before midnight and finished after it is still
+  // that day's, and a result posted to the next day would lock out the real one)
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const driveDate = () => { const d = new Date(idx.launch + 'T12:00:00'); d.setDate(d.getDate() + dayN - 1); return ymd(d); };
   function dailyBox(p, spotW) {
     const box = el('div', 'board daily');
     box.hidden = true;
     const post = async () => {
-      const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: localDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)), ...(myName() ? { name: myName() } : {}) }));
+      const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: driveDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)), ...(myName() ? { name: myName() } : {}) }));
       if (!res.ok) throw new Error(`daily ${res.status}`);
       return res.json();
     };
+    let retried = false;
     const refresh = async (force) => {
-      try { fillDaily(box, await post(), p, spotW, () => refresh(true)); } catch (e) { if (force) toast('Could not reach today’s stats'); }
+      try { fillDaily(box, await post(), p, spotW, () => refresh(true)); } catch (e) {
+        if (force) toast('Could not reach today’s stats');
+        else if (!retried) { retried = true; setTimeout(() => { if (box.isConnected) refresh(false); }, 5000); }   // once: a busy moment
+      }
     };
     (BOARD.ready || Promise.resolve()).then(() => { if (BOARD.mode === 'api') refresh(false); });
     return box;
@@ -3884,6 +3928,14 @@
     const b = el('b', '', '');
     w.append(document.createTextNode(label || (today.length > 1 ? 'New spots in ' : 'Next drive in ')), b);
     const upd = () => {
+      if (dayOf(new Date()) > dayN) {           // past midnight on yesterday's screen: the new drive is out
+        clearInterval(tick);
+        w.textContent = '';
+        const go = el('button', 'btn', 'Play today’s drive');
+        go.addEventListener('click', () => location.reload());
+        w.append(go);
+        return;
+      }
       const now = new Date(), next = new Date(now); next.setHours(24, 0, 0, 0);
       let s = Math.max(0, Math.floor((next - now) / 1000));
       const h = Math.floor(s / 3600); s -= h * 3600; const m = Math.floor(s / 60); s -= m * 60;
@@ -4053,9 +4105,8 @@
     try {
       idx = await fetch(asset('game.json')).then((r) => { if (!r.ok) throw new Error('game data ' + r.status); return r.json(); });
       idx.calls.forEach((c) => { CALL[c.id] = c; });
-      const launch = new Date(idx.launch + 'T00:00:00');
-      const now = new Date(); now.setHours(0, 0, 0, 0);
-      dayN = Math.max(1, Math.floor((now - launch) / 864e5) + 1);
+      const now = new Date();
+      dayN = dayOf(now);
       if (SURV) {
         state = load(stateKey(), null) || newRun();
         if (!load(`${STORE}:seen`, false)) { openHelp(true); save(`${STORE}:seen`, true); }

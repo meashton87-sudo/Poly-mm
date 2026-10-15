@@ -38,6 +38,14 @@ store.set('runs', [...store.get('runs'), { name: 'Old', best: 4, at: '2026-10-01
 assert.strictEqual((await call('POST', { name: 'old', best: 1, key: KEY.spam })).status, 200);
 assert.strictEqual((await call('POST', { name: 'Old', best: 50, key: KEY.eli })).status, 409, 'claimed by the first post');
 
+// claims are one key per name, never one shared value (it would outgrow storage's 2 MB a value); a claim kept in
+// the old shared value still holds
+assert.strictEqual(store.get('claim:eli'), store.get('runs').find((x) => x.name === 'Eli').kh, 'claimed under its own key');
+assert.ok(!store.has('claims'), 'no shared claims value');
+store.set('claims', { legacy: 'f'.repeat(64) });
+assert.strictEqual((await call('POST', { name: 'Legacy', best: 5, key: KEY.matt })).status, 409, 'an old shared claim holds');
+store.delete('claims');
+
 for (const bad of [{ name: '', best: 3 }, { name: 'X', best: -1 }, { name: 'X', best: 1000 }, { name: 'X', best: 2.5 }, { name: '\u0000​', best: 3 }]) {
   assert.strictEqual((await call('POST', { ...bad, key: KEY.spam })).status, 400, JSON.stringify(bad));
 }
@@ -48,7 +56,7 @@ r = await call('POST', { name: '  Long  name with   spaces and more than twenty 
 assert.ok((await r.json()).rows.some((x) => x.name === 'Long name with spaces an'), 'names trimmed and cut to 24');
 
 const same = { ip: '9.9.9.9' };
-for (let i = 0; i < 10; i++) assert.strictEqual((await call('POST', { name: 'Spam', best: i, key: KEY.spam }, same)).status, 200);
+for (let i = 0; i < 30; i++) assert.strictEqual((await call('POST', { name: 'Spam', best: i, key: KEY.spam }, same)).status, 200);
 assert.strictEqual((await call('POST', { name: 'Spam', best: 50, key: KEY.spam }, same)).status, 429, 'rate limited');
 
 // the commissioner removes a row; without the token (or with no ADMIN_TOKEN set) nobody can
@@ -83,7 +91,7 @@ assert.strictEqual(b.spots[0].hist[0], 1, 'clipped at -50'); assert.strictEqual(
 r = await day({ date: today, key: 'anon-device-key-0000001', p: 0.5, spots: [0, 0, 0] });      // no name: counted, not listed
 b = await r.json();
 assert.strictEqual(b.n, 3); assert.strictEqual(b.top.length, 1);
-for (const bad of [{ date: '2001-01-01' }, { date: 'today' }, { p: 1.5 }, { p: -0.1 }, { spots: [] }, { spots: [0, 0, 0, 0] }, { spots: [0, 2, 0] }, { key: 'short' }]) {
+for (const bad of [{ date: '2001-01-01' }, { date: 'today' }, { p: 1.5 }, { p: -0.1 }, { spots: [] }, { spots: [0, 0, 0, 0] }, { spots: [0, 2, 0] }, { key: 'short' }, { p: null }, { p: '0.5' }, { spots: [null, 0, 0] }]) {
   r = await day({ date: today, key: 'other-device-key-000001', p: 0.5, spots: [0, 0, 0], ...bad });
   assert.strictEqual(r.status, 400, JSON.stringify(bad));
 }

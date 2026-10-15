@@ -40,7 +40,23 @@ DRIVE_RESULT = {"Touchdown": "touchdown", "Field goal": "field goal", "Punt": "p
                 "Missed field goal": "missed field goal", "Opp touchdown": "defensive touchdown", "Safety": "safety"}
 
 
-def candidates(pbp: pd.DataFrame, lib: pd.DataFrame) -> pd.DataFrame:
+# The schedule as it went live, frozen: every spot's id and kind in order, and each day's three spots (indices into
+# that list). A build drawn fresh from the data would reshuffle every day as soon as a new week of games arrived
+# (more candidates, a different permutation), changing today's drive mid-day and resuming saved drives on the
+# wrong game. With the file, a build keeps the same spots in the same order on the same days. Extend it only by
+# adding days at the end.
+FROZEN = config.ROOT / "src" / "nflclock" / "daily_schedule.json"
+
+
+def freeze(game_json=WEB / "game.json", out=FROZEN) -> dict:
+    """Write the schedule of a built game.json (the live one) to the frozen file."""
+    g = json.loads(game_json.read_text())
+    frozen = {"launch": g["launch"], "spots": [[sp["id"], sp["category"]] for sp in g["spots"]], "schedule": g["schedule"]}
+    out.write_text(json.dumps(frozen, separators=(",", ":")) + "\n")
+    return {"spots": len(frozen["spots"]), "days": len(frozen["schedule"])}
+
+
+def candidates(pbp: pd.DataFrame, lib: pd.DataFrame, keep: dict | None = None) -> pd.DataFrame:
     s = pbp[pbp["is_snap"] & pbp["season"].isin(SCENARIO_SEASONS) & pbp["play_type"].isin(["run", "pass"])
             & pbp["posteam_timeouts_remaining"].notna() & pbp["defteam_timeouts_remaining"].notna()]
     s = s.sort_values(["game_id", "row_order"])
@@ -55,9 +71,15 @@ def candidates(pbp: pd.DataFrame, lib: pd.DataFrame) -> pd.DataFrame:
                                                         & (m.abs() <= 10))],
         ["drill", "protect", "tight"], default="")
     first = first.assign(category=cat)
-    first = first[(first["category"] != "") & wp.between(0.08, 0.92)]
+    ids = first["game_id"] + "#" + first["play_id"].astype(int).astype(str)
     bad = kicker_unavailable(pbp)
-    first = first[~pd.Series(list(zip(first["game_id"], first["posteam"])), index=first.index).isin(bad)]
+    ok = (first["category"] != "") & wp.between(0.08, 0.92) \
+        & ~pd.Series(list(zip(first["game_id"], first["posteam"])), index=first.index).isin(bad)
+    if keep:          # the frozen spots stay, with their frozen kind, whatever a data revision did to wp or the filters
+        frozen = ids.isin(keep)
+        first.loc[frozen, "category"] = ids[frozen].map(keep)
+        ok = ok | frozen
+    first = first.assign(spot_id=ids)[ok]
     real_call = lib.set_index(["game_id", "play_id"])["call"]
     first["real_call"] = [P.CALL_IDS[int(real_call.get((g, p), -1))] if (g, p) in real_call.index else None
                           for g, p in zip(first["game_id"], first["play_id"])]
@@ -69,9 +91,20 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
     pbp = data.load(tuple(range(2016, max(SCENARIO_SEASONS) + 1)))
     lib = P.labeled_plays()
     P.export(lib, WEB / "playbook.json")
-    cand = candidates(pbp, lib)
+    frozen = json.loads(FROZEN.read_text()) if FROZEN.exists() else None
+    cand = candidates(pbp, lib, keep=dict(map(tuple, frozen["spots"])) if frozen else None)
     rng = np.random.default_rng(seed)
-    picks = {cat: cand[cand["category"] == cat].iloc[lambda d: rng.permutation(len(d))].head(days) for cat in CATEGORIES}
+    if frozen:
+        by_id = cand.drop_duplicates("spot_id").set_index("spot_id", drop=False)
+        missing = [i for i, _ in frozen["spots"] if i not in by_id.index]
+        if missing:       # a play renumbered upstream: the build fails rather than move a day's drive
+            raise RuntimeError(f"frozen spots missing from the data: {missing[:5]} ({len(missing)})")
+        picks = {cat: by_id.loc[[i for i, c in frozen["spots"] if c == cat]] for cat in CATEGORIES}
+        order = [i for i, _ in frozen["spots"]]
+        if [i for cat in CATEGORIES for i in picks[cat]["spot_id"]] != order:
+            raise RuntimeError("frozen spots are not grouped by kind in CATEGORIES order")
+    else:
+        picks = {cat: cand[cand["category"] == cat].iloc[lambda d: rng.permutation(len(d))].head(days) for cat in CATEGORIES}
 
     hist = HI.History(bundle, lib)
     tr = bundle.team_ratings
@@ -117,9 +150,12 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
         chunks.setdefault(i // SPOT_CHUNK, {})[str(i)] = t["teams"]
     n = {cat: len(df) for cat, df in picks.items()}
     offs = {cat: sum(n[c] for c in list(CATEGORIES)[:i]) for i, cat in enumerate(CATEGORIES)}
-    schedule = [[offs[cat] + (d % n[cat]) for cat in CATEGORIES] for d in range(days)]
-    for day in schedule:
-        rng.shuffle(day)
+    if frozen:
+        schedule = frozen["schedule"]
+    else:
+        schedule = [[offs[cat] + (d % n[cat]) for cat in CATEGORIES] for d in range(days)]
+        for day in schedule:
+            rng.shuffle(day)
     models = {}
     for key, name in (("tendency", "tendency_web.json"), ("grade_scale", "grade_scale.json")):
         mp = config.ARTIFACT_DIR / name
