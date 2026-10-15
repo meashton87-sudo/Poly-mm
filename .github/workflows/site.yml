@@ -30,7 +30,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
     defaults:
       run:
         working-directory: nfl-time-management
@@ -66,6 +66,10 @@ jobs:
         run: |
           python -c "from nflclock import webexport as w; w.export_engine()"
           python -c "from nflclock import dailygame as G; print(G.build())"
+
+      # Pro: the historic drives (nflclock.pro), from any season since 1999; a failure here leaves the daily game to ship
+      - name: Export the historic drives (Pro)
+        run: python -c "from nflclock import pro; print(pro.build())" || echo "::warning::the historic drives did not build; the site ships without them"
 
       # nothing ships unless all of this passes: a failure here leaves the last good site up
       - name: Check the game before it ships
