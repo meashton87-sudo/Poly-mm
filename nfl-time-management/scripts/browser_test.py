@@ -263,10 +263,15 @@ async def main(a) -> int:
     srv.shutdown()
     bad = [r for r in results if r["status"] != "ok"]
     # the field has to match the outcome: an incomplete pass is a covered man or a visibly bad ball, seldom a receiver
-    # with nobody near him. By design (the separation buckets in game.js, after NGS) about 11% of incompletions have
-    # him 4+ yards clear: missed throws to open men happen. Before the outcome-driven coverage it was 43%. A fixed
+    # with nobody near him. Incompletions are drawn contested (game.js separationFor), so about 5% have him 4+ yards
+    # clear (a deep ball whose cover man is left behind); before the outcome-driven coverage, 43%. A fixed
     # cut on a CI-sized sample (~15 passes) would fail by chance, so: fail only when the count is very unlikely
-    # (p < 0.001) at a 15% rate.
+    # (p < 0.001) at a 10% rate.
+    try:
+        import json as _json
+        (out / "seps.json").write_text(_json.dumps([x for r in results for x in r.get("seps", [])]))
+    except Exception:
+        pass
     inc = [x for r in results for x in r.get("seps", []) if not x.get("caught") and not x.get("intc") and x.get("kind") != "hail" and x.get("evt") != "throwaway"]
     open_inc = sum(1 for x in inc if x.get("actual", 0) >= 4)
     print(f"passes logged: {sum(len(r.get('seps', [])) for r in results)}, incomplete: {len(inc)}")
@@ -280,8 +285,8 @@ async def main(a) -> int:
         bad.append({"name": "broken-up"})
     if len(inc) >= 8:
         n = len(inc)
-        tail = sum(math.comb(n, k) * 0.15 ** k * 0.85 ** (n - k) for k in range(open_inc, n + 1))
-        print(f"incomplete passes with nobody within 4 yards: {open_inc} of {n} (chance of this many at 15%: {tail:.4f})")
+        tail = sum(math.comb(n, k) * 0.10 ** k * 0.90 ** (n - k) for k in range(open_inc, n + 1))
+        print(f"incomplete passes with nobody within 4 yards: {open_inc} of {n} (chance of this many at 10%: {tail:.4f})")
         if tail < 0.001:
             print("FAIL: too many incompletions look wide open")
             bad.append({"name": "separation"})
