@@ -207,7 +207,7 @@
   const tempoKeyOf = (t) => (t === 'urgent' || t === 'hurry' ? 'nohuddle' : t === 'normal' ? 'huddle' : 'milk');
   const RUNDOWN_AT = 3;               // seconds left after the timeout (engine.js CLOSE_KICK_AT)
   const clockAct = (k, r) => (TEMPOS.includes(k) ? { to_off: false, tempo: engineTempo(k, r) }
-    : k === 'rundown' ? { to_off: false, runoff: Math.max(0, halfLeft(r.t) - RUNDOWN_AT), play: 'fg' } : CLOCK[k].act);
+    : k === 'rundown' ? { to_off: false, to_def: false, runoff: Math.max(0, halfLeft(r.t) - RUNDOWN_AT), play: 'fg' } : CLOCK[k].act);
   const tempoSecs = (k, r) => { const S_ = (G.info && G.info.tempoSecs) || {}; return S_[engineTempo(k, r)]; };
   function spotText(r) {
     if (Math.round(r.yl) === 50) return 'midfield';
@@ -2532,6 +2532,7 @@
     return late && (lead <= 0 || (lead <= 3 && r.yl <= 45));
   }
   async function stepWith(action) {
+    await cutReplay();                // a replay's last redraw must not show this play's result before it animates
     const seed = hash('step', seedKey(), G.si, G.seq++);
     const before = G.root, side = G.side;
     const res = (await send({ type: 'step', scen: simScen(), root: G.root, action, seed }, true)).res;
@@ -2611,7 +2612,7 @@
     if (canKneel(r)) keys.push('kneel');
     // in field goal range late: burn the clock, timeout, kick (the end-of-half/end-of-game classic)
     const th = halfLeft(r.t);
-    if (r.to[me] > 0 && needTime && th > RUNDOWN_AT + 2 && th <= 60 && r.yl <= 40 && (r.t > 1800 || lead >= -3)) keys.push('rundown');
+    if (r.to[me] > 0 && needTime && th > RUNDOWN_AT + 2 && th <= 60 && r.yl <= 40 && (G.info.pFg || 0) >= 0.3 && (r.t > 1800 || lead >= -3)) keys.push('rundown');
     return keys;
   }
   function callOptions(r) {
@@ -3010,7 +3011,11 @@
       if (r.down === 4) {
         const f4 = coachProbs('fourth_down', r, me) || { go: r.yl <= 40 ? 0.35 : 0.15, fg: r.yl <= 40 ? 0.55 : 0.05, punt: r.yl <= 40 ? 0.1 : 0.8 };
         goShare = f4.go; if (specials.includes('fg')) q.fg = f4.fg; if (specials.includes('punt')) q.punt = f4.punt;
-      } else if (specials.includes('fg')) { q.fg = halfLeft(r.t) <= 10 ? 0.6 : 0.2; goShare = 1 - q.fg; }
+      } else if (specials.includes('fg')) {
+        // the old windows (last 20 s, 3rd down late): play-callers often kick; the any-down kick late is rare
+        const th = halfLeft(r.t), usual = th <= 20 || (r.down === 3 && th <= 40);
+        q.fg = !usual ? 0.02 : th <= 10 ? 0.6 : 0.2; goShare = 1 - q.fg;
+      }
       if (specials.includes('kneel')) { const qk = r.score[me] > r.score[1 - me] ? 0.5 : 0.1; q.kneel = qk; goShare *= 1 - qk; }
       const fs = calls.reduce((a, id) => a + (freq[id] || 0), 0) || 1;
       calls.forEach((id) => { q[id] = goShare * (freq[id] || 0) / fs; });
@@ -3664,7 +3669,8 @@
 
   // ------------------------------------------------------------ survivor ---
   // the pool: every fourth-quarter spot (each one plays to the final gun), none twice in a run until all are used
-  const survPool = () => idx.spots.map((sp, i) => (sp.start.qtr >= 4 ? i : -1)).filter((i) => i >= 0);
+  const featuredSpots = () => new Set(Object.values(idx.featured || {}).map((f) => f.spot));   // a day's story, not survivor's
+  const survPool = () => { const f = featuredSpots(); return idx.spots.map((sp, i) => (sp.start.qtr >= 4 && !f.has(i) ? i : -1)).filter((i) => i >= 0); };
   function newRun() {
     return { run: Math.floor(Math.random() * 2 ** 31), spots: [], current: 0, pick: null, won: 0, games: [], played: [], out: false };
   }
@@ -3973,6 +3979,7 @@
     const upd = () => {
       if (dayOf(new Date()) > dayN) {           // past midnight on yesterday's screen: the new drive is out
         clearInterval(tick);
+        if (w.querySelector('button')) return;     // drawn once: a redraw under the finger would eat the tap
         w.textContent = '';
         const go = el('button', 'btn', 'Play today’s drive');
         go.addEventListener('click', () => location.reload());

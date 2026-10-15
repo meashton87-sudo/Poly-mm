@@ -990,7 +990,8 @@
       let fire = runC && down === 4 && fgUseful0 && this.fgProb(yl + FG_SNAP_YARDS, o) >= 0.3 && tHalf <= FIRE_WINDOW;
       fire = fire && !kneelNow && !spikeNow;
       // with time to spare a forced kick is set up normally, not rushed
-      if (forced !== undefined) fire = runC && forced === 'fg' && tHalf <= FIRE_WINDOW;
+      // (a set runoff is the clock run down to a timeout: the kick after it is set up, not rushed)
+      if (forced !== undefined) fire = runC && forced === 'fg' && tHalf <= FIRE_WINDOW && act.runoff === undefined;
       tempo = kneelNow ? T_KNEEL : spikeNow ? T_SPIKE : fire ? T_FIRE : tempo;
       let runoff;
       if (tempo === T_KNEEL) runoff = KNEEL_RUNOFF[0] + (KNEEL_RUNOFF[1] - KNEEL_RUNOFF[0]) * u[0];

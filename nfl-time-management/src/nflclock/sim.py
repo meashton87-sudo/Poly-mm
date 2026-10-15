@@ -407,7 +407,8 @@ class Simulator:
         fire = run_c & (down == 4) & fg_useful0 & (self.fg_prob(yl + FG_SNAP_YARDS, o) >= 0.3) & (t_half <= FIRE_WINDOW)
         fire &= ~kneel_now & ~spike_now
         if forced is not None:   # with time to spare a forced kick is set up normally, not rushed
-            fire = run_c & (forced == "fg") & (t_half <= FIRE_WINDOW)
+            # (a set runoff is the clock run down to a timeout: the kick after it is set up, not rushed)
+            fire = run_c & (forced == "fg") & (t_half <= FIRE_WINDOW) & ("runoff" not in act)
         tempo = np.where(kneel_now, T_KNEEL, np.where(spike_now, T_SPIKE, np.where(fire, T_FIRE, tempo)))
         runoff = np.zeros(ix.size)
         for tm, arr in self.tempo.items():
