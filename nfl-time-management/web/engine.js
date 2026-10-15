@@ -882,8 +882,22 @@
       if (act && act.pat) go2 = act.pat === 'two';
       const pk = clip(this.fgProb(33.0, o), 1e-9, 1 - 1e-9);
       const p = go2 ? this.ctx.twoPt[o] : sigmoid(Math.log(pk / (1 - pk)) + XP_LOGIT);
-      if (u[3] < p) S.s[o] += go2 ? 2 : 1;
-      if (S.log) S.log.push({ ev: 'pat', team: o, two: go2, good: u[3] < p });
+      let good = u[3] < p, callIdx = -1, row = -1;
+      // daily game: a two-point try you called is a real play of that call from the 2 (a must-score snap), against
+      // the look the defense showed: good if it gets 2 yards without a turnover (a flag: the league rate decides)
+      if (go2 && act && act.call !== undefined && this.pbCdf && this.e.pb.callIndex[act.call] !== undefined) {
+        const P = this.e.pb;
+        callIdx = P.callIndex[act.call];
+        const match = this.matchOf(callIdx, this.defOfLooks(act.looks));
+        row = this.samplePlaybook(o, callIdx, fineKey(MODE_NORMAL, 3, 2, 2), u[2], false, act.looks, match,
+          act.route, act.route ? (WHO_CODE[act.who] || 0) : undefined);
+        if (row >= 0) {
+          const f = P.flags[row];
+          if (!(f & 1)) good = !(f & 64) && !(f & 4) && ((f & 16) !== 0 || P.yards[row] >= 2);
+        }
+      }
+      if (good) S.s[o] += go2 ? 2 : 1;
+      if (S.log) S.log.push({ ev: 'pat', team: o, two: go2, good, call: callIdx, row });
       S.phase = S.t <= g.halfEnd ? DONE : KICKOFF;
       S.freeKick = false;
     }
