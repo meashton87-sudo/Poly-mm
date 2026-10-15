@@ -24,6 +24,28 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const clean = (name) => String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
 const KEY_RE = /^[A-Za-z0-9_-]{16,128}$/;
+// Names are shown publicly (the stats page, the survivor board): slurs and obscenities are refused, spelled any way
+// (case, spaces, punctuation, digits for letters, repeated letters). SUB: refused anywhere in a name; WORD: refused as
+// a whole word (they occur inside ordinary names: "Cassel", "Dickerson", "Hancock"). Stored rows with such a name are
+// left out of every list too (rows from before the check).
+const SUB = ['nigg', 'niga', 'nigr', 'faggot', 'retard', 'kike', 'chink', 'wetback', 'tranny', 'beaner', 'raghead',
+  'towelhead', 'fuck', 'fck', 'shit', 'cunt', 'pussy', 'whore', 'slut', 'bitch', 'hitler', 'kkk', 'cocksuck', 'motherf',
+  'dildo', 'blowjob', 'handjob', 'jizz', 'porn', 'penis', 'vagina', 'molest', 'incest', 'boob', 'titties', 'onlyfans',
+  'siegheil', 'heilhit', 'gasthe', 'killall', 'nazi'];
+const WORD = ['ass', 'asses', 'asshole', 'dick', 'dicks', 'cock', 'cocks', 'fag', 'fags', 'twat', 'wank', 'piss', 'hoe',
+  'hoes', 'nig', 'dyke', 'homo', 'tit', 'tits', 'cum', 'anal', 'sex', 'sexy', 'spic', 'coon', 'gook', 'rape', 'raped',
+  'rapist', 'pedo', 'fuk', 'nude', 'naked', 'jihad', 'terrorist'];
+const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', 8: 'b', 9: 'g', '@': 'a', $: 's', '!': 'i', '|': 'i', '+': 't' };
+function blocked(name) {
+  const low = String(name || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+  const mapped = [...low].map((c) => LEET[c] ?? c).join('');
+  const squash = (x) => x.replace(/[^a-z]/g, '').replace(/(.)\1+/g, '$1');
+  const whole = squash(mapped), joined = mapped.replace(/[^a-z]/g, '');
+  if (SUB.some((w) => { const sw = squash(w); return (sw.length >= 4 && whole.includes(sw)) || joined.includes(w); })) return true;
+  const words = mapped.split(/[^a-z]+/).filter(Boolean);
+  return words.some((w) => WORD.includes(w) || WORD.includes(squash(w)));
+}
+const shown = (rows) => rows.filter((r) => !blocked(r.name));
 
 function cors(req, env) {
   const allowed = String(env.ALLOWED_ORIGINS || '*').split(',').map((s) => s.trim()).filter(Boolean);
@@ -33,7 +55,7 @@ function cors(req, env) {
     'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Max-Age': '86400', Vary: 'Origin' };
 }
 const json = (body, status, headers) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers } });
-const ranked = (all) => all.slice().sort((a, b) => b.best - a.best || String(a.at).localeCompare(String(b.at))).slice(0, TOP)
+const ranked = (all) => shown(all).slice().sort((a, b) => b.best - a.best || String(a.at).localeCompare(String(b.at))).slice(0, TOP)
   .map(({ name, best, at }) => ({ name, best, at }));            // never the key hash
 async function sha256(s) {
   const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)));
@@ -65,7 +87,7 @@ async function ownerOf(storage, lower) {
 const claim = (storage, lower, kh) => storage.put(`claim:${lower}`, kh);
 const emptyDay = () => ({ n: 0, hist: new Array(101).fill(0), spots: [0, 1, 2].map(() => ({ n: 0, sum: 0, hist: new Array(101).fill(0) })), top: [] });
 const dayView = (d) => ({ n: d.n, hist: d.hist, spots: d.spots.map((x) => ({ n: x.n, avg: x.n ? x.sum / x.n : 0, hist: x.hist })),
-  top: d.top.map(({ name, p }) => ({ name, p })) });
+  top: shown(d.top).map(({ name, p }) => ({ name, p })) });
 function dateOk(date, now = Date.now()) {
   if (!DATE_RE.test(date)) return false;
   const t = Date.parse(date + 'T12:00:00Z');
@@ -97,7 +119,8 @@ async function daily(req, env, storage, hits, h, url) {
   let body;
   try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
   const date = String((body && body.date) || ''), p = body && body.p, devKey = String((body && body.key) || '');
-  const spots = Array.isArray(body && body.spots) ? body.spots : null, name = clean(body && body.name);
+  const spots = Array.isArray(body && body.spots) ? body.spots : null, raw = clean(body && body.name);
+  const refused = !!raw && blocked(raw), name = refused ? '' : raw;   // a refused name: the result counts, unnamed
   if (!dateOk(date)) return json({ error: 'date (YYYY-MM-DD, today) wanted' }, 400, h);
   if (!(typeof p === 'number' && p >= 0 && p <= 1)) return json({ error: 'p (0-1) wanted' }, 400, h);
   if (!spots || spots.length < 1 || spots.length > 3 || !spots.every((w) => typeof w === 'number' && w >= -1 && w <= 1)) return json({ error: 'spots (1-3, each -1 to 1) wanted' }, 400, h);
@@ -122,7 +145,7 @@ async function daily(req, env, storage, hits, h, url) {
       await storage.put(`day:${date}`, day);
       if (unclaimed) await claim(storage, name.toLowerCase(), kh);
     }
-    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots }, ...(taken ? { taken: true } : {}) }, 200, h);
+    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots }, ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}) }, 200, h);
   }
   const pt = Math.round(p * 100);
   day.n += 1;
@@ -137,7 +160,7 @@ async function daily(req, env, storage, hits, h, url) {
   await storage.put(mine, { ...you, ...(name && !taken ? { name } : {}) });
   await storage.put(`day:${date}`, day);
   if (unclaimed && name) await claim(storage, name.toLowerCase(), kh);
-  return json({ ...dayView(day), counted: true, you, ...(taken ? { taken: true } : {}) }, 200, h);
+  return json({ ...dayView(day), counted: true, you, ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}) }, 200, h);
 }
 
 // The board itself: `storage` is the Durable Object's (get/put), `hits` its in-memory per-IP counts.
@@ -166,6 +189,7 @@ export async function handle(req, env, storage, hits) {
   try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
   const name = clean(body && body.name), best = Number(body && body.best), devKey = String((body && body.key) || '');
   if (!name || !Number.isInteger(best) || best < 0 || best > 999) return json({ error: 'name (1-24 characters) and best (0-999) wanted' }, 400, h);
+  if (blocked(name)) return json({ error: 'name not allowed', refused: true, rows: ranked(await readAll()) }, 409, h);
   if (!KEY_RE.test(devKey)) return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
   const kh = await sha256(devKey);                 // before the read: from here to the write is storage only
   const all = await readAll(), lower = name.toLowerCase(), i = all.findIndex((r) => String(r.name).toLowerCase() === lower);

@@ -3896,6 +3896,7 @@
         const res = await apiBoard('POST', { name, best, key: deviceKey() });
         BOARD.rows = res.rows || BOARD.rows;
         BOARD.taken = res.taken ? name : '';
+        BOARD.refused = res.refused ? name : '';
         redrawBoards();
         return res.taken ? false : res.kept != null ? { kept: res.kept } : { best };
       } catch (e) { return false; }
@@ -3941,6 +3942,7 @@
     if (BOARD.mode === 'api') {
       const n = myName();
       b.append(el('p', 'note', !n ? 'Set your name on a survivor run’s summary to get on the board.'
+        : BOARD.refused && BOARD.refused.toLowerCase() === n.toLowerCase() ? 'That name isn’t allowed on the board. Pick another name.'
         : BOARD.taken && BOARD.taken.toLowerCase() === n.toLowerCase() ? `Someone else already plays as ${n} here. Pick another name to get on the board.`
           : `Your best run posts here as ${n}.`));
     } else if (BOARD.canWrite) {
@@ -4274,8 +4276,9 @@
       });
       box.append(el('div', 'k sub', 'Today’s best'), ol);
     }
-    if (d.taken) box.append(el('p', 'note', `Someone else already plays as ${myName()} here. Pick another name to get on the list.`));
-    if (!myName() || d.taken) box.append(nameInput(again));
+    if (d.refused) box.append(el('p', 'note', 'That name isn’t allowed on the list. Your result still counts; pick another name to be on it.'));
+    else if (d.taken) box.append(el('p', 'note', `Someone else already plays as ${myName()} here. Pick another name to get on the list.`));
+    if (!myName() || d.taken || d.refused) box.append(nameInput(again));
     const btn = el('button', 'chip', 'Refresh');
     btn.type = 'button';
     btn.addEventListener('click', again);
@@ -4316,7 +4319,7 @@
   const disclaimer = () => el('p', 'note legal', DISCLAIMER);
   function privacyLink() {
     const p = el('p', 'note'), a = el('a', '', 'Privacy');
-    a.href = 'privacy.html';
+    a.href = 'privacy';
     p.append(a, ' · what the site keeps, analytics and ads');
     return p;
   }

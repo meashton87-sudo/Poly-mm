@@ -1,4 +1,4 @@
-<title>Two-Minute Drill</title>
+<title>Two-Minute Drill: Daily NFL Play-Calling Game</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Libre+Franklin:wght@400;500;600;700;800&display=swap">
@@ -333,7 +333,7 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 .opts tr.best td:first-child::before { content: "★ "; color: var(--sq-y); }
 .opts caption { text-align: left; font-weight: 700; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 4px 0; }
 .note { font-size: 12.5px; color: var(--muted); }
-.legal { font-size: 11px; line-height: 1.4; opacity: .85; }
+.legal { font-size: 11px; line-height: 1.4; }
 .note a { color: inherit; }
 /* an ad (website only, game.js adBox): set apart below everything on a between-games screen, always labeled */
 .adbox { margin-top: 18px; padding-top: 10px; border-top: 1px solid var(--line); min-height: 60px; }
@@ -438,6 +438,11 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
 .facts dd { margin: 0; font-weight: 600; }
 .toast { position: fixed; left: 50%; top: calc(60px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); z-index: 30; background: var(--ink); color: var(--paper); font-weight: 700; padding: 10px 16px; border-radius: 6px; }
 .err { color: var(--sq-r); font-weight: 600; }
+.siteinfo { max-width: 680px; margin: 28px auto 0; padding: 18px 16px 0; border-top: 1px solid var(--line); }
+.siteinfo h2 { font: 900 24px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; margin: 0 0 8px; }
+.siteinfo h3 { font: 800 17px/1.2 var(--display); text-transform: uppercase; letter-spacing: .03em; margin: 18px 0 4px; }
+.siteinfo p { margin: 0 0 8px; max-width: 65ch; color: var(--ink); }
+.siteinfo a { color: var(--ink); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .flip, .spin, .pop, .result, .movefade, .modal .box, #field .call .in { animation: none; } .ballmove { transition: none; } .sw2::after { transition: none; } }
 </style>
 
@@ -477,6 +482,33 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
   <section id="done" class="endcard" hidden></section>
   <div id="boot" class="status"><span class="spin"></span><span>Loading today's spots…</span></div>
 </main>
+
+<section class="siteinfo" aria-labelledby="aboutGame">
+  <h2 id="aboutGame">What is Two-Minute Drill?</h2>
+  <p>Two-Minute Drill is a free daily football game: you call the plays for the end of a real NFL game. Every day
+    everyone gets the same real late-game drive from the 2023 to 2026 seasons, playoffs included, with the real score,
+    clock, timeouts and the 22 players who were on the field. Your job is to win it.</p>
+  <h3>How it works</h3>
+  <p>Call <b>Run</b>, <b>Pass</b>, <b>RPO</b> or <b>Trick</b>, then the play: 27 calls in all, from inside runs and
+    quick passes to deep shots, play action and a flea-flicker. On a pass, tap a receiver to change his route and pick
+    who gets the ball. Timeouts, spikes, kneel-downs and field goals appear when they matter, and you choose the tempo.
+    When the other team has the ball, you call the defense. Every snap is played out with a real NFL play of the call
+    you made, from the same kind of situation.</p>
+  <h3>How scoring works</h3>
+  <p>Every call is graded on win chance. Before showing the result, the game simulates the rest of the game for every
+    option you had and compares your call with the best one: green is the best call or within half a point of win
+    chance, yellow is close, orange is costly and red is a big miss. A good call that didn't work is still a good call.
+    Your day ends with a percentile against NFL play-callers, your rank among everyone who played, and the NFL head
+    coach your calls look most like.</p>
+  <h3>Two ways to play</h3>
+  <p><b>Daily</b>: one drive a day, the same for everyone. <b>Survivor</b>: random real fourth quarters back to back;
+    win to keep going, one loss ends your run.</p>
+  <h3>The data behind it</h3>
+  <p>The situations, the 160,141 real plays the snaps are drawn from and the player ratings all come from public NFL
+    play-by-play, participation and charting data published by nflverse. The ranks and stats come from real players'
+    results. <a href="how-it-works">Read the full guide</a>.</p>
+</section>
+<!--SITE-FOOT-->
 
 <div id="deep" class="deep" hidden>
   <div class="in">

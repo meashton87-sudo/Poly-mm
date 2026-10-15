@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!--SITE-HEAD-->
+<title>About Two-Minute Drill</title>
+<meta name="description" content="About Two-Minute Drill, an independent, fan-made NFL play-calling game built on public nflverse data: who made it, why, and how to get in touch.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800;900&family=Libre+Franklin:wght@400;600;700&display=swap">
+<style>
+/* Same tokens as the game and the stats page */
+:root {
+  --paper: #f3f5f2; --card: #ffffff; --ink: #121a15; --muted: #5a675e; --line: #d3dbd5; --turf: #2c7549;
+  --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "Libre Franklin", "Franklin Gothic Medium", "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; color-scheme: dark;
+} }
+:root[data-theme="dark"] { --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.55 var(--body); padding-top: env(safe-area-inset-top, 0px); }
+.wrap { max-width: 640px; margin: 0 auto; padding: 14px 16px 48px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 8px; }
+h1 { margin: 0; font: 900 30px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
+h1 small { display: block; font: 700 11px var(--body); letter-spacing: .16em; color: var(--muted); margin-top: 4px; }
+h2 { font: 800 20px/1.15 var(--display); text-transform: uppercase; letter-spacing: .02em; margin: 26px 0 6px; text-wrap: balance; }
+p, li { max-width: 65ch; }
+a { color: var(--turf); }
+a.play { font-weight: 700; color: var(--ink); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; background: var(--card); white-space: nowrap; }
+.note { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><a href="./" class="home">Two-Minute Drill</a><small>About</small></h1>
+    <a class="play" href="./">Play today ›</a>
+  </header>
+<main>
+  <p>Two-Minute Drill is a free daily football game: one real NFL late-game drive a day, and you call the plays. It
+    is an independent, fan-made project, built by a football fan who wanted to know what it's really like to make the
+    calls that decide games, and how often the "obvious" call is actually the right one.</p>
+
+  <h2>Why we built it</h2>
+  <p>Every Sunday, fans argue about the last two minutes: why did they run there, why didn't they use a timeout, why
+    kick the field goal now. Two-Minute Drill lets you make those calls yourself, in the real situations, against the
+    real teams, and then shows you how your calls compare with the best ones and with how NFL play-callers actually
+    call those spots.</p>
+
+  <h2>What makes it different</h2>
+  <ul>
+    <li><b>Real situations.</b> Every spot is a real moment from the 2023 to 2026 NFL seasons, playoffs included.</li>
+    <li><b>Real plays.</b> Every snap is a real NFL play of the call you made, from the same kind of situation.</li>
+    <li><b>Honest grades.</b> Calls are graded on win chance from simulating the rest of the game for every option,
+      not on whether the play happened to work.</li>
+    <li><b>Real results.</b> The ranks and stats you see come from the people who actually played. No numbers are
+      seeded, simulated or made up.</li>
+  </ul>
+  <p>Read <a href="how-it-works">how it works</a> for the full details, or see <a href="stats">how everyone did
+    today</a>.</p>
+
+  <h2>The data</h2>
+  <p>The game is built on public NFL data from <a href="https://github.com/nflverse" rel="noopener">nflverse</a>:
+    play-by-play, player participation and Next Gen Stats charting, and FTN charting (FTN Data via nflverse, licensed
+    <a href="https://creativecommons.org/licenses/by-sa/4.0/" rel="noopener">CC BY-SA 4.0</a>). Thanks to the nflverse
+    maintainers and contributors, who make football analytics open to everyone.</p>
+
+  <h2>Not affiliated with the NFL</h2>
+  <p>Two-Minute Drill is not affiliated with, endorsed by or sponsored by the National Football League, its teams, its
+    players or the NFL Players Association. NFL, team names and player names are trademarks or property of their
+    respective owners and are used only to identify the real games the spots come from. No team logos are used.</p>
+
+  <h2>Contact</h2>
+  <p>Questions, bug reports and ideas are welcome. Message us on X at
+    <a href="https://x.com/TwoMinuteDrill0" rel="noopener">@TwoMinuteDrill0</a>. Many of the game's features came
+    from players' suggestions there.</p>
+
+</main>
+<!--SITE-FOOT-->
+</div>
+</body>
+</html>
