@@ -247,6 +247,16 @@ ol.top b { font: 900 18px var(--display); }
   boot();
   // an ad below the stats (AdSense; only when the site was built with an ad unit: site.py --adsense --ad-slot)
   (() => {
+    const frame = document.querySelector('meta[name="ad-frame"]');
+    if (frame) {                 // another network's banner (site.py: web/ads/banner.html), sandboxed as in the game
+      const [w, h] = (frame.dataset.size || '300x250').split('x').map(Number), f = document.createElement('iframe');
+      Object.assign(f, { src: frame.content, title: 'Advertisement', loading: 'lazy', width: w, height: h, scrolling: 'no' });
+      f.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox');
+      f.style.cssText = `display:block;margin:0 auto;border:0;max-width:100%;width:${w}px;height:${h}px`;
+      $('ad').append(el('div', 'adlab', 'Advertisement'), f);
+      $('ad').hidden = false;
+      return;
+    }
     const client = document.querySelector('meta[name="google-adsense-account"]'), slot = document.querySelector('meta[name="ad-slot"]');
     if (!client || !slot) return;
     const box = $('ad'), ins = document.createElement('ins');
