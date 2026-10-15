@@ -296,6 +296,9 @@ async def main(a) -> int:
     if past:
         print("FAIL: forward progress", past[:5])
         bad.append({"name": "forward-progress"})
+    # a short throw with a man running free deep reads as a QB who missed him (players saw it): report how often
+    sh = [x for r in results for x in r.get("seps", []) if x.get("caught") and x.get("air", 99) <= 6]
+    print(f"short completions: {len(sh)}, with a deep man 5+ yards clear: {sum(1 for x in sh if x.get('openDeep', 0) > 0)}")
     late = sum(1 for r in results for x in r.get("seps", []) if x.get("late"))
     print(f"cover man too far to break it up (shown as a bad ball instead): {late} of {len(inc)} incompletions")
     lonely = [x for r in results for x in r.get("seps", []) if x.get("label") == "Broken up" and x.get("ballD", 0) > 3]

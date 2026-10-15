@@ -533,6 +533,12 @@
       const e = put(S('line', { x1: SX0, x2: SX1, ...attrs }), (Y) => { const y = Y(L); e.setAttribute('y1', y); e.setAttribute('y2', y); });
       return e;
     };
+    // the midfield logo (players asked: it shows where the ball is at a glance)
+    const logo = put(S('g', { class: 'midlogo' }), (Y) => {
+      const y = Y(50), rr = clip(Math.abs(Y(50) - Y(54.5)), 10, 30);
+      logo.setAttribute('transform', `translate(180 ${y}) scale(${(rr / 20).toFixed(3)})`);
+    });
+    logo.append(S('circle', { r: 20 }), S('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', y: 1 }, '2MD'));
     for (let L = 5; L <= 95; L += 5) hline(L, { stroke: 'var(--chalk)', 'stroke-width': L % 10 ? 0.6 : 1.1, opacity: L % 10 ? 0.6 : 1 });
     [0, 100].forEach((L) => hline(L, { stroke: 'var(--chalk)', 'stroke-width': 2.4 }));
     [-10, 110].forEach((L) => {     // the goalposts on each end line, seen from above
@@ -1314,6 +1320,20 @@
           if (d) { used.add(d); leg(d, REACT_DEF, 'go', { x: m[0] + jit(1.5), y: m[1] + jit(1), eff: 0.75 }); }
         });
         cover.filter((d) => !used.has(d)).forEach((d) => leg(d, REACT_DEF, 'go', { x: d.b.x + (BX - d.b.x) * 0.3, y: d.label === 'DL' || d.label === 'EDGE' ? fwd(L0, 3.5) : fwd(d.b.y, 3), eff: 0.6 }));
+        // a deep defender carries the vertical in his area: after his drop he runs with the deepest route near him,
+        // a cushion over the top (never deep men running free while the ball goes short; players saw it). Tighter
+        // when the throw is short: the coverage downfield is why the ball went underneath
+        const shortThrow = Math.abs(catchPt[1] - L0) <= 6;
+        const deepers = deepMarks.length ? [...used].filter((d) => deepPool.includes(d)).slice(0, deepMarks.length) : [];
+        const taken = new Set();
+        runners.map(([a, pl]) => ({ a, end: pl.at(pl.T) })).filter((x) => Math.abs(x.end[1] - L0) > 12)
+          .sort((x, y) => Math.abs(y.end[1] - L0) - Math.abs(x.end[1] - L0))
+          .forEach(({ a, end }) => {
+            const d = nearest(deepers.filter((x) => !taken.has(x)), [end[0], end[1]]);
+            if (!d) return;
+            taken.add(d);
+            leg(d, REACT_DEF + 0.9, 'chase', { who: a.b, gap: shortThrow ? 1.3 : 2.2, eff: 0.92, lead: 0.5 });
+          });
       }
       return { cover, man, assigned };
     }
@@ -1336,7 +1356,9 @@
       let u = R() * tot, i = 0;
       while (i < w.length - 1 && u > w[i]) { u -= w[i]; i++; }
       const sep = SEP[i][0] + R() * (SEP[i][1] - SEP[i][0]);
-      return { sep: caught ? sep : Math.min(sep, air >= 15 ? 3 : 3.5), bucket: i };
+      // a catch with little after it: a man was right there to make the tackle (never one caught in space who then
+      // stands waiting for a tackler; players saw it)
+      return { sep: caught ? (yac < 3 ? Math.min(sep, 1.2 + yac * 0.4) : sep) : Math.min(sep, air >= 15 ? 3 : 3.5), bucket: i };
     }
 
     function pass(c, id, sign) {
@@ -1535,7 +1557,8 @@
       if (late) { broke = null; overthrow = true; }
       // (tests: how open the target really was on the field when the ball got there, against the outcome)
       const sepRow = window.__sepLog ? { evt: e.evt || '', inc: !!e.incomplete, caught, intc, yac: Math.max(0, (e.yards || 0) - air), air,
-        late, drawn: sepd && sepd.sep, actual: Math.min(...K.def.map((d) => dist(here(d), here(tgt)))), ballD, kind } : null;
+        late, drawn: sepd && sepd.sep, actual: Math.min(...K.def.map((d) => dist(here(d), here(tgt)))), ballD, kind,
+        openDeep: K.recv.filter((a) => a !== tgt && a !== passer && Math.abs(here(a)[1] - L0) > 12 && Math.min(...K.def.map((d) => dist(here(d), here(a)))) > 5).length } : null;
       if (sepRow) window.__sepLog.push(sepRow);
       // what happened at the catch point
       if (intc) {

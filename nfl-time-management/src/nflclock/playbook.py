@@ -506,19 +506,24 @@ def call_frequencies(lib: pd.DataFrame, prior: float = 20.0) -> np.ndarray:
     return f / f.sum(1, keepdims=True)
 
 
-def oob_odds(lib: pd.DataFrame) -> np.ndarray:
-    """Odds multiplier on getting out of bounds when the ball carrier is trying to, by call: plays where
-    the offense trailed late (wanted the clock stopped) against plays with no clock motive."""
+def oob_odds(lib: pd.DataFrame, motive: str = "want_oob") -> np.ndarray:
+    """Odds multiplier on getting out of bounds, by call, against plays with no clock motive: "want_oob", the
+    ball carrier trying to (the offense trailed late, wanted the clock stopped: 1-3x); "stay_in", trying not to
+    (it led late and wanted the clock running; NFL 2016-2026: outside runs 3.9% out of bounds against 10%,
+    short outside throws 16% against 25%: 0.2-1x)."""
     out = np.ones(len(CALLS))
     ok = ~lib["penalty"] & (lib["yards"] >= 0)
+    if motive == "stay_in":
+        ok &= ~lib["incomplete"]
+    lo, hi = (1.0, 3.0) if motive == "want_oob" else (0.2, 1.0)
     for fam, members in OOB_FAMILIES.items():
         m = lib["call"].isin([CALL_INDEX[c] for c in members]) & ok
         base = lib.loc[m & ~lib["want_oob"] & ~lib["stay_in"], "oob"]
-        want = lib.loc[m & lib["want_oob"], "oob"]
+        want = lib.loc[m & lib[motive], "oob"]
         if len(want) < 50 or base.mean() <= 0:
             continue
         p0, p1 = base.mean(), (want.sum() + 10 * base.mean()) / (len(want) + 10)   # light shrinkage
-        out[[CALL_INDEX[c] for c in members]] = float(np.clip((p1 / (1 - p1)) / (p0 / (1 - p0)), 1.0, 3.0))
+        out[[CALL_INDEX[c] for c in members]] = float(np.clip((p1 / (1 - p1)) / (p0 / (1 - p0)), lo, hi))
     return out
 
 
@@ -597,6 +602,7 @@ def export(lib: pd.DataFrame, path) -> dict:
         "pool_shift": _b64(pool_shifts(lib, items, offsets).astype(np.float32)),
         "freq": _b64(call_frequencies(lib).astype(np.float32).ravel()),
         "oob_odds": oob_odds(lib).round(3).tolist(),
+        "stay_odds": oob_odds(lib, "stay_in").round(3).tolist(),
         "seasons": list(SEASONS),
     }
     path.write_text(json.dumps(out, separators=(",", ":"), allow_nan=False))
