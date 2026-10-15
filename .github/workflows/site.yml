@@ -93,7 +93,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Assemble the site
-        run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --board-api "${{ vars.BOARD_API }}" --ga "${{ vars.GA_ID || 'G-4QQ8N62SMB' }}"
+        run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --board-api "${{ vars.BOARD_API }}" --ga "${{ vars.GA_ID || 'G-4QQ8N62SMB' }}" --adsense "${{ vars.ADSENSE_ID }}" --ad-slot "${{ vars.ADSENSE_SLOT }}"
 
       - if: vars.PAGES_DEPLOY == 'true'
         uses: actions/upload-pages-artifact@v3
