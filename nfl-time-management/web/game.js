@@ -3690,26 +3690,33 @@
     for (let i = 0; i < today.length; i++) { const s = state.spots[i]; if (s && s.decisions) out.push(...s.decisions); }
     return out;
   }
-  // The day's score: the share of simulated NFL play-callers whose drive costs more win chance than yours. Each one
-  // calls like the league (NFL frequencies q) but, like a real coach, mostly sees the look: an option's weight drops
-  // by e for every PCT_TAU of win chance it gives up against the best. Callers by frequency alone (the first days)
-  // ignore the look, so anyone who reads it scored 90+; at 1 point typical players land near 50, sharp ones 90+.
-  const PCT_TAU = 0.01, PCT_FROM = 4;                    // day 4 (Oct 15, 2026) on; earlier days keep their scale
+  // The day's score: the share of simulated NFL play-callers whose drive cost more win chance than yours. Each one
+  // calls like the league (NFL frequencies q), sharpened by how well he reads the spot: an option's weight drops by e
+  // for every `tau` of win chance it gives up against the best. Play-callers differ, so each simulated one gets his
+  // own tau (log-uniform from very sharp, 0.003, to loose, 0.3), and 15% call by league frequency alone. Against one
+  // skill level (day 4 morning: every caller at 0.01) the totals over a drive bunch so tightly that a little worse
+  // scores 0 and a little better 100 (half of the players scored 0); against the whole range they spread from 0 to
+  // 100 and a typical player lands near the middle. Days 1-3 compared with frequency-only callers (nearly all 90+).
+  const PCT_FROM = 4, PCT_TAU_LO = 0.003, PCT_TAU_HI = 0.3, PCT_FREQ = 0.15;
   function percentileVsNFL(decs) {
     const my = decs.reduce((a, x) => a + x.cost, 0);
     const R = rng(hash('pct', dayN)), N = 4000;
-    const ws = decs.map((x) => {
-      const w = x.wps.map((o) => (x.q[o.key] || 0) * (dayN >= PCT_FROM ? Math.exp((o.wp - x.bestWp) / PCT_TAU) : 1));
+    const mixed = dayN >= PCT_FROM;
+    const weights = (x, tau) => {
+      const w = x.wps.map((o) => (x.q[o.key] || 0) * (tau ? Math.exp((o.wp - x.bestWp) / tau) : 1));
       const t = w.reduce((a, b) => a + b, 0);
-      return t > 0 ? w.map((v) => v / t) : w;
-    });
+      return t > 0 ? w.map((v) => v / t) : w.map(() => 1 / w.length);
+    };
+    const freqW = decs.map((x) => weights(x, 0));
+    const lnLo = Math.log(PCT_TAU_LO), lnSpan = Math.log(PCT_TAU_HI) - lnLo;
     let better = 0;
     for (let s = 0; s < N; s++) {
+      const tau = !mixed || R() < PCT_FREQ ? 0 : Math.exp(lnLo + R() * lnSpan);
       let tot = 0;
       for (let i = 0; i < decs.length; i++) {
-        const x = decs[i], u = R();
+        const x = decs[i], w = tau ? weights(x, tau) : freqW[i], u = R();
         let acc = 0, pick = x.wps[x.wps.length - 1];
-        for (let j = 0; j < x.wps.length; j++) { acc += ws[i][j]; if (u <= acc) { pick = x.wps[j]; break; } }
+        for (let j = 0; j < x.wps.length; j++) { acc += w[j]; if (u <= acc) { pick = x.wps[j]; break; } }
         tot += Math.max(0, x.bestWp - pick.wp);
       }
       if (tot > my + 1e-9) better += 1; else if (Math.abs(tot - my) <= 1e-9) better += 0.5;
