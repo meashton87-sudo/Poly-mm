@@ -1287,14 +1287,18 @@
     // who didn't catch it got a bad ball (which the play then shows). Buckets in yards, how often throws find each,
     // and the completion rate in each (approximate, after NGS).
     const SEP = [[0.4, 1], [1, 2], [2, 3], [3, 5], [5, 8]], SEP_P = [0.2, 0.27, 0.2, 0.2, 0.13], SEP_C = [0.42, 0.58, 0.7, 0.79, 0.87];
-    function separationFor(caught, yac, R) {
+    // an incompletion is drawn contested: a man at most ~3.5 yd off (3 on a deep ball), never wide open. NFL tracking has
+    // some throws to open men falling incomplete, but drawn that way they read as a rigged game (players said so)
+    function separationFor(caught, yac, R, air) {
       const w = SEP_P.map((p, i) => p * (caught ? SEP_C[i] : 1 - SEP_C[i]));
+      if (!caught) { w[4] = 0; }
       if (caught && yac >= 8) { w[0] = 0; w[1] *= 0.4; }                  // a long run after the catch: he was loose
       if (caught && yac >= 15) { w[1] = 0; w[2] *= 0.4; }
       const tot = w.reduce((a, b) => a + b, 0);
       let u = R() * tot, i = 0;
       while (i < w.length - 1 && u > w[i]) { u -= w[i]; i++; }
-      return { sep: SEP[i][0] + R() * (SEP[i][1] - SEP[i][0]), bucket: i };
+      const sep = SEP[i][0] + R() * (SEP[i][1] - SEP[i][0]);
+      return { sep: caught ? sep : Math.min(sep, air >= 15 ? 3 : 3.5), bucket: i };
     }
 
     function pass(c, id, sign) {
@@ -1396,7 +1400,7 @@
       const caught = !intc && (!e.incomplete || e.evt === 'drop');
       const graded = !thrownAway && kind !== 'hail' && e.evt !== 'throwaway';
       const sepd = !graded ? null : intc ? { sep: 0.4 + R() * 0.5, bucket: 0 } : e.evt === 'near_pick' ? { sep: 0.4 + R() * 0.6, bucket: 0 }
-        : separationFor(caught, Math.max(0, (e.yards || 0) - air), R);
+        : separationFor(caught, Math.max(0, (e.yards || 0) - air), R, air);
       let shadow = null;
       if (sepd) {
         const tS = Math.max(REACT_DEF + 0.3, tThrow - 1.6);
