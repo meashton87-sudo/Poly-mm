@@ -148,6 +148,18 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     if await page.locator('meta[name="ad-slot"]').count() and not await page.locator("#done .adbox ins.adsbygoogle").count():
                         problems.append("ads are on but the results screen has no ad spot")
                         continue
+                    # the stats modal: a finished day or run shows how you call it, counting every graded call
+                    if "tend" not in chaos_done:
+                        chaos_done.add("tend"); act("stats after finishing")
+                        await page.click("#statsBtn", timeout=3000)
+                        await page.wait_for_timeout(300)
+                        calls = await page.evaluate("() => { const b = document.querySelector('#modal .tend .stats b'); return b ? Number(b.textContent) : -1; }")
+                        if calls < 1:
+                            problems.append(f"the stats modal shows no tendencies after a finished game (calls graded: {calls})")
+                        else:
+                            print(f"tendencies: {calls} calls graded, {await page.evaluate("() => document.querySelectorAll('#modal .tend .tr').length")} traits")
+                        await page.click("#mClose", timeout=3000)
+                        await page.wait_for_timeout(200)
                     if mode == "daily":
                         finished = max(finished, 1)
                         break
