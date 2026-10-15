@@ -2658,7 +2658,11 @@
           k === 'timeout' ? `${r.to[me]} left` : k === 'rundown' ? `timeout at 0:0${RUNDOWN_AT}, then kick` : null]));
       }
       const { specials } = callOptions(r);
-      specials.forEach((k) => extra.push([k, specialLabel(k), k === 'fg' ? `${Math.round(G.info.fgDist)} yards${r.clock_running && halfLeft(r.t) < 12 ? ' · a rush to get it off' : ''}` : null]));
+      // the kick's real odds on the button (this kicker, this distance, the weather; a rushed kick a little less), so
+      // a miss reads as the 1-in-5 it was, not a rigged game
+      const rush = r.clock_running && halfLeft(r.t) < 12;
+      const pFg = G.info.pFg == null ? null : rush ? 1 / (1 + Math.exp(-(Math.log(G.info.pFg / Math.max(1e-9, 1 - G.info.pFg)) - 0.3))) : G.info.pFg;
+      specials.forEach((k) => extra.push([k, specialLabel(k), k === 'fg' ? `${Math.round(G.info.fgDist)} yards${pFg != null ? ` · ${Math.round(pFg * 100)}% to make` : ''}${rush ? ' · rushed' : ''}` : null]));
       if (extra.length) {
         const row = el('div', 'keys');
         row.style.setProperty('--cols', Math.min(extra.length, 4));
@@ -3090,7 +3094,8 @@
         opts: [{ key: 'timeout', label: 'Timeout', sub: `${r.to[me]} left`, action: { to_def: true } }, { key: 'no_timeout', label: 'Let it run', action: { to_def: false } }],
         q: () => coachProbs('def_timeout', r, me) || { timeout: 0.15, no_timeout: 0.85 } },
       pat: { ask: 'Touchdown!', sub: 'Kick it or go for two?', family: 'pat',
-        opts: [{ key: 'xp', label: 'Kick it', action: { pat: 'xp' } }, { key: 'two', label: 'Go for two', action: { pat: 'two' } }],
+        opts: [{ key: 'xp', label: 'Kick it', sub: 'About 19 in 20 go in', action: { pat: 'xp' } },
+          { key: 'two', label: 'Go for two', sub: 'About half convert', action: { pat: 'two' } }],
         q: () => coachProbs('pat', r, me) || { xp: 0.9, two: 0.1 } },
       // 2025 rules: a touchback off a kickoff comes out to the 35, and only a team that is behind may declare an onside
       // kick; in 2025, 18% of kickoffs were kicked through for the touchback (q)
