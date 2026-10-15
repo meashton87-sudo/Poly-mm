@@ -6,6 +6,7 @@
 //   DELETE /board?name=Eli  (Authorization: Bearer <ADMIN_TOKEN>)          remove a row (no ADMIN_TOKEN secret: off)
 //   GET    /daily?date=2026-10-14                         -> that day's players: { n, hist, spots, top }
 //   GET    /days                                           -> every day played: { days: [{ date, n, avg, best }] }
+//   GET    /madden                                         -> every John Madden found: { odds, finds: [{ date, at, code }] }
 //   POST   /daily  { date, key, p, spots: [w, ...], name? }  -> the same, after counting your result (1-3 spots: the
 //                                                             day's drive, or the three spots days had before)
 // The daily game: every device's first result of a day counts once (a replay of the day changes nothing). p is the
@@ -46,6 +47,22 @@ function blocked(name) {
   return words.some((w) => WORD.includes(w) || WORD.includes(squash(w)));
 }
 const shown = (rows) => rows.filter((r) => !blocked(r.name));
+// The rare one (the #HuntForMadden): a device's first counted daily result is John Madden one time in MADDEN_ODDS, by a
+// draw from a secret the pages never see (env.MADDEN_SECRET, else one made at random on first use and kept in
+// storage), so it can't be faked on the page or worked out in advance. Each find gets a claim code (shown on the card)
+// and goes on the public list with the time, earliest first: the first code on the list is the first find.
+const MADDEN_ODDS = 50000, MADDEN_KEEP = 2000;
+async function maddenSecret(env, storage) {
+  if (env.MADDEN_SECRET) return String(env.MADDEN_SECRET);
+  let s = await storage.get('madden:secret');
+  if (!s) { s = Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, '0')).join(''); await storage.put('madden:secret', s); }
+  return s;
+}
+async function maddenDraw(env, storage, kh, date) {
+  const sec = await maddenSecret(env, storage), d = await sha256(`${sec}:draw:${kh}:${date}`);
+  if (parseInt(d.slice(0, 12), 16) / 2 ** 48 >= 1 / MADDEN_ODDS) return null;
+  return (await sha256(`${sec}:code:${kh}:${date}`)).slice(0, 8).toUpperCase();
+}
 
 function cors(req, env) {
   const allowed = String(env.ALLOWED_ORIGINS || '*').split(',').map((s) => s.trim()).filter(Boolean);
@@ -145,7 +162,8 @@ async function daily(req, env, storage, hits, h, url) {
       await storage.put(`day:${date}`, day);
       if (unclaimed) await claim(storage, name.toLowerCase(), kh);
     }
-    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots }, ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}) }, 200, h);
+    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots }, ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}),
+      ...(prev.madden ? { madden: prev.madden } : {}) }, 200, h);
   }
   const pt = Math.round(p * 100);
   day.n += 1;
@@ -157,10 +175,16 @@ async function daily(req, env, storage, hits, h, url) {
     day.top = day.top.slice(0, DAY_TOP);
   }
   const you = { p, spots };
-  await storage.put(mine, { ...you, ...(name && !taken ? { name } : {}) });
+  const madden = await maddenDraw(env, storage, kh, date);
+  if (madden) {
+    const list = (await storage.get('madden:list')) || [];
+    list.push({ date, at: new Date().toISOString(), code: madden });
+    await storage.put('madden:list', list.slice(-MADDEN_KEEP));
+  }
+  await storage.put(mine, { ...you, ...(name && !taken ? { name } : {}), ...(madden ? { madden } : {}) });
   await storage.put(`day:${date}`, day);
   if (unclaimed && name) await claim(storage, name.toLowerCase(), kh);
-  return json({ ...dayView(day), counted: true, you, ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}) }, 200, h);
+  return json({ ...dayView(day), counted: true, you, ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}), ...(madden ? { madden } : {}) }, 200, h);
 }
 
 // The board itself: `storage` is the Durable Object's (get/put), `hits` its in-memory per-IP counts.
@@ -169,6 +193,8 @@ export async function handle(req, env, storage, hits) {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: h });
   if (url.pathname === '/daily') return daily(req, env, storage, hits, h, url);
   if (url.pathname === '/days') return req.method === 'GET' ? days(storage, h) : json({ error: 'method' }, 405, h);
+  if (url.pathname === '/madden') return req.method === 'GET' ? json({ odds: MADDEN_ODDS, finds: (await storage.get('madden:list')) || [] }, 200, h)
+    : json({ error: 'method' }, 405, h);
   if (url.pathname !== '/board') return json({ error: 'not found' }, 404, h);
   const readAll = async () => { const all = await storage.get('runs'); return Array.isArray(all) ? all : []; };
   if (req.method === 'GET') return json({ rows: ranked(await readAll()) }, 200, h);
@@ -215,7 +241,7 @@ export class Board {
 export default {
   fetch(req, env) {
     const url = new URL(req.url);
-    if (req.method === 'OPTIONS' || !['/board', '/daily', '/days'].includes(url.pathname)) return handle(req, env, null, null);
+    if (req.method === 'OPTIONS' || !['/board', '/daily', '/days', '/madden'].includes(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },
 };

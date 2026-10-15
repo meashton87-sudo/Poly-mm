@@ -3664,15 +3664,17 @@
     return { el: box, name: c.name };
   }
 
-  // The rare one: John Madden (no play-by-play from his years, so never a match on tendencies): one finished daily
-  // drive in MADDEN_ODDS, by a draw fixed for this device and day (a reload or a replay of the day never redraws it)
-  const MADDEN_ODDS = 50000;
-  const maddenDay = () => rng(hash('madden', deviceKey(), dayN))() < 1 / MADDEN_ODDS;
-  function maddenCard() {
+  // The rare one: John Madden (the #HuntForMadden; no play-by-play from his years, so never a match on tendencies).
+  // The draw is the leaderboard server's (board/worker.js: about one first daily finish in 50,000, from a secret the page
+  // never sees, so it can't be faked here); it answers the day's result with a claim code, shown on the card and kept
+  // on its public list (/madden) with the time
+  let onMadden = null;
+  function maddenCard(code) {
     const box = el('div', 'coach madden');
     box.append(el('div', 'rare', '★ Rare'), el('div', 'k', 'Today you coached like'), el('div', 'name', 'John Madden'),
       el('div', 'why', 'The rarest coach in the game: about 1 in 50,000 drives. Boom!'),
-      el('div', 'meta', 'Raiders · 1969–1978 · 103–32–7 · Super Bowl XI champion · never a losing season'));
+      el('div', 'meta', 'Raiders · 1969–1978 · 103–32–7 · Super Bowl XI champion · never a losing season'),
+      el('div', 'claim', `Claim code ${code} · #HuntForMadden`));
     box.title = 'The rare one: about 1 in 50,000 finished daily drives.';
     return { el: box, name: 'John Madden', rare: true };
   }
@@ -4147,7 +4149,7 @@
     const p = decs.length ? percentileVsNFL(decs) : 0;
     const wpa = decs.reduce((a, x) => a + x.wpa, 0);
     const st = load(`${STORE}:stats`, { days: {} });
-    const cc = maddenDay() ? maddenCard() : coachCard(decs, 'Today you coached like');
+    const cc = coachCard(decs, 'Today you coached like');
     st.days[dayN] = { p, wpa, coach: cc ? cc.name : null };
     save(`${STORE}:stats`, st);
     const firstFinish = !state.done;
@@ -4175,7 +4177,6 @@
     });
     const met = rec[0] + rec[1] + rec[2], recTxt = `${rec[0]}-${rec[1]}${rec[2] ? `-${rec[2]}` : ''}`;
     liveDrive.on = false;
-    if (firstFinish && cc && cc.rare) track('madden', { day: dayN });
     if (firstFinish) track('daily_finish', { day: dayN, kind: today[0] && today[0].category, score: Math.round(p * 100),
       vs_coach: rec[0] ? 'better' : rec[1] ? 'worse' : met ? 'same' : 'none', snaps: decs.length });
     // one drive: a sentence, not a record
@@ -4191,14 +4192,26 @@
         el('span', 'sub', `${rec[0]} better, ${rec[1]} worse${rec[2] ? `, ${rec[2]} the same` : ''}`));
       box.insertBefore(v, box.children[3] || null);
     }
-    const text = `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}${cc.rare ? ' 🏆' : ''}` : ''}${vs}` +
+    const text = `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
       `${streak >= 2 ? `\n🔥 ${streak}-day streak` : ''}\n${rows.join('\n')}\nCan you beat me? ${SITE}`;
     // sharing is how new players find the game: the button sits right under the result, not below the standings
+    const share = { text };
     const pre = el('div', 'grid-share', text);
     const btn = el('button', 'btn', 'Share your score');
     btn.type = 'button';
-    btn.addEventListener('click', () => shareText(text, pre, 'daily'));
+    btn.addEventListener('click', () => shareText(share.text, pre, 'daily'));
     box.insertBefore(pre, dbox);
+    // the server drew John Madden for this result: his card in place of the match, his line in the share text
+    onMadden = (code) => {
+      const m = maddenCard(code), old = box.querySelector('.coach');
+      if (old) old.replaceWith(m.el); else box.insertBefore(m.el, pre);
+      const line = `Coached like John Madden 🏆 (${code})`;
+      share.text = cc ? share.text.replace(`Coached like ${cc.name}`, line) : share.text.replace(/\n/, `\n${line}\n`);
+      pre.textContent = share.text;
+      const stt = load(`${STORE}:stats`, { days: {} });
+      if (stt.days[dayN]) { stt.days[dayN].coach = 'John Madden'; stt.days[dayN].madden = code; save(`${STORE}:stats`, stt); }
+      if (!state.madden) { state.madden = code; saveState(); track('madden', { day: dayN }); }
+    };
     box.insertBefore(btn, dbox);
     box.append(countdown(streak >= 1 ? 'Keep the streak: next drive in ' : null));
     const ad = adBox();
@@ -4235,7 +4248,7 @@
     };
     let retried = false;
     const refresh = async (force) => {
-      try { fillDaily(box, await post(), p, spotW, () => refresh(true)); } catch (e) {
+      try { const d = await post(); fillDaily(box, d, p, spotW, () => refresh(true)); if (d.madden && onMadden) onMadden(d.madden); } catch (e) {
         if (force) toast('Could not reach today’s stats');
         else if (!retried) { retried = true; setTimeout(() => { if (box.isConnected) refresh(false); }, 5000); }   // once: a busy moment
       }

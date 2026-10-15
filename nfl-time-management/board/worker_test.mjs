@@ -140,4 +140,29 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   b = await (await call('GET')).json();
   assert.ok(!b.rows.some((x) => x.name === 'b!tch'), 'a stored row with such a name is left out');
 }
+// the #HuntForMadden: the draw is the server's (a secret the page never sees). With a known secret, find a device that
+// draws him: its first result of the day gets a claim code, the public list has it with the time, a replay of the day
+// returns the same code, and anyone else's result doesn't get one
+{
+  const { createHash } = await import('node:crypto');
+  const hex = (x) => createHash('sha256').update(x).digest('hex');
+  board.env.MADDEN_SECRET = 'test-madden-secret';
+  let lucky = null;
+  for (let i = 0; i < 2e6 && !lucky; i++) {
+    const k = `madden-device-key-${i}`, d = hex(`test-madden-secret:draw:${hex(k)}:${today}`);
+    if (parseInt(d.slice(0, 12), 16) / 2 ** 48 < 1 / 50000) lucky = k;
+  }
+  assert.ok(lucky, 'a device that draws him');
+  const plain = await (await day({ date: today, key: 'unlucky-device-key-00001', p: 0.5, spots: [0, 0, 0] })).json();
+  assert.strictEqual(plain.madden, undefined, 'an ordinary result: no Madden');
+  const got = await (await day({ date: today, key: lucky, p: 0.3, spots: [0, 0, 0] })).json();
+  assert.ok(/^[0-9A-F]{8}$/.test(got.madden), 'a claim code: ' + JSON.stringify(got).slice(0, 200));
+  const again = await (await day({ date: today, key: lucky, p: 0.9, spots: [0, 0, 0] })).json();
+  assert.strictEqual(again.madden, got.madden, 'a replay shows the same code');
+  const list = await (await call('GET', null, { path: '/madden' })).json();
+  assert.strictEqual(list.odds, 50000);
+  assert.deepStrictEqual(list.finds.map((f) => [f.date, f.code]), [[today, got.madden]], 'on the public list, once');
+  assert.ok(!JSON.stringify(list).includes(hex(lucky)) && !JSON.stringify(list).includes('test-madden-secret'), 'no key or secret shown');
+  delete board.env.MADDEN_SECRET;
+}
 console.log('board worker ok');
