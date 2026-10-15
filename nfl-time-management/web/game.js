@@ -3791,6 +3791,8 @@
       else renderSummary();
     });
     card.append(btn);
+    // survivor: an ad after each finished game, below the button (never between the player and it)
+    if (SURV) { const ad = adBox(); if (ad) card.append(ad); }
     d.append(card);
     drawTiles();
   }
