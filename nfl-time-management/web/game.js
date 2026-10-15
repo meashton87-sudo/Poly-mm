@@ -1085,7 +1085,8 @@
         follow(car, tC, B);
         tEnd = tC + Math.max(B.T, 0.25);
         // he goes at the right moment (a lineman, slow off his block, goes at once)
-        tGo = tackler.b.g === 'DL' || tackler.b.g === 'OL' ? t0 : clip(tC - reach[0].T / 0.82, t0, tC - 0.3);
+        // (he commits at once on a timed path to the meeting point, which he can make: a late start left him short)
+        tGo = t0;
         // until he goes, he closes on the play
         if (tGo > t0 + 0.05) leg(tackler, t0 + 0.15, 'chase', { who: car.b, gap: 4, eff: 0.6, lead: 1 });
         // a second man in, just after
