@@ -87,7 +87,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     page.on("requestfailed", lambda r: base in r.url and problems.append(f"request failed: {r.url} {r.failure}"))
     url = f"{base}/index.html" + ("#survivor" if mode == "survivor" else "")
     await page.goto(url)
-    finished = reloads = steps = 0
+    finished = reloads = steps = rundowns = 0
     last_key, since, chaos_done = None, time.time(), set()
     trail: list[str] = []            # the last screens and actions, printed with a failure
     first_q = None                   # the quarter a daily drive starts in: a first-half drive ends at halftime
@@ -164,6 +164,16 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         chaos_done.add("deep"); act("player ratings"); await page.click("#deepBtn", timeout=3000)
                     elif r < 0.12 and "bar" not in chaos_done:
                         chaos_done.add("bar"); act("game details"); await page.click("#bar", timeout=3000)
+                    elif await page.locator("#dock .key:visible", has_text="Run it down").count() and rnd.random() < 0.7:
+                        # burn the clock to 0:03, timeout, then the kick: the clock must read 0:03 after
+                        act("RUN IT DOWN"); rundowns += 1
+                        await page.locator("#dock .key:visible", has_text="Run it down").first.click(timeout=3000)
+                        for _ in range(80):
+                            await page.wait_for_timeout(100)
+                            if "0:03" in await page.evaluate("() => document.getElementById('bar').innerText"):
+                                break
+                        else:
+                            problems.append("ran the clock down, but the clock does not read 0:03")
                     elif r < 0.17 and "replay" not in chaos_done and await page.locator("#dock .replay:visible").count() \
                             and await page.locator("#dock .key.big:visible").count():
                         # a call tapped while a replay runs must be taken (it cuts the replay short), never dropped
@@ -223,7 +233,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 pass
         await ctx.close()
     return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
-            "secs": round(time.time() - t_start), "problems": problems[:5], "seps": seps, "trail": trail if problems else []}
+            "secs": round(time.time() - t_start), "rundowns": rundowns, "problems": problems[:5], "seps": seps, "trail": trail if problems else []}
 
 
 async def main(a) -> int:
@@ -259,6 +269,7 @@ async def main(a) -> int:
     open_inc = sum(1 for x in inc if x.get("actual", 0) >= 4)
     print(f"passes logged: {sum(len(r.get('seps', [])) for r in results)}, incomplete: {len(inc)}")
     # "Broken up" needs a defender at the ball (players saw it with nobody near)
+    print(f"run it down, timeout at 0:03: tapped {sum(r.get('rundowns', 0) for r in results)} times")
     late = sum(1 for r in results for x in r.get("seps", []) if x.get("late"))
     print(f"cover man too far to break it up (shown as a bad ball instead): {late} of {len(inc)} incompletions")
     lonely = [x for r in results for x in r.get("seps", []) if x.get("label") == "Broken up" and x.get("ballD", 0) > 3]
