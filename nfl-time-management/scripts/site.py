@@ -88,10 +88,26 @@ ADSENSE_TAG = ("<meta name=\"google-adsense-account\" content=\"{id}\">"
                "<script async src=\"https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={id}\" crossorigin=\"anonymous\"></script>")
 
 
-def ads_head(adsense: str | None, ad_slot: str | None) -> str:
-    if not adsense:
+# Another ad network's banner (Adsterra and the like, whose approval is quicker than AdSense's): its ad code, as the
+# network gives it, in web/ads/banner.html (a first line "<!-- size: 300x250 -->" gives the unit's size). The site
+# serves it as its own page (ad-banner.html) that the game and the stats page show in a sandboxed frame, between games
+# only. Lines in web/ads/ads.txt go into ads.txt after Google's.
+BANNER = WEB / "ads" / "banner.html"
+
+
+def banner_meta() -> str:
+    if not BANNER.exists() or not BANNER.read_text().strip():
         return ""
-    return ADSENSE_TAG.format(id=adsense) + (f"<meta name=\"ad-slot\" content=\"{ad_slot}\">" if ad_slot else "")
+    m = re.search(r"size:\s*(\d+)x(\d+)", BANNER.read_text())
+    size = f"{m.group(1)}x{m.group(2)}" if m else "300x250"
+    return f'<meta name="ad-frame" content="ad-banner.html" data-size="{size}">'
+
+
+def ads_head(adsense: str | None, ad_slot: str | None) -> str:
+    out = banner_meta()
+    if not adsense:
+        return out
+    return ADSENSE_TAG.format(id=adsense) + (f"<meta name=\"ad-slot\" content=\"{ad_slot}\">" if ad_slot and not out else "") + out
 
 
 GA_TAG = ("<script async src=\"https://www.googletagmanager.com/gtag/js?id={id}\"></script>"
@@ -205,8 +221,15 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     (out / "sitemap.xml").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
         + "".join(f"  <url><loc>{base}/{p}</loc><lastmod>{day}</lastmod><changefreq>{'daily' if p in ('', 'stats') else 'monthly'}</changefreq>"
                   f"<priority>{pr}</priority></url>\n" for p, _, pr in PAGES) + "</urlset>\n")
-    if adsense:                              # ads.txt: who may sell this site's ad space (Google's line, with our id)
-        (out / "ads.txt").write_text(f"google.com, {adsense.replace('ca-', '', 1)}, DIRECT, f08c47fec0942fa0\n")
+    # ads.txt: who may sell this site's ad space (Google's line, with our id, then any other network's lines)
+    extra = (WEB / "ads" / "ads.txt").read_text().strip() if (WEB / "ads" / "ads.txt").exists() else ""
+    lines = ([f"google.com, {adsense.replace('ca-', '', 1)}, DIRECT, f08c47fec0942fa0"] if adsense else []) + ([extra] if extra else [])
+    if lines:
+        (out / "ads.txt").write_text("\n".join(lines) + "\n")
+    if banner_meta():                        # the banner's own page (the frame's)
+        (out / "ad-banner.html").write_text('<!doctype html><html><head><meta charset="utf-8"><meta name="robots" content="noindex">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;padding:0;overflow:hidden;'
+            'background:transparent;display:flex;justify-content:center}</style></head><body>' + BANNER.read_text() + "</body></html>\n")
     for f in FILES:
         shutil.copy2(WEB / f, out / f)
     for f, p in PACKED.items():

@@ -4221,6 +4221,18 @@
   // An ad unit (Google AdSense, the website only: site.py --adsense --ad-slot), only on screens between games, never
   // while a drive is on, labeled as an ad. Nothing without both metas (claude.ai, local copies, the test builds).
   function adBox() {
+    // another network's banner (site.py: web/ads/banner.html, e.g. Adsterra): in a sandboxed frame of its own, so its
+    // script can't touch the game or send the page elsewhere (a tap on the ad still opens it in a new tab)
+    const frame = document.querySelector('meta[name="ad-frame"]');
+    if (frame) {
+      const [w, h] = (frame.dataset.size || '300x250').split('x').map(Number), box = el('div', 'adbox');
+      const f = document.createElement('iframe');
+      Object.assign(f, { src: frame.content, title: 'Advertisement', loading: 'lazy', width: w, height: h, scrolling: 'no' });
+      f.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox');
+      f.style.cssText = `display:block;margin:0 auto;border:0;max-width:100%;width:${w}px;height:${h}px`;
+      box.append(el('div', 'adlab', 'Advertisement'), f);
+      return box;
+    }
     const client = document.querySelector('meta[name="google-adsense-account"]'), slot = document.querySelector('meta[name="ad-slot"]');
     if (!client || !slot) return null;
     const box = el('div', 'adbox'), ins = document.createElement('ins');
