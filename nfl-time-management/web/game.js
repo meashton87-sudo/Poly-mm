@@ -1068,9 +1068,12 @@
       let A = runFrom(car, t0, route, { eff: o.eff ?? 0.97, v1: tackled ? 3.4 : undefined });
       let tC = t0 + A.T;
       // who gets there: the defender with the shortest time to the contact point, from where he is now
+      // (from where he is, carrying his momentum the way runFrom does: a man going full speed the other way first
+      // has to turn, so he is slower to get there than from a standing start)
       const reach = defs.map((d) => {
-        const p = here(d), s = vel(d), cosv = s > 0.5 ? ((contact[0] - p[0]) * d.b.vx + (contact[1] - p[1]) * d.b.vy) / (s * (dist(p, contact) || 1)) : 0;
-        return { d, T: Motion.minTime([p, contact], d.b.g, { v0: Math.max(0, s * cosv), spd: d.b.spd }) };
+        const p = here(d), s = vel(d), st = [p];
+        if (s > 1.2) { const k = Math.min(4, Math.max(1, s * 0.45)) / s; st.push([d.b.x + d.b.vx * k, d.b.y + d.b.vy * k]); }
+        return { d, T: Motion.minTime(st.concat([contact]), d.b.g, { v0: s, spd: d.b.spd }) };
       }).sort((x, y) => x.T - y.T);
       let tackler = null, tEnd = tC, tGo = t0, B = null;
       if (tackled && reach.length) {
