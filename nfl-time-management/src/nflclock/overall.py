@@ -66,15 +66,15 @@ def _z(x: pd.Series, ref: pd.Series) -> pd.Series:
 def _load(seasons=None):
     seasons = sorted(seasons or SEASON_W)
     T = PL.load_tables(seasons)
-    st = pd.concat([pd.read_parquet(PL._get("stats_player", f"stats_player_week_{s}.parquet")) for s in seasons], ignore_index=True)
+    st = PL.read_seasons("stats_player", "stats_player_week_{s}.parquet", seasons)
     st = st[st["season_type"] == "REG"]
     ngs = {k: pd.read_parquet(PL._get("nextgen_stats", f"ngs_{k}.parquet")) for k in ("rushing", "receiving")}
     ngs = {k: v[(v["week"] > 0) & v["season"].isin(seasons)] for k, v in ngs.items()}
     cols = ["season", "season_type", "game_id", "posteam", "id", "qb_dropback", "qb_epa", "play_type", "rusher_player_id",
             "qb_scramble", "epa", "two_point_attempt", "week"]
-    pbp = pd.concat([pd.read_parquet(config.RAW_DIR / f"play_by_play_{s}.parquet", columns=cols) for s in seasons], ignore_index=True)
+    pbp = pd.concat([pd.read_parquet(PL.pbp_path(s), columns=cols) for s in seasons], ignore_index=True)
     pbp = pbp[(pbp["season_type"] == "REG") & (pbp["two_point_attempt"].fillna(0) == 0)]
-    T["rec"] = pd.concat([pd.read_parquet(PL._get("pfr_advstats", f"advstats_week_rec_{s}.parquet")) for s in seasons], ignore_index=True)
+    T["rec"] = PL.read_seasons("pfr_advstats", "advstats_week_rec_{s}.parquet", seasons)
     return T, st, ngs, pbp
 
 
@@ -293,9 +293,10 @@ DRAFT_FADE = 0.25                                     # where he was drafted cou
 ASOF_FIRST = 2019                                     # earliest season loaded (the 2023 spots look back four seasons)
 
 
-def load_asof():
-    """Everything ratings_asof needs, every season it can look back to."""
-    return _load(range(ASOF_FIRST, max(SEASON_W) + 1))
+def load_asof(first: int = ASOF_FIRST):
+    """Everything ratings_asof needs, every season it can look back to (from `first`: a spot four seasons after it
+    looks back that far)."""
+    return _load(range(min(first, ASOF_FIRST), max(SEASON_W) + 1))
 
 
 def _before(df: pd.DataFrame, season: int, week: int) -> pd.DataFrame:

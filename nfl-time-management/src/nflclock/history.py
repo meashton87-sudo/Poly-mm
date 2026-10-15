@@ -17,10 +17,13 @@ Nothing after the game is used (the daily game's rule, as for grading).
 """
 from __future__ import annotations
 
+import urllib.error
+import urllib.request
 from collections import Counter
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from . import archetypes as AR
 from . import coaches as CO
@@ -29,6 +32,9 @@ from . import live
 from . import overall as O
 from . import players as PL
 from . import playbook as P
+from . import ratings as TR
+
+SEASONS = (2023, 2024, 2025, 2026)     # the daily game's own seasons; a featured spot can come from any season since 2012
 
 OL_SLOTS = ["LT", "LG", "C", "RG", "RT"]
 OFF_POS = {"QB": "QB", "RB": "RB", "HB": "RB", "FB": "RB", "WR": "WR", "TE": "TE",
@@ -56,27 +62,48 @@ def _ol_slots(players: list) -> list:
     return out + [(pid, "TE") for pid in extra]          # an extra lineman lines up as a tight end
 
 
+def _participation(season: int):
+    """The season's NGS participation file (2016 on), downloaded once; None when it is not published."""
+    p = config.RAW_DIR / f"pbp_participation_{season}.parquet"
+    if not p.exists():
+        tmp = p.with_suffix(".part")
+        try:
+            urllib.request.urlretrieve(P.PART_URL.format(season=season), tmp)
+        except urllib.error.HTTPError:
+            return None
+        tmp.replace(p)
+    return p
+
+
 class History:
-    def __init__(self, bundle, lib: pd.DataFrame):
+    def __init__(self, bundle, lib: pd.DataFrame, seasons=SEASONS, pbp: pd.DataFrame | None = None):
+        """seasons: every season a spot can come from; pbp: the enriched play-by-play (data.load) covering them, for
+        the team ratings of seasons before the bundle's."""
         self.bundle, self.lib = bundle, lib
+        self.seasons, self.pbp_full, self.extra_tr = tuple(sorted(seasons)), pbp, {}
         self.part = {}
-        for s in (2023, 2024, 2025, 2026):
-            p = config.RAW_DIR / f"pbp_participation_{s}.parquet"
-            if p.exists():
-                f = pd.read_parquet(p, columns=["nflverse_game_id", "play_id", "possession_team", "offense_players",
-                                                "offense_positions", "defense_players", "defense_positions"])
+        for s in self.seasons:
+            p = _participation(s)
+            if p is not None:
+                cols = ["nflverse_game_id", "play_id", "possession_team", "offense_players", "defense_players"]
+                have = set(pq.read_schema(p).names)     # the files before 2023 list the players but not their positions
+                pos_cols = [c for c in ("offense_positions", "defense_positions") if c in have]
+                f = pd.read_parquet(p, columns=cols + pos_cols)
+                for c in ("offense_positions", "defense_positions"):
+                    if c not in f:
+                        f[c] = None
                 self.part[s] = f.rename(columns={"nflverse_game_id": "game_id"})
         self.R, self.meas, self.cards, self.pbp_raw, self.ovr, self.ovr_data = {}, {}, {}, {}, {}, None
-        full = pd.read_parquet(PL._get("players", "players.parquet"), columns=["gsis_id", "display_name", "height", "weight"])
+        full = pd.read_parquet(PL._get("players", "players.parquet"), columns=["gsis_id", "display_name", "height", "weight", "position"])
         full = full.drop_duplicates("gsis_id").set_index("gsis_id")
         self.names, self.body = full["display_name"].to_dict(), full[["height", "weight"]]
+        self.pos_now = full["position"].dropna().to_dict()        # a player's position today: the old participation files have none
         num = pd.read_parquet(PL._get("players", "players.parquet"), columns=["gsis_id", "pfr_id", "jersey_number"]).dropna(subset=["jersey_number"])
         self.num_now = {**dict(zip(num["pfr_id"].dropna(), num["jersey_number"])), **dict(zip(num["gsis_id"], num["jersey_number"]))}
         self.jerseys = {}
         cols = ["game_id", "play_id", "season", "week", "posteam", "defteam", "play_type", "kicker_player_id",
                 "punter_player_id", "passer_player_id", "qb_dropback"]
-        self.pbp = pd.concat([pd.read_parquet(config.RAW_DIR / f"play_by_play_{s}.parquet", columns=cols)
-                              for s in (2023, 2024, 2025, 2026)], ignore_index=True)
+        self.pbp = pd.concat([pd.read_parquet(PL.pbp_path(s), columns=cols) for s in self.seasons], ignore_index=True)
         self.pfr_names = {}
         # participation rows of real offensive snaps only (not kicks, punts or kneels)
         scrim = self.pbp[self.pbp["play_type"].isin(["run", "pass"])][["game_id", "play_id"]]
@@ -93,7 +120,7 @@ class History:
         """overall.ratings_asof for the week (ovr, pct by gsis id), cached."""
         if (season, week) not in self.ovr:
             if self.ovr_data is None:
-                self.ovr_data = O.load_asof()
+                self.ovr_data = O.load_asof(first=min(self.seasons) - 4)
             self.ovr[(season, week)] = O.ratings_asof(season, week, self.ovr_data)[["ovr", "pct"]]
         return self.ovr[(season, week)]
 
@@ -110,14 +137,21 @@ class History:
     def raw(self, season: int) -> pd.DataFrame:
         if season not in self.pbp_raw:
             cols = ["season", "week", "posteam", "defteam", "qb_dropback", "epa", "passer_id", "name"]
-            self.pbp_raw[season] = pd.concat([pd.read_parquet(config.RAW_DIR / f"play_by_play_{s}.parquet", columns=cols)
+            self.pbp_raw[season] = pd.concat([pd.read_parquet(PL.pbp_path(s), columns=cols)
                                               for s in (season - 2, season - 1, season)], ignore_index=True)
         return self.pbp_raw[season]
 
     # ---- who was on the field
-    def _snap_units(self, game_id: str, season: int, play_id: float, team: str) -> dict:
+    def _game_positions(self, R: PL.Ratings, game_id: str) -> dict:
+        """Each player's position in that game, from its snap counts (the participation files before 2023 give none)."""
+        sn = R.T["snaps"]
+        g = sn[sn["game_id"] == game_id]
+        to_gsis = {v: k for k, v in R.gsis_to_pfr.items()}
+        return {to_gsis.get(p, "pfr:" + p): pos for p, pos in zip(g["pfr_player_id"], g["position"])}
+
+    def _snap_units(self, game_id: str, season: int, play_id: float, team: str, pos_of: dict | None = None) -> dict:
         """{'off': [(gsis, pos)], 'def': [(gsis, pos)]} for `team`: the given snap when it is on the field for it,
-        else the nearest snap of the game where that unit was."""
+        else the nearest snap of the game where that unit was; pos_of fills in positions the file does not give."""
         f = self.part.get(season)
         if f is None:
             return {}
@@ -131,7 +165,8 @@ class History:
                 continue
             r = rows.iloc[int(np.argmin(np.abs(rows["play_id"].to_numpy(float) - float(play_id))))]
             ids = str(r["offense_players" if unit == "off" else "defense_players"]).split(";")
-            pos = str(r["offense_positions" if unit == "off" else "defense_positions"]).split(";")
+            pc = r["offense_positions" if unit == "off" else "defense_positions"]
+            pos = str(pc).split(";") if isinstance(pc, str) and pc else [(pos_of or {}).get(i) or self.pos_now.get(i, "") for i in ids]
             if len(ids) == len(pos) == 11:
                 out[unit] = list(zip(ids, pos))
         return out
@@ -233,7 +268,10 @@ class History:
             placed = []
             for i, p in members:
                 pfr = R.gsis_to_pfr.get(i)
-                grp = (R.role.get(pfr) if pfr else None) or rt["grp"].get(pfr) or DEF_POS.get(p) or p
+                # his role today (PFF) tells an edge from an interior lineman; in an old game a corner who became a safety
+                # (or the reverse) was what that game's snap counts say
+                then = DEF_POS.get(p) if season < 2023 and p in ("CB", "DB", "S", "FS", "SS", "SAF") else None
+                grp = then or (R.role.get(pfr) if pfr else None) or rt["grp"].get(pfr) or DEF_POS.get(p) or p
                 placed.append((i, grp if grp in ("EDGE", "DL", "LB", "CB", "S") else DEF_POS.get(p, "LB")))
         line_pct, line_stat = rt["ol"].get(team, (None, None))
         ov = self.overall(season, week) if week is not None else None
@@ -279,8 +317,19 @@ class History:
         return recs
 
     # ---- the simulator's view of a team that week
-    def _strength(self, team: str, season: int, week: int, game_id: str, qb_id) -> dict:
+    def team_ratings(self, season: int) -> pd.DataFrame:
+        """The bundle's as-of team ratings (2023 on), plus the season's own fit (ratings.team_ratings on the play-by-play
+        of it and the two before) for a season before them."""
         tr = self.bundle.team_ratings
+        if season >= int(tr["season"].min()) or self.pbp_full is None:
+            return tr
+        if season not in self.extra_tr:
+            p = self.pbp_full[self.pbp_full["season"].between(season - 2, season)]
+            self.extra_tr[season] = TR.team_ratings(p, [season], current=False)
+        return pd.concat([self.extra_tr[season], tr], ignore_index=True)
+
+    def _strength(self, team: str, season: int, week: int, game_id: str, qb_id) -> dict:
+        tr = self.team_ratings(season)
         rows = tr[(tr["team"] == team) & ((tr["season"] < season) | ((tr["season"] == season) & (tr["week"] < week)))]
         if not len(rows):          # the ratings start in 2023: a 2023 week 1 game takes the team's first rating
             rows = tr[tr["team"] == team].sort_values(["season", "week"]).head(1)
@@ -327,7 +376,7 @@ class History:
         card = self.card(season, week)
         out = {}
         for side, team in (("home", home), ("away", away)):
-            units = self._snap_units(game_id, season, play_id, team)
+            units = self._snap_units(game_id, season, play_id, team, self._game_positions(R, game_id) if season < 2023 else None)
             if len(units) < 2:
                 units = {**self._snapcount_units(R, game_id, team), **units}
             off, dfn = units.get("off", []), units.get("def", [])

@@ -20,7 +20,19 @@
 // keeps; only its SHA-256 is stored), so nobody else can overwrite your score. Scores are not checked against the
 // runs that made them. Posts are limited per IP (RATE_PER_MIN a minute). The page may be served from another host,
 // so responses carry CORS headers for ALLOWED_ORIGINS (comma-separated; "*" = any).
+// Pro (a one-time purchase on Stripe Checkout: Apple Pay, Google Pay, Link and cards on Stripe's own page; needs the
+// secrets STRIPE_SECRET and the vars STRIPE_PRICE (a one-time price id) and SITE; without them /pay answers 503):
+//   GET    /pro                      -> { on, price }        whether payments are set up, and the price shown
+//   POST   /pay                      -> { url }              a Checkout session: send the player to url; Stripe sends
+//                                                            him back to SITE/?claim=<session id>
+//   POST   /claim   { s }            -> { code }             after paying: the session's Pro code (the same code
+//                                                            every time for one session; TMD-XXXX-XXXX-XXXX)
+//   POST   /restore { code }         -> { ok, code }         the code on another device (404 for one never issued)
+// A code is 12 letters and digits (no 0/O, 1/I/L) drawn at random: about 60 bits, posted at RATE_PER_MIN an IP.
+// Nothing about the buyer is kept here (Stripe has the receipt); only the session id behind each code.
 const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
+const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore'];
+const PRO_PRICE = '$4.99', PRO_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', SESSION_RE = /^cs_(test|live)_[A-Za-z0-9]{10,200}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const clean = (name) => String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
@@ -187,10 +199,75 @@ async function daily(req, env, storage, hits, h, url) {
   return json({ ...dayView(day), counted: true, you, ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}), ...(madden ? { madden } : {}) }, 200, h);
 }
 
+// ---- Pro
+const proOn = (env) => !!(env.STRIPE_SECRET && env.STRIPE_PRICE);
+function proCode() {
+  const b = crypto.getRandomValues(new Uint8Array(12));
+  const s = Array.from(b, (x) => PRO_ALPHABET[x % PRO_ALPHABET.length]).join('');     // 256 % 31 = 8: a slight lean, fine for a code
+  return `TMD-${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8)}`;
+}
+// a code as typed (any case, with or without dashes or the TMD) in its stored form, or null
+function normCode(c) {
+  let s = String(c ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (s.startsWith('TMD')) s = s.slice(3);
+  s = s.replace(/[0O]/g, 'O').replace(/O/g, '0').replace(/[1IL]/g, 'I');     // 0/O and 1/I/L are never in a code: a typo of either
+  s = s.replace(/0/g, '').replace(/I/g, '');
+  return /^[A-Z2-9]{12}$/.test(s) && [...s].every((ch) => PRO_ALPHABET.includes(ch)) ? `TMD-${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8)}` : null;
+}
+const stripe = (env, path, form) => fetch(`https://api.stripe.com/v1/${path}`, {
+  method: form ? 'POST' : 'GET',
+  headers: { Authorization: `Bearer ${env.STRIPE_SECRET}`, ...(form ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}) },
+  body: form ? new URLSearchParams(form) : undefined,
+});
+async function pro(req, env, storage, hits, h, url) {
+  if (url.pathname === '/pro') return req.method === 'GET' ? json({ on: proOn(env), price: PRO_PRICE }, 200, h) : json({ error: 'method' }, 405, h);
+  if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
+  if (!proOn(env)) return json({ error: 'payments are not set up yet' }, 503, h);
+  if (limited(req, hits)) return json({ error: 'slow down' }, 429, h);
+  let body = {};
+  if (url.pathname !== '/pay') {
+    try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
+  }
+  if (url.pathname === '/pay') {
+    const site = String(env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, '');
+    let r;
+    try {
+      r = await stripe(env, 'checkout/sessions', { mode: 'payment', 'line_items[0][price]': env.STRIPE_PRICE, 'line_items[0][quantity]': '1',
+        success_url: `${site}/?claim={CHECKOUT_SESSION_ID}`, cancel_url: `${site}/?pro=cancel` });
+    } catch (e) { return json({ error: 'stripe unreachable' }, 502, h); }
+    const sess = await r.json().catch(() => ({}));
+    if (!r.ok || !sess.url) return json({ error: 'stripe refused the session' }, 502, h);
+    return json({ url: sess.url }, 200, h);
+  }
+  if (url.pathname === '/claim') {
+    const s = String(body.s || '');
+    if (!SESSION_RE.test(s)) return json({ error: 'session wanted' }, 400, h);
+    const have = await storage.get(`pro:sess:${s}`);
+    if (have) return json({ code: have }, 200, h);
+    let r;
+    try { r = await stripe(env, `checkout/sessions/${s}`); } catch (e) { return json({ error: 'stripe unreachable' }, 502, h); }
+    const sess = await r.json().catch(() => ({}));
+    if (!r.ok) return json({ error: 'no such session' }, 404, h);
+    if (sess.payment_status !== 'paid') return json({ error: 'not paid' }, 402, h);
+    const code = proCode();
+    await storage.put(`pro:code:${code}`, { s, at: new Date().toISOString() });
+    await storage.put(`pro:sess:${s}`, code);
+    return json({ code }, 200, h);
+  }
+  if (url.pathname === '/restore') {
+    const code = normCode(body.code);
+    if (!code) return json({ error: 'a code looks like TMD-XXXX-XXXX-XXXX' }, 400, h);
+    const row = await storage.get(`pro:code:${code}`);
+    return row ? json({ ok: true, code }, 200, h) : json({ error: 'unknown code' }, 404, h);
+  }
+  return json({ error: 'not found' }, 404, h);
+}
+
 // The board itself: `storage` is the Durable Object's (get/put), `hits` its in-memory per-IP counts.
 export async function handle(req, env, storage, hits) {
   const h = cors(req, env), url = new URL(req.url);
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: h });
+  if (PRO_PATHS.includes(url.pathname)) return pro(req, env, storage, hits, h, url);
   if (url.pathname === '/daily') return daily(req, env, storage, hits, h, url);
   if (url.pathname === '/days') return req.method === 'GET' ? days(storage, h) : json({ error: 'method' }, 405, h);
   if (url.pathname === '/madden') return req.method === 'GET' ? json({ odds: MADDEN_ODDS, finds: (await storage.get('madden:list')) || [] }, 200, h)
@@ -242,7 +319,7 @@ export class Board {
 export default {
   fetch(req, env) {
     const url = new URL(req.url);
-    if (req.method === 'OPTIONS' || !['/board', '/daily', '/days', '/madden'].includes(url.pathname)) return handle(req, env, null, null);
+    if (req.method === 'OPTIONS' || ![...PRO_PATHS, '/board', '/daily', '/days', '/madden'].includes(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },
 };

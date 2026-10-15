@@ -61,7 +61,8 @@ def freeze(game_json=WEB / "game.json", out=FROZEN) -> dict:
 
 
 def candidates(pbp: pd.DataFrame, lib: pd.DataFrame, keep: dict | None = None) -> pd.DataFrame:
-    s = pbp[pbp["is_snap"] & pbp["season"].isin(SCENARIO_SEASONS) & pbp["play_type"].isin(["run", "pass"])
+    seasons = set(SCENARIO_SEASONS) | {int(k[:4]) for k in (keep or {})}     # a featured spot can be from any season
+    s = pbp[pbp["is_snap"] & pbp["season"].isin(seasons) & pbp["play_type"].isin(["run", "pass"])
             & pbp["posteam_timeouts_remaining"].notna() & pbp["defteam_timeouts_remaining"].notna()]
     s = s.sort_values(["game_id", "row_order"])
     first = s.groupby(["game_id", "fixed_drive"]).head(1)
@@ -96,12 +97,13 @@ def candidates(pbp: pd.DataFrame, lib: pd.DataFrame, keep: dict | None = None) -
 
 def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
     bundle = Bundle.load()
-    pbp = data.load(tuple(range(2016, max(SCENARIO_SEASONS) + 1)))
     lib = P.labeled_plays()
     P.export(lib, WEB / "playbook.json")
     frozen = json.loads(FROZEN.read_text()) if FROZEN.exists() else None
     featured = (frozen or {}).get("featured", {})
     keep = {**dict(map(tuple, frozen["spots"])), **{f["id"]: f["category"] for f in featured.values()}} if frozen else None
+    seasons = sorted(set(SCENARIO_SEASONS) | {int(k[:4]) for k in (keep or {})})
+    pbp = data.load(tuple(range(min(2016, min(seasons) - 2), max(seasons) + 1)))    # two seasons before the earliest: its team ratings
     cand = candidates(pbp, lib, keep=keep)
     rng = np.random.default_rng(seed)
     if frozen:
@@ -121,7 +123,7 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
     else:
         picks = {cat: cand[cand["category"] == cat].iloc[lambda d: rng.permutation(len(d))].head(days) for cat in CATEGORIES}
 
-    hist = HI.History(bundle, lib)
+    hist = HI.History(bundle, lib, seasons=seasons, pbp=pbp)
     tr = bundle.team_ratings
     last = tr[tr["season"] == season]
     last = last[last["week"] == last["week"].max()].iloc[0]

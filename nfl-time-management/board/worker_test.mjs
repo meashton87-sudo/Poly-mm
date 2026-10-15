@@ -171,4 +171,59 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.ok(q.rows.some((x) => x.name === 'Hearty' && x.life === true), 'the ❤️ mark');
   assert.ok(!q.rows.some((x) => x.name !== 'Hearty' && x.life), 'only on that run');
 }
+
+// ---- Pro: Stripe Checkout behind /pay, codes from /claim, /restore on another device (Stripe answered by a stub)
+{
+  const realFetch = globalThis.fetch;
+  const stripeCalls = [];
+  globalThis.fetch = async (u, init) => {
+    stripeCalls.push([u, init]);
+    if (u === 'https://api.stripe.com/v1/checkout/sessions') return new Response(JSON.stringify({ id: 'cs_test_new1234567890', url: 'https://checkout.stripe.com/c/pay/cs_test_new1234567890' }), { status: 200 });
+    if (u.endsWith('/checkout/sessions/cs_test_paid1234567890')) return new Response(JSON.stringify({ id: 'cs_test_paid1234567890', payment_status: 'paid' }), { status: 200 });
+    if (u.endsWith('/checkout/sessions/cs_test_open1234567890')) return new Response(JSON.stringify({ id: 'cs_test_open1234567890', payment_status: 'unpaid' }), { status: 200 });
+    return new Response(JSON.stringify({ error: { message: 'No such checkout.session' } }), { status: 404 });
+  };
+  const RATE = 30;      // RATE_PER_MIN in the worker
+  const pro = (method, path, body, o = {}) => call(method, body, { ...o, path });
+  // not set up: /pro says so and /pay refuses
+  assert.deepStrictEqual(await (await pro('GET', '/pro')).json(), { on: false, price: '$4.99' });
+  assert.strictEqual((await pro('POST', '/pay')).status, 503, 'no Stripe keys: 503');
+  for (const e of [env, board.env]) { e.STRIPE_SECRET = 'sk_test_x'; e.STRIPE_PRICE = 'price_123'; e.SITE = 'https://nfl2mindrill.com/'; }    // (board was remade above with its own env)
+  assert.deepStrictEqual(await (await pro('GET', '/pro')).json(), { on: true, price: '$4.99' });
+  r = await pro('POST', '/pay');
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual((await r.json()).url, 'https://checkout.stripe.com/c/pay/cs_test_new1234567890');
+  const [u0, init0] = stripeCalls[0];
+  assert.strictEqual(u0, 'https://api.stripe.com/v1/checkout/sessions');
+  assert.strictEqual(init0.headers.Authorization, 'Bearer sk_test_x');
+  const form = new URLSearchParams(init0.body);
+  assert.strictEqual(form.get('mode'), 'payment');
+  assert.strictEqual(form.get('line_items[0][price]'), 'price_123');
+  assert.strictEqual(form.get('success_url'), 'https://nfl2mindrill.com/?claim={CHECKOUT_SESSION_ID}', 'the site without its trailing slash');
+  // claiming: a paid session gets a code, the same one again; an unpaid or unknown one gets none
+  for (const bad of [{}, { s: 'cs_live_' }, { s: 'nope' }]) assert.strictEqual((await pro('POST', '/claim', bad)).status, 400, JSON.stringify(bad));
+  assert.strictEqual((await pro('POST', '/claim', { s: 'cs_test_open1234567890' })).status, 402, 'unpaid');
+  assert.strictEqual((await pro('POST', '/claim', { s: 'cs_test_gone1234567890' })).status, 404, 'unknown session');
+  r = await pro('POST', '/claim', { s: 'cs_test_paid1234567890' });
+  assert.strictEqual(r.status, 200);
+  const { code } = await r.json();
+  assert.match(code, /^TMD-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/, code);
+  assert.ok(!/[01IOL]/.test(code.slice(4)), 'no look-alike letters');
+  const n = stripeCalls.length;
+  assert.strictEqual((await (await pro('POST', '/claim', { s: 'cs_test_paid1234567890' })).json()).code, code, 'the same code again');
+  assert.strictEqual(stripeCalls.length, n, 'a known session is not asked of Stripe again');
+  assert.deepStrictEqual(Object.keys(store.get(`pro:code:${code}`)).sort(), ['at', 's'], 'only the session behind the code is kept');
+  // restoring: the code as typed, any case, dashes or not, with 0/1 for O/I corrected
+  const typed = code.toLowerCase().replace(/-/g, ' ').replace(/^tmd/, '');
+  r = await pro('POST', '/restore', { code: typed });
+  assert.deepStrictEqual(await r.json(), { ok: true, code });
+  assert.strictEqual((await pro('POST', '/restore', { code: 'TMD-AAAA-AAAA-AAAA' })).status, 404, 'never issued');
+  assert.strictEqual((await pro('POST', '/restore', { code: 'TMD-AAAA' })).status, 400, 'too short');
+  assert.strictEqual((await pro('POST', '/restore', {})).status, 400);
+  for (let i = 0; i < RATE; i++) await pro('POST', '/restore', { code: 'TMD-AAAA-AAAA-AAAB' }, { ip: '7.7.7.7' });
+  assert.strictEqual((await pro('POST', '/restore', { code: 'TMD-AAAA-AAAA-AAAB' }, { ip: '7.7.7.7' })).status, 429, 'guessing codes is rate limited');
+  assert.strictEqual((await pro('GET', '/pay')).status, 405);
+  globalThis.fetch = realFetch;
+  for (const e of [env, board.env]) { delete e.STRIPE_SECRET; delete e.STRIPE_PRICE; delete e.SITE; }
+}
 console.log('board worker ok');

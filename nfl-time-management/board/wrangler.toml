@@ -6,8 +6,12 @@ name = "two-minute-drill-board"
 main = "worker.js"
 compatibility_date = "2025-06-01"
 
+# Pro purchases: `npx wrangler secret put STRIPE_SECRET` (the Stripe secret key, sk_live_...), then STRIPE_PRICE below
+# (the one-time price id, price_...) and SITE (where Stripe sends the buyer back). Without them /pay answers 503.
 [vars]
 ALLOWED_ORIGINS = "https://nfl2mindrill.com,https://www.nfl2mindrill.com,https://nfl2mindrill.pages.dev"
+SITE = "https://nfl2mindrill.com"
+STRIPE_PRICE = ""
 
 [[durable_objects.bindings]]
 name = "BOARD"

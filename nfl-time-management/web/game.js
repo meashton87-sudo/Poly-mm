@@ -131,6 +131,8 @@
   // two modes: the daily three spots, or survivor (#survivor): random real fourth-quarter spots back to back, win to
   // keep going, one loss and the run is over (a tie at the gun goes to overtime, played out: see overtime())
   const SURV = location.hash === '#survivor';
+  // the archive (Pro): #archive lists every past day, #day-N plays one (its own saved state, like the day it was)
+  const ARCH = location.hash === '#archive', ARCH_DAY = Number((location.hash.match(/^#day-(\d+)$/) || [])[1] || 0);
   const stateKey = () => (SURV ? `${STORE}:surv` : `${STORE}:day:${dayN}`);
   const saveState = () => save(stateKey(), state);
   const seedKey = () => (SURV ? `s${state.run}:${state.games.length}` : dayN);    // what the engine's draws are seeded by
@@ -2389,6 +2391,7 @@
   }
   function drawAll() { drawTiles(); drawBar(); drawField(); }
   function show(which) {
+    $('arch').hidden = which !== 'arch';
     $('intro').hidden = which !== 'intro';
     $('play').hidden = which !== 'play';
     $('done').hidden = which !== 'done';
@@ -2585,7 +2588,7 @@
     const state_ = lead > 0 ? `Up by ${lead}` : lead < 0 ? `Down by ${-lead}` : 'Tied';
     const big = el('div', 'big', state_);
     big.append(el('span', 'left', left));
-    box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : (today.length > 1 ? `Spot ${G.si + 1} of ${today.length} · ` : 'Today’s drive · ') + catLabel(sc)),
+    box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : (today.length > 1 ? `Spot ${G.si + 1} of ${today.length} · ` : ARCH_DAY ? `No. ${dayN}, from the archive · ` : 'Today’s drive · ') + catLabel(sc)),
       el('div', 'game', `${gameTag(sc)} · ${teamName(sc.away)} at ${teamName(sc.home)}`), big);
     const mu = el('div', 'matchup');
     const t = (c, i) => {
@@ -4247,11 +4250,18 @@
     let streak = 0; for (let k = dayN; st.days[k]; k--) streak++;
     box.append(el('div', 'note', `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
       el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers`),
-      el('div', 'streak', streak >= 2 ? `🔥 ${streak}-day streak` : 'Day 1 of your streak · come back tomorrow'));
+      el('div', 'streak', ARCH_DAY ? 'From the archive' : streak >= 2 ? `🔥 ${streak}-day streak` : 'Day 1 of your streak · come back tomorrow'));
     if (cc) box.append(cc.el);
     box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller ${today.length > 1 ? 'across today’s spots' : 'on today’s drive'}.`));
     const dbox = dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0)));
     box.append(dbox);
+    if (ARCH_DAY) { const a = el('a', 'btn', 'Back to the archive'); a.href = '#archive'; box.append(a); }
+    else if (!isPro() && dayN > 1 && BOARD.api) {       // the website: the archive is a Pro purchase there
+      const a = el('a', '', 'the Archive'), nudge = el('p', 'note');
+      a.href = '#archive';
+      nudge.append('Missed a day? Every past daily is in ', a, ' (Pro).');
+      box.append(nudge);
+    }
     const rec = [0, 0, 0];             // against the real coaches: better, worse, the same (a W-L-T record)
     const rows = today.map((_, i) => {
       const s = state.spots[i]; if (!s) return '';
@@ -4376,6 +4386,7 @@
   function dailyBox(p, spotW) {
     const box = el('div', 'board daily');
     box.hidden = true;
+    if (ARCH_DAY) return box;                 // a day from the archive: nothing to post, nobody else playing it
     const post = async () => {
       const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: driveDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)), ...(myName() ? { name: myName() } : {}) }));
       if (!res.ok) throw new Error(`daily ${res.status}`);
@@ -4621,6 +4632,106 @@
     openModal('Your stats', nodes);
   }
 
+  // one drive a day: the schedule holds three spots a day (a two-minute drill, protecting a lead, a tied game or
+  // the end of a half); the day's drive is one of them, the kind rotating from day to day; a featured day plays a
+  // famous spot (with its story on the intro) instead of the scheduled one
+  function dayIds(n) {
+    const row = idx.schedule[(n - 1) % idx.schedule.length], kinds = Object.keys(idx.categories);
+    const want = kinds[(n - 1) % kinds.length], feat = idx.featured && idx.featured[n];
+    return feat ? [feat.spot] : [row.find((i) => idx.spots[i].category === want) ?? row[(n - 1) % row.length]];
+  }
+  const dayDate = (n) => { const d = new Date(idx.launch + 'T12:00:00'); d.setDate(d.getDate() + n - 1); return d; };
+
+  // ---- Pro: a one-time purchase (Stripe Checkout behind the board API: /pay, /claim, /restore; board/worker.js).
+  // The code the purchase gives is kept here and is all a device needs; the same code restores Pro on another.
+  const PRO_KEY = `${STORE}:pro`;
+  const proCode = () => String((load(PRO_KEY, null) || {}).code || '');
+  const isPro = () => !!proCode();
+  async function proApi(path, body) {
+    if (!BOARD.api) throw new Error('no backend here');
+    const r = await fetch(`${BOARD.api}${path}`, body ? POST_JSON(body) : POST_JSON({}));
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `pro ${r.status}`);
+    return d;
+  }
+  // back from Stripe's page: ?claim=<session> (the address is tidied either way; ?pro=cancel is a cancelled purchase)
+  async function proClaimFromUrl() {
+    const q = new URLSearchParams(location.search), s = q.get('claim');
+    if (!s && !q.has('pro')) return;
+    history.replaceState(null, '', location.pathname + location.hash);
+    if (!s) return;
+    try {
+      const d = await proApi('/claim', { s });
+      save(PRO_KEY, { code: d.code, at: Date.now() });
+      track('pro_unlocked');
+      toast('Pro unlocked');
+    } catch (e) { toast('The purchase could not be confirmed: ' + e.message); }
+  }
+  function proNodes() {
+    const box = el('div', 'pro'), days = Math.max(0, dayOf(new Date()) - 1);
+    box.append(el('div', 'k', 'Two-Minute Drill Pro'), el('div', 'price', '$4.99 · once'));
+    const ul = el('ul');
+    [`The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed, with its score and stats`,
+      'Coming: 20 historic drives. Mahomes’ 13 seconds, the Minneapolis Miracle, the Philly Special, 28–3…',
+      'Coming: playoff runs. A team’s whole postseason, every late-game spot, to call in order'].forEach((t) => ul.append(el('li', '', t)));
+    box.append(ul);
+    if (isPro()) {
+      box.append(el('p', '', `Pro is on. Your code: ${proCode()}. Keep it: it unlocks Pro on any other device.`));
+      return [box];
+    }
+    const row = el('div', 'row'), buy = el('button', 'btn', 'Unlock · $4.99');
+    buy.type = 'button';
+    buy.addEventListener('click', async () => {
+      buy.disabled = true;
+      try { track('pro_pay'); const d = await proApi('/pay'); location.href = d.url; } catch (e) {
+        toast(/not set up/.test(e.message) ? 'Payments open soon' : 'Could not start the purchase: ' + e.message);
+        buy.disabled = false;
+      }
+    });
+    row.append(buy);
+    box.append(row, el('p', 'note', 'Apple Pay, Google Pay or a card, on Stripe’s secure page. One code, any device.'));
+    const rs = el('div', 'row'), inp = el('input'), go = el('button', 'btn', 'Restore');
+    inp.placeholder = 'TMD-XXXX-XXXX-XXXX'; inp.setAttribute('aria-label', 'Your Pro code'); inp.autocapitalize = 'characters'; inp.spellcheck = false;
+    go.type = 'button';
+    go.addEventListener('click', async () => {
+      try {
+        const d = await proApi('/restore', { code: inp.value });
+        save(PRO_KEY, { code: d.code, at: Date.now() });
+        track('pro_restored');
+        toast('Pro restored');
+        if (location.hash === '#archive') location.reload(); else location.hash = '#archive';
+      } catch (e) { toast(e.message); }
+    });
+    rs.append(inp, go);
+    box.append(el('p', 'note', 'Already have Pro? Enter your code.'), rs);
+    if (!BOARD.api) { buy.disabled = true; go.disabled = true; }
+    return [box];
+  }
+  // the archive: every past day, newest first, with your score where you played it; the pitch when Pro is not on
+  function renderArchive(now) {
+    track('archive_open', { pro: isPro() });
+    show('arch');
+    const box = $('arch'), todayN = dayOf(now);
+    box.textContent = '';
+    box.append(el('h2', '', 'Archive'));
+    if (!isPro()) {
+      box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''}: play any day you missed, graded like the day it ran.`), ...proNodes());
+      return;
+    }
+    if (todayN <= 1) { box.append(el('p', '', 'The archive fills from tomorrow: today’s drive is on the Daily tab.')); return; }
+    const st = load(`${STORE}:stats`, { days: {} }), list = el('div', 'days');
+    for (let n = todayN - 1; n >= 1; n--) {
+      const sp = idx.spots[dayIds(n)[0]], feat = idx.featured && idx.featured[n], opp = sp.player === sp.home ? sp.away : sp.home;
+      const a = el('a', 'day');
+      a.href = `#day-${n}`;
+      a.append(el('b', '', `No. ${n}`), el('span', 'd', dayDate(n).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })),
+        el('span', 'm', `${teamName(sp.player)} vs ${teamName(opp)}${feat ? ' · featured' : ''}`),
+        el('span', 'sc', st.days[n] ? String(Math.round(st.days[n].p * 100)) : 'Play'));
+      list.append(a);
+    }
+    box.append(list, el('p', 'note', `Pro is on this device · code ${proCode()}`));
+  }
+
   // ----------------------------------------------------------------- boot ---
   async function boot() {
     const topH = () => document.documentElement.style.setProperty('--top-h', `${document.querySelector('.top').offsetHeight}px`);
@@ -4629,7 +4740,7 @@
     fieldTaps();
     boardInit();
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
-    $(SURV ? 'modeSurv' : 'modeDaily').setAttribute('aria-current', 'page');
+    $(SURV ? 'modeSurv' : ARCH || ARCH_DAY ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
     $('statsBtn').addEventListener('click', openStats);
     $('bar').addEventListener('click', () => { if (G) spotInfo(); });
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
@@ -4650,7 +4761,9 @@
       idx = await fetch(asset('game.json')).then((r) => { if (!r.ok) throw new Error('game data ' + r.status); return r.json(); });
       idx.calls.forEach((c) => { CALL[c.id] = c; });
       const now = new Date();
-      dayN = dayOf(now);
+      dayN = ARCH_DAY || dayOf(now);
+      await proClaimFromUrl();
+      if (ARCH || (ARCH_DAY && (!isPro() || ARCH_DAY >= dayOf(now)))) { renderArchive(now); return; }
       if (SURV) {
         state = load(stateKey(), null) || newRun();
         if (!load(`${STORE}:seen`, false)) { openHelp(true); save(`${STORE}:seen`, true); }
@@ -4658,16 +4771,10 @@
         if (state.out) renderSurvSummary(); else await survOpen();
         return;
       }
-      // one drive a day: the schedule holds three spots a day (a two-minute drill, protecting a lead, a tied game or
-      // the end of a half); the day's drive is one of them, the kind rotating from day to day
-      const row = idx.schedule[(dayN - 1) % idx.schedule.length], kinds = Object.keys(idx.categories);
-      const want = kinds[(dayN - 1) % kinds.length];
-      // a featured day plays a famous spot (with its story on the intro) instead of the scheduled one
-      const feat = idx.featured && idx.featured[dayN];
-      const ids = feat ? [feat.spot] : [row.find((i) => idx.spots[i].category === want) ?? row[(dayN - 1) % row.length]];
+      const ids = dayIds(dayN);
       const teams = await loadTeams(ids);
       today = ids.map((i) => buildScen(idx.spots[i], teams[i]));
-      $('dayLabel').textContent = `No. ${dayN} · ${now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+      $('dayLabel').textContent = `No. ${dayN} · ${dayDate(dayN).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${ARCH_DAY ? ' · archive' : ''}`;
     } catch (e) { $('boot').textContent = 'Today\'s spots did not load (' + e.message + '). Check your connection and reload.'; return; }
     state = load(`${STORE}:day:${dayN}`, null) || { spots: [], current: 0, done: false };
     if (!load(`${STORE}:seen`, false)) { openHelp(true); save(`${STORE}:seen`, true); }
