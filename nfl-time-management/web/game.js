@@ -1329,13 +1329,15 @@
         runners.map(([a, pl]) => ({ a, end: pl.at(pl.T) })).filter((x) => Math.abs(x.end[1] - L0) > 12)
           .sort((x, y) => Math.abs(y.end[1] - L0) - Math.abs(x.end[1] - L0))
           .forEach(({ a, end }) => {
-            const d = nearest(deepers.filter((x) => !taken.has(x)), [end[0], end[1]]);
+            // (more verticals than deep men: the nearest underneath defender sinks with the extra one)
+            const d = nearest(deepers.filter((x) => !taken.has(x)), [end[0], end[1]])
+              || nearest(cover.filter((x) => !taken.has(x) && x.label !== 'DL' && x.label !== 'EDGE'), here(a));
             if (!d) return;
             taken.add(d);
             leg(d, REACT_DEF + 0.9, 'chase', { who: a.b, gap: shortThrow ? 1.3 : 2.2, eff: 0.92, lead: 0.5 });
           });
       }
-      return { cover, man, assigned };
+      return { cover, man, assigned, shell };
     }
     const xy = (p) => ({ x: p[0], y: p[1] });
     // How open the target is when the ball gets there (yards to the nearest defender), drawn to fit what really
@@ -1558,7 +1560,9 @@
       // (tests: how open the target really was on the field when the ball got there, against the outcome)
       const sepRow = window.__sepLog ? { evt: e.evt || '', inc: !!e.incomplete, caught, intc, yac: Math.max(0, (e.yards || 0) - air), air,
         late, drawn: sepd && sepd.sep, actual: Math.min(...K.def.map((d) => dist(here(d), here(tgt)))), ballD, kind,
-        openDeep: K.recv.filter((a) => a !== tgt && a !== passer && Math.abs(here(a)[1] - L0) > 12 && Math.min(...K.def.map((d) => dist(here(d), here(a)))) > 5).length } : null;
+        openDeep: K.recv.filter((a) => a !== tgt && a !== passer && Math.abs(here(a)[1] - L0) > 12 && Math.min(...K.def.map((d) => dist(here(d), here(a)))) > 5).length,
+        deep: K.recv.filter((a) => a !== tgt && a !== passer && Math.abs(here(a)[1] - L0) > 12).map((a) => [a.label, +Math.abs(here(a)[1] - L0).toFixed(0), +Math.min(...K.def.map((d) => dist(here(d), here(a)))).toFixed(1)]),
+        man: !!cov.man, shell: cov.shell } : null;
       if (sepRow) window.__sepLog.push(sepRow);
       // what happened at the catch point
       if (intc) {
@@ -1599,6 +1603,7 @@
       const endY = e.td ? tdL() : inL(fwd(L0, e.yards));
       const endX = e.oob ? sidelineX(catchPt[0] + out * 6) : inX(catchPt[0] + clip(jit(5) + out * Math.min(Math.abs(yac), 12) * 0.25, -9, 9));
       if (Math.abs(yac) > 4 && !e.bt) say(tCatch, 'Caught', 'boom', { follow: tgt });
+      if (shadow) busy.delete(shadow);       // the man on him at the catch is the first who can tackle him
       const ep = [endX, endY], tEnd = runDown(tgt, tCatch + 0.05, ep, { td: e.td, oob: e.oob, bt: e.bt, from: tCatch });
       finish(tgt, tEnd, ep);
     }
