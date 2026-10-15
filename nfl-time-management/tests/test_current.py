@@ -61,3 +61,11 @@ def test_line_has_one_man_per_slot_when_a_hurt_starter_and_his_fill_in_both_rate
     assert _line(ol, dc, since) == [("lt", "LT"), ("lg", "LG"), ("c", "C"), ("rg", "RG"), ("rt_hurt", "RT")]
     healthy = ol.drop(index="rt_hurt")                                  # no clash: the five best, at their slots
     assert _line(healthy, dc, since) == [("lt", "LT"), ("lg", "LG"), ("c", "C"), ("rg", "RG"), ("rt_fill", "RT")]
+
+
+def test_past_ratings_use_only_games_before_the_week():
+    import pandas as pd
+    from nflclock.overall import LAG_W, _before
+    df = pd.DataFrame({"season": [2022, 2023, 2023, 2023, 2024], "week": [18, 13, 14, 15, 1]})
+    assert _before(df, 2023, 14).to_dict("list") == {"season": [2022, 2023], "week": [18, 13]}
+    assert LAG_W[0] >= LAG_W[1] >= LAG_W[2] >= LAG_W[3] > 0      # older seasons never count more

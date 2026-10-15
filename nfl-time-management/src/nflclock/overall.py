@@ -48,8 +48,8 @@ OTC_GROUP = {"QB": "QB", "RB": "RB", "FB": "RB", "WR": "WR", "TE": "TE", "LT": "
              "S": "S", "SAF": "S"}
 
 
-def _weights(df: pd.DataFrame, col: str = "season") -> np.ndarray:
-    return df[col].map(SEASON_W).fillna(0.0).to_numpy()
+def _weights(df: pd.DataFrame, col: str = "season", sw: dict | None = None) -> np.ndarray:
+    return df[col].map(sw or SEASON_W).fillna(0.0).to_numpy()
 
 
 def _shrunk(num: pd.Series, den: pd.Series, k: float) -> pd.Series:
@@ -63,15 +63,15 @@ def _z(x: pd.Series, ref: pd.Series) -> pd.Series:
     return ((x - ref.mean()) / (sd if sd and np.isfinite(sd) and sd > 0 else 1.0)).clip(-3.5, 3.5)
 
 
-def _load():
-    seasons = sorted(SEASON_W)
+def _load(seasons=None):
+    seasons = sorted(seasons or SEASON_W)
     T = PL.load_tables(seasons)
     st = pd.concat([pd.read_parquet(PL._get("stats_player", f"stats_player_week_{s}.parquet")) for s in seasons], ignore_index=True)
     st = st[st["season_type"] == "REG"]
     ngs = {k: pd.read_parquet(PL._get("nextgen_stats", f"ngs_{k}.parquet")) for k in ("rushing", "receiving")}
     ngs = {k: v[(v["week"] > 0) & v["season"].isin(seasons)] for k, v in ngs.items()}
     cols = ["season", "season_type", "game_id", "posteam", "id", "qb_dropback", "qb_epa", "play_type", "rusher_player_id",
-            "qb_scramble", "epa", "two_point_attempt"]
+            "qb_scramble", "epa", "two_point_attempt", "week"]
     pbp = pd.concat([pd.read_parquet(config.RAW_DIR / f"play_by_play_{s}.parquet", columns=cols) for s in seasons], ignore_index=True)
     pbp = pbp[(pbp["season_type"] == "REG") & (pbp["two_point_attempt"].fillna(0) == 0)]
     T["rec"] = pd.concat([pd.read_parquet(PL._get("pfr_advstats", f"advstats_week_rec_{s}.parquet")) for s in seasons], ignore_index=True)
@@ -92,8 +92,10 @@ def groups(T: dict) -> pd.Series:
     return g[~g.index.duplicated()]
 
 
-def performance(T: dict, st: pd.DataFrame, ngs: dict, pbp: pd.DataFrame, grp: pd.Series) -> pd.DataFrame:
-    """perf (z within group), n (weighted plays or snaps) and a few raw measures, by gsis id."""
+def performance(T: dict, st: pd.DataFrame, ngs: dict, pbp: pd.DataFrame, grp: pd.Series, sw: dict | None = None) -> pd.DataFrame:
+    """perf (z within group), n (weighted plays or snaps) and a few raw measures, by gsis id; sw: per-game
+    weight by season (SEASON_W unless given)."""
+    wts = lambda d: _weights(d, sw=sw)  # noqa: E731
     pl = T["players"].dropna(subset=["pfr_id"])
     to_gsis = dict(zip(pl["pfr_id"], pl["gsis_id"]))
     out = []
@@ -104,7 +106,7 @@ def performance(T: dict, st: pd.DataFrame, ngs: dict, pbp: pd.DataFrame, grp: pd
         out.append(pd.DataFrame({"perf": _z(z, z[ref]), "n": n, "pgroup": group}, index=df.index))
 
     # quarterbacks: EPA per play (dropbacks and designed runs) and completion % over expected
-    pbp = pbp.assign(w=_weights(pbp))
+    pbp = pbp.assign(w=wts(pbp))
     drop = pbp[(pbp["qb_dropback"] == 1) & pbp["id"].notna() & pbp["qb_epa"].notna()]
     qbs = grp[grp == "QB"].index
     runs = pbp[(pbp["play_type"] == "run") & (pbp["qb_scramble"].fillna(0) == 0) & pbp["rusher_player_id"].isin(qbs) & pbp["epa"].notna()]
@@ -112,7 +114,7 @@ def performance(T: dict, st: pd.DataFrame, ngs: dict, pbp: pd.DataFrame, grp: pd
     q = q[q.index.isin(qbs)]
     r = pd.DataFrame({"e": (runs["epa"] * runs["w"]).groupby(runs["rusher_player_id"]).sum(), "n": runs.groupby("rusher_player_id")["w"].sum()})
     q = q.add(r.reindex(q.index).fillna(0.0), fill_value=0.0)
-    sq = st[st["attempts"] > 0].assign(w=lambda d: _weights(d))
+    sq = st[st["attempts"] > 0].assign(w=lambda d: wts(d))
     cp = (sq["passing_cpoe"].fillna(0) * sq["attempts"] * sq["w"]).groupby(sq["player_id"]).sum()
     ca = (sq["attempts"] * sq["w"]).groupby(sq["player_id"]).sum()
     q["value"] = _shrunk(q["e"], q["n"], 150)
@@ -120,11 +122,11 @@ def performance(T: dict, st: pd.DataFrame, ngs: dict, pbp: pd.DataFrame, grp: pd
     finish(q, "QB", {"value": (0.7, 1), "cpoe": (0.3, 1)}, q["n"], 300)
 
     # running backs: rush yards over expected, rushing EPA, scrimmage yards per game, receiving EPA
-    sr = st[st["position"].isin(["RB", "FB"])].assign(w=lambda d: _weights(d))
+    sr = st[st["position"].isin(["RB", "FB"])].assign(w=lambda d: wts(d))
     agg = lambda c: (sr[c].fillna(0) * sr["w"]).groupby(sr["player_id"]).sum()
     rb = pd.DataFrame({"car": agg("carries"), "ry": agg("rushing_yards"), "re": agg("rushing_epa"), "tg": agg("targets"),
                        "rcy": agg("receiving_yards"), "rce": agg("receiving_epa"), "g": sr.groupby("player_id")["w"].sum()})
-    nr = ngs["rushing"].assign(w=lambda d: _weights(d))
+    nr = ngs["rushing"].assign(w=lambda d: wts(d))
     rb["oe"] = (nr["rush_yards_over_expected"].fillna(0) * nr["w"]).groupby(nr["player_gsis_id"]).sum().reindex(rb.index).fillna(0.0)
     rb["oa"] = (nr["rush_attempts"].fillna(0) * nr["w"]).groupby(nr["player_gsis_id"]).sum().reindex(rb.index).fillna(0.0)
     rb["ryoe"] = _shrunk(rb["oe"], rb["oa"], 80)
@@ -134,11 +136,11 @@ def performance(T: dict, st: pd.DataFrame, ngs: dict, pbp: pd.DataFrame, grp: pd
     finish(rb, "RB", {"ryoe": (0.3, 1), "epa": (0.2, 1), "ypg": (0.35, 1), "rec": (0.15, 1)}, rb["car"] + rb["tg"], 120)
 
     # receivers and tight ends: yards per game, target and air-yards share, EPA per target, YAC over expected
-    nrc = ngs["receiving"].assign(w=lambda d: _weights(d))
+    nrc = ngs["receiving"].assign(w=lambda d: wts(d))
     yoe = (nrc["avg_yac_above_expectation"].fillna(0) * nrc["receptions"].fillna(0) * nrc["w"]).groupby(nrc["player_gsis_id"]).sum()
     yrc = (nrc["receptions"].fillna(0) * nrc["w"]).groupby(nrc["player_gsis_id"]).sum()
     for pos in ("WR", "TE"):
-        s_ = st[st["position"] == pos].assign(w=lambda d: _weights(d))
+        s_ = st[st["position"] == pos].assign(w=lambda d: wts(d))
         agg = lambda c: (s_[c].fillna(0) * s_["w"]).groupby(s_["player_id"]).sum()
         d = pd.DataFrame({"tg": agg("targets"), "y": agg("receiving_yards"), "e": agg("receiving_epa"), "o": agg("wopr"),
                           "g": s_.groupby("player_id")["w"].sum()})
@@ -149,7 +151,7 @@ def performance(T: dict, st: pd.DataFrame, ngs: dict, pbp: pd.DataFrame, grp: pd
         finish(d, pos, {"ypg": (0.35, 1), "wopr": (0.25, 1), "ept": (0.25, 1), "yacoe": (0.15, 1)}, d["tg"], 50)
 
     # defense: PFR charting (pressures, tackling, coverage) on snap counts, box-score sacks, TFL, hits, PDs
-    sn = T["snaps"].assign(w=lambda d: _weights(d))
+    sn = T["snaps"].assign(w=lambda d: wts(d))
     dsn = sn[sn["defense_snaps"] > 0][["game_id", "pfr_player_id", "defense_snaps", "w"]]
     cols = ["def_pressures", "def_tackles_combined", "def_missed_tackles", "def_targets", "def_completions_allowed",
             "def_yards_allowed", "def_receiving_td_allowed", "def_ints"]
@@ -160,7 +162,7 @@ def performance(T: dict, st: pd.DataFrame, ngs: dict, pbp: pd.DataFrame, grp: pd
     dd["g"] = d.groupby("pfr_player_id")["w"].sum()
     dd.index = dd.index.map(to_gsis)
     dd = dd[dd.index.notna()].groupby(level=0).sum()
-    box = st.assign(w=lambda x: _weights(x))
+    box = st.assign(w=lambda x: wts(x))
     bagg = lambda c: (box[c].fillna(0) * box["w"]).groupby(box["player_id"]).sum()
     for c, src in (("sk", "def_sacks"), ("tfl", "def_tackles_for_loss"), ("hits", "def_qb_hits"), ("pd", "def_pass_defended")):
         dd[c] = bagg(src).reindex(dd.index).fillna(0.0)
@@ -185,7 +187,7 @@ def performance(T: dict, st: pd.DataFrame, ngs: dict, pbp: pd.DataFrame, grp: pd
         finish(m.loc[ids], g_, parts, nvar.loc[ids], nmin)
 
     # offensive linemen: their line's pressure rate allowed and yards before contact, by team-season
-    pa = T["pass"].assign(w=lambda d: _weights(d))
+    pa = T["pass"].assign(w=lambda d: wts(d))
     pr_ = pa.groupby(["season", "team"])["times_pressured"].sum()
     db = pbp[pbp["qb_dropback"] == 1].groupby(["season", "posteam"]).size()
     db.index.names = ["season", "team"]
@@ -281,6 +283,102 @@ def ratings(season: int = 2026, role: pd.DataFrame | None = None, data=None) -> 
             ref = df.loc[m, "score"]
         z = (df.loc[m, "score"] - ref.mean()) / (ref.std() or 1.0)
         df.loc[m, "ovr"] = scale(CENTER + SPREAD * z)
+    return df
+
+
+# ------------------------------------------------ as of a past week (daily-game spots) ---
+LAG_W = {0: 1.0, 1: 1.0, 2: 0.4, 3: 0.15, 4: 0.05}     # per game, by seasons before the game's: as SEASON_W counts them now
+STANDING_ASOF = {"contract": 0.5, "draft": 0.15, "usage": 0.35}   # no honors: the public lists give career totals only
+DRAFT_FADE = 0.25                                     # where he was drafted counts this much less each season after
+ASOF_FIRST = 2019                                     # earliest season loaded (the 2023 spots look back four seasons)
+
+
+def load_asof():
+    """Everything ratings_asof needs, every season it can look back to."""
+    return _load(range(ASOF_FIRST, max(SEASON_W) + 1))
+
+
+def _before(df: pd.DataFrame, season: int, week: int) -> pd.DataFrame:
+    return df[(df["season"] < season) | ((df["season"] == season) & (df["week"] < week))]
+
+
+def _role_asof(T: dict, season: int, week: int) -> pd.DataFrame:
+    """His share of his side's snaps in the games he played this season before the week (o, d), and last
+    season's times current.PRIOR_ROLE (po, pd), by gsis id."""
+    pl = T["players"].dropna(subset=["pfr_id"])
+    to_gsis = dict(zip(pl["pfr_id"], pl["gsis_id"]))
+    sn = T["snaps"].assign(gsis=lambda d: d["pfr_player_id"].map(to_gsis)).dropna(subset=["gsis"])
+    cur = sn[(sn["season"] == season) & (sn["week"] < week)].groupby("gsis")[["offense_pct", "defense_pct"]].mean()
+    prev = sn[sn["season"] == season - 1].groupby("gsis")[["offense_pct", "defense_pct"]].mean() * 0.9
+    return cur.set_axis(["o", "d"], axis=1).join(prev.set_axis(["po", "pd"], axis=1), how="outer")
+
+
+def standing_asof(T: dict, grp: pd.Series, role: pd.DataFrame, season: int) -> pd.DataFrame:
+    """contract, draft and usage z-scores within each position group as of a past season, by gsis id. The
+    contract is the latest one signed by that season and still running; a rookie deal says only where he was
+    drafted, so it counts as an average contract (0), as does none at all for a player who has been playing."""
+    ids = grp.index
+    con = pd.read_parquet(PL._get("contracts", "historical_contracts.parquet"))
+    con = con[con["gsis_id"].notna() & (con["year_signed"] <= season) & (con["year_signed"] + con["years"].fillna(1) > season)]
+    con = con.sort_values(["year_signed", "apy"]).drop_duplicates("gsis_id", keep="last").set_index("gsis_id")
+    rookie = con["year_signed"] == con["draft_year"]
+    apy = con["apy_cap_pct"].where(~rookie)
+    full = pd.read_parquet(PL._get("players", "players.parquet"), columns=["gsis_id", "draft_pick", "draft_year"]).drop_duplicates("gsis_id").set_index("gsis_id")
+    pick = full["draft_pick"].reindex(ids).fillna(300).clip(1, 300)
+    yrs = (season - full["draft_year"].reindex(ids)).fillna(4).clip(lower=0)
+    fade = np.clip(1 - DRAFT_FADE * yrs, 0.0, 1.0).to_numpy()
+    s = pd.DataFrame({"grp": grp, "apy": apy.reindex(ids), "draft": -np.log(pick), "usage": _share(grp, role)}, index=ids)
+    out = pd.DataFrame(index=ids)
+    for g_ in GROUPS:
+        m = s["grp"] == g_
+        sub = s[m]
+        if not len(sub):
+            continue
+        ap = sub["apy"]
+        if ap.notna().any():
+            q = norm.ppf((ap.rank(pct=True) - 0.5 / ap.notna().sum()).clip(0.005, 0.995).to_numpy())
+            out.loc[m, "contract"] = np.where(ap.isna(), 0.0, q)
+        out.loc[m, "draft"] = _z(sub["draft"], sub["draft"]).to_numpy() * fade[m.to_numpy()]
+        out.loc[m, "usage"] = _z(sub["usage"], sub["usage"]).to_numpy()
+    return out
+
+
+def ratings_asof(season: int, week: int, data=None) -> pd.DataFrame:
+    """ratings() as of a past week: only games before it (the daily game's rule) and the contracts signed by
+    then; perf, n, standing, score, ovr (40-99) and pct (his place among the position's starters), by gsis id."""
+    T0, st0, ngs0, pbp0 = data or load_asof()
+    T = {k: (_before(v, season, week) if isinstance(v, pd.DataFrame) and {"season", "week"} <= set(v.columns) else v)
+         for k, v in T0.items()}
+    st, pbp = _before(st0, season, week), _before(pbp0, season, week)
+    ngs = {k: _before(v, season, week) for k, v in ngs0.items()}
+    sw = {season - lag: w for lag, w in LAG_W.items()}
+    grp = groups(T)
+    perf = performance(T, st, ngs, pbp, grp, sw=sw)
+    role = _role_asof(T, season, week)
+    stand = standing_asof(T, grp, role, season)
+    df = pd.DataFrame({"grp": grp}).join(perf[["perf", "n"]], how="left").join(stand, how="left")
+    df["n"] = df["n"].fillna(0.0)
+    num, den = np.zeros(len(df)), np.zeros(len(df))
+    for c, w in STANDING_ASOF.items():
+        v = df[c].to_numpy(float) if c in df else np.full(len(df), np.nan)
+        ok = np.isfinite(v)
+        num += np.where(ok, w * v, 0.0); den += np.where(ok, w, 0.0)
+    df["standing"] = np.where(den > 0, num / np.maximum(den, 1e-9), 0.0)
+    k, cap = df["grp"].map(K).to_numpy(float), df["grp"].map(PERF_CAP).to_numpy(float)
+    df["w_perf"] = np.where(df["perf"].notna(), cap * df["n"] / (df["n"] + k), 0.0)
+    df["score"] = df["w_perf"] * df["perf"].fillna(0.0) + (1 - df["w_perf"]) * df["standing"]
+    df["starter"] = _share(df["grp"], role) >= STARTER_ROLE
+    df["ovr"], df["pct"] = np.nan, np.nan
+    for g_ in GROUPS:
+        m = df["grp"] == g_
+        ref = df.loc[m & df["starter"], "score"]
+        if len(ref) < 5:
+            ref = df.loc[m, "score"]
+        z = (df.loc[m, "score"] - ref.mean()) / (ref.std() or 1.0)
+        df.loc[m, "ovr"] = scale(CENTER + SPREAD * z)
+        srt = np.sort(ref.to_numpy())
+        sc = df.loc[m, "score"].to_numpy()
+        df.loc[m, "pct"] = (np.searchsorted(srt, sc, "left") + np.searchsorted(srt, sc, "right")) / 2 / max(len(srt), 1)
     return df
 
 
