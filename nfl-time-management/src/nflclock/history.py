@@ -138,7 +138,7 @@ class History:
         if season not in self.pbp_raw:
             cols = ["season", "week", "posteam", "defteam", "qb_dropback", "epa", "passer_id", "name"]
             self.pbp_raw[season] = pd.concat([pd.read_parquet(PL.pbp_path(s), columns=cols)
-                                              for s in (season - 2, season - 1, season)], ignore_index=True)
+                                              for s in PL.pbp_seasons((season - 2, season - 1, season))], ignore_index=True)
         return self.pbp_raw[season]
 
     # ---- who was on the field
@@ -221,6 +221,87 @@ class History:
             for gr in ("EDGE", "DL", "LB", "CB", "S"):
                 picks += [(r.pfr_player_id, gr) for r in dfn[dfn["grp"] == gr].head(alloc.get(gr, 0)).itertuples()]
             out["def"] = [(to_gsis.get(p, "pfr:" + p), gr) for p, gr in picks]
+        return out
+
+    # players credited on a play, by what they did (nflverse play-by-play columns)
+    BOX_OFF = {"passer_player_id": 3.0, "rusher_player_id": 1.0, "receiver_player_id": 1.0}
+    BOX_DEF = ["solo_tackle_1_player_id", "solo_tackle_2_player_id", "assist_tackle_1_player_id", "assist_tackle_2_player_id",
+               "assist_tackle_3_player_id", "assist_tackle_4_player_id", "sack_player_id", "half_sack_1_player_id", "half_sack_2_player_id",
+               "qb_hit_1_player_id", "qb_hit_2_player_id", "pass_defense_1_player_id", "pass_defense_2_player_id", "interception_player_id",
+               "tackle_for_loss_1_player_id", "tackle_for_loss_2_player_id", "forced_fumble_player_1_player_id"]
+
+    def _roster(self, season: int) -> pd.DataFrame:
+        """The season's rosters (nflverse, 1999 on): gsis_id, team, position, years_exp; empty when not published."""
+        if ("roster", season) not in self.jerseys:
+            p = PL._get("rosters", f"roster_{season}.parquet", optional=True)
+            cols = ["season", "team", "position", "gsis_id", "full_name", "years_exp"]
+            self.jerseys[("roster", season)] = pd.read_parquet(p, columns=cols).dropna(subset=["gsis_id"]) if p is not None else pd.DataFrame(columns=cols)
+        return self.jerseys[("roster", season)]
+
+    def _boxscore_units(self, game_id: str, season: int, team: str) -> dict:
+        """Before snap counts (2012): the players the play-by-play credits in the game, most involved first, at the
+        positions the players table gives them; the line (never credited) and any gap from the season's roster."""
+        cols = ["game_id", "posteam", "defteam", "play_type"] + list(self.BOX_OFF) + self.BOX_DEF
+        g = pd.read_parquet(PL.pbp_path(season), columns=cols, filters=[("game_id", "==", game_id)])
+        g = g[g["play_type"].isin(["run", "pass"])]
+        ros = self._roster(season)
+        ros = ros[ros["team"] == team].sort_values("years_exp", ascending=False)
+        pos_of = {**self.pos_now, **dict(zip(ros["gsis_id"], ros["position"]))}
+        out = {}
+        # offense: the quarterback who threw most, then the backs, receivers and tight ends by touches
+        off = g[g["posteam"] == team]
+        cnt = Counter()
+        for col, w in self.BOX_OFF.items():
+            for pid in off[col].dropna():
+                cnt[pid] += w
+        qb = [p for p, _ in cnt.most_common() if pos_of.get(p) == "QB"][:1]
+        skill = [(p, OFF_POS[pos_of[p]]) for p, _ in cnt.most_common() if p not in qb and OFF_POS.get(pos_of.get(p, "")) in ("RB", "WR", "TE")]
+        line = [(p, OFF_POS[ps]) for p, ps in zip(ros["gsis_id"], ros["position"]) if OFF_POS.get(ps) in ("T", "G", "C")]
+        ol = [x for x in line if x[1] == "T"][:2] + [x for x in line if x[1] == "G"][:2] + [x for x in line if x[1] == "C"][:1]
+        picks = [(p, "QB") for p in qb] + ol
+        groups = {"RB": 1, "WR": 3, "TE": 1}
+        for p, grp in skill:
+            if groups.get(grp, 0) > 0 and len(picks) < 11:
+                picks.append((p, grp)); groups[grp] -= 1
+        for p, grp in skill:                                   # still short: whoever else touched it
+            if len(picks) >= 11:
+                break
+            if (p, grp) not in picks:
+                picks.append((p, grp))
+        for p, ps in zip(ros["gsis_id"], ros["position"]):      # still short: the roster
+            if len(picks) >= 11:
+                break
+            if OFF_POS.get(ps) in ("QB", "RB", "WR", "TE") and all(p != q for q, _ in picks):
+                picks.append((p, OFF_POS[ps]))
+        if len(picks) == 11:
+            out["off"] = picks
+        # defense: everyone credited with a tackle, sack, hit, pass defended or pick, most first, in the groups a
+        # defense fields; the roster fills a group nobody was credited in
+        dfn = g[g["defteam"] == team]
+        cnt = Counter()
+        for col in self.BOX_DEF:
+            for pid in dfn[col].dropna():
+                cnt[pid] += 1
+        cand = [(p, DEF_POS.get(pos_of.get(p, ""))) for p, _ in cnt.most_common()]
+        cand = [(p, grp) for p, grp in cand if grp]
+        want = {"EDGE": 2, "DL": 2, "LB": 3, "CB": 2, "S": 2}
+        picks = []
+        for p, grp in cand:
+            if want.get(grp, 0) > 0:
+                picks.append((p, grp)); want[grp] -= 1
+        for grp, n in want.items():
+            for p, ps in zip(ros["gsis_id"], ros["position"]):
+                if n <= 0:
+                    break
+                if DEF_POS.get(ps) == grp and all(p != q for q, _ in picks):
+                    picks.append((p, grp)); n -= 1
+        for p, grp in cand:                                    # still short: the next most involved
+            if len(picks) >= 11:
+                break
+            if all(p != q for q, _ in picks):
+                picks.append((p, grp))
+        if len(picks) == 11:
+            out["def"] = picks
         return out
 
     def _jersey_table(self, season: int) -> dict:
@@ -379,6 +460,8 @@ class History:
             units = self._snap_units(game_id, season, play_id, team, self._game_positions(R, game_id) if season < 2023 else None)
             if len(units) < 2:
                 units = {**self._snapcount_units(R, game_id, team), **units}
+            if len(units) < 2:
+                units = {**self._boxscore_units(game_id, season, team), **units}
             off, dfn = units.get("off", []), units.get("def", [])
             qb_id = next((i for i, p in off if OFF_POS.get(p) == "QB"), None)
             if qb_id is None or qb_id.startswith("pfr:"):

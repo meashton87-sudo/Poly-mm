@@ -69,7 +69,7 @@ def _w(season_col: pd.Series, season: int) -> np.ndarray:
 def _plays(season: int) -> pd.DataFrame:
     cols = ["season", "game_id", "season_type", "play_type", "passer_player_id", "rusher_player_id", "receiver_player_id",
             "qb_dropback", "qb_scramble", "air_yards", "rush_attempt", "pass_attempt", "yards_gained", "two_point_attempt"]
-    p = pd.concat([pd.read_parquet(PL.pbp_path(s), columns=cols) for s in (season - 1, season)],
+    p = pd.concat([pd.read_parquet(PL.pbp_path(s), columns=cols) for s in PL.pbp_seasons((season - 1, season))],
                   ignore_index=True)
     p = p[(p["season_type"] == "REG") & (p["two_point_attempt"].fillna(0) == 0)]
     return p.assign(w=_w(p["season"], season))

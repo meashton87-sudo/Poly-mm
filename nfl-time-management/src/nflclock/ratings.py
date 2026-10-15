@@ -74,6 +74,9 @@ def _ridge_team_effects(epa, w, off_idx, def_idx, home, n_teams, lam_off, lam_de
     return beta[0], beta[1], beta[2:2 + n_teams], beta[2 + n_teams:]
 
 
+MIN_PAST_PLAYS = 2000     # about a week of games: fewer and the ridge fit has nothing to pin the teams to
+
+
 def team_ratings(pbp: pd.DataFrame, target_seasons, current: bool = True) -> pd.DataFrame:
     """As-of offense/defense EPA ratings for every (season, week, team)."""
     plays = pbp[pbp["play_type"].isin(["run", "pass"]) & pbp["epa"].notna()
@@ -96,6 +99,8 @@ def team_ratings(pbp: pd.DataFrame, target_seasons, current: bool = True) -> pd.
     for _, row in _target_slates(plays, target_seasons, current).iterrows():
         past = plays[plays["slate"] < row["slate"]]
         past = past[past["slate"] >= row["slate"] - 60]
+        if len(past) < MIN_PAST_PLAYS:        # the first weeks of the earliest season there is (1999): nothing to rate on yet
+            continue
         age = row["slate"] - past["slate"].to_numpy()
         w_all = past["w_base"].to_numpy() * _decay(age)
         rec = {"team": teams}

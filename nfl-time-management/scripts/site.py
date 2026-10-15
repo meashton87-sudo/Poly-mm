@@ -293,6 +293,10 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         pack(WEB / f, out / p)
     for f in sorted((WEB / "spots").glob("s*.json")):
         shutil.copy2(f, out / "spots" / f.name)
+    if (WEB / "pro").is_dir():                  # Pro: the historic drives (nflclock.pro.build), when built
+        (out / "pro").mkdir(exist_ok=True)
+        for f in sorted((WEB / "pro").glob("*.json")):
+            shutil.copy2(f, out / "pro" / f.name)
     if domain:
         (out / "CNAME").write_text(domain.strip() + "\n")
     (out / ".nojekyll").write_text("")          # serve the files as they are

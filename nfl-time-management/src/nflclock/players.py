@@ -75,8 +75,18 @@ def read_seasons(tag: str, pattern: str, seasons, columns=None) -> pd.DataFrame:
     return pd.read_parquet(_get(tag, pattern.format(s=SCHEMA_SEASON)), columns=columns).iloc[0:0]
 
 
+FIRST_SEASON = 1999      # nflverse play-by-play starts here
+
+
+def pbp_seasons(seasons):
+    """The seasons with play-by-play among `seasons` (none before FIRST_SEASON)."""
+    return [s for s in seasons if s >= FIRST_SEASON]
+
+
 def pbp_path(season: int):
     """The season's play-by-play file, downloaded when it is not there yet."""
+    if season < FIRST_SEASON:
+        raise ValueError(f"no play-by-play before {FIRST_SEASON} ({season})")
     p = config.RAW_DIR / f"play_by_play_{season}.parquet"
     if not p.exists():
         from . import data
@@ -90,7 +100,7 @@ def load_tables(seasons) -> dict:
                                      columns=["gsis_id", "pfr_id", "display_name", "position", "pff_position"])
     cols = ["season", "week", "season_type", "posteam", "play_type", "qb_dropback", "id", "qb_epa", "epa",
             "receiver_player_id", "two_point_attempt"]
-    pbp = pd.concat([pd.read_parquet(pbp_path(s), columns=cols) for s in seasons], ignore_index=True)
+    pbp = pd.concat([pd.read_parquet(pbp_path(s), columns=cols) for s in pbp_seasons(seasons)], ignore_index=True)
     out["pbp"] = pbp[pbp["two_point_attempt"].fillna(0) == 0]
     return out
 

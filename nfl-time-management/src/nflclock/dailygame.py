@@ -95,6 +95,51 @@ def candidates(pbp: pd.DataFrame, lib: pd.DataFrame, keep: dict | None = None) -
     return first
 
 
+def spot_record(r, g, receive2h: dict) -> dict:
+    """A spot in the game's format: the candidate row r (dailygame.candidates) and its game's row g (games.csv)."""
+    gid = r["game_id"]
+    home, away = g["home_team"], g["away_team"]
+    off = r["posteam"]
+    home_off = off == home
+    res = r.get("fixed_drive_result")
+    return {
+        "id": f"{gid}#{int(r['play_id'])}", "category": r["category"], "home": home, "away": away, "player": off,
+        "indoor": g["roof"] in ("dome", "closed"), "wind": float(np.nan_to_num(g["wind"])),
+        "temp": None if pd.isna(g["temp"]) else float(g["temp"]),
+        "start": {"qtr": int(r["qtr"]), "clock": float(r["quarter_seconds_remaining"]),
+                  "score": [int(r["total_away_score"]), int(r["total_home_score"])],
+                  "pos": off, "down": 1, "ytg": float(r["ydstogo"]), "yl": float(r["yardline_100"]),
+                  "to": [int(r["posteam_timeouts_remaining"] if not home_off else r["defteam_timeouts_remaining"]),
+                         int(r["posteam_timeouts_remaining"] if home_off else r["defteam_timeouts_remaining"])],
+                  "running": False, "phase": "snap", "receive2h": receive2h.get(gid, away)},
+        "spread": float(np.nan_to_num(g["spread_line"])),
+        "real": {"season": int(g["season"]), "week": int(g["week"]), "type": str(g["game_type"]),
+                 "coach": CO.COACH_FIX.get(c := g["home_coach"] if home_off else g["away_coach"], c), "call": r["real_call"],
+                 "drive": None if res is None or (isinstance(res, float) and np.isnan(res)) else DRIVE_RESULT.get(res, res),
+                 "final": {"away": int(r["away_score"]), "home": int(r["home_score"])}},
+    }
+
+
+def team_chunks(hist, spots: list, games: pd.DataFrame, chunk: int = SPOT_CHUNK) -> dict:
+    """The two teams as they were in each spot's game (history.History.teams), in chunks the browser loads one at a
+    time: {chunk index: {spot index: teams}}; each spot gets its league constants."""
+    chunks: dict = {}
+    for i, sp in enumerate(spots):
+        gid, pid = sp["id"].split("#")
+        g = games.loc[gid]
+        t = hist.teams(gid, int(g["season"]), int(g["week"]), float(pid), sp["home"], sp["away"],
+                       {"home": g["home_coach"], "away": g["away_coach"]})
+        sp["league"] = t["league"]
+        chunks.setdefault(i // chunk, {})[str(i)] = t["teams"]
+    return chunks
+
+
+def receive2h_of(pbp: pd.DataFrame) -> dict:
+    """game id -> the team that gets the ball after halftime (it kicked off to start the game)."""
+    ko = pbp[pbp["play_type"] == "kickoff"].sort_values(["game_id", "row_order"]).groupby("game_id").head(1)
+    return dict(zip(ko["game_id"], ko["defteam"]))
+
+
 def _nan_paths(obj, path: str = "") -> list:
     """Where a NaN or infinity sits in a nested dict/list (JSON cannot carry one): 'spots.3.real.drive', ..."""
     if isinstance(obj, dict):
@@ -140,43 +185,10 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
     last = last[last["week"] == last["week"].max()].iloc[0]
     league = {k: round(float(last[k]), 5) for k in ("mu_pass", "mu_rush", "home_pass", "home_rush")}
     games = pd.read_csv(config.RAW_DIR / "games.csv").set_index("game_id")
-    ko = pbp[pbp["play_type"] == "kickoff"].sort_values(["game_id", "row_order"]).groupby("game_id").head(1)
-    receive2h = dict(zip(ko["game_id"], ko["defteam"]))      # the team that kicked off first gets the ball after halftime
+    receive2h = receive2h_of(pbp)
 
-    spots = []
-    for cat, df in picks.items():
-        for _, r in df.iterrows():
-            gid = r["game_id"]
-            g = games.loc[gid]
-            home, away = g["home_team"], g["away_team"]
-            off = r["posteam"]
-            home_off = off == home
-            res = r.get("fixed_drive_result")
-            spots.append({
-                "id": f"{gid}#{int(r['play_id'])}", "category": r["category"], "home": home, "away": away, "player": off,
-                "indoor": g["roof"] in ("dome", "closed"), "wind": float(np.nan_to_num(g["wind"])),
-                "temp": None if pd.isna(g["temp"]) else float(g["temp"]),
-                "start": {"qtr": int(r["qtr"]), "clock": float(r["quarter_seconds_remaining"]),
-                          "score": [int(r["total_away_score"]), int(r["total_home_score"])],
-                          "pos": off, "down": 1, "ytg": float(r["ydstogo"]), "yl": float(r["yardline_100"]),
-                          "to": [int(r["posteam_timeouts_remaining"] if not home_off else r["defteam_timeouts_remaining"]),
-                                 int(r["posteam_timeouts_remaining"] if home_off else r["defteam_timeouts_remaining"])],
-                          "running": False, "phase": "snap", "receive2h": receive2h.get(gid, away)},
-                "spread": float(np.nan_to_num(g["spread_line"])),
-                "real": {"season": int(g["season"]), "week": int(g["week"]), "type": str(g["game_type"]),
-                         "coach": CO.COACH_FIX.get(c := g["home_coach"] if home_off else g["away_coach"], c), "call": r["real_call"],
-                         "drive": None if res is None or (isinstance(res, float) and np.isnan(res)) else DRIVE_RESULT.get(res, res),
-                         "final": {"away": int(r["away_score"]), "home": int(r["home_score"])}},
-            })
-    # the two teams as they were in each spot's game, in chunks the browser loads a day at a time
-    chunks: dict = {}
-    for i, sp in enumerate(spots):
-        gid, pid = sp["id"].split("#")
-        g = games.loc[gid]
-        t = hist.teams(gid, int(g["season"]), int(g["week"]), float(pid), sp["home"], sp["away"],
-                       {"home": g["home_coach"], "away": g["away_coach"]})
-        sp["league"] = t["league"]
-        chunks.setdefault(i // SPOT_CHUNK, {})[str(i)] = t["teams"]
+    spots = [spot_record(r, games.loc[r["game_id"]], receive2h) for df in picks.values() for _, r in df.iterrows()]
+    chunks = team_chunks(hist, spots, games)
     n = {cat: len(df) for cat, df in picks.items()}
     offs = {cat: sum(n[c] for c in list(CATEGORIES)[:i]) for i, cat in enumerate(CATEGORIES)}
     if frozen:
