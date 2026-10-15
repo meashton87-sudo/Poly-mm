@@ -432,6 +432,16 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
 .dist .r { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12px; font-variant-numeric: tabular-nums; }
 .dist .bar2 { background: var(--key); color: var(--key-ink); font-weight: 700; padding: 2px 6px; text-align: right; border-radius: 2px; min-width: 22px; }
 .dist .bar2.hi { background: var(--sq-g); color: var(--sq-ink); }
+.tend { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+.tend h3 { margin: 0; font: 800 12px var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.tend .stats { margin: 0 0 2px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.tend .tr { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 3px 8px; align-items: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+.tend .tr .lab { grid-row: span 2; font-weight: 700; line-height: 1.15; }
+.tend .tr .lab small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
+.tend .tb { height: 17px; border-radius: 2px; display: flex; align-items: center; padding: 0 6px; font-size: 11px; font-weight: 700; white-space: nowrap; box-sizing: border-box; min-width: 64px; }
+.tend .tb.you { background: var(--sq-g); color: var(--sq-ink); }
+.tend .tb.nfl { background: var(--line); color: var(--ink); }
+.tend p { margin: 0; font-size: 13.5px; }
 /* everyone today (the website's daily stats) */
 .board.daily .daily-head { margin: 2px 0 4px; font-weight: 700; font-size: 15px; text-wrap: balance; }
 .board.daily .dspots { display: grid; gap: 6px; text-align: left; font-size: 12.5px; font-variant-numeric: tabular-nums; }

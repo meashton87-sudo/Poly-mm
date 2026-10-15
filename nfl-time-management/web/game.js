@@ -3591,35 +3591,43 @@
   }
 
   // ------------------------------------------------- who you coached like ---
+  // what a graded call says about you, trait by trait: [trait, what you did (0 or 1), what NFL play-callers do in the
+  // same spot (0 to 1: the option frequencies the grading uses)]
+  const chosenCallOf = (x) => CALL[x.chosenCall || String(x.chosen).replace('+oob', '')];
+  function traitsOf(x) {
+    const out = [];
+    if (x.kind === 'call') {
+      let qPlay = 0, qPass = 0, qPassOnly = 0, qDeep = 0, qAll = 0;
+      x.wps.forEach((w) => {
+        const q = x.q[w.key] || 0;
+        qAll += q;
+        // a receiver's route you picked counts as the call it is played as (w.call); the out-of-bounds twins and
+        // your pick itself (it duplicates a call already in the list) are left out of what play-callers do
+        if (w.key.endsWith('+oob') || w.key.startsWith('pass:')) return;
+        const c = CALL[w.key];
+        if (!c) return;
+        qPlay += q;
+        qPass += q * (c.family === 'pass' ? 1 : c.family === 'rpo' ? 0.5 : 0);
+        if (c.family === 'pass') { qPassOnly += q; if (DEEP.has(c.id)) qDeep += q; }
+      });
+      const c = chosenCallOf(x);
+      if (c && qPlay > 0) {
+        out.push(['pass', c.family === 'pass' ? 1 : c.family === 'rpo' ? 0.5 : 0, qPass / qPlay]);
+        if (c.family === 'pass' && qPassOnly > 0) out.push(['deep', DEEP.has(c.id) ? 1 : 0, qDeep / qPassOnly]);
+      }
+      if (x.family === 'fourth_down' && qAll > 0) out.push(['go', c ? 1 : 0, qPlay / qAll]);
+    } else if (x.kind === 'pat') out.push(['two', x.chosen === 'two' ? 1 : 0, x.q.two || 0]);
+    else if (x.kind === 'clock' && x.wps.some((w) => w.key === 'nohuddle')) out.push(['nohuddle', x.chosen === 'nohuddle' ? 1 : 0, x.q.nohuddle || 0]);
+    else if (x.kind === 'defcall') DEFS.forEach((k) => out.push([k, x.chosen === k ? 1 : 0, x.q[k] || 0]));
+    return out;
+  }
   function coachMatch(decs) {
     const C = idx.coaches;
     if (!C || !C.coaches || !C.coaches.length) return null;
     // per trait: [sum of (you - play-callers), snaps, what you did, what play-callers would have done (expected)]
     const acc = { pass: [0, 0, 0, 0], deep: [0, 0, 0, 0], go: [0, 0, 0, 0], two: [0, 0, 0, 0] };
     const add = (k, mine, theirs) => { const a = acc[k]; a[0] += mine - theirs; a[1] += 1; a[2] += mine; a[3] += theirs; };
-    decs.forEach((x) => {
-      if (x.kind === 'call') {
-        let qPlay = 0, qPass = 0, qPassOnly = 0, qDeep = 0, qAll = 0;
-        x.wps.forEach((w) => {
-          const q = x.q[w.key] || 0;
-          qAll += q;
-          // a receiver's route you picked counts as the call it is played as (w.call); the out-of-bounds twins and
-          // your pick itself (it duplicates a call already in the list) are left out of what play-callers do
-          if (w.key.endsWith('+oob') || w.key.startsWith('pass:')) return;
-          const c = CALL[w.key];
-          if (!c) return;
-          qPlay += q;
-          qPass += q * (c.family === 'pass' ? 1 : c.family === 'rpo' ? 0.5 : 0);
-          if (c.family === 'pass') { qPassOnly += q; if (DEEP.has(c.id)) qDeep += q; }
-        });
-        const c = CALL[x.chosenCall || String(x.chosen).replace('+oob', '')];
-        if (c && qPlay > 0) {
-          add('pass', c.family === 'pass' ? 1 : c.family === 'rpo' ? 0.5 : 0, qPass / qPlay);
-          if (c.family === 'pass' && qPassOnly > 0) add('deep', DEEP.has(c.id) ? 1 : 0, qDeep / qPassOnly);
-        }
-        if (x.family === 'fourth_down' && qAll > 0) add('go', c ? 1 : 0, qPlay / qAll);
-      } else if (x.kind === 'pat') add('two', x.chosen === 'two' ? 1 : 0, x.q.two || 0);
-    });
+    decs.forEach((x) => { traitsOf(x).forEach(([k, mine, theirs]) => { if (acc[k]) add(k, mine, theirs); }); });
     const zu = {}, w = {};
     Object.keys(acc).forEach((k) => {
       const [sum, n] = acc[k];
@@ -3662,6 +3670,74 @@
     box.append(el('div', 'meta', `${teams} · ${c.from === c.to ? c.from : `${c.from}–${c.to}`} · from ${c.plays.toLocaleString()} late-game snaps`));
     box.title = 'Matched on how often you throw, go deep, go for it on fourth down and go for two, each against what NFL play-callers do in the same spots.';
     return { el: box, name: c.name };
+  }
+
+  // ---- your tendencies: every call you have had graded (daily days as they finish, survivor games as they end), each
+  // against what NFL play-callers do in the same spot. A running tally in storage, keyed so nothing counts twice; a
+  // day or game finished before the tally existed is folded in when the stats are opened.
+  const TRAIT = { pass: ['Pass', 'throw', 'plays'], deep: ['Deep shot', 'go deep', 'throws'], go: ['Go on 4th', 'go for it on fourth down', 'fourth downs'],
+    two: ['Go for two', 'go for two', 'tries'], nohuddle: ['No huddle', 'hurry', 'snaps on a running clock'],
+    blitz: ['Blitz', 'blitz', 'defensive snaps'], load: ['Load the box', 'load the box', 'defensive snaps'], soft: ['Coverage', 'sit back in coverage', 'defensive snaps'] };
+  const TEND_LEAN = 0.08, TEND_MIN = 3;        // a lean worth saying: this many points off the NFL, on at least this many calls
+  function tendStore() { return load(`${STORE}:tend`, { seen: {}, t: {}, calls: {}, grade: {}, n: 0 }); }
+  function tendFold(decs, key) {
+    const T = tendStore();
+    if (!decs || !decs.length || T.seen[key]) return T;
+    T.seen[key] = 1;
+    decs.forEach((x) => {
+      const m = markOf(x.cost);
+      T.n += 1;
+      T.grade[m] = (T.grade[m] || 0) + 1;
+      const c = x.kind === 'call' && chosenCallOf(x);
+      if (c) T.calls[c.id] = (T.calls[c.id] || 0) + 1;
+      traitsOf(x).forEach(([k, mine, theirs]) => { const a = T.t[k] || (T.t[k] = [0, 0, 0]); a[0] += mine; a[1] += theirs; a[2] += 1; });
+    });
+    save(`${STORE}:tend`, T);
+    return T;
+  }
+  function tendAll() {
+    let T = tendStore();
+    let keys = [];
+    try { keys = Object.keys(localStorage); } catch (e) { /* storage off */ }
+    keys.filter((k) => k.startsWith(`${STORE}:day:`)).forEach((k) => {
+      const n = Number(k.slice(`${STORE}:day:`.length));
+      if (!(n > 0) || T.seen[`d${n}`]) return;
+      const s = load(k, null);
+      if (s && s.done) T = tendFold((s.spots || []).reduce((a, sp) => a.concat((sp && sp.decisions) || []), []), `d${n}`);
+    });
+    const sv = SURV ? state : load(`${STORE}:surv`, null);
+    if (sv && sv.run) (sv.spots || []).forEach((s, i) => { if (s && s.over && s.decisions && !T.seen[`s${sv.run}:${i}`]) T = tendFold(s.decisions, `s${sv.run}:${i}`); });
+    return T;
+  }
+  function tendEl() {
+    const T = tendAll();
+    if (!T.n) return null;
+    const box = el('div', 'tend');
+    box.append(el('h3', '', 'How you call it'));
+    const row = el('div', 'stats');
+    [[T.n, 'Calls graded'], [`${Math.round(100 * (T.grade.g || 0) / T.n)}%`, 'Best call or close'], [T.grade.r || 0, 'Big mistakes']]
+      .forEach(([v, l]) => { const c = el('div'); c.append(el('b', '', String(v)), el('span', '', l)); row.append(c); });
+    box.append(row);
+    const leans = [];
+    Object.keys(TRAIT).forEach((k) => {
+      const a = T.t[k];
+      if (!a || !a[2]) return;
+      const you = a[0] / a[2], nfl = a[1] / a[2];
+      const r = el('div', 'tr');
+      const lab = el('div', 'lab', TRAIT[k][0]);
+      lab.append(el('small', '', `${a[2]} ${TRAIT[k][2]}`));
+      const bar = (cls, who, p) => { const b = el('div', `tb ${cls}`, `${who} ${Math.round(p * 100)}%`); b.style.width = `${clip(p * 100, 0, 100)}%`; return b; };
+      r.append(lab, bar('you', 'You', you), bar('nfl', 'NFL', nfl));
+      box.append(r);
+      if (a[2] >= TEND_MIN && Math.abs(you - nfl) >= TEND_LEAN) leans.push([k, you - nfl]);
+    });
+    leans.sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    const say = leans.slice(0, 2).map(([k, d]) => `${TRAIT[k][1]} ${d > 0 ? 'more' : 'less'} (${d > 0 ? '+' : '−'}${Math.round(Math.abs(d) * 100)} points)`);
+    box.append(el('p', '', say.length ? `Against NFL play-callers in the same spots, you ${say.join(' and ')}.`
+      : T.n >= TEND_MIN ? 'Your calls sit close to NFL play-callers’ across the board.' : 'Your tendencies show after a few more calls.'));
+    const fav = Object.entries(T.calls).filter(([id]) => CALL[id]).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    if (fav.length) box.append(el('p', 'note', `Go-to calls: ${fav.map(([id, n]) => `${CALL[id].label} (${n})`).join(', ')}.`));
+    return box;
   }
 
   // The rare one: John Madden (the #HuntForMadden; no play-by-play from his years, so never a match on tendencies).
@@ -3741,6 +3817,7 @@
       state.games.push({ id: sc.id, tag: gameTag(sc), me: sc.player, op: sc.player === sc.home ? sc.away : sc.home,
         mine: res.mine, theirs: res.theirs, ot: inOT, w, tie });
       if (w) state.won += 1; else if (!tie) state.out = true;
+      tendFold(G.decisions, `s${state.run}:${G.si}`);
       liveDrive.on = false;
     track('survivor_game', { result: w ? 'win' : tie ? 'tie' : 'loss', overtime: inOT, streak: state.won });
       persist();
@@ -4159,6 +4236,7 @@
     const cc = coachCard(decs, 'Today you coached like');
     st.days[dayN] = { p, wpa, coach: cc ? cc.name : null };
     save(`${STORE}:stats`, st);
+    tendFold(decs, `d${dayN}`);
     const firstFinish = !state.done;
     state.done = true;
     saveState();
@@ -4535,6 +4613,8 @@
       const top = Object.entries(coaches.reduce((a, c) => ({ ...a, [c]: (a[c] || 0) + 1 }), {})).sort((a, b) => b[1] - a[1])[0];
       nodes.push(el('p', '', `You coach most like ${top[0]} (${top[1]} day${top[1] === 1 ? '' : 's'}).`));
     }
+    const te = tendEl();
+    if (te) nodes.push(te);
     const sv = survStats();
     if (sv.runs) nodes.push(el('p', '', `Survivor: best run ${sv.best} win${sv.best === 1 ? '' : 's'} (${sv.runs} run${sv.runs === 1 ? '' : 's'}).`));
     nodes.push(boardEl());
