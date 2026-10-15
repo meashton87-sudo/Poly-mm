@@ -116,12 +116,13 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .fieldbox { position: relative; border-radius: 12px; overflow: hidden; background: var(--turf); line-height: 0; }
 .playgrid { display: grid; gap: 6px; }
 /* wide screens: the calls beside the field, both on screen at once (no scrolling down to call the play) */
-@media (min-width: 1000px) {
+@media (min-width: 1000px) { @supports selector(:has(*)) {    /* browsers without :has() keep the one-column layout */
   .wrap:has(> #play:not([hidden])) { max-width: 1120px; }
   .playgrid { grid-template-columns: minmax(0, 1.2fr) minmax(340px, 1fr); column-gap: 24px; align-items: start; }
   .playgrid > * { grid-column: 1; }
   .playgrid > #dock { grid-column: 2; grid-row: 1 / span 5; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; }
-}
+  .playgrid { grid-template-rows: auto auto auto auto 1fr; }
+} }
 #field { width: 100%; display: block; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .dot { cursor: pointer; }
 .dot circle.c { stroke-width: 1.6; }
@@ -175,6 +176,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
   .rcv { grid-template-columns: auto minmax(0, 1fr) auto; padding: 3px 10px; line-height: 1.25; }
   .rcv.on { padding: 2px 9px; }
   .rcv .pos { grid-row: span 2; }
+  .rcv .nm, .rcv .rt { grid-column: 2; }      /* placed, so the odds arriving never reflow the row */
   .rcv .od { grid-column: 3; grid-row: 1 / span 2; text-align: right; max-width: 15.5em; line-height: 1.3; }
 }
 /* the survivor leaderboard */

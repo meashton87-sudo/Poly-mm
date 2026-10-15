@@ -191,8 +191,8 @@
   // the end of the first half (t = 1800) reads 0:00 of the 2nd quarter: every spot is late in Q2 or Q4
   function clockOf(t) {
     const q = t > 2700 ? 1 : t >= 1800 ? 2 : t > 900 ? 3 : 4;
-    const s = Math.max(0, t - (4 - q) * 900);
-    return { q, s, text: `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` };
+    const s = Math.max(0, t - (4 - q) * 900), c = Math.ceil(s - 1e-6);      // a game clock: 0:00 only when time is out
+    return { q, s, text: `${Math.floor(c / 60)}:${String(c % 60).padStart(2, '0')}` };
   }
   const halfLeft = (t) => t - (t > 1800 ? 1800 : 0);
   const qLabel = (r) => (r.ot ? (r.ot.n > 1 ? `OT${r.ot.n}` : 'OT') : `Q${clockOf(r.t).q}`);
@@ -207,7 +207,7 @@
   const tempoKeyOf = (t) => (t === 'urgent' || t === 'hurry' ? 'nohuddle' : t === 'normal' ? 'huddle' : 'milk');
   const RUNDOWN_AT = 3;               // seconds left after the timeout (engine.js CLOSE_KICK_AT)
   const clockAct = (k, r) => (TEMPOS.includes(k) ? { to_off: false, tempo: engineTempo(k, r) }
-    : k === 'rundown' ? { to_off: false, runoff: Math.max(0, halfLeft(r.t) - RUNDOWN_AT), play: 'fg' } : CLOCK[k].act);
+    : k === 'rundown' ? { to_off: false, to_def: false, runoff: Math.max(0, halfLeft(r.t) - RUNDOWN_AT), play: 'fg' } : CLOCK[k].act);
   const tempoSecs = (k, r) => { const S_ = (G.info && G.info.tempoSecs) || {}; return S_[engineTempo(k, r)]; };
   function spotText(r) {
     if (Math.round(r.yl) === 50) return 'midfield';
@@ -2358,7 +2358,7 @@
         case 'runoff':
           if (e.stop === '2mw') text = 'Two-minute warning';
           else if (e.stop === 'quarter') text = 'End of the quarter';
-          else if (e.secs >= 3 && !e.kneel && !e.spike) text = `Clock runs ${Math.round(e.secs)} seconds`;
+          else if (e.secs >= 3 && !e.kneel && !e.spike) text = `Clock runs ${Math.ceil(e.t + e.secs - 1e-6) - Math.ceil(e.t - 1e-6)} seconds`;   // as the scoreboard reads
           break;
         case 'play': text = playLine(e, act); break;
         case 'fg': text = e.foul ? `Roughing the kicker on the ${teamName(code(1 - e.team))}: 15 yards and a first down`
@@ -2429,6 +2429,8 @@
     const rl = sc.real || {};
     return `${rl.season} · ${ROUND[rl.type] || `Week ${rl.week}`}`;
   }
+  // the kind of spot, as this one is: "Tied, or end of the half" says which ("End of the half" above "Down by 4")
+  const catLabel = (sc) => (sc.category !== 'tight' ? idx.categories[sc.category] : sc.start.qtr <= 2 ? 'End of the half' : 'Tied game');
   function renderIntro() {
     const sc = G.scen, r = G.root, box = $('intro');
     box.textContent = '';
@@ -2440,7 +2442,7 @@
     const state_ = lead > 0 ? `Up by ${lead}` : lead < 0 ? `Down by ${-lead}` : 'Tied';
     const big = el('div', 'big', state_);
     big.append(el('span', 'left', left));
-    box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : (today.length > 1 ? `Spot ${G.si + 1} of ${today.length} · ` : 'Today’s drive · ') + idx.categories[sc.category]),
+    box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : (today.length > 1 ? `Spot ${G.si + 1} of ${today.length} · ` : 'Today’s drive · ') + catLabel(sc)),
       el('div', 'game', `${gameTag(sc)} · ${teamName(sc.away)} at ${teamName(sc.home)}`), big);
     const mu = el('div', 'matchup');
     const t = (c, i) => {
@@ -2532,6 +2534,7 @@
     return late && (lead <= 0 || (lead <= 3 && r.yl <= 45));
   }
   async function stepWith(action) {
+    await cutReplay();                // a replay's last redraw must not show this play's result before it animates
     const seed = hash('step', seedKey(), G.si, G.seq++);
     const before = G.root, side = G.side;
     const res = (await send({ type: 'step', scen: simScen(), root: G.root, action, seed }, true)).res;
@@ -2611,7 +2614,7 @@
     if (canKneel(r)) keys.push('kneel');
     // in field goal range late: burn the clock, timeout, kick (the end-of-half/end-of-game classic)
     const th = halfLeft(r.t);
-    if (r.to[me] > 0 && needTime && th > RUNDOWN_AT + 2 && th <= 60 && r.yl <= 40 && (r.t > 1800 || lead >= -3)) keys.push('rundown');
+    if (r.to[me] > 0 && needTime && th > RUNDOWN_AT + 2 && th <= 60 && r.yl <= 40 && (G.info.pFg || 0) >= 0.3 && (r.t > 1800 || lead >= -3)) keys.push('rundown');
     return keys;
   }
   function callOptions(r) {
@@ -3010,7 +3013,11 @@
       if (r.down === 4) {
         const f4 = coachProbs('fourth_down', r, me) || { go: r.yl <= 40 ? 0.35 : 0.15, fg: r.yl <= 40 ? 0.55 : 0.05, punt: r.yl <= 40 ? 0.1 : 0.8 };
         goShare = f4.go; if (specials.includes('fg')) q.fg = f4.fg; if (specials.includes('punt')) q.punt = f4.punt;
-      } else if (specials.includes('fg')) { q.fg = halfLeft(r.t) <= 10 ? 0.6 : 0.2; goShare = 1 - q.fg; }
+      } else if (specials.includes('fg')) {
+        // the old windows (last 20 s, 3rd down late): play-callers often kick; the any-down kick late is rare
+        const th = halfLeft(r.t), usual = th <= 20 || (r.down === 3 && th <= 40);
+        q.fg = !usual ? 0.02 : th <= 10 ? 0.6 : 0.2; goShare = 1 - q.fg;
+      }
       if (specials.includes('kneel')) { const qk = r.score[me] > r.score[1 - me] ? 0.5 : 0.1; q.kneel = qk; goShare *= 1 - qk; }
       const fs = calls.reduce((a, id) => a + (freq[id] || 0), 0) || 1;
       calls.forEach((id) => { q[id] = goShare * (freq[id] || 0) / fs; });
@@ -3183,7 +3190,7 @@
     const call = e.team === G.me && action && action.route && action.targetName
       ? `${routeSay(action.targetPos, action.route)} to ${shortName(action.targetName) || action.targetPos}` : idx.calls[e.call].label.toLowerCase();
     // how it went for the offense: a big play, or nothing (no gain, an incompletion, a turnover)
-    const big = (e.td && !e.turnover) || e.yards >= 10, none = e.turnover || e.incomplete || e.yards <= 0;
+    const big = !e.turnover && (e.td || e.yards >= 10), none = e.turnover || e.incomplete || e.yards <= 0;
     if (e.team === G.me) {
       const b = action && action.looks ? Math.round(Math.log2(action.looks)) : -1;
       if (!(b >= 0 && b < 4)) return null;
@@ -3352,7 +3359,8 @@
   // Both teams get the ball, then the next score wins; a regular-season overtime can end tied, which keeps the run
   // alive without a win. The toss is seeded, so a reload lands on the same one.
   const isPlayoff = (sc) => !!ROUND[(sc.real || {}).type];
-  const needsOvertime = (r) => SURV && r.phase === DONE && r.t <= 0 && !r.ot && r.score[0] === r.score[1];
+  // tied at the end of regulation: overtime, played out (the daily drive too: a playoff game can't end tied)
+  const needsOvertime = (r) => r.phase === DONE && r.t <= 0 && !r.ot && r.score[0] === r.score[1];
   function overtime() {
     track('overtime', { day: dayN });
     const r = G.root, po = isPlayoff(G.scen), d = $('dock'), them = teamName(code(1 - G.me));
@@ -3431,7 +3439,8 @@
     if (hh) card.append(hhCard(hh));
     const rl = sc.real || {};
     const realCall = rl.call && CALL[rl.call] ? CALL[rl.call].label : 'a play';
-    const drive = !rl.drive ? '' : rl.drive === 'ran out the clock' ? 'they ran out the clock' : `the drive ended in a ${rl.drive}`;
+    const lead0 = sc.start.score[sc.player === sc.home ? 1 : 0] - sc.start.score[sc.player === sc.home ? 0 : 1];
+    const drive = !rl.drive ? '' : rl.drive === 'ran out the clock' ? (lead0 > 0 ? 'they ran out the clock' : 'time ran out on them') : `the drive ended in a ${rl.drive}`;
     card.append(el('p', 'real', `In the real game (${gameTag(sc)}), ${rl.coach || 'the coach'} called "${realCall}" here; ${drive}.`));
     const cc = coachCard(G.decisions, 'You called this one like');
     if (cc) card.append(cc.el);
@@ -3477,7 +3486,7 @@
     const hm = me === 0 ? rl.final.home : rl.final.away, ht = me === 0 ? rl.final.away : rl.final.home;
     const wl = (a, b) => (a > b ? 'Won' : a < b ? 'Lost' : 'Tied');
     return { coach: rl.coach, who, v: Math.sign(Math.sign(result.mine - result.theirs) - Math.sign(hm - ht)),
-      you: `${wl(result.mine, result.theirs)} ${result.mine}–${result.theirs}`, him: `${wl(hm, ht)} ${hm}–${ht}` };
+      you: `${wl(result.mine, result.theirs)} ${result.mine}–${result.theirs}${G.root && G.root.ot ? ' (OT)' : ''}`, him: `${wl(hm, ht)} ${hm}–${ht}` };
   }
   function hhCard(h) {
     const box = el('div', `h2h ${h.v > 0 ? 'beat' : h.v < 0 ? 'lost' : 'tie'}`);
@@ -3664,7 +3673,8 @@
 
   // ------------------------------------------------------------ survivor ---
   // the pool: every fourth-quarter spot (each one plays to the final gun), none twice in a run until all are used
-  const survPool = () => idx.spots.map((sp, i) => (sp.start.qtr >= 4 ? i : -1)).filter((i) => i >= 0);
+  const featuredSpots = () => new Set(Object.values(idx.featured || {}).map((f) => f.spot));   // a day's story, not survivor's
+  const survPool = () => { const f = featuredSpots(); return idx.spots.map((sp, i) => (sp.start.qtr >= 4 && !f.has(i) ? i : -1)).filter((i) => i >= 0); };
   function newRun() {
     return { run: Math.floor(Math.random() * 2 ** 31), spots: [], current: 0, pick: null, won: 0, games: [], played: [], out: false };
   }
@@ -3973,6 +3983,7 @@
     const upd = () => {
       if (dayOf(new Date()) > dayN) {           // past midnight on yesterday's screen: the new drive is out
         clearInterval(tick);
+        if (w.querySelector('button')) return;     // drawn once: a redraw under the finger would eat the tap
         w.textContent = '';
         const go = el('button', 'btn', 'Play today’s drive');
         go.addEventListener('click', () => location.reload());
@@ -4050,7 +4061,8 @@
       const ol = el('ol', 'quick');
       [['Call the play.', 'Run, pass or a trick play, in the last minutes of a real NFL game.'],
         ['Watch it happen.', 'Every snap is a real NFL play run against your call.'],
-        ['Beat the real coach.', 'Then see how you rank against everyone who played today.']]
+        SURV ? ['Keep winning.', 'Every game is a different real one. How many in a row can you win?']
+          : ['Beat the real coach.', 'Then see how you rank against everyone who played today.']]
         .forEach(([b, t]) => { const li = el('li'); li.append(el('b', '', b), ' ', t); ol.append(li); });
       const go = el('button', 'btn', 'Let’s go');
       go.type = 'button';
@@ -4067,7 +4079,8 @@
       'You call the plays at the end of a real NFL game. A new drive every day.',
       'Pick Run, Pass, RPO or Trick. On a pass, tap a receiver on the field to change his route, then tap his name to throw it.',
       'Every snap is a real NFL play. Read the defense: a blitz loses to quick throws, a loaded box to play action.',
-      'Beat the real coach, and see how you rank against everyone who played today.',
+      SURV ? 'Survivor: win each real game to keep going. One loss ends your run; put your name on the board.'
+        : 'Beat the real coach, and see how you rank against everyone who played today.',
     ].forEach((t) => ul.append(el('li', '', t)));
     const more = el('details', 'more');
     more.append(el('summary', '', 'More about the game'));

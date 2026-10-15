@@ -144,7 +144,7 @@ self.onmessage = async (ev) => {
     } else if (m.type === 'odds') {         // each pick's odds here (a receiver's route): caught, yards a throw, picks
       const sim = simFor(m.scen), r = m.root, half = r.t > 1800 ? 1 : 2, ht = r.t - (half === 1 ? 1800 : 0);
       const fk = fineKey(gameMode(half, ht, r.score[r.pos] - r.score[1 - r.pos]), r.down, r.ytg, r.yl);
-      const out = m.picks.map((q) => sim.routeOdds(r.pos, eng.pb.callIndex[q.call], fk, q.looks || 0, q.route, q.who));
+      const out = m.picks.map((q) => sim.routeOdds(r.pos, eng.pb.callIndex[q.call], fk, q.looks || 0, q.route, q.who, r.yl));
       self.postMessage({ type: 'odds', id: m.id, out });
     } else if (m.type === 'step') {
       const r = simFor(m.scen).step(m.root, { action: m.action, seed: m.seed });

@@ -86,6 +86,32 @@ for (const pat of ['xp', 'two']) for (let k = 0; k < 40; k++) {
   }
   console.log(`inside the 10: ${scored} touchdowns, ${fum} turnovers, none past the goal line`);
 }
+// "Run it down" (game.js rundown) is graded as played: the clock runs to 0:03 with no timeout from the defense in
+// between, and the kick after the timeout is set up, not rushed
+for (let k = 0; k < 200; k++) {
+  const at = { ...root, t: 40, phase: 0, score: [17, 17], pos: 0, down: 2, ytg: 6, yl: 20, to: [2, 3], clock_running: true };
+  const r = sim.step(at, { action: { to_off: false, to_def: false, runoff: 37, play: 'fg' }, seed: 7000 + k });
+  const fg = r.log.find((e) => e.ev === 'fg');
+  assert.ok(fg && !fg.fire && Math.abs(fg.dist - 37) < 1e-9, `rundown kick set up: ${JSON.stringify(fg)}`);
+  assert.ok(!r.log.some((e) => e.ev === 'timeout' && e.team === 1), 'no defensive timeout in a rundown');
+  const ro = r.log.find((e) => e.ev === 'runoff');
+  assert.ok(ro && Math.abs(ro.t - 3) < 1e-9, `rundown to 0:03: ${JSON.stringify(ro)}`);
+}
+// a timeout called just before 2:00 never carries the clock past it: the two-minute warning still comes
+for (let k = 0; k < 100; k++) {
+  const at = { ...root, t: 120.6, phase: 0, score: [17, 20], pos: 0, down: 2, ytg: 6, yl: 40, to: [2, 3], clock_running: true };
+  const r = sim.step(at, { action: { to_def: true }, seed: 8000 + k });
+  const to = r.log.find((e) => e.ev === 'timeout');
+  assert.ok(to && to.t >= 120, `a timeout before the warning stays before it: ${JSON.stringify(to)}`);
+}
+// yards a throw (game.js pass odds) never past the goal line
+{
+  const fk9 = 3 * 7 * 4 + 0;   // any situation bucket
+  for (const id of ['deep_strong', 'deep_middle', 'pa_deep', 'quick_strong']) {
+    const o = sim.routeOdds(0, eng.pb.callIndex[id], fk9, 0, null, null, 9);
+    assert.ok(!o || o.yds <= 9 + 1e-9, `yards a throw from the 9: ${id} ${o && o.yds}`);
+  }
+}
 // matchups (engine.js MATCH): a call that beats the defense's call does better than the real plays alone, one that
 // loses to it worse (mean EPA of the plays drawn, over every situation)
 {
