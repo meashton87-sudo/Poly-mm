@@ -102,6 +102,7 @@ def spot_record(r, g, receive2h: dict) -> dict:
     off = r["posteam"]
     home_off = off == home
     res = r.get("fixed_drive_result")
+    call = r.get("real_call")
     return {
         "id": f"{gid}#{int(r['play_id'])}", "category": r["category"], "home": home, "away": away, "player": off,
         "indoor": g["roof"] in ("dome", "closed"), "wind": float(np.nan_to_num(g["wind"])),
@@ -114,7 +115,8 @@ def spot_record(r, g, receive2h: dict) -> dict:
                   "running": False, "phase": "snap", "receive2h": receive2h.get(gid, away)},
         "spread": float(np.nan_to_num(g["spread_line"])),
         "real": {"season": int(g["season"]), "week": int(g["week"]), "type": str(g["game_type"]),
-                 "coach": CO.COACH_FIX.get(c := g["home_coach"] if home_off else g["away_coach"], c), "call": r["real_call"],
+                 "coach": CO.COACH_FIX.get(c := g["home_coach"] if home_off else g["away_coach"], c),
+                 "call": call if isinstance(call, str) else None,          # the library's label for the real play (2022 on)
                  "drive": None if res is None or (isinstance(res, float) and np.isnan(res)) else DRIVE_RESULT.get(res, res),
                  "final": {"away": int(r["away_score"]), "home": int(r["home_score"])}},
     }

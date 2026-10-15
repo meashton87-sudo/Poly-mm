@@ -27,7 +27,7 @@
   // Analytics events (the website's Google tag, scripts/site.py --ga; nothing anywhere else): what players do, so the
   // next changes follow the data. Event names and fields are listed in the README.
   const track = (name, params) => { try { if (typeof window.gtag === 'function') window.gtag('event', name, params || {}); } catch (e) { /* never in the way */ } };
-  const modeName = () => (SURV ? 'survivor' : 'daily');
+  const modeName = () => (SURV ? 'survivor' : DRIVE ? 'drive' : ARCH_DAY ? 'archive' : 'daily');
   // a drive left half-played: when the page goes to the background mid-drive (closed, or switched away from), once
   // a page load, with how far in it was and whether it was still waiting on the simulator's data
   const liveDrive = { on: false, calls: 0, t0: 0, kind: null, left: false };
@@ -133,9 +133,12 @@
   const SURV = location.hash === '#survivor';
   // the archive (Pro): #archive lists every past day, #day-N plays one (its own saved state, like the day it was)
   const ARCH = location.hash === '#archive', ARCH_DAY = Number((location.hash.match(/^#day-(\d+)$/) || [])[1] || 0);
-  const stateKey = () => (SURV ? `${STORE}:surv` : `${STORE}:day:${dayN}`);
+  // a historic drive (Pro, pro/drives.json): #drive-N plays the Nth one, with its own saved state
+  const DRIVE = Number((location.hash.match(/^#drive-(\d+)$/) || [])[1] || 0);
+  let PRO = null;                 // pro/drives.json, once loaded
+  const stateKey = () => (SURV ? `${STORE}:surv` : DRIVE ? `${STORE}:drive:${DRIVE}` : `${STORE}:day:${dayN}`);
   const saveState = () => save(stateKey(), state);
-  const seedKey = () => (SURV ? `s${state.run}:${state.games.length}` : dayN);    // what the engine's draws are seeded by
+  const seedKey = () => (SURV ? `s${state.run}:${state.games.length}` : DRIVE ? `drive${DRIVE}` : dayN);    // what the engine's draws are seeded by
   let G = null;                   // the spot being played
   let ui = { step: null, fam: null, oob: false };
   let busy = false, lastFocus = null, tick = null, lastBall = null;
@@ -2588,7 +2591,7 @@
     const state_ = lead > 0 ? `Up by ${lead}` : lead < 0 ? `Down by ${-lead}` : 'Tied';
     const big = el('div', 'big', state_);
     big.append(el('span', 'left', left));
-    box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : (today.length > 1 ? `Spot ${G.si + 1} of ${today.length} · ` : ARCH_DAY ? `No. ${dayN}, from the archive · ` : 'Today’s drive · ') + catLabel(sc)),
+    box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : DRIVE ? 'Historic drive' : (today.length > 1 ? `Spot ${G.si + 1} of ${today.length} · ` : ARCH_DAY ? `No. ${dayN}, from the archive · ` : 'Today’s drive · ') + catLabel(sc)),
       el('div', 'game', `${gameTag(sc)} · ${teamName(sc.away)} at ${teamName(sc.home)}`), big);
     const mu = el('div', 'matchup');
     const t = (c, i) => {
@@ -2607,6 +2610,7 @@
     box.append(facts);
     const rc = (sc.real || {}).coach, feat = !SURV && idx.featured && idx.featured[dayN];
     if (feat && feat.note && idx.spots[feat.spot] && idx.spots[feat.spot].id === sc.id) box.append(el('p', 'story', feat.note));
+    else if (sc.story) box.append(el('p', 'story', sc.story));
     box.append(el('div', 'who', `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
     if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
     const go = el('button', 'btn', 'Next');
@@ -4238,10 +4242,16 @@
     const p = decs.length ? percentileVsNFL(decs) : 0;
     const wpa = decs.reduce((a, x) => a + x.wpa, 0);
     const st = load(`${STORE}:stats`, { days: {} });
-    const cc = coachCard(decs, 'Today you coached like');
-    st.days[dayN] = { p, wpa, coach: cc ? cc.name : null };
-    save(`${STORE}:stats`, st);
-    tendFold(decs, `d${dayN}`);
+    const cc = coachCard(decs, DRIVE ? 'You coached like' : 'Today you coached like');
+    if (DRIVE) {                      // a historic drive: its own record, not a day's
+      const ds = load(`${STORE}:drives`, {});
+      ds[DRIVE] = { p, wpa };
+      save(`${STORE}:drives`, ds);
+    } else {
+      st.days[dayN] = { p, wpa, coach: cc ? cc.name : null };
+      save(`${STORE}:stats`, st);
+    }
+    tendFold(decs, DRIVE ? `drive${DRIVE}` : `d${dayN}`);
     const firstFinish = !state.done;
     state.done = true;
     saveState();
@@ -4250,14 +4260,14 @@
     box.textContent = '';
     // the daily streak: days in a row finished, today included (what brings players back tomorrow)
     let streak = 0; for (let k = dayN; st.days[k]; k--) streak++;
-    box.append(el('div', 'note', `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
+    box.append(el('div', 'note', DRIVE ? `${PRO.drives[DRIVE - 1].title} · your score` : `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
       el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers`),
-      el('div', 'streak', ARCH_DAY ? 'From the archive' : streak >= 2 ? `🔥 ${streak}-day streak` : 'Day 1 of your streak · come back tomorrow'));
+      el('div', 'streak', DRIVE ? 'Historic drive' : ARCH_DAY ? 'From the archive' : streak >= 2 ? `🔥 ${streak}-day streak` : 'Day 1 of your streak · come back tomorrow'));
     if (cc) box.append(cc.el);
     box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller ${today.length > 1 ? 'across today’s spots' : 'on today’s drive'}.`));
     const dbox = dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0)));
     box.append(dbox);
-    if (ARCH_DAY) { const a = el('a', 'btn', 'Back to the archive'); a.href = '#archive'; box.append(a); }
+    if (ARCH_DAY || DRIVE) { const a = el('a', 'btn', DRIVE ? 'More drives' : 'Back to the archive'); a.href = '#archive'; box.append(a); }
     else if (!isPro() && dayN > 1 && BOARD.api) {       // the website: the archive is a Pro purchase there
       const a = el('a', '', 'the Archive'), nudge = el('p', 'note');
       a.href = '#archive';
@@ -4289,7 +4299,7 @@
         el('span', 'sub', `${rec[0]} better, ${rec[1]} worse${rec[2] ? `, ${rec[2]} the same` : ''}`));
       box.insertBefore(v, box.children[3] || null);
     }
-    const text = `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
+    const text = `${DRIVE ? `Two-Minute Drill · ${PRO.drives[DRIVE - 1].title}` : `Two-Minute Drill #${dayN}`}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
       `${streak >= 2 ? `\n🔥 ${streak}-day streak` : ''}\n${rows.join('\n')}\nCan you beat me? ${SITE}`;
     // sharing is how new players find the game: the button sits right under the result, not below the standings
     const share = { text };
@@ -4388,7 +4398,7 @@
   function dailyBox(p, spotW) {
     const box = el('div', 'board daily');
     box.hidden = true;
-    if (ARCH_DAY) return box;                 // a day from the archive: nothing to post, nobody else playing it
+    if (ARCH_DAY || DRIVE) return box;        // a day from the archive or a historic drive: nothing to post
     const post = async () => {
       const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: driveDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)), ...(myName() ? { name: myName() } : {}) }));
       if (!res.ok) throw new Error(`daily ${res.status}`);
@@ -4709,17 +4719,43 @@
     if (!BOARD.api) { buy.disabled = true; go.disabled = true; }
     return [box];
   }
-  // the archive: every past day, newest first, with your score where you played it; the pitch when Pro is not on
-  function renderArchive(now) {
+  // the historic drives (nflclock.pro: pro/drives.json and pro/d{k}.json, the teams in chunks); null where not built
+  async function loadPro() {
+    if (PRO) return PRO;
+    try { const r = await fetch(asset('pro/drives.json')); if (!r.ok) return null; PRO = await r.json(); } catch (e) { return null; }
+    return PRO;
+  }
+  async function loadProTeams(i) {
+    const per = PRO.spot_chunk || 20, r = await fetch(asset(`pro/d${Math.floor(i / per)}.json`));
+    if (!r.ok) throw new Error('drive data ' + r.status);
+    return r.json();
+  }
+  // the Pro screen: the historic drives and every past day, newest first, with your score where you played; the
+  // pitch when Pro is not on
+  async function renderArchive(now) {
     track('archive_open', { pro: isPro() });
     show('arch');
     const box = $('arch'), todayN = dayOf(now);
     box.textContent = '';
-    box.append(el('h2', '', 'Archive'));
+    box.append(el('h2', '', 'Pro'));
     if (!isPro()) {
-      box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''}: play any day you missed, graded like the day it ran.`), ...proNodes());
+      box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''} and the historic drives: play any of them, graded like the day it ran.`), ...proNodes());
       return;
     }
+    box.append(el('h3', '', 'Historic drives'));
+    const pro = await loadPro(), ds = load(`${STORE}:drives`, {});
+    if (pro && pro.drives.length) {
+      const dl = el('div', 'days');
+      pro.drives.forEach((d, k) => {
+        const sp = pro.spots[d.spot], opp = sp.player === sp.home ? sp.away : sp.home, a = el('a', 'day drive');
+        a.href = `#drive-${k + 1}`;
+        a.append(el('b', '', d.title), el('span', 'd', String(sp.real.season)), el('span', 'm', `${teamName(sp.player)} vs ${teamName(opp)}`),
+          el('span', 'sc', ds[k + 1] ? String(Math.round(ds[k + 1].p * 100)) : 'Play'));
+        dl.append(a);
+      });
+      box.append(dl);
+    } else box.append(el('p', 'note', 'The historic drives land here with the next build.'));
+    box.append(el('h3', '', 'Past dailies'));
     if (todayN <= 1) { box.append(el('p', '', 'The archive fills from tomorrow: today’s drive is on the Daily tab.')); return; }
     const st = load(`${STORE}:stats`, { days: {} }), list = el('div', 'days');
     for (let n = todayN - 1; n >= 1; n--) {
@@ -4742,7 +4778,7 @@
     fieldTaps();
     boardInit();
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
-    $(SURV ? 'modeSurv' : ARCH || ARCH_DAY ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
+    $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
     $('statsBtn').addEventListener('click', openStats);
     $('bar').addEventListener('click', () => { if (G) spotInfo(); });
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
@@ -4765,7 +4801,7 @@
       const now = new Date();
       dayN = ARCH_DAY || dayOf(now);
       await proClaimFromUrl();
-      if (ARCH || (ARCH_DAY && (!isPro() || ARCH_DAY >= dayOf(now)))) { renderArchive(now); return; }
+      if (ARCH || (ARCH_DAY && (!isPro() || ARCH_DAY >= dayOf(now))) || (DRIVE && !isPro())) { await renderArchive(now); return; }
       if (SURV) {
         state = load(stateKey(), null) || newRun();
         if (!load(`${STORE}:seen`, false)) { openHelp(true); save(`${STORE}:seen`, true); }
@@ -4773,12 +4809,22 @@
         if (state.out) renderSurvSummary(); else await survOpen();
         return;
       }
-      const ids = dayIds(dayN);
-      const teams = await loadTeams(ids);
-      today = ids.map((i) => buildScen(idx.spots[i], teams[i]));
-      $('dayLabel').textContent = `No. ${dayN} · ${dayDate(dayN).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${ARCH_DAY ? ' · archive' : ''}`;
+      if (DRIVE) {
+        PRO = await loadPro();
+        const d = PRO && PRO.drives[DRIVE - 1];
+        if (!d) { location.replace(location.pathname + '#archive'); return; }
+        const teams = await loadProTeams(d.spot);
+        today = [buildScen(PRO.spots[d.spot], teams[d.spot])];
+        today[0].story = d.note;
+        $('dayLabel').textContent = `Drive · ${d.title}`;
+      } else {
+        const ids = dayIds(dayN);
+        const teams = await loadTeams(ids);
+        today = ids.map((i) => buildScen(idx.spots[i], teams[i]));
+        $('dayLabel').textContent = `No. ${dayN} · ${dayDate(dayN).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${ARCH_DAY ? ' · archive' : ''}`;
+      }
     } catch (e) { $('boot').textContent = 'Today\'s spots did not load (' + e.message + '). Check your connection and reload.'; return; }
-    state = load(`${STORE}:day:${dayN}`, null) || { spots: [], current: 0, done: false };
+    state = load(stateKey(), null) || { spots: [], current: 0, done: false };
     if (!load(`${STORE}:seen`, false)) { openHelp(true); save(`${STORE}:seen`, true); }
     drawTiles();
     startWorkers();
