@@ -98,7 +98,7 @@ def candidates(pbp: pd.DataFrame, lib: pd.DataFrame, keep: dict | None = None) -
 def spot_record(r, g, receive2h: dict) -> dict:
     """A spot in the game's format: the candidate row r (dailygame.candidates) and its game's row g (games.csv)."""
     gid = r["game_id"]
-    home, away = g["home_team"], g["away_team"]
+    home, away = r["home_team"], r["away_team"]       # the play-by-play's codes (LA, not STL): the engine's and the teams'
     off = r["posteam"]
     home_off = off == home
     res = r.get("fixed_drive_result")

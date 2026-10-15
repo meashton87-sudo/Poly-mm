@@ -42,6 +42,10 @@ OFF_POS = {"QB": "QB", "RB": "RB", "HB": "RB", "FB": "RB", "WR": "WR", "TE": "TE
 DEF_POS = {"DE": "EDGE", "OLB": "EDGE", "DT": "DL", "NT": "DL", "DL": "DL", "ILB": "LB", "MLB": "LB", "LB": "LB",
            "CB": "CB", "DB": "CB", "FS": "S", "SS": "S", "S": "S", "SAF": "S"}
 UNRATED_OVR = int(O.CENTER - 12)       # a player without enough snaps yet, as in the current-roster lineups
+# play-by-play names every franchise by its code today (LA, LAC, LV); rosters, snap counts and games.csv keep the code
+# of the time, so a team is looked up under both
+TEAM_THEN = {"LA": ["STL"], "LAC": ["SD"], "LV": ["OAK"]}
+codes = lambda team: [team] + TEAM_THEN.get(team, [])     # noqa: E731
 
 
 def _ol_slots(players: list) -> list:
@@ -159,7 +163,7 @@ class History:
         if not len(g):
             return {}
         out = {}
-        for unit, mine in (("off", g["possession_team"] == team), ("def", g["possession_team"] != team)):
+        for unit, mine in (("off", g["possession_team"].isin(codes(team))), ("def", ~g["possession_team"].isin(codes(team)))):
             rows = g[mine]
             if not len(rows):
                 continue
@@ -175,7 +179,7 @@ class History:
         """The skill players of the game not on the field for the snap, most snaps first: two tight ends, two backs
         (a fullback first) and two receivers. The daily game swaps them in when you change the personnel."""
         sn = R.T["snaps"]
-        g = sn[(sn["game_id"] == game_id) & (sn["team"] == team) & (sn["offense_snaps"] > 0)].sort_values("offense_snaps", ascending=False)
+        g = sn[(sn["game_id"] == game_id) & sn["team"].isin(codes(team)) & (sn["offense_snaps"] > 0)].sort_values("offense_snaps", ascending=False)
         to_gsis = {v: k for k, v in R.gsis_to_pfr.items()}
         have = {i for i, _ in on_field}
         out = []
@@ -195,7 +199,7 @@ class History:
     def _snapcount_units(self, R: PL.Ratings, game_id: str, team: str) -> dict:
         """The most-used players of the game at each position, in the personnel used most (2026 and gaps)."""
         sn = R.T["snaps"]
-        g = sn[(sn["game_id"] == game_id) & (sn["team"] == team)]
+        g = sn[(sn["game_id"] == game_id) & sn["team"].isin(codes(team))]
         to_gsis = {v: k for k, v in R.gsis_to_pfr.items()}
         out = {}
         off = g[g["offense_snaps"] > 0].sort_values("offense_snaps", ascending=False)
@@ -245,7 +249,7 @@ class History:
         g = pd.read_parquet(PL.pbp_path(season), columns=cols, filters=[("game_id", "==", game_id)])
         g = g[g["play_type"].isin(["run", "pass"])]
         ros = self._roster(season)
-        ros = ros[ros["team"] == team].sort_values("years_exp", ascending=False)
+        ros = ros[ros["team"].isin(codes(team))].sort_values("years_exp", ascending=False)
         pos_of = {**self.pos_now, **dict(zip(ros["gsis_id"], ros["position"]))}
         out = {}
         # offense: the quarterback who threw most, then the backs, receivers and tight ends by touches
@@ -327,12 +331,12 @@ class History:
     def _jersey(self, season: int, week: int, team: str, gid: str, pfr) -> tuple:
         """(number, name) as of that week; the season's, else the current number and no name."""
         t = self._jersey_table(season)
-        for i in (gid, pfr):
-            if i and (i, team, week) in t:
-                return t[(i, team, week)]
-        for i in (gid, pfr):
-            if i and (i, team) in t:
-                return t[(i, team)]
+        for i, tm in ((i, tm) for i in (gid, pfr) for tm in codes(team)):
+            if i and (i, tm, week) in t:
+                return t[(i, tm, week)]
+        for i, tm in ((i, tm) for i in (gid, pfr) for tm in codes(team)):
+            if i and (i, tm) in t:
+                return t[(i, tm)]
         n = self.num_now.get(gid) or (self.num_now.get(pfr) if pfr else None)
         return (int(n) if n is not None and n == n else None), None
 
@@ -354,7 +358,7 @@ class History:
                 then = DEF_POS.get(p) if season < 2023 and p in ("CB", "DB", "S", "FS", "SS", "SAF") else None
                 grp = then or (R.role.get(pfr) if pfr else None) or rt["grp"].get(pfr) or DEF_POS.get(p) or p
                 placed.append((i, grp if grp in ("EDGE", "DL", "LB", "CB", "S") else DEF_POS.get(p, "LB")))
-        line_pct, line_stat = rt["ol"].get(team, (None, None))
+        line_pct, line_stat = next((rt["ol"][c] for c in codes(team) if c in rt["ol"]), (None, None))
         ov = self.overall(season, week) if week is not None else None
         if not hasattr(self, "pfr_to_gsis"):
             self.pfr_to_gsis = {v: k for k, v in R.gsis_to_pfr.items()}
