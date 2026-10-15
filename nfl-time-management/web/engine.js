@@ -594,10 +594,13 @@
       if (pers && P.ngs && P.ngs.pers) {
         const pools = [pool];
         if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (!pools.includes(lp)) pools.push(lp); }
-        for (const lk of looks && P.lookB ? [looks, 0] : [0]) {
-          for (const pl of pools) {
-            const r = this._sampleLook(cdf, pl, u, lk, s, 0, 0, true, pers);
-            if (r >= 0) return r;
+        // (enough plays with it first; then any at all, before the grouping is dropped)
+        for (const need of [true, false]) {
+          for (const lk of looks && P.lookB ? [looks, 0] : [0]) {
+            for (const pl of pools) {
+              const r = this._sampleLook(cdf, pl, u, lk, s, 0, 0, need, pers);
+              if (r >= 0) return r;
+            }
           }
         }
       }

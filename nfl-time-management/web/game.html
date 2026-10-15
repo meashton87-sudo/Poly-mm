@@ -224,7 +224,8 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .ghost { border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 6px 12px; font-weight: 700; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .ghost:hover { border-color: var(--muted); }
 .legend .btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-@media (max-width: 420px) { .legend .ramp i { width: 40px; } .legend .ghost { padding: 6px 10px; font-size: 12.5px; } }
+@media (max-width: 420px) { .legend { gap: 6px; } .legend .ramp { gap: 4px; font-size: 11px; } .legend .ramp i { width: 28px; }
+  .legend .btns { flex-wrap: nowrap; gap: 5px; } .legend .ghost { padding: 5px 9px; font-size: 12px; gap: 4px; } .legend .ghost svg { width: 13px; height: 13px; } }
 .pgroups { display: grid; gap: 6px; }
 .pgroup { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: center; text-align: left; border: 1px solid var(--line);
   background: var(--card); color: var(--ink); border-radius: 10px; padding: 8px 10px; cursor: pointer; }
