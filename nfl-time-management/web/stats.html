@@ -70,6 +70,8 @@ ol.top .n { color: var(--muted); } ol.top .nm { font-weight: 700; overflow: hidd
 ol.top b { font: 900 18px var(--display); }
 .note { color: var(--muted); font-size: 13px; margin: 0; }
 .empty { color: var(--muted); text-align: center; padding: 20px 0; margin: 0; }
+.again { display: block; margin: 0 auto 16px; font: inherit; font-weight: 600; padding: 8px 18px; border-radius: 999px;
+  border: 1px solid currentColor; background: transparent; color: inherit; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -191,7 +193,15 @@ ol.top b { font: 900 18px var(--display); }
   }
   async function boot() {
     if (!API) { $('day').textContent = ''; $('day').append(el('p', 'empty', 'Stats show on the website (nfl2mindrill.com/stats).')); return; }
-    try { days = (await get('/days')).days || []; } catch (e) { $('day').textContent = ''; $('day').append(el('p', 'empty', 'The stats did not load. Try again in a moment.')); return; }
+    try { days = (await get('/days')).days || []; } catch (e) {
+      // the backend busy or briefly down: say so, and offer another go rather than a dead page
+      $('day').textContent = '';
+      const again = el('button', 'again', 'Try again');
+      again.type = 'button';
+      again.addEventListener('click', () => { $('day').textContent = ''; $('day').append(el('p', 'empty', 'Loading…')); boot(); });
+      $('day').append(el('p', 'empty', 'The stats did not load. The game still works; try again in a moment.'), again);
+      return;
+    }
     tiles();
     if (!days.length) { bars(); $('day').textContent = ''; $('day').append(el('p', 'empty', 'Nobody has finished a daily drive yet.')); return; }
     const t = days.findIndex((d) => d.date === localToday());
