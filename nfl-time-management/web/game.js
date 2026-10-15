@@ -1155,7 +1155,9 @@
         t += 0.2;
       } else if (e.oob) say(tEnd, 'Out of bounds', 'info', { follow: car });
       else {
-        say(tEnd, fwd(0, xyEnd[1] - L0) < -0.5 ? 'Stopped for a loss' : two ? 'Stopped short' : 'Tackled', 'info', { follow: car });
+        // the call-out from the play's own yards (as the play-by-play has it), the size of a loss said
+        const lossOf = Math.round(-(e.yards || 0));
+        say(tEnd, lossOf >= 1 ? `Stopped for a loss of ${lossOf}` : two ? 'Stopped short' : 'Tackled', 'info', { follow: car });
         down(tEnd + 0.08, car);
       }
       if (e.fd && !e.td) say(tEnd + 0.35, 'First down', 'good', { slot: 1, follow: car });
