@@ -2910,10 +2910,21 @@
       opt('Out of bounds', 'The ball carrier tries to stop the clock. No guarantee.', ui.oob, (v) => { ui.oob = v; }, 'oobSwitch'));
     d.append(opts, list);
     const avail = callOptions(r).calls, more = ['hail_mary'].filter((id) => avail.includes(id));
-    if (more.length) {
+    // the screen in one tap: the back's route set to the screen and the ball to him (it was only a route on the
+    // picker, which players didn't find, while the grade could still name the screen as the best call)
+    const rbI = eligibles(scene).findIndex((a) => a.label === 'RB');
+    const extra = (rbI >= 0 && avail.includes('screen') ? ['screen'] : []).concat(more);
+    if (extra.length) {
       const row = el('div', 'keys');
-      row.style.setProperty('--cols', more.length);
-      more.forEach((id, i) => { const b = key(CALL[id].label.replace(/ \(.*\)$/, ''), null, 'alt', i); b.addEventListener('click', () => { if (!busy) decideCall({ call: id }); }); row.append(b); });
+      row.style.setProperty('--cols', extra.length);
+      extra.forEach((id, i) => {
+        const b = key(id === 'screen' ? 'Screen' : CALL[id].label.replace(/ \(.*\)$/, ''), id === 'screen' ? 'To the back, blockers in front' : null, 'alt', i);
+        b.addEventListener('click', () => {
+          if (busy) return;
+          if (id === 'screen') { P.routes[rbI] = 'screen'; P.pa = false; P.roll = false; decideCall({ pass: rbI }); } else decideCall({ call: id });
+        });
+        row.append(b);
+      });
       d.append(row);
     }
     fetchOdds();
