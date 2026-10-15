@@ -285,8 +285,11 @@ async def main(a) -> int:
     tk = [x for r in results for x in r.get("tackles", [])]
     alone = [x for x in tk if x.get("nd", 0) > 3]
     print(f"tackles: {len(tk)}, nobody within 3 yards: {len(alone)}")
-    # (a rare one is tolerated: under 2% of tackles; it was 6% before the tackler fixes)
-    if len(alone) > max(1, 0.02 * len(tk)):
+    # (a rare one is tolerated: fail only when this many would be unlikely, p < 0.01, at a 2% rate (7 of 113, as before the fixes, fails); it was 6%
+    # before the tackler fixes. A fixed cut on a short CI run fails by chance)
+    n_tk = len(tk)
+    tail_tk = sum(math.comb(n_tk, k) * 0.02 ** k * 0.98 ** (n_tk - k) for k in range(len(alone), n_tk + 1)) if alone else 1.0
+    if alone and tail_tk < 0.01:
         print("FAIL: tackled with nobody near", alone[:5])
         bad.append({"name": "tackles"})
     # forward progress: a carrier never has the ball past where it is spotted (beyond where he got it), so he is
