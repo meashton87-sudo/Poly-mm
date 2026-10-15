@@ -2590,7 +2590,7 @@
     drawTiles();
     const me = code(G.me), op = code(1 - G.me);
     const lead = r.score[G.me] - r.score[1 - G.me], ck = clockOf(r.t);
-    const left = r.t > 1800 ? `${ck.text} left in the half` : `${ck.text} left in the game`;
+    const left = `${ck.text} left in ${ck.q === 4 ? 'the game' : ck.q === 2 ? 'the half' : ck.q === 3 ? 'the third quarter' : 'the first quarter'}`;
     const state_ = lead > 0 ? `Up by ${lead}` : lead < 0 ? `Down by ${-lead}` : 'Tied';
     const big = el('div', 'big', state_);
     big.append(el('span', 'left', left));
