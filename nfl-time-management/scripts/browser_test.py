@@ -224,8 +224,10 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     finally:
         try:
             seps = await page.evaluate("() => window.__sepLog || []")
+            tackles = await page.evaluate("() => window.__tackleLog || []")
+            fps = await page.evaluate("() => window.__fpLog || []")
         except Exception:
-            seps = []
+            seps, tackles, fps = [], [], []
         if problems:
             status = "fail"
             shot = out / f"{name}.png"
@@ -235,7 +237,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 pass
         await ctx.close()
     return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
-            "secs": round(time.time() - t_start), "rundowns": rundowns, "problems": problems[:5], "seps": seps, "trail": trail if problems else []}
+            "secs": round(time.time() - t_start), "rundowns": rundowns, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "trail": trail if problems else []}
 
 
 async def main(a) -> int:
@@ -270,6 +272,8 @@ async def main(a) -> int:
     try:
         import json as _json
         (out / "seps.json").write_text(_json.dumps([x for r in results for x in r.get("seps", [])]))
+        (out / "tackles.json").write_text(_json.dumps([x for r in results for x in r.get("tackles", [])]))
+        (out / "fps.json").write_text(_json.dumps([x for r in results for x in r.get("fps", [])]))
     except Exception:
         pass
     inc = [x for r in results for x in r.get("seps", []) if not x.get("caught") and not x.get("intc") and x.get("kind") != "hail" and x.get("evt") != "throwaway"]
@@ -277,6 +281,19 @@ async def main(a) -> int:
     print(f"passes logged: {sum(len(r.get('seps', [])) for r in results)}, incomplete: {len(inc)}")
     # "Broken up" needs a defender at the ball (players saw it with nobody near)
     print(f"run it down, timeout at 0:03: tapped {sum(r.get('rundowns', 0) for r in results)} times")
+    # a tackled carrier goes down with a defender on him, never alone in the open
+    tk = [x for r in results for x in r.get("tackles", [])]
+    alone = [x for x in tk if x.get("nd", 0) > 3]
+    print(f"tackles: {len(tk)}, nobody within 3 yards: {len(alone)}")
+    # (reported, not yet a gate: a few tackles still end with the nearest man 3+ yards off; being fixed)
+    # forward progress: a carrier never has the ball past where it is spotted (beyond where he got it), so he is
+    # never shown driven back from it
+    fp = [x for r in results for x in r.get("fps", [])]
+    past = [x for x in fp if x.get("over", 0) > 0.5]
+    print(f"carries: {len(fp)}, ball carried 0.5+ yards past the spot: {len(past)}" + (f" (worst {max(x['over'] for x in past):.1f})" if past else ""))
+    if past:
+        print("FAIL: forward progress", past[:5])
+        bad.append({"name": "forward-progress"})
     late = sum(1 for r in results for x in r.get("seps", []) if x.get("late"))
     print(f"cover man too far to break it up (shown as a bad ball instead): {late} of {len(inc)} incompletions")
     lonely = [x for r in results for x in r.get("seps", []) if x.get("label") == "Broken up" and x.get("ballD", 0) > 3]

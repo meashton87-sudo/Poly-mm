@@ -952,7 +952,10 @@
         closing = margin >= -2 && margin <= 0 && tHalf <= CLOSE_WINDOW && offTo > 0 &&
           this.fgProb(yl + FG_SNAP_YARDS, o) >= CLOSE_FG_P;
         if (closing) offWants = false;                                   // timeouts are kept for the kick
-        defWants = defWants || (closing && tHalf <= CLOSE_DEF_WINDOW);   // the defense saves time for a reply
+        // the defense saves time for a reply when a field goal would beat it, whatever timeouts the offense has left
+        // (players saw a defense let the clock run out on them with the offense in range and out of timeouts)
+        const defSaves = margin >= -2 && margin <= 0 && tHalf <= CLOSE_DEF_WINDOW && this.fgProb(yl + FG_SNAP_YARDS, o) >= CLOSE_FG_P;
+        defWants = defWants || defSaves;
       } else {
         attempt = (yl - 35.0) <= 0.6 * (tHalf + 20.0 * offTo);
         if (S.stratActive && S.pos !== rootPos) S.stratActive = false;
