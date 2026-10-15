@@ -132,6 +132,10 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         break
                     await page.click("#dock .endcard .btn", timeout=3000)
                 elif st == "summary":
+                    # a site built with an ad unit shows one labeled ad on the between-games screens, below the rest
+                    if await page.locator('meta[name="ad-slot"]').count() and not await page.locator("#done .adbox ins.adsbygoogle").count():
+                        problems.append("ads are on but the results screen has no ad spot")
+                        continue
                     if mode == "daily":
                         finished = max(finished, 1)
                         break
