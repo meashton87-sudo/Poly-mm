@@ -88,19 +88,64 @@ ADSENSE_TAG = ("<meta name=\"google-adsense-account\" content=\"{id}\">"
                "<script async src=\"https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={id}\" crossorigin=\"anonymous\"></script>")
 
 
-# Another ad network's banner (Adsterra and the like, whose approval is quicker than AdSense's): its ad code, as the
-# network gives it, in web/ads/banner.html (a first line "<!-- size: 300x250 -->" gives the unit's size). The site
-# serves it as its own page (ad-banner.html) that the game and the stats page show in a sandboxed frame, between games
-# only. Lines in web/ads/ads.txt go into ads.txt after Google's.
-BANNER = WEB / "ads" / "banner.html"
+# Another ad network's units (Adsterra and the like, whose approval is quicker than AdSense's): each unit's code, as
+# the network gives it, in web/ads/<slot>.html (a first line "<!-- size: WxH -->" gives its size). Each is served as its
+# own page (ad-<slot>.html) shown in a sandboxed frame (its script can't touch the page or send it elsewhere; a tap on
+# the ad opens it in a new tab), labeled, never where a play is called or run:
+#   banner  300x250: the results screen between games (game.js, stats.html), and mid-page on How it works and About
+#   native  native cards: above the footer of every page but the privacy policy
+#   leader  728x90: above the footer, desktops; mobile 320x50: above the footer, phones
+#   side    160x600 or 300x600: pinned in the empty margins beside the page, wide desktop screens only
+# Lines in web/ads/ads.txt go into ads.txt after Google's.
+ADS = WEB / "ads"
+SLOT_SIZE = {"banner": "300x250", "native": "100%x300", "leader": "728x90", "mobile": "320x50", "side": "160x600"}
+BANNER = ADS / "banner.html"
+
+
+def slot_code(slot: str) -> str:
+    f = ADS / f"{slot}.html"
+    return f.read_text() if f.exists() and f.read_text().strip() else ""
+
+
+def slot_size(slot: str) -> tuple[str, str]:
+    m = re.search(r"size:\s*(\d+%?)x(\d+)", slot_code(slot))
+    w, h = (m.group(1), m.group(2)) if m else SLOT_SIZE[slot].split("x")
+    return w, h
+
+
+def ad_frame(slot: str) -> str:
+    """A unit's sandboxed frame, labeled (empty when the unit has no code)."""
+    if not slot_code(slot):
+        return ""
+    w, h = slot_size(slot)
+    css_w = w if w.endswith("%") else f"{w}px"
+    return (f'<div class="adslot ad-{slot}"><div class="adlab">Advertisement</div><iframe src="/ad-{slot}.html" title="Advertisement" '
+            f'loading="lazy" scrolling="no" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" '
+            f'style="display:block;margin:0 auto;border:0;max-width:100%;width:{css_w};height:{h}px"></iframe></div>')
+
+
+AD_CSS = ("<style>.adslot{margin:22px auto 0;max-width:100%;text-align:center}.adslot .adlab{font:600 10.5px/1 system-ui,sans-serif;"
+          "letter-spacing:.14em;text-transform:uppercase;color:var(--muted,#5a675e);margin-bottom:4px}"
+          ".ad-native{max-width:680px;padding:0 16px}.ad-leader{display:none}"
+          "@media (min-width:800px){.ad-leader{display:block}.ad-mobile{display:none}}"
+          ".adrail{display:none}@media (min-width:1500px){.adrail{display:block;position:fixed;top:110px;z-index:1}"
+          ".adrail.l{left:12px}.adrail.r{right:12px}.adrail .adslot{margin:0}}</style>")
+
+
+def foot_ads() -> str:
+    """Above the footer (native, leader or mobile) and the side rails; nothing when no unit has code."""
+    out = ad_frame("native") + ad_frame("leader") + ad_frame("mobile")
+    side = ad_frame("side")
+    if side:
+        out += f'<div class="adrail l">{side}</div><div class="adrail r">{side}</div>'
+    return out
 
 
 def banner_meta() -> str:
-    if not BANNER.exists() or not BANNER.read_text().strip():
+    if not slot_code("banner"):
         return ""
-    m = re.search(r"size:\s*(\d+)x(\d+)", BANNER.read_text())
-    size = f"{m.group(1)}x{m.group(2)}" if m else "300x250"
-    return f'<meta name="ad-frame" content="ad-banner.html" data-size="{size}">'
+    w, h = slot_size("banner")
+    return f'<meta name="ad-frame" content="/ad-banner.html" data-size="{w}x{h}">'
 
 
 def ads_head(adsense: str | None, ad_slot: str | None) -> str:
@@ -194,13 +239,14 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     page = (WEB / "game.html").read_text()
     for js in ("motion.js", "game.js"):
         page = page.replace(f'<script src="{js}"></script>', f'<script src="{js}?v={stamp}"></script>')
-    (out / "index.html").write_text(HEAD.format(extra=extra) + page.replace("<!--SITE-FOOT-->", FOOT) + "</body></html>\n")
+    (out / "index.html").write_text(HEAD.format(extra=extra + AD_CSS) + page.replace("<!--SITE-FOOT-->", foot_ads() + FOOT) + "</body></html>\n")
     # the stats page (/stats): its own document; the same analytics tag and backend address
     stats_head = (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Two-Minute Drill stats",
         "How everyone did on the daily drive: players per day, the score spread and the top ten.", "stats") + (
         f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else "")
-    fill = lambda name, head, path: (out / name).write_text((WEB / name).read_text().replace("<!--SITE-HEAD-->",
-        head + canonical(site_url, path) + FOOT_CSS).replace("<!--SITE-FOOT-->", FOOT))
+    fill = lambda name, head, path, ads=True: (out / name).write_text((WEB / name).read_text().replace("<!--SITE-HEAD-->",
+        head + canonical(site_url, path) + FOOT_CSS + AD_CSS).replace("<!--AD-MID-->", ad_frame("banner") if ads else "")
+        .replace("<!--SITE-FOOT-->", (foot_ads() if ads else "") + FOOT))
     fill("stats.html", stats_head, "stats")
     # the guide and the about page (content: the same analytics and ad tags as the game)
     for name, path, title, d in (("how-it-works.html", "how-it-works", "How Two-Minute Drill works",
@@ -209,7 +255,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
                                   "An independent, fan-made NFL play-calling game built on public nflverse data.")):
         fill(name, (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, title, d, path), path)
     # the privacy page (AdSense wants one): the analytics tag only, no ads on it
-    fill("privacy.html", (GA_TAG.format(id=ga) if ga else "") + ICONS, "privacy")
+    fill("privacy.html", (GA_TAG.format(id=ga) if ga else "") + ICONS, "privacy", ads=False)
     (out / "site.webmanifest").write_text(json.dumps({"name": "Two-Minute Drill", "short_name": "2MD", "start_url": "/",
         "display": "standalone", "background_color": "#0c1d42", "theme_color": "#0c1d42", "icons": [
             {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
@@ -226,10 +272,11 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     lines = ([f"google.com, {adsense.replace('ca-', '', 1)}, DIRECT, f08c47fec0942fa0"] if adsense else []) + ([extra] if extra else [])
     if lines:
         (out / "ads.txt").write_text("\n".join(lines) + "\n")
-    if banner_meta():                        # the banner's own page (the frame's)
-        (out / "ad-banner.html").write_text('<!doctype html><html><head><meta charset="utf-8"><meta name="robots" content="noindex">'
-            '<meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;padding:0;overflow:hidden;'
-            'background:transparent;display:flex;justify-content:center}</style></head><body>' + BANNER.read_text() + "</body></html>\n")
+    for slot in SLOT_SIZE:                   # each unit's own page (its frame's)
+        if slot_code(slot):
+            (out / f"ad-{slot}.html").write_text('<!doctype html><html><head><meta charset="utf-8"><meta name="robots" content="noindex">'
+                '<meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;padding:0;overflow:hidden;'
+                'background:transparent;display:flex;justify-content:center}</style></head><body>' + slot_code(slot) + "</body></html>\n")
     for f in FILES:
         shutil.copy2(WEB / f, out / f)
     for f, p in PACKED.items():
