@@ -203,7 +203,9 @@ class Simulator:
                                       root offense for the rest of its possession
         """
         action = action or {}
-        self.half_end = 1800.0 if root.t > 1800 else 0.0
+        # 0:00 of the 2nd quarter is t = 1800, which otherwise reads as the start of the second half; a try at that
+        # moment (a touchdown on the last play of the first half) still belongs to the first half, which ends after it
+        self.half_end = 1800.0 if root.t > 1800 or (root.t == 1800 and root.phase == PAT) else 0.0
         self.half = 1 if self.half_end > 0 else 2
         self.q_end = self.half_end + 900.0
         self.tmw = self.half_end + 120.0

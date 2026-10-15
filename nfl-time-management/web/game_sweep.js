@@ -202,6 +202,7 @@ idx.spots.forEach((sp, si) => {
       const r = sim.step(cur, { action, seed: 77 + si * 31 + g * 101 + n });
       steps++;
       check(before, r, `game ${si}.${g} step ${n}`);
+      if (sp.start.qtr <= 2 && r.root.t < 1800) flag('a first-half spot went on into the second half', `game ${si}.${g} step ${n} t ${r.root.t}`);
       attrib(before, r, `game ${si}.${g} step ${n}`);
       if (cur.pos === me) honored(before, action, r, `game ${si}.${g} step ${n}`);
       if (action.kick) kickCheck(r, action.kick, `game ${si}.${g} step ${n}`, before.free_kick);
@@ -221,6 +222,18 @@ idx.spots.forEach((sp, si) => {
     }
     if (n >= 400) stuck++;
     games++;
+  }
+});
+// 2b) a touchdown on the last play of the first half: the try at 0:00 of Q2 (t = 1800) ends the half, from every
+// first-half spot's two teams, whichever team scored and whatever the try
+idx.spots.forEach((sp, si) => {
+  if (sp.start.qtr > 2) return;
+  const sim = eng.simulator(eng.makeContext(scen(sp), { receive2h: sp.start.receive2h }));
+  for (const pos of [0, 1]) for (const pat of ['xp', 'two']) {
+    const r = sim.step({ ...rootOf(sp), t: 1800, phase: 1, pos, down: 1, ytg: 2, yl: 2, clock_running: false }, { action: { pat }, seed: si * 7 + pos });
+    steps++;
+    count('try at the end of the first half');
+    if (!r.done || r.root.t !== 1800 || r.log.some((e) => e.ev === 'kickoff')) flag('a try at the end of the first half did not end it', `spot ${si} ${pat} ${JSON.stringify(r.root)}`);
   }
 });
 // 3) overtime (survivor) from every other spot's two teams: tied, a 10-minute period (15 in the playoffs),

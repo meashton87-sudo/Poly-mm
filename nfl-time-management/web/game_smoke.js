@@ -59,6 +59,18 @@ for (let i = 0; i < 8; i++) {
   cur = r.root;
   if (r.done) break;
 }
+// a touchdown on the last play of the first half: the try comes at t = 1800 (0:00 of Q2) and the half ends after it,
+// whatever the try does (no kickoff, no second half); the same in the value of the try
+for (const pat of ['xp', 'two']) for (let k = 0; k < 40; k++) {
+  const end = { ...root, t: 1800, phase: 1, score: [14, 10], pos: 0, down: 1, ytg: 2, yl: 2, clock_running: false };
+  const r = sim.step(end, { action: { pat }, seed: 900 + k });
+  assert.ok(r.done && r.root.phase === 3 && r.root.t === 1800, `try at the end of the first half ends it (${pat}): ${JSON.stringify(r.root)}`);
+  assert.ok(!r.log.some((e) => e.ev === 'kickoff'), 'no kickoff after a try that ends the first half');
+}
+{
+  const v = sim.run({ ...root, t: 1800, phase: 1, score: [14, 10], pos: 0, down: 1, ytg: 2, yl: 2, clock_running: false }, { n: 400, action: { pat: 'xp' }, perspective: 0, seed: 3 });
+  assert.ok(v.mean >= 0 && v.mean <= 1);
+}
 // matchups (engine.js MATCH): a call that beats the defense's call does better than the real plays alone, one that
 // loses to it worse (mean EPA of the plays drawn, over every situation)
 {

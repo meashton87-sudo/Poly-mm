@@ -67,11 +67,30 @@ jobs:
           python -c "from nflclock import webexport as w; w.export_engine()"
           python -c "from nflclock import dailygame as G; print(G.build())"
 
+      # nothing ships unless all of this passes: a failure here leaves the last good site up
       - name: Check the game before it ships
         run: |
+          npx --yes eslint@8.57.0 --no-eslintrc -c web/eslint.json web/game.js web/motion.js web/engine.js web/game_worker.js
           node web/game_smoke.js
           node web/motion_test.js
           node board/worker_test.mjs
+          node web/game_sweep.js
+
+      # bots play daily drives and survivor runs in a real browser on the same files, with no leaderboard and no
+      # analytics (so they never show up in the real stats), and fail on any script error, freeze or stuck game
+      - name: Play the game in a browser before it ships
+        run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+          python scripts/site.py _site_test
+          python scripts/browser_test.py _site_test --daily 6 --survivor 3 --games 2 --jobs 2 --out browser_test_out
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-test-screenshots
+          path: nfl-time-management/browser_test_out
+          if-no-files-found: ignore
 
       - name: Assemble the site
         run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --board-api "${{ vars.BOARD_API }}" --ga "${{ vars.GA_ID || 'G-4QQ8N62SMB' }}"
