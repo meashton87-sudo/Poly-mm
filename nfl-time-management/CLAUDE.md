@@ -39,4 +39,7 @@ node board/worker_test.mjs            # the website's survivor leaderboard (Clou
 - `data/`, `artifacts/`, `web/engine_data.json`, `web/parity_expected.json`, `web/playbook.json`,
   `web/game.json`, `web/spots/` and `_site/` are generated; never commit them (the website workflow,
   `.github/workflows/site.yml`, builds them in CI and ships them only to GitHub Pages).
+- The daily schedule is frozen in `src/nflclock/daily_schedule.json` (committed: every spot id in order and each
+  day's three spots, as it went live). Never regenerate it with `dailygame.freeze()` from a fresh build: that moves
+  days people have played or are playing. Extend it only by adding days at the end; never reorder it.
 - Decisions are graded "as of" the week of the game: no ratings may use later games.

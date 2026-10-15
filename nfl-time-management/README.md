@@ -256,7 +256,8 @@ node web/parity_test.js
 
 `web/game.html` is a Wordle-style daily game built on the same engine. Every day it serves one real
 late-game drive from 2023-26, the kind rotating day to day (a two-minute drill, protecting a lead, a tied
-game or the end of a half; the schedule holds three spots a day and the page plays the day's kind),
+game or the end of a half; the schedule holds three spots a day and the page plays the day's kind; it is
+frozen in `src/nflclock/daily_schedule.json`, so a new week of games never moves a day's drive),
 and the player calls every play for one team until the game ends: tempo, timeouts, spikes, kneels,
 field goals, punts, two-point tries and onside kicks, plus 26 play calls:
 

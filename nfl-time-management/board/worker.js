@@ -19,7 +19,7 @@
 // keeps; only its SHA-256 is stored), so nobody else can overwrite your score. Scores are not checked against the
 // runs that made them. Posts are limited per IP (RATE_PER_MIN a minute). The page may be served from another host,
 // so responses carry CORS headers for ALLOWED_ORIGINS (comma-separated; "*" = any).
-const TOP = 25, KEEP = 500, RATE_PER_MIN = 10, DAY_TOP = 10;
+const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const clean = (name) => String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
@@ -50,14 +50,19 @@ const limited = (req, hits) => {
   hits.set(ip, { min, n: hit.n + 1 });
   return false;
 };
-// who owns a name: its claim, or the survivor row that holds it from before claims were kept
+// who owns a name: its claim (one key per name: claim:<name>), a claim in the one shared value claims were first
+// kept in (no longer written: a single value would outgrow storage's 2 MB a value), or the survivor row that holds
+// it from before claims were kept
 async function ownerOf(storage, lower) {
+  const mine = await storage.get(`claim:${lower}`);
+  if (mine) return mine;
   const claims = (await storage.get('claims')) || {};
-  if (claims[lower]) return { claims, owner: claims[lower] };
+  if (claims[lower]) return claims[lower];
   const runs = (await storage.get('runs')) || [];
   const row = runs.find((r) => String(r.name).toLowerCase() === lower);
-  return { claims, owner: row && row.kh ? row.kh : null };
+  return row && row.kh ? row.kh : null;
 }
+const claim = (storage, lower, kh) => storage.put(`claim:${lower}`, kh);
 const emptyDay = () => ({ n: 0, hist: new Array(101).fill(0), spots: [0, 1, 2].map(() => ({ n: 0, sum: 0, hist: new Array(101).fill(0) })), top: [] });
 const dayView = (d) => ({ n: d.n, hist: d.hist, spots: d.spots.map((x) => ({ n: x.n, avg: x.n ? x.sum / x.n : 0, hist: x.hist })),
   top: d.top.map(({ name, p }) => ({ name, p })) });
@@ -91,21 +96,21 @@ async function daily(req, env, storage, hits, h, url) {
   if (limited(req, hits)) return json({ error: 'slow down' }, 429, h);
   let body;
   try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
-  const date = String((body && body.date) || ''), p = Number(body && body.p), devKey = String((body && body.key) || '');
-  const spots = Array.isArray(body && body.spots) ? body.spots.map(Number) : null, name = clean(body && body.name);
+  const date = String((body && body.date) || ''), p = body && body.p, devKey = String((body && body.key) || '');
+  const spots = Array.isArray(body && body.spots) ? body.spots : null, name = clean(body && body.name);
   if (!dateOk(date)) return json({ error: 'date (YYYY-MM-DD, today) wanted' }, 400, h);
-  if (!(p >= 0 && p <= 1)) return json({ error: 'p (0-1) wanted' }, 400, h);
-  if (!spots || spots.length < 1 || spots.length > 3 || !spots.every((w) => w >= -1 && w <= 1)) return json({ error: 'spots (1-3, each -1 to 1) wanted' }, 400, h);
+  if (!(typeof p === 'number' && p >= 0 && p <= 1)) return json({ error: 'p (0-1) wanted' }, 400, h);
+  if (!spots || spots.length < 1 || spots.length > 3 || !spots.every((w) => typeof w === 'number' && w >= -1 && w <= 1)) return json({ error: 'spots (1-3, each -1 to 1) wanted' }, 400, h);
   if (!KEY_RE.test(devKey)) return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
   const kh = await sha256(devKey);                 // before the reads: from here to the writes is storage only
   const mine = `dk:${date}:${kh}`;
   const day = (await storage.get(`day:${date}`)) || emptyDay();
   const prev = await storage.get(mine);
-  let taken = false, claims = null;
+  let taken = false, unclaimed = false;
   if (name && !(prev && prev.name)) {
-    const o = await ownerOf(storage, name.toLowerCase());
-    taken = !!(o.owner && o.owner !== kh);
-    if (!taken && !o.owner) { claims = o.claims; claims[name.toLowerCase()] = kh; }
+    const owner = await ownerOf(storage, name.toLowerCase());
+    taken = !!(owner && owner !== kh);
+    unclaimed = !owner;
   }
   if (prev) {           // the day's first result stands; a name given afterwards puts that result on the list
     if (name && !prev.name && !taken) {
@@ -115,7 +120,7 @@ async function daily(req, env, storage, hits, h, url) {
       day.top = day.top.slice(0, DAY_TOP);
       await storage.put(mine, prev);
       await storage.put(`day:${date}`, day);
-      if (claims) await storage.put('claims', claims);
+      if (unclaimed) await claim(storage, name.toLowerCase(), kh);
     }
     return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots }, ...(taken ? { taken: true } : {}) }, 200, h);
   }
@@ -131,7 +136,7 @@ async function daily(req, env, storage, hits, h, url) {
   const you = { p, spots };
   await storage.put(mine, { ...you, ...(name && !taken ? { name } : {}) });
   await storage.put(`day:${date}`, day);
-  if (claims) await storage.put('claims', claims);
+  if (unclaimed && name) await claim(storage, name.toLowerCase(), kh);
   return json({ ...dayView(day), counted: true, you, ...(taken ? { taken: true } : {}) }, 200, h);
 }
 
@@ -164,9 +169,9 @@ export async function handle(req, env, storage, hits) {
   if (!KEY_RE.test(devKey)) return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
   const kh = await sha256(devKey);                 // before the read: from here to the write is storage only
   const all = await readAll(), lower = name.toLowerCase(), i = all.findIndex((r) => String(r.name).toLowerCase() === lower);
-  const { claims, owner } = await ownerOf(storage, lower);
+  const owner = await ownerOf(storage, lower);
   if (owner && owner !== kh) return json({ error: 'name taken', rows: ranked(all) }, 409, h);
-  if (!claims[lower]) { claims[lower] = kh; await storage.put('claims', claims); }
+  if (!owner) await claim(storage, lower, kh);
   if (i >= 0 && all[i].best >= best) {
     if (!all[i].kh) { all[i].kh = kh; await storage.put('runs', all); }       // a row from before names were claimed
     return json({ rows: ranked(all), kept: all[i].best }, 200, h);

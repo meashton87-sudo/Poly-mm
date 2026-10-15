@@ -56,7 +56,16 @@ def serve(root: Path) -> tuple[http.server.ThreadingHTTPServer, int]:
     return srv, srv.server_address[1]
 
 
-async def episode(browser, base: str, name: str, mode: str, seed: int, target: int, out: Path, mobile: bool) -> dict:
+# rough browsers real players have: an older Safari with no DecompressionStream (the site falls back to the JSON),
+# private browsing where storage throws (the drive plays on, a reload starts it over)
+QUIRK = {
+    "nopack": "delete window.DecompressionStream;",
+    "nostore": """for (const k of ['localStorage', 'sessionStorage']) Object.defineProperty(window, k, { get() {
+      throw new DOMException('The operation is insecure.', 'SecurityError'); } });""",
+}
+
+
+async def episode(browser, base: str, name: str, mode: str, seed: int, target: int, out: Path, mobile: bool, quirk: str = "") -> dict:
     rnd = random.Random(seed)
     vp = {"width": 390, "height": 844} if mobile else {"width": 1280, "height": 900}
     ctx = await browser.new_context(viewport=vp, is_mobile=mobile, has_touch=mobile)
@@ -67,6 +76,8 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
       window.Date = D; window.__sepLog = [];
       let s = {seed} >>> 0; Math.random = () => {{ s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1);
         t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }}; }})();""")
+    if quirk:
+        await ctx.add_init_script(QUIRK[quirk])
     page = await ctx.new_page()
     problems: list[str] = []
     page.on("pageerror", lambda e: problems.append(f"script error: {e}"))
@@ -152,6 +163,20 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         chaos_done.add("deep"); act("player ratings"); await page.click("#deepBtn", timeout=3000)
                     elif r < 0.12 and "bar" not in chaos_done:
                         chaos_done.add("bar"); act("game details"); await page.click("#bar", timeout=3000)
+                    elif r < 0.17 and "replay" not in chaos_done and await page.locator("#dock .replay:visible").count() \
+                            and await page.locator("#dock .key.big:visible").count():
+                        # a call tapped while a replay runs must be taken (it cuts the replay short), never dropped
+                        chaos_done.add("replay"); act("replay, then a call")
+                        await page.click("#dock .replay", timeout=3000)
+                        await page.wait_for_timeout(300)
+                        before = await page.evaluate("() => document.getElementById('dock').innerText")
+                        await page.locator("#dock .key.big:visible").first.click(timeout=3000)
+                        for _ in range(30):
+                            await page.wait_for_timeout(100)
+                            if await page.evaluate("() => document.getElementById('dock').innerText") != before:
+                                break
+                        else:
+                            problems.append("a call tapped during a replay did nothing")
                     elif r < 0.14 and reloads < 2:
                         reloads += 1
                         act("RELOAD")
@@ -214,8 +239,10 @@ async def main(a) -> int:
         async def run(i, job):
             mode, seed, target = job
             async with sem:
-                r = await episode(browser, base, f"{mode}-{seed}", mode, seed, target, out, mobile=i % 3 != 2)
-            print(f"{r['status']:5s} {r['name']:16s} games {r['finished']}  reloads {r['reloads']}  {r['secs']} s"
+                quirk = ("", "", "nopack", "", "nostore")[i % 5]
+                r = await episode(browser, base, f"{mode}-{seed}" + (f"-{quirk}" if quirk else ""), mode, seed, target, out,
+                                  mobile=i % 3 != 2, quirk=quirk)
+            print(f"{r['status']:5s} {r['name']:24s} games {r['finished']}  reloads {r['reloads']}  {r['secs']} s"
                   + "".join(f"\n      {x}" for x in r["problems"]) + "".join(f"\n        {x}" for x in r["trail"]), flush=True)
             return r
         results = await asyncio.gather(*(run(i, j) for i, j in enumerate(jobs)))
