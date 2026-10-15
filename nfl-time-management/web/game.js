@@ -1022,7 +1022,10 @@
       Wd.run(t0);
       t0 = Wd.t;
       busy.add(car);
-      const start = here(car), defs = foes(car).filter((d) => !busy.has(d));
+      // the tackler comes from the defenders still free; when every one is busy (in coverage, on the ball), from all of
+      // them: a carrier never stops in the open with nobody there (players saw it)
+      const free = foes(car).filter((d) => !busy.has(d));
+      const start = here(car), defs = free.length ? free : foes(car);
       const tackled = !o.td && !o.oob && !o.free;
       const after = tackled ? (o.after ?? (car.label === 'RB' || car.label === 'QB' ? 1.5 + R() : 0.6 + R() * 0.8)) : 0;
       // to daylight: the middle of the run bends away from where the defense is headed
@@ -1124,6 +1127,9 @@
         leg(tackler, tEnd + 0.05, 'stand');
       }
       Wd.run(tEnd);
+      // (tests: how close the nearest defender is when a tackled carrier goes down)
+      if (tackled && window.__sepLog) (window.__tackleLog = window.__tackleLog || []).push({ nd: Math.min(...foes(car).map((d) => dist(here(d), here(car)))), free: free.length, tackler: !!tackler,
+        td: dist(tackler ? here(tackler) : [0, 0], here(car)), car: car.label, mine: !!car.off === !!(car.off && G.root.pos === G.me), span: dist(start, endPt), tC: tC - t0, reach: reach.length ? reach[0].T : null });
       if (tackled) leg(car, tEnd, 'stand');
       else leg(car, tEnd, 'go', { x: endPt[0] + (o.oob ? Math.sign(endPt[0] - FW / 2) * 1.5 : 0), y: endPt[1] + dir * (o.td ? 1.5 : 1), eff: 0.4 });
       whistle(tEnd, here(car));
