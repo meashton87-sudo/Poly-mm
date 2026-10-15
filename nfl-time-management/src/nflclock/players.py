@@ -20,6 +20,7 @@ the position average so a few good snaps don't make anyone elite.
 """
 from __future__ import annotations
 
+import urllib.error
 import urllib.request
 
 import numpy as np
@@ -30,6 +31,7 @@ from .playbook import PRIOR_SEASON_WEIGHT
 
 RAW = config.RAW_DIR / "players"
 BASE = "https://github.com/nflverse/nflverse-data/releases/download/"
+SCHEMA_SEASON = 2025     # when no season asked for has a file (PFR charting starts in 2018), this season's gives the columns
 FILES = {"snaps": ("snap_counts", "snap_counts_{s}.parquet"),
          "def": ("pfr_advstats", "advstats_week_def_{s}.parquet"),
          "pass": ("pfr_advstats", "advstats_week_pass_{s}.parquet"),
@@ -44,23 +46,61 @@ PFF_GROUP = {"ED": "EDGE", "DI": "DL", "LB": "LB", "CB": "CB", "S": "S"}
 
 
 # ----------------------------------------------------------------- data ---
-def _get(tag: str, name: str):
+def _get(tag: str, name: str, optional: bool = False):
+    """The nflverse release file, downloaded once; None when it is not published and `optional` (noted, so it is
+    not asked for again)."""
     RAW.mkdir(parents=True, exist_ok=True)
     p = RAW / name
     if not p.exists():
-        urllib.request.urlretrieve(BASE + f"{tag}/{name}", p)
+        if optional and p.with_suffix(p.suffix + ".missing").exists():
+            return None
+        tmp = p.with_suffix(p.suffix + ".part")
+        try:
+            urllib.request.urlretrieve(BASE + f"{tag}/{name}", tmp)
+        except urllib.error.HTTPError as e:
+            if optional and e.code == 404:
+                p.with_suffix(p.suffix + ".missing").touch()
+                return None
+            raise
+        tmp.replace(p)
+    return p
+
+
+def read_seasons(tag: str, pattern: str, seasons, columns=None) -> pd.DataFrame:
+    """The seasons' files as one frame, skipping seasons not published (PFR charting starts in 2018); none at all gives
+    an empty frame with SCHEMA_SEASON's columns, so every stat reads as zero."""
+    frames = [pd.read_parquet(f, columns=columns) for f in (_get(tag, pattern.format(s=s), optional=True) for s in seasons) if f is not None]
+    if frames:
+        return pd.concat(frames, ignore_index=True)
+    return pd.read_parquet(_get(tag, pattern.format(s=SCHEMA_SEASON)), columns=columns).iloc[0:0]
+
+
+FIRST_SEASON = 1999      # nflverse play-by-play starts here
+
+
+def pbp_seasons(seasons):
+    """The seasons with play-by-play among `seasons` (none before FIRST_SEASON)."""
+    return [s for s in seasons if s >= FIRST_SEASON]
+
+
+def pbp_path(season: int):
+    """The season's play-by-play file, downloaded when it is not there yet."""
+    if season < FIRST_SEASON:
+        raise ValueError(f"no play-by-play before {FIRST_SEASON} ({season})")
+    p = config.RAW_DIR / f"play_by_play_{season}.parquet"
+    if not p.exists():
+        from . import data
+        data.download([season])
     return p
 
 
 def load_tables(seasons) -> dict:
-    out = {k: pd.concat([pd.read_parquet(_get(tag, pat.format(s=s))) for s in seasons], ignore_index=True)
-           for k, (tag, pat) in FILES.items()}
+    out = {k: read_seasons(tag, pat, seasons) for k, (tag, pat) in FILES.items()}
     out["players"] = pd.read_parquet(_get("players", "players.parquet"),
                                      columns=["gsis_id", "pfr_id", "display_name", "position", "pff_position"])
     cols = ["season", "week", "season_type", "posteam", "play_type", "qb_dropback", "id", "qb_epa", "epa",
             "receiver_player_id", "two_point_attempt"]
-    pbp = pd.concat([pd.read_parquet(config.RAW_DIR / f"play_by_play_{s}.parquet", columns=cols) for s in seasons],
-                    ignore_index=True)
+    pbp = pd.concat([pd.read_parquet(pbp_path(s), columns=cols) for s in pbp_seasons(seasons)], ignore_index=True)
     out["pbp"] = pbp[pbp["two_point_attempt"].fillna(0) == 0]
     return out
 
@@ -315,7 +355,7 @@ def ratings_now(R: "Ratings", season: int) -> dict:
     T = R.T
     seasons = (season - 1, season)
     wf = lambda d: np.where(d["season"] == season, 1.0, np.where(d["season"] == season - 1, PRIOR_SEASON_WEIGHT, 0.0))
-    ps = pd.concat([pd.read_parquet(_get(*[x.format(s=s) for x in NOW_FILES["stats"]])) for s in seasons], ignore_index=True)
+    ps = read_seasons(*NOW_FILES["stats"], seasons)
     ps = ps.assign(w=wf(ps))
     ps = ps[ps["w"] > 0]
     ngs = {k: pd.read_parquet(_get(*v)) for k, v in NGS_FILES.items()}

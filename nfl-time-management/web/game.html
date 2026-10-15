@@ -59,9 +59,29 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .tiles span.done { border-color: transparent; color: var(--sq-ink); }
 .tiles span.more { width: auto; padding-inline: 4px; border-color: transparent; }
 /* Daily or Survivor: two links that swap the page's #anchor (the page reloads into that mode) */
+.arch { display: grid; gap: 10px; margin-top: 8px; }
+.arch h2 { margin: 0; font: 900 24px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.arch .lead { margin: 0; font-size: 15px; }
+.arch h3 { margin: 6px 0 0; font: 800 12px var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.arch .days { display: grid; gap: 6px; }
+.arch .day.drive { grid-template-columns: minmax(0, 1.2fr) 40px minmax(0, 1fr) auto; }
+.arch .day.drive b { font-size: 15px; line-height: 1.1; }
+.arch .day { display: grid; grid-template-columns: 54px 50px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; color: inherit; text-decoration: none; font-size: 13.5px; }
+.arch .day b { font: 900 18px/1 var(--display); }
+.arch .day .d { color: var(--muted); font-variant-numeric: tabular-nums; }
+.arch .day .m { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arch .day .sc { font: 800 13px var(--display); background: var(--ink); color: var(--paper); border-radius: 999px; padding: 3px 10px; min-width: 28px; text-align: center; }
+.pro { border: 2px solid var(--ink); border-radius: 12px; padding: 14px; display: grid; gap: 8px; }
+.pro .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.pro .price { font: 900 34px/1 var(--display); }
+.pro ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 14px; }
+.pro p { margin: 0; }
+.pro .row { display: flex; gap: 6px; flex-wrap: wrap; }
+.pro input { flex: 1; min-width: 160px; font: 600 14px var(--body); padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
 .modes { display: flex; justify-content: center; gap: 4px; }
 .modes a { font: 700 12px var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); text-decoration: none;
   padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); }
+.modes a[hidden] { display: none; }
 .modes a[aria-current="page"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 .intro .who.surv { font: 800 13px var(--body); letter-spacing: .1em; text-transform: uppercase; color: var(--sq-r); }
 .endcard .alive { margin: 0; font: 900 22px/1.1 var(--display); letter-spacing: .04em; text-transform: uppercase; }
@@ -475,8 +495,9 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
 </header>
 
 <main class="wrap">
-  <nav class="modes" aria-label="Game mode"><a id="modeDaily" href="#daily">Daily</a><a id="modeSurv" href="#survivor">Survivor</a></nav>
+  <nav class="modes" aria-label="Game mode"><a id="modeDaily" href="#daily">Daily</a><a id="modeSurv" href="#survivor">Survivor</a><a id="modeArch" href="#archive">Pro</a></nav>
   <div id="tiles" class="tiles" aria-label="Today's three spots"></div>
+  <section id="arch" class="arch" aria-label="Archive" hidden></section>
   <section id="intro" class="intro" hidden></section>
   <section id="play" hidden>
     <div class="playgrid">

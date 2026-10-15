@@ -66,15 +66,15 @@ def _z(x: pd.Series, ref: pd.Series) -> pd.Series:
 def _load(seasons=None):
     seasons = sorted(seasons or SEASON_W)
     T = PL.load_tables(seasons)
-    st = pd.concat([pd.read_parquet(PL._get("stats_player", f"stats_player_week_{s}.parquet")) for s in seasons], ignore_index=True)
+    st = PL.read_seasons("stats_player", "stats_player_week_{s}.parquet", seasons)
     st = st[st["season_type"] == "REG"]
     ngs = {k: pd.read_parquet(PL._get("nextgen_stats", f"ngs_{k}.parquet")) for k in ("rushing", "receiving")}
     ngs = {k: v[(v["week"] > 0) & v["season"].isin(seasons)] for k, v in ngs.items()}
     cols = ["season", "season_type", "game_id", "posteam", "id", "qb_dropback", "qb_epa", "play_type", "rusher_player_id",
             "qb_scramble", "epa", "two_point_attempt", "week"]
-    pbp = pd.concat([pd.read_parquet(config.RAW_DIR / f"play_by_play_{s}.parquet", columns=cols) for s in seasons], ignore_index=True)
+    pbp = pd.concat([pd.read_parquet(PL.pbp_path(s), columns=cols) for s in PL.pbp_seasons(seasons)], ignore_index=True)
     pbp = pbp[(pbp["season_type"] == "REG") & (pbp["two_point_attempt"].fillna(0) == 0)]
-    T["rec"] = pd.concat([pd.read_parquet(PL._get("pfr_advstats", f"advstats_week_rec_{s}.parquet")) for s in seasons], ignore_index=True)
+    T["rec"] = PL.read_seasons("pfr_advstats", "advstats_week_rec_{s}.parquet", seasons)
     return T, st, ngs, pbp
 
 
@@ -89,7 +89,12 @@ def groups(T: dict) -> pd.Series:
     pff = pd.Series({gid: PFF[v] for gid, v in zip(T["players"]["gsis_id"], T["players"]["pff_position"]) if v in PFF})
     defense = g.isin(["EDGE", "DL", "LB", "CB", "S"])
     g.loc[defense] = pff.reindex(g.index[defense]).fillna(g[defense]).to_numpy()
-    return g[~g.index.duplicated()]
+    g = g[~g.index.duplicated()]
+    # before snap counts (2012): the players table's position
+    rest = T["players"].dropna(subset=["gsis_id"]).drop_duplicates("gsis_id")
+    rest = pd.Series(rest["position"].map(POS_GROUP).to_numpy(), index=rest["gsis_id"]).dropna()
+    rest = rest[~rest.index.isin(g.index)]
+    return pd.concat([g, rest])
 
 
 def performance(T: dict, st: pd.DataFrame, ngs: dict, pbp: pd.DataFrame, grp: pd.Series, sw: dict | None = None) -> pd.DataFrame:
@@ -163,7 +168,13 @@ def performance(T: dict, st: pd.DataFrame, ngs: dict, pbp: pd.DataFrame, grp: pd
     dd.index = dd.index.map(to_gsis)
     dd = dd[dd.index.notna()].groupby(level=0).sum()
     box = st.assign(w=lambda x: wts(x))
+    box = box[box[["def_sacks", "def_tackles_for_loss", "def_qb_hits", "def_pass_defended"]].fillna(0).sum(axis=1) > 0]
     bagg = lambda c: (box[c].fillna(0) * box["w"]).groupby(box["player_id"]).sum()
+    # a defender the box score knows but snap counts do not (before 2012): his games stand in for his snaps
+    bg = box.groupby("player_id")["w"].sum()
+    dd = dd.reindex(dd.index.union(bg.index)).fillna(0.0)
+    dd["g"] = np.maximum(dd["g"], bg.reindex(dd.index).fillna(0.0))
+    dd["defense_snaps"] = dd["defense_snaps"].where(dd["defense_snaps"] > 0, dd["g"] * 60)
     for c, src in (("sk", "def_sacks"), ("tfl", "def_tackles_for_loss"), ("hits", "def_qb_hits"), ("pd", "def_pass_defended")):
         dd[c] = bagg(src).reindex(dd.index).fillna(0.0)
     snaps, games, tg = dd["defense_snaps"], dd["g"], dd["def_targets"]
@@ -293,9 +304,10 @@ DRAFT_FADE = 0.25                                     # where he was drafted cou
 ASOF_FIRST = 2019                                     # earliest season loaded (the 2023 spots look back four seasons)
 
 
-def load_asof():
-    """Everything ratings_asof needs, every season it can look back to."""
-    return _load(range(ASOF_FIRST, max(SEASON_W) + 1))
+def load_asof(first: int = ASOF_FIRST):
+    """Everything ratings_asof needs, every season it can look back to (from `first`: a spot four seasons after it
+    looks back that far)."""
+    return _load(range(max(PL.FIRST_SEASON, min(first, ASOF_FIRST)), max(SEASON_W) + 1))
 
 
 def _before(df: pd.DataFrame, season: int, week: int) -> pd.DataFrame:

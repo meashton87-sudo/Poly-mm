@@ -69,7 +69,7 @@ def _w(season_col: pd.Series, season: int) -> np.ndarray:
 def _plays(season: int) -> pd.DataFrame:
     cols = ["season", "game_id", "season_type", "play_type", "passer_player_id", "rusher_player_id", "receiver_player_id",
             "qb_dropback", "qb_scramble", "air_yards", "rush_attempt", "pass_attempt", "yards_gained", "two_point_attempt"]
-    p = pd.concat([pd.read_parquet(config.RAW_DIR / f"play_by_play_{s}.parquet", columns=cols) for s in (season - 1, season)],
+    p = pd.concat([pd.read_parquet(PL.pbp_path(s), columns=cols) for s in PL.pbp_seasons((season - 1, season))],
                   ignore_index=True)
     p = p[(p["season_type"] == "REG") & (p["two_point_attempt"].fillna(0) == 0)]
     return p.assign(w=_w(p["season"], season))
@@ -130,16 +130,15 @@ def measures(R: PL.Ratings, season: int) -> dict:
     dsum = dsums(R.T["def"], R.T["snaps"], lambda d: _w(d["season"], season))
     few = set(dsum.index[dsum["def_snaps"] < FEW_SNAPS]) | (set(out) - set(dsum.index))
     old_seasons = range(season - 4, season - 1)
-    old_def = pd.concat([pd.read_parquet(PL._get("pfr_advstats", f"advstats_week_def_{s}.parquet")) for s in old_seasons], ignore_index=True)
-    old_sn = pd.concat([pd.read_parquet(PL._get("snap_counts", f"snap_counts_{s}.parquet")) for s in old_seasons], ignore_index=True)
+    old_def = PL.read_seasons("pfr_advstats", "advstats_week_def_{s}.parquet", old_seasons)
+    old_sn = PL.read_seasons("snap_counts", "snap_counts_{s}.parquet", old_seasons)
     old = dsums(old_def, old_sn, lambda d: np.full(len(d), OLD_WEIGHT))
     add = old[old.index.isin(few)]
     dsum = dsum.add(add, fill_value=0.0)
     for c in dcols:
         put(dsum[c], c)
     put(dsum["def_snaps"], "def_snaps")
-    st = pd.concat([pd.read_parquet(PL._get(*[x.format(s=s) for x in PL.NOW_FILES["stats"]]), columns=["player_id", "season", "def_pass_defended"])
-                    for s in (season - 1, season)], ignore_index=True)
+    st = PL.read_seasons(*PL.NOW_FILES["stats"], (season - 1, season), columns=["player_id", "season", "def_pass_defended"])
     st = st.assign(w=_w(st["season"], season))
     put((st["def_pass_defended"].fillna(0) * st["w"]).groupby(st["player_id"]).sum(), "pass_defended")
     return out

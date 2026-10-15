@@ -30,7 +30,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
     defaults:
       run:
         working-directory: nfl-time-management
@@ -66,6 +66,9 @@ jobs:
         run: |
           python -c "from nflclock import webexport as w; w.export_engine()"
           python -c "from nflclock import dailygame as G; print(G.build())"
+
+      # Pro (off until approved): the historic drives build with `python -c "from nflclock import pro; pro.build()"`
+      # and ship with `scripts/site.py --pro`, which also turns the Pro tab on
 
       # nothing ships unless all of this passes: a failure here leaves the last good site up
       - name: Check the game before it ships
