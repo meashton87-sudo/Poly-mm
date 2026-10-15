@@ -1382,8 +1382,20 @@
         const pl = runFrom(picker, tThrow + 0.2, [[catchPt[0] - out * 0.4, catchPt[1] - dir * 0.6]], { T: tCatch - tThrow - 0.2 });
         if (pl.late > 0.05) tCatch += pl.late;
       }
+      // an incompletion has to read as one: the nearest defender gets to the ball and breaks it up, or, when nobody
+      // can (the receiver really was open), the throw sails past him. Never a dead-open man and a ball that just
+      // falls (players called that the game cheating)
+      let broke = null, overthrow = false;
+      const contest = !intc && !thrownAway && kind !== 'hail' && (e.incomplete || e.evt === 'near_pick') && e.evt !== 'drop';
+      if (contest && breakers[0]) {
+        broke = breakers[0];
+        busy.add(broke);
+        const pl = runFrom(broke, tThrow + 0.15, [[catchPt[0] - out * 0.3, catchPt[1] + dir * 0.5]], { T: tCatch - tThrow - 0.15 });
+        if (pl.late > 0.6 && e.evt !== 'near_pick') overthrow = true;       // too far to get there: the throw missed
+        else if (pl.late > 0.02) tCatch += pl.late;
+      } else if (contest) overthrow = true;
       breakers.forEach((d, i) => {
-        if (d === picker) return;
+        if (d === picker || d === broke) return;
         const near_ = dist(here(d), catchPt);
         const yac = Math.abs(e.yards - air);
         // the closer the coverage, the shorter the run after the catch: trail by more when he got loose
@@ -1406,14 +1418,15 @@
         return;
       }
       if (e.incomplete || ['throwaway', 'drop', 'near_pick'].includes(e.evt)) {
-        const brk = breakers[0];
-        const g = thrownAway ? catchPt : [inX(catchPt[0] + jit(1.5)), catchPt[1] + dir * 1.4];
+        const brk = broke ? null : breakers[0];
+        const g = thrownAway ? catchPt : overthrow ? [inX(catchPt[0] + out * 1.5 + jit(1)), inL(catchPt[1] + dir * 4)]
+          : [inX(catchPt[0] + jit(1.5)), catchPt[1] + dir * 1.4];
         fly(tCatch, tCatch + 0.2, px(catchPt[0]), catchPt[1], px(g[0]), g[1], 0.15);
         rest(tCatch + 0.2, px(g[0]), g[1]);
         rest(tCatch + 1.0, px(g[0]), g[1], true);
         if (brk && !thrownAway) leg(brk, tCatch - 0.1, 'go', { x: catchPt[0] + out * 0.5, y: catchPt[1] + dir * 0.4, eff: 0.7 });
         const text = e.evt === 'drop' ? 'Dropped!' : e.evt === 'near_pick' ? 'Almost picked!' : thrownAway ? 'Thrown away'
-          : kind === 'hail' ? 'Knocked down' : two ? 'Incomplete: no good' : 'Incomplete';
+          : kind === 'hail' ? 'Knocked down' : two ? 'Incomplete: no good' : overthrow ? 'Overthrown' : broke ? 'Broken up' : 'Incomplete';
         say(tCatch, text, e.evt === 'near_pick' ? 'boom' : 'info', { x: px(inX(catchPt[0])), L: catchPt[1] });
         if (e.evt === 'drop') down(tCatch + 0.1, tgt);
         leg(tgt, tCatch + 0.1, 'stand');
