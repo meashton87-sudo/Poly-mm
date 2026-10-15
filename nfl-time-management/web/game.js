@@ -3052,6 +3052,46 @@
     pen.append(S('path', { d: 'M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4' }));
     b.append(pen);
   }
+  // the personnel change, played out: those coming off jog to the near sideline, those coming on jog in from it,
+  // and everyone staying moves to his new spot
+  const xyOf = (g) => { const m = /translate\(([-\d.]+),([-\d.]+)\)/.exec(g.getAttribute('transform') || ''); return m ? [+m[1], +m[2]] : null; };
+  function persSnap() {
+    const m = new Map();
+    if (scene) scene.actors.filter((a) => a.off && a.p).forEach((a) => { const xy = xyOf(a.g); if (xy) m.set(a.p.name, { xy, g: a.g }); });
+    return m;
+  }
+  let persAnim = 0;
+  function persMove(before) {
+    const sc = scene;
+    if (!sc || !before.size || reduced()) return;
+    const side = (x) => [x < 180 ? -16 : 376];
+    const now = new Set(), moves = [];
+    sc.actors.filter((a) => a.off && a.p).forEach((a) => {
+      now.add(a.p.name);
+      const end = xyOf(a.g), b = before.get(a.p.name);
+      if (!end) return;
+      const start = b ? b.xy : [side(end[0])[0], end[1]];
+      if (Math.hypot(start[0] - end[0], start[1] - end[1]) > 0.5) moves.push({ g: a.g, start, end, d: b ? 0 : 0.25 });
+    });
+    before.forEach((b, name) => {
+      if (now.has(name)) return;
+      const g = b.g.cloneNode(true);
+      sc.layer.append(g);
+      moves.push({ g, start: b.xy, end: [side(b.xy[0])[0], b.xy[1]], d: 0, drop: true });
+    });
+    if (!moves.length) return;
+    const id = ++persAnim, T = 1100, t0 = performance.now();
+    const set = (m, u) => m.g.setAttribute('transform', `translate(${lerp(m.start[0], m.end[0], u).toFixed(1)},${lerp(m.start[1], m.end[1], u).toFixed(1)})`);
+    moves.forEach((m) => set(m, 0));
+    const step = (t) => {
+      if (id !== persAnim || scene !== sc) { moves.forEach((m) => (m.drop ? m.g.remove() : set(m, 1))); return; }
+      const k = (t - t0) / T;
+      moves.forEach((m) => set(m, EASE.io(clip((k - m.d) / (1 - m.d), 0, 1))));
+      if (k < 1) requestAnimationFrame(step);
+      else moves.forEach((m) => { if (m.drop) m.g.remove(); });
+    };
+    requestAnimationFrame(step);
+  }
   function openPers() {
     if (busy || !G || G.root.pos !== G.me) return;
     const real = persOf(lineup(G.me).off), L = lineup(G.me);
@@ -3110,7 +3150,15 @@
       nodes.push(hint, groups, el('h3', '', 'Who plays'), slots, reset, done);
       const b = $('mBody'); b.textContent = ''; nodes.forEach((n) => b.append(n));
     };
-    const changed = () => { track('personnel', { pers: G.pers || real, custom: !!G.persWho }); persist(); drawField(); persButton(); render(); };
+    const changed = () => {
+      track('personnel', { pers: G.pers || real, custom: !!G.persWho });
+      persist();
+      dirty = true;          // the field redraws, players moving, when the sheet closes (it covers the field on phones)
+      persButton(); render();
+    };
+    let dirty = false;
+    const before = persSnap();
+    onModalClose = () => { if (dirty) { drawField(); persMove(before); } };
     openModal('Personnel', []);
     render();
   }
@@ -4280,7 +4328,13 @@
     $('modal').hidden = false;
     $('mClose').focus();
   }
-  function closeModal() { $('modal').hidden = true; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
+  let onModalClose = null;
+  function closeModal() {
+    $('modal').hidden = true;
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+    const f = onModalClose; onModalClose = null;
+    if (f) f();
+  }
   function playerInfo(p, label, team) {
     const ol = OL.includes(label) || label === 'T' || label === 'G';
     const top = el('div', 'pinfo');
