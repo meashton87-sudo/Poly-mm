@@ -1191,6 +1191,9 @@
       if (penalty && yards > 0) yards = yards >= 15 ? Math.min(yards, yl0 - 1) : Math.min(yards, yl0 / 2);
       if (penalty && yards < 0) yards = -Math.min(-yards, (100 - yl0) / 2);
       const newYl = yl0 - yards;
+      // a real fumble drawn closer to the goal than it happened: he crossed the goal line with the ball before
+      // losing it, a touchdown (players saw a receiver fumble standing in the end zone)
+      if (turnover && !penalty && yards > 0 && newYl <= 0) { turnover = false; tdDef = false; }
       tdOff = tdOff || (!turnover && !penalty && newYl <= 0);
       // a safety is where the play ends: a library safety from the 1 drawn at the 11 is a loss of a yard
       safety = !turnover && !tdOff && newYl >= 100;

@@ -71,6 +71,21 @@ for (const pat of ['xp', 'two']) for (let k = 0; k < 40; k++) {
   const v = sim.run({ ...root, t: 1800, phase: 1, score: [14, 10], pos: 0, down: 1, ytg: 2, yl: 2, clock_running: false }, { n: 400, action: { pat: 'xp' }, perspective: 0, seed: 3 });
   assert.ok(v.mean >= 0 && v.mean <= 1);
 }
+// a fumble only after crossing the goal line is a touchdown (a real fumble drawn closer to the goal than it
+// happened): from inside the 10, no lost fumble may follow a gain that reached the end zone
+{
+  let fum = 0, scored = 0;
+  for (let k = 0; k < 6000; k++) {
+    const id = ['quick_strong', 'deep_middle', 'screen', 'rb_inside_strong', 'pa_short'][k % 5];
+    const at = { ...root, t: 600, phase: 0, score: [10, 14], pos: 0, down: 1, ytg: 8, yl: 8, clock_running: false };
+    const r = sim.step(at, { action: { to_off: false, play: eng.pb.calls.find((c) => c.id === id).kind, call: id }, seed: 5000 + k });
+    r.log.filter((e) => e.ev === 'play').forEach((e) => {
+      assert.ok(!(e.turnover && !e.penalty && e.yards >= e.yl), `a lost fumble after reaching the end zone: ${JSON.stringify(e)}`);
+      if (e.turnover) fum++; if (e.td) scored++;
+    });
+  }
+  console.log(`inside the 10: ${scored} touchdowns, ${fum} turnovers, none past the goal line`);
+}
 // matchups (engine.js MATCH): a call that beats the defense's call does better than the real plays alone, one that
 // loses to it worse (mean EPA of the plays drawn, over every situation)
 {

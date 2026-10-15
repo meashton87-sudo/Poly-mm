@@ -1128,7 +1128,7 @@
     }
     // how the ball carrier's play ends: the call-outs, a fumble
     function finish(car, tEnd, xyEnd) {
-      const fumble = ['fumble_lost', 'fumble_kept', 'scoop_score'].includes(e.evt);
+      const fumble = !e.td && ['fumble_lost', 'fumble_kept', 'scoop_score'].includes(e.evt);
       let t = tEnd;
       if (e.td) say(tEnd, two ? 'Two-point try good!' : 'Touchdown!', 'good', { follow: car });
       else if (e.safety) say(tEnd, 'Safety!', 'hit', { follow: car });
@@ -2328,6 +2328,8 @@
         scramble: e.td ? `scrambles ${y} yards for a touchdown` : `pressure, scrambles: ${gain}`,
         throwaway: y < 0 ? `pressure, intentional grounding: ${gain}` : 'pressure, throws it away', drop: 'dropped, incomplete', near_pick: 'nearly intercepted, incomplete' }[e.evt];
     }
+    // a fumble he made only after crossing the goal line is just the touchdown (engine.js scores it that way)
+    if (e.td && !e.turnover && /fumble|scoop|strip/.test(e.evt || '')) res = null;
     if (!res) {
       if (e.turnover) res = e.tdDef ? 'turnover, returned for a touchdown' : e.kind === PASS ? 'intercepted' : 'fumble, lost';
       else if (e.td) res = `${y}-yard touchdown`;
@@ -2621,7 +2623,9 @@
     // the kick: rushing the unit on takes 7-12 s with the clock running (engine.js FIRE_DRILL), so under 7 s it needs
     // a timeout first; a try on 4th down in range, in the last 20 s, or a likely make on 3rd down late
     const p = G.info.pFg, kickable = !r.clock_running || th >= 7;
-    if (kickable && ((r.down === 4 && p >= 0.05) || (th <= 20 && p >= 0.2) || (r.down === 3 && th <= 40 && p >= 0.4))) specials.push('fg');
+    // and on any down late in a half once in decent range (down 9 with 2:00 left: take the points now, then the onside)
+    const late = r.t > 1800 ? th <= 120 : th <= 300;
+    if (kickable && ((r.down === 4 && p >= 0.05) || (th <= 20 && p >= 0.2) || (r.down === 3 && th <= 40 && p >= 0.4) || (late && p >= 0.3))) specials.push('fg');
     if (r.down === 4 && r.yl >= 30) specials.push('punt');
     if (!r.clock_running && canKneel(r)) specials.push('kneel');
     return { calls, specials };
