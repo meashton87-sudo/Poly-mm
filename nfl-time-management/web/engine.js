@@ -39,6 +39,7 @@
   const FIRE_DRILL = [7.0, 12.0];      // seconds to rush the field-goal unit on with the clock running
   const KNEEL_RUNOFF = [38.0, 40.0];   // seconds run off between kneels (40 s play clock)
   const FIRE_DRILL_LOGIT = -0.3;       // rushed kicks are a little less accurate
+  const XP_LOGIT = 0.35;               // an extra point beats a 33-yard field goal (snapped from the middle): 2023-25 ~95.7%
   const FIRE_WINDOW = 25.0;            // seconds left in the half below which a kick with the clock running is a fire drill
   // Clock-aware play calls when the offense needs the clock stopped and has no timeouts (2020-25 data):
   // a pass that would end in bounds with a gain is kept with this probability, otherwise redrawn from the
@@ -875,7 +876,8 @@
       const o = S.pos, margin = S.s[o] - S.s[1 - o], tHalf = S.t - g.halfEnd;
       let go2 = g.half === 2 && tHalf <= 900 && TWO_PT_SET.has(margin);
       if (act && act.pat) go2 = act.pat === 'two';
-      const p = go2 ? this.ctx.twoPt[o] : this.fgProb(33.0, o);
+      const pk = clip(this.fgProb(33.0, o), 1e-9, 1 - 1e-9);
+      const p = go2 ? this.ctx.twoPt[o] : sigmoid(Math.log(pk / (1 - pk)) + XP_LOGIT);
       if (u[3] < p) S.s[o] += go2 ? 2 : 1;
       if (S.log) S.log.push({ ev: 'pat', team: o, two: go2, good: u[3] < p });
       S.phase = S.t <= g.halfEnd ? DONE : KICKOFF;

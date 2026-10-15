@@ -34,6 +34,7 @@ BURN_SECONDS = 8.0           # leading in the last seconds: any snap is played t
 FIRE_DRILL = (7.0, 12.0)     # seconds to rush the field-goal unit on with the clock running
 KNEEL_RUNOFF = (38.0, 40.0)  # seconds run off between kneels (40 s play clock, snapped with 0-2 s left)
 FIRE_DRILL_LOGIT = -0.3      # rushed kicks are a little less accurate
+XP_LOGIT = 0.35              # an extra point beats a 33-yard field goal (snapped from the middle): 2023-25 ~95.7%
 FIRE_WINDOW = 25.0           # seconds left in the half below which a kick with the clock running is a fire drill
 # Clock-aware play calls when the offense needs the clock stopped and has no timeouts (2020-25 data):
 # a pass that would end in bounds with a gain is kept with this probability, otherwise redrawn from the
@@ -264,7 +265,8 @@ class Simulator:
         go2 = (self.half == 2) & (t_half <= 900) & np.isin(margin, [-2, -5, -9, -10, -13, 1, 5])
         if "pat" in act:
             go2[:] = act["pat"] == "two"
-        p = np.where(go2, self.ctx.two_pt[o], self.fg_prob(np.full(ix.size, 33.0), o))
+        pk = np.clip(self.fg_prob(np.full(ix.size, 33.0), o), 1e-9, 1 - 1e-9)
+        p = np.where(go2, self.ctx.two_pt[o], 1.0 / (1.0 + np.exp(-(np.log(pk / (1 - pk)) + XP_LOGIT))))
         made = u[ix, 3] < p
         S.score[ix, o] += np.where(made, np.where(go2, 2, 1), 0)
         S.phase[ix] = np.where(S.t[ix] <= self.half_end, DONE, KICKOFF)
