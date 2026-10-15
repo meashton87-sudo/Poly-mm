@@ -1268,9 +1268,25 @@
         });
         cover.filter((d) => !used.has(d)).forEach((d) => leg(d, REACT_DEF, 'go', { x: d.b.x + (BX - d.b.x) * 0.3, y: d.label === 'DL' || d.label === 'EDGE' ? fwd(L0, 3.5) : fwd(d.b.y, 3), eff: 0.6 }));
       }
-      return { cover, man };
+      return { cover, man, assigned };
     }
     const xy = (p) => ({ x: p[0], y: p[1] });
+    // How open the target is when the ball gets there (yards to the nearest defender), drawn to fit what really
+    // happened. Completion rates climb steeply with separation (NFL Next Gen Stats: tight windows under a yard are
+    // completed well under half the time, wide-open throws almost always), so given the outcome: a catch with a
+    // long run after it was a man who got loose, an incompletion was mostly a covered man, and the rare open man
+    // who didn't catch it got a bad ball (which the play then shows). Buckets in yards, how often throws find each,
+    // and the completion rate in each (approximate, after NGS).
+    const SEP = [[0.4, 1], [1, 2], [2, 3], [3, 5], [5, 8]], SEP_P = [0.2, 0.27, 0.2, 0.2, 0.13], SEP_C = [0.42, 0.58, 0.7, 0.79, 0.87];
+    function separationFor(caught, yac, R) {
+      const w = SEP_P.map((p, i) => p * (caught ? SEP_C[i] : 1 - SEP_C[i]));
+      if (caught && yac >= 8) { w[0] = 0; w[1] *= 0.4; }                  // a long run after the catch: he was loose
+      if (caught && yac >= 15) { w[1] = 0; w[2] *= 0.4; }
+      const tot = w.reduce((a, b) => a + b, 0);
+      let u = R() * tot, i = 0;
+      while (i < w.length - 1 && u > w[i]) { u -= w[i]; i++; }
+      return { sep: SEP[i][0] + R() * (SEP[i][1] - SEP[i][0]), bucket: i };
+    }
 
     function pass(c, id, sign) {
       if (!qb) return;
@@ -1365,6 +1381,37 @@
         leg(w, Math.max(REACT_DEF + 0.4, tThrow - 1.1), 'chase', { who: passer.b, gap: 1.1, eff: 1, lead: 0.3 });
       }
       const cov = passShape({ kind, tgt, catchPt, tThrow, tCatch, rushers, shell: shellOf(), side, qbSpot, passer });
+      // the coverage on the target fits the outcome: one defender (his man, or the zone defender nearest where the
+      // ball is going) closes to the separation drawn above by the time the ball arrives
+      const intc = e.evt === 'interception' || e.evt === 'pick_six';
+      const caught = !intc && (!e.incomplete || e.evt === 'drop');
+      const graded = !thrownAway && kind !== 'hail' && e.evt !== 'throwaway';
+      const sepd = !graded ? null : intc ? { sep: 0.4 + R() * 0.5, bucket: 0 } : e.evt === 'near_pick' ? { sep: 0.4 + R() * 0.6, bucket: 0 }
+        : separationFor(caught, Math.max(0, (e.yards || 0) - air), R);
+      let shadow = null;
+      if (sepd) {
+        const tS = Math.max(REACT_DEF + 0.3, tThrow - 1.6);
+        Wd.run(tS);
+        const rAt = (t) => tp.at(Math.max(0, t - tStart));
+        const end = rAt(tCatch);
+        let manOf = null;
+        if (cov.man && cov.assigned) for (const [d, r] of cov.assigned) if (r === tgt) manOf = d;
+        shadow = manOf || cov.cover.filter((d) => d.label !== 'DL' && d.label !== 'EDGE').sort((a, b) => dist(here(a), end) - dist(here(b), end))[0] || null;
+        if (shadow) {
+          busy.add(shadow);
+          const r0 = rAt(tS), d0 = here(shadow);
+          const rel0 = [d0[0] - r0[0], d0[1] - r0[1]];
+          // where he ends up: trailing (between the receiver and the line) and to the inside in man; in zone, from
+          // where he came, closing; at the drawn distance
+          const ins = Math.sign(BX - end[0]) || 1;
+          const u = cov.man ? [ins * 0.55, -dir * 0.83] : (() => { const l = Math.hypot(rel0[0], rel0[1]) || 1; return [rel0[0] / l, rel0[1] / l]; })();
+          const span = Math.max(0.3, tCatch - tS);
+          leg(shadow, tS, 'track', { gain: 3, eff: 1, fn: (t) => {
+            const k = clip((t - tS) / span, 0, 1), q = rAt(Math.min(t, tCatch));
+            return [q[0] + rel0[0] * (1 - k) + u[0] * sepd.sep * k, q[1] + rel0[1] * (1 - k) + u[1] * sepd.sep * k];
+          } });
+        }
+      }
       // the throw
       Wd.run(tThrow);
       const qT = here(passer);
@@ -1374,10 +1421,9 @@
       leg(passer, tThrow + 0.15, 'go', { x: qT[0] + jit(1), y: qT[1] + dir * 1.2, eff: 0.25 });
       // the defense breaks on the ball a beat after it is out: the nearest two to where it is going
       const breakers = cov.cover.slice().sort((a, b) => dist(here(a), catchPt) - dist(here(b), catchPt)).slice(0, 2);
-      const intc = e.evt === 'interception' || e.evt === 'pick_six';
       let picker = null;
       if (intc) {
-        picker = breakers[0] || nearest(K.def, catchPt);
+        picker = shadow || breakers[0] || nearest(K.def, catchPt);
         busy.add(picker);
         const pl = runFrom(picker, tThrow + 0.2, [[catchPt[0] - out * 0.4, catchPt[1] - dir * 0.6]], { T: tCatch - tThrow - 0.2 });
         if (pl.late > 0.05) tCatch += pl.late;
@@ -1387,15 +1433,13 @@
       // falls (players called that the game cheating)
       let broke = null, overthrow = false;
       const contest = !intc && !thrownAway && kind !== 'hail' && (e.incomplete || e.evt === 'near_pick') && e.evt !== 'drop';
-      if (contest && breakers[0]) {
-        broke = breakers[0];
-        busy.add(broke);
-        const pl = runFrom(broke, tThrow + 0.15, [[catchPt[0] - out * 0.3, catchPt[1] + dir * 0.5]], { T: tCatch - tThrow - 0.15 });
-        if (pl.late > 0.6 && e.evt !== 'near_pick') overthrow = true;       // too far to get there: the throw missed
-        else if (pl.late > 0.02) tCatch += pl.late;
-      } else if (contest) overthrow = true;
+      if (contest) {
+        // a covered man: his defender gets a hand on it; an open one (the rare open incompletion): a bad ball
+        if (shadow && sepd && sepd.sep < 2) { broke = shadow; leg(shadow, tCatch - 0.15, 'go', { x: catchPt[0] - out * 0.2, y: catchPt[1] + dir * 0.3, eff: 1 }); }
+        else overthrow = true;
+      }
       breakers.forEach((d, i) => {
-        if (d === picker || d === broke) return;
+        if (d === picker || d === broke || d === shadow) return;
         const near_ = dist(here(d), catchPt);
         const yac = Math.abs(e.yards - air);
         // the closer the coverage, the shorter the run after the catch: trail by more when he got loose
@@ -1404,6 +1448,11 @@
         if (near_ > 25) leg(d, tThrow + 0.35, 'go', { x: catchPt[0], y: catchPt[1] + dir * 6, eff: 0.85 });
       });
       Wd.run(tCatch);
+      // (tests: how open the target really was on the field when the ball got there, against the outcome)
+      if (window.__sepLog) {
+        const tq = here(tgt), nd = Math.min(...K.def.map((d) => dist(here(d), tq)));
+        window.__sepLog.push({ evt: e.evt || '', inc: !!e.incomplete, caught, intc, yac: Math.max(0, (e.yards || 0) - air), air, drawn: sepd && sepd.sep, actual: nd, kind });
+      }
       // what happened at the catch point
       if (intc) {
         hold(tCatch, picker);
@@ -1419,14 +1468,16 @@
       }
       if (e.incomplete || ['throwaway', 'drop', 'near_pick'].includes(e.evt)) {
         const brk = broke ? null : breakers[0];
-        const g = thrownAway ? catchPt : overthrow ? [inX(catchPt[0] + out * 1.5 + jit(1)), inL(catchPt[1] + dir * 4)]
+        // a bad ball misses where you can see it: long past him on a deep throw, behind him or at his feet short
+        const g = thrownAway ? catchPt : overthrow ? (air >= 15 ? [inX(catchPt[0] + out * 1.5 + jit(1)), inL(catchPt[1] + dir * 4)]
+          : [inX(catchPt[0] - out * 2.2 + jit(0.8)), inL(catchPt[1] - dir * 1.5)])
           : [inX(catchPt[0] + jit(1.5)), catchPt[1] + dir * 1.4];
         fly(tCatch, tCatch + 0.2, px(catchPt[0]), catchPt[1], px(g[0]), g[1], 0.15);
         rest(tCatch + 0.2, px(g[0]), g[1]);
         rest(tCatch + 1.0, px(g[0]), g[1], true);
         if (brk && !thrownAway) leg(brk, tCatch - 0.1, 'go', { x: catchPt[0] + out * 0.5, y: catchPt[1] + dir * 0.4, eff: 0.7 });
         const text = e.evt === 'drop' ? 'Dropped!' : e.evt === 'near_pick' ? 'Almost picked!' : thrownAway ? 'Thrown away'
-          : kind === 'hail' ? 'Knocked down' : two ? 'Incomplete: no good' : overthrow ? 'Overthrown' : broke ? 'Broken up' : 'Incomplete';
+          : kind === 'hail' ? 'Knocked down' : two ? 'Incomplete: no good' : overthrow ? (air >= 15 ? 'Overthrown' : 'Off target') : broke ? 'Broken up' : 'Incomplete';
         say(tCatch, text, e.evt === 'near_pick' ? 'boom' : 'info', { x: px(inX(catchPt[0])), L: catchPt[1] });
         if (e.evt === 'drop') down(tCatch + 0.1, tgt);
         leg(tgt, tCatch + 0.1, 'stand');

@@ -64,7 +64,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     # a shifted date (each day's drive), and a seeded Math.random so a failing survivor run can be replayed
     await ctx.add_init_script(f"""(() => {{ const off = {day} * 864e5, _D = Date;
       class D extends _D {{ constructor(...a) {{ super(...(a.length ? a : [_D.now() + off])); }} static now() {{ return _D.now() + off; }} }}
-      window.Date = D;
+      window.Date = D; window.__sepLog = [];
       let s = {seed} >>> 0; Math.random = () => {{ s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1);
         t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }}; }})();""")
     page = await ctx.new_page()
@@ -164,7 +164,11 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                             # mostly the big calls; sometimes anything (a route, a tempo, a timeout, Back)
                             big = page.locator("#dock .key.big:visible")
                             nb = await big.count()
-                            if nb and rnd.random() < 0.55:
+                            labels = [(await big.nth(i).inner_text()).upper() for i in range(nb)]
+                            passes = [i for i, l in enumerate(labels) if l.startswith("PASS")]
+                            if passes and rnd.random() < 0.5:       # passes are the busiest plays: throw a lot of them
+                                b = big.nth(passes[0]); act("tap PASS"); await b.click(timeout=3000)
+                            elif nb and rnd.random() < 0.55:
                                 b = big.nth(rnd.randrange(nb)); act("tap " + (await b.inner_text())[:40]); await b.click(timeout=3000)
                             else:
                                 b = btns.nth(rnd.randrange(n)); act("tap " + (await b.inner_text())[:40].replace(chr(10), ' ')); await b.click(timeout=3000)
@@ -180,6 +184,10 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
         if not problems and finished < (1 if mode == "daily" else target):
             problems.append(f"stopped after {finished} of {target} games")
     finally:
+        try:
+            seps = await page.evaluate("() => window.__sepLog || []")
+        except Exception:
+            seps = []
         if problems:
             status = "fail"
             shot = out / f"{name}.png"
@@ -189,7 +197,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 pass
         await ctx.close()
     return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
-            "secs": round(time.time() - t_start), "problems": problems[:5], "trail": trail if problems else []}
+            "secs": round(time.time() - t_start), "problems": problems[:5], "seps": seps, "trail": trail if problems else []}
 
 
 async def main(a) -> int:
@@ -214,6 +222,16 @@ async def main(a) -> int:
         await browser.close()
     srv.shutdown()
     bad = [r for r in results if r["status"] != "ok"]
+    # the field has to match the outcome: an incomplete pass is a covered man or a visibly bad ball, almost never a
+    # receiver with nobody near him (before the outcome-driven coverage, 43% had nobody within 4 yards)
+    inc = [x for r in results for x in r.get("seps", []) if not x.get("caught") and not x.get("intc") and x.get("kind") != "hail" and x.get("evt") != "throwaway"]
+    open_inc = sum(1 for x in inc if x.get("actual", 0) >= 4)
+    print(f"passes logged: {sum(len(r.get('seps', [])) for r in results)}, incomplete: {len(inc)}")
+    if len(inc) >= 8:
+        print(f"incomplete passes with nobody within 4 yards: {open_inc} of {len(inc)}")
+        if open_inc > 0.2 * len(inc):      # the old drawing: 43%; outcome-driven coverage: none
+            print("FAIL: too many incompletions look wide open")
+            bad.append({"name": "separation"})
     print(f"{len(results) - len(bad)} of {len(results)} episodes clean" + (f"; screenshots in {out}" if bad else ""))
     return 1 if bad else 0
 
