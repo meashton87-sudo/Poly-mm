@@ -81,6 +81,8 @@
     huddle: { label: 'Huddle', short: 'Huddle' },
     milk: { label: 'Milk the clock', short: 'Milk it' },
     timeout: { label: 'Timeout', act: { to_off: true } },
+    // let it run to 0:03, then the timeout, then the kick (graded as the kick at 0:03: the engine's kick-to-win)
+    rundown: { label: 'Run it down, timeout at 0:03' },
     spike: { label: 'Spike', act: { to_off: false, play: 'spike' } },
     kneel: { label: 'Kneel', act: { to_off: false, play: 'kneel' } },
   };
@@ -203,7 +205,9 @@
     return usual === 'urgent' || usual === 'hurry' ? usual : halfLeft(r.t) <= 120 ? 'urgent' : 'hurry';
   }
   const tempoKeyOf = (t) => (t === 'urgent' || t === 'hurry' ? 'nohuddle' : t === 'normal' ? 'huddle' : 'milk');
-  const clockAct = (k, r) => (TEMPOS.includes(k) ? { to_off: false, tempo: engineTempo(k, r) } : CLOCK[k].act);
+  const RUNDOWN_AT = 3;               // seconds left after the timeout (engine.js CLOSE_KICK_AT)
+  const clockAct = (k, r) => (TEMPOS.includes(k) ? { to_off: false, tempo: engineTempo(k, r) }
+    : k === 'rundown' ? { to_off: false, runoff: Math.max(0, halfLeft(r.t) - RUNDOWN_AT), play: 'fg' } : CLOCK[k].act);
   const tempoSecs = (k, r) => { const S_ = (G.info && G.info.tempoSecs) || {}; return S_[engineTempo(k, r)]; };
   function spotText(r) {
     if (Math.round(r.yl) === 50) return 'midfield';
@@ -2600,6 +2604,9 @@
     if (r.to[me] > 0 && needTime) keys.push('timeout');
     if (r.down <= 3 && needTime && halfLeft(r.t) <= 180) keys.push('spike');
     if (canKneel(r)) keys.push('kneel');
+    // in field goal range late: burn the clock, timeout, kick (the end-of-half/end-of-game classic)
+    const th = halfLeft(r.t);
+    if (r.to[me] > 0 && needTime && th > RUNDOWN_AT + 2 && th <= 60 && r.yl <= 40 && (r.t > 1800 || lead >= -3)) keys.push('rundown');
     return keys;
   }
   function callOptions(r) {
@@ -2646,7 +2653,8 @@
       d.append(fam);
       const extra = [];
       if (r.clock_running) {
-        clockOptions(r).filter((k) => !TEMPOS.includes(k)).forEach((k) => extra.push([k, CLOCK[k].label, k === 'timeout' ? `${r.to[me]} left` : null]));
+        clockOptions(r).filter((k) => !TEMPOS.includes(k)).forEach((k) => extra.push([k, k === 'rundown' ? 'Run it down' : CLOCK[k].label,
+          k === 'timeout' ? `${r.to[me]} left` : k === 'rundown' ? `timeout at 0:0${RUNDOWN_AT}, then kick` : null]));
       }
       const { specials } = callOptions(r);
       specials.forEach((k) => extra.push([k, specialLabel(k), k === 'fg' ? `${Math.round(G.info.fgDist)} yards${r.clock_running && halfLeft(r.t) < 12 ? ' · a rush to get it off' : ''}` : null]));
@@ -2658,6 +2666,7 @@
           b.addEventListener('click', () => {
             if (busy) return;
             if (k === 'timeout') decideTimeout();
+            else if (k === 'rundown') decideTimeout(true);
             else if ((k === 'spike' || k === 'kneel') && r.clock_running) decideClock(k);
             else decideCall({ special: k });
           });
@@ -2881,6 +2890,10 @@
     else q = { play: 0.8, timeout: 0.14, spike: 0.06 };
     q[tempoKeyOf(G.info.tempo)] = q.play;          // snapping it, a typical play-caller goes at the usual tempo here
     delete q.play;
+    if (opts.some((o) => o.key === 'rundown') && halfLeft(r.t) <= 45) {     // in range late, most run it down and kick
+      Object.keys(q).forEach((k) => { q[k] *= 0.4; });
+      q.rundown = 0.6;
+    }
     return { kind: 'clock', family: 'off_clock_stop', r, opts, chosen, q, situation: situation(r), seed: hash('clock', seedKey(), G.si, seq) };
   }
   // a call: the snap goes at once and the grading (thousands of simulated games) runs while the play does; the result
@@ -2925,20 +2938,23 @@
     G.pending = null;
     persist();
   }
-  async function decideTimeout() {
+  // a timeout now, or (rundown) after letting the clock run down to 0:03 for the kick
+  async function decideTimeout(rundown) {
     if (busy) return;
     busy = true;
     const r = G.root;
     try {
-      const x = (await gradeSpecs({ snap: G.snapN, specs: [clockSpec(r, 'timeout', G.seq)] }))[0];
+      const x = (await gradeSpecs({ snap: G.snapN, specs: [clockSpec(r, rundown ? 'rundown' : 'timeout', G.seq)] }))[0];
       G.decisions.push(x);
       G.snapN += 1;
       const halfEnd = r.t > 1800 ? 1800 : 0;
-      G.root = { ...r, to: r.to.slice(), clock_running: false, t: Math.max(halfEnd, r.t - 1) };
+      const t = rundown ? Math.min(r.t - 1, halfEnd + RUNDOWN_AT) : r.t - 1;
+      G.root = { ...r, to: r.to.slice(), clock_running: false, t: Math.max(halfEnd, t) };
       G.root.to[G.me] -= 1;
-      addLog(`Timeout, ${teamName(code(G.me))}`, G.root.t, true);
+      if (rundown) addLog(`Ran the clock down to ${clockOf(G.root.t).text}`, G.root.t, true);
+      addLog(`Timeout, ${teamName(code(G.me))}${rundown ? ' (to set up the kick)' : ''}`, G.root.t, true);
       persist();
-      showResult([x], { log: [], action: { to_off: true } }, 'Timeout');
+      showResult([x], { log: [], action: { to_off: true } }, rundown ? 'Ran it down, timeout' : 'Timeout');
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
     busy = false;
   }
