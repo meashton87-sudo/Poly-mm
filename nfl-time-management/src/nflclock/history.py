@@ -320,7 +320,9 @@ class History:
             out = {}
             try:
                 w = pd.read_parquet(PL._get("weekly_rosters", f"roster_weekly_{season}.parquet"),
-                                    columns=["week", "team", "gsis_id", "pfr_id", "jersey_number", "full_name"]).dropna(subset=["jersey_number"])
+                                    columns=["week", "team", "gsis_id", "pfr_id", "jersey_number", "full_name"])
+                w["jersey_number"] = pd.to_numeric(w["jersey_number"], errors="coerce")      # an old file has a '67O'
+                w = w.dropna(subset=["jersey_number"])
             except Exception:                      # not published (yet): fall back to the current numbers
                 w = pd.DataFrame(columns=["week", "team", "gsis_id", "pfr_id", "jersey_number", "full_name"])
             names = w["full_name"].where(w["full_name"].notna(), None)
