@@ -67,9 +67,8 @@ jobs:
           python -c "from nflclock import webexport as w; w.export_engine()"
           python -c "from nflclock import dailygame as G; print(G.build())"
 
-      # Pro: the historic drives (nflclock.pro), from any season since 1999; a failure here leaves the daily game to ship
-      - name: Export the historic drives (Pro)
-        run: python -c "from nflclock import pro; print(pro.build())" || echo "::warning::the historic drives did not build; the site ships without them"
+      # Pro (off until approved): the historic drives build with `python -c "from nflclock import pro; pro.build()"`
+      # and ship with `scripts/site.py --pro`, which also turns the Pro tab on
 
       # nothing ships unless all of this passes: a failure here leaves the last good site up
       - name: Check the game before it ships

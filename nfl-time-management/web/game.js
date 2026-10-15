@@ -131,10 +131,13 @@
   // two modes: the daily three spots, or survivor (#survivor): random real fourth-quarter spots back to back, win to
   // keep going, one loss and the run is over (a tie at the gun goes to overtime, played out: see overtime())
   const SURV = location.hash === '#survivor';
+  // Pro is off until it is turned on in the site build (scripts/site.py --pro: <meta name="pro">): no tab, no
+  // archive, no drives, no purchase
+  const PRO_ON = !!document.querySelector('meta[name="pro"]');
   // the archive (Pro): #archive lists every past day, #day-N plays one (its own saved state, like the day it was)
-  const ARCH = location.hash === '#archive', ARCH_DAY = Number((location.hash.match(/^#day-(\d+)$/) || [])[1] || 0);
+  const ARCH = PRO_ON && location.hash === '#archive', ARCH_DAY = PRO_ON ? Number((location.hash.match(/^#day-(\d+)$/) || [])[1] || 0) : 0;
   // a historic drive (Pro, pro/drives.json): #drive-N plays the Nth one, with its own saved state
-  const DRIVE = Number((location.hash.match(/^#drive-(\d+)$/) || [])[1] || 0);
+  const DRIVE = PRO_ON ? Number((location.hash.match(/^#drive-(\d+)$/) || [])[1] || 0) : 0;
   let PRO = null;                 // pro/drives.json, once loaded
   const stateKey = () => (SURV ? `${STORE}:surv` : DRIVE ? `${STORE}:drive:${DRIVE}` : `${STORE}:day:${dayN}`);
   const saveState = () => save(stateKey(), state);
@@ -4268,7 +4271,7 @@
     const dbox = dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0)));
     box.append(dbox);
     if (ARCH_DAY || DRIVE) { const a = el('a', 'btn', DRIVE ? 'More drives' : 'Back to the archive'); a.href = '#archive'; box.append(a); }
-    else if (!isPro() && dayN > 1 && BOARD.api) {       // the website: the archive is a Pro purchase there
+    else if (PRO_ON && !isPro() && dayN > 1 && BOARD.api) {       // the website: the archive is a Pro purchase there
       const a = el('a', '', 'the Archive'), nudge = el('p', 'note');
       a.href = '#archive';
       nudge.append('Missed a day? Every past daily is in ', a, ' (Pro).');
@@ -4671,7 +4674,7 @@
     const q = new URLSearchParams(location.search), s = q.get('claim');
     if (!s && !q.has('pro')) return;
     history.replaceState(null, '', location.pathname + location.hash);
-    if (!s) return;
+    if (!s || !PRO_ON) return;
     try {
       const d = await proApi('/claim', { s });
       save(PRO_KEY, { code: d.code, at: Date.now() });
@@ -4779,6 +4782,7 @@
     boardInit();
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
     $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
+    $('modeArch').hidden = !PRO_ON;
     $('statsBtn').addEventListener('click', openStats);
     $('bar').addEventListener('click', () => { if (G) spotInfo(); });
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });

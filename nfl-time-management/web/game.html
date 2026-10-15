@@ -81,6 +81,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .modes { display: flex; justify-content: center; gap: 4px; }
 .modes a { font: 700 12px var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); text-decoration: none;
   padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); }
+.modes a[hidden] { display: none; }
 .modes a[aria-current="page"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 .intro .who.surv { font: 800 13px var(--body); letter-spacing: .1em; text-transform: uppercase; color: var(--sq-r); }
 .endcard .alive { margin: 0; font: 900 22px/1.1 var(--display); letter-spacing: .04em; text-transform: uppercase; }
