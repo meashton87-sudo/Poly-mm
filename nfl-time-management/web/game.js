@@ -2469,6 +2469,7 @@
     box.append(go);
     const rl = sc.real || {};
     box.append(el('div', 'from', `The real score, clock, ball and timeouts from that game, with the players who were on the field and how good they were that week.`));
+    box.append(el('div', 'from legal', 'Fan-made. Not affiliated with or endorsed by the NFL or its teams.'));
     go.focus({ preventScroll: true });
   }
   async function enterField() {
@@ -3750,6 +3751,7 @@
     box.append(nameInput(), pre, share, again, boardEl());
     const ad = adBox();
     if (ad) box.append(ad);
+    box.append(disclaimer());
     if (!redraw) again.focus({ preventScroll: true });
   }
 
@@ -3854,6 +3856,7 @@
     box.append(countdown(streak >= 1 ? 'Keep the streak: next drive in ' : null));
     const ad = adBox();
     if (ad) box.append(ad);
+    box.append(disclaimer());
   }
   // An ad unit (Google AdSense, the website only: site.py --adsense --ad-slot), only on screens between games, never
   // while a drive is on, labeled as an ad. Nothing without both metas (claude.ai, local copies, the test builds).
@@ -3979,6 +3982,9 @@
   }
 
   // ------------------------------------------------------- boxes to tap ---
+  // the website is a fan-made game: on every screen between games, in the help and on the intro
+  const DISCLAIMER = 'Not affiliated with, endorsed by or sponsored by the National Football League, its teams or players. NFL and team names are trademarks of their respective owners, used here only to identify real games. Play-by-play from the public nflverse data.';
+  const disclaimer = () => el('p', 'note legal', DISCLAIMER);
   function privacyLink() {
     const p = el('p', 'note'), a = el('a', '', 'Privacy');
     a.href = 'privacy.html';
@@ -4074,6 +4080,7 @@
       el('p', 'note', 'Calls: green, the best or as good; yellow, close; orange, costly; red, a big miss. Your score and the share grid count the calls.'),
       more,
       ...(BUILD ? [privacyLink()] : []),        // the website only (claude.ai has its own)
+      disclaimer(),
     ]);
   }
   function openStats() {
