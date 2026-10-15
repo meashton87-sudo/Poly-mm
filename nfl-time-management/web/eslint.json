@@ -1,0 +1,14 @@
+{
+  "root": true,
+  "env": { "browser": true, "worker": true, "es2022": true, "node": true },
+  "parserOptions": { "ecmaVersion": 2022, "sourceType": "script" },
+  "globals": { "NFLClockEngine": "readonly", "Motion": "readonly", "gtag": "readonly" },
+  "rules": {
+    "no-undef": "error",
+    "no-use-before-define": ["error", { "functions": false, "classes": false, "variables": false }],
+    "no-redeclare": "error", "no-dupe-keys": "error", "no-dupe-else-if": "error", "no-unreachable": "error",
+    "no-const-assign": "error", "no-self-assign": "error", "no-unsafe-finally": "error", "use-isnan": "error",
+    "valid-typeof": "error", "no-cond-assign": "error", "no-fallthrough": "error", "no-sparse-arrays": "error",
+    "no-loss-of-precision": "error", "no-unsafe-negation": "error", "no-func-assign": "error", "no-import-assign": "error"
+  }
+}

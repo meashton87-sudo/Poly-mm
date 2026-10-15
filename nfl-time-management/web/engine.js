@@ -786,7 +786,9 @@
       opts = opts || {};
       const n = opts.n || 4000, action = opts.action || {}, persp = opts.perspective || 0, seed = (opts.seed || 0) >>> 0;
       const maxSteps = opts.maxSteps || 300;
-      const halfEnd = root.t > 1800 ? 1800 : 0;
+      // 0:00 of Q2 is t = 1800, otherwise the start of the second half; a try at that moment (a touchdown on the last
+      // play of the first half) still belongs to the first half, which ends after it (sim.py the same)
+      const halfEnd = root.t > 1800 || (root.t === 1800 && root.phase === PAT) ? 1800 : 0;
       const g = { halfEnd, half: halfEnd > 0 ? 1 : 2, qEnd: halfEnd + 900, tmw: halfEnd + 120,
         oobWindow: halfEnd > 0 ? 120 : 300 };
       const values = new Float64Array(n);
@@ -840,7 +842,9 @@
     step(root, opts) {
       opts = opts || {};
       const action = opts.action || {}, seed = (opts.seed || 0) >>> 0;
-      const halfEnd = root.t > 1800 ? 1800 : 0;
+      // 0:00 of Q2 is t = 1800, otherwise the start of the second half; a try at that moment (a touchdown on the last
+      // play of the first half) still belongs to the first half, which ends after it (sim.py the same)
+      const halfEnd = root.t > 1800 || (root.t === 1800 && root.phase === PAT) ? 1800 : 0;
       const g = { halfEnd, half: halfEnd > 0 ? 1 : 2, qEnd: halfEnd + 900, tmw: halfEnd + 120,
         oobWindow: halfEnd > 0 ? 120 : 300 };
       const S = { t: root.t, pos: root.pos, s: [root.score[0], root.score[1]], down: root.down, ytg: root.ytg, yl: root.yl,

@@ -209,3 +209,16 @@ def test_no_safety_unless_the_play_ends_in_the_end_zone(sim):
     root = RootState(t=1500, pos=0, score=(10, 10), down=1, ytg=10, yl=80, to=(3, 3))
     _, S = sim.run(root, n=40000, perspective=0, seed=4, max_steps=1, return_state=True)
     assert int(((S.score[:, 1] - 10) == 2).sum()) <= 2      # only a 20-yard loss could do it
+
+
+@needs_bundle
+def test_try_at_the_end_of_the_first_half_ends_it(sim):
+    # a touchdown on the last play of the first half leaves the try at t = 1800 (0:00 of Q2); the half ends after it,
+    # not the final gun of the game (worth 0, 1/2 or 1) nor a kickoff into the second half: every rollout is worth a
+    # halftime lead or deficit
+    from nflclock.sim import PAT, RootState
+    root = RootState(t=1800.0, pos=0, score=(14, 10), down=1, ytg=2, yl=2, to=(2, 1), clock_running=False, phase=PAT)
+    for pat in ("xp", "two"):
+        v = sim.run(root, n=400, action={"pat": pat}, perspective=0, seed=5)
+        assert np.unique(np.round(v, 9)).size <= 3      # made, missed (and a rare defensive return of the try)
+        assert ((v > 0.05) & (v < 0.95)).all()

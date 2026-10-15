@@ -16,3 +16,5 @@ web/_test_game.js
 _site/
 board/node_modules/
 board/.wrangler/
+_site_test/
+browser_test_out/

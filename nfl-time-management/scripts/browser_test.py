@@ -1,0 +1,228 @@
+"""Play the built website in a real browser like an impatient, curious player, and fail on anything a player would
+hit: a script error, a screen that stops moving, a drive or game that never ends, broken text.
+
+    python scripts/browser_test.py _site [--daily 6] [--survivor 6] [--seed 1] [--jobs 3] [--out browser_test_out]
+
+Each daily episode plays one day's drive (the date shifted forward, so every kind of spot comes up); each survivor
+episode plays games back to back, starting a new run when one ends, until it has finished that many games. Calls
+are random among every button the dock offers (timeouts, spikes, kicks, tempo and routes included), and now and
+then the bot opens the help, the stats, the game details or the player ratings mid-play, replays a snap, waits out
+an animation instead of skipping it, or reloads the page mid-drive (the drive must pick up where it was).
+Needs Playwright with Chromium (pip install playwright; python -m playwright install chromium).
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import functools
+import http.server
+import random
+import re
+import sys
+import threading
+import time
+from pathlib import Path
+
+from playwright.async_api import async_playwright
+
+STATE = """() => {
+  const vis = (id) => { const e = document.getElementById(id); return e && !e.hidden; };
+  if (vis('modal')) return 'modal';
+  if (vis('deep')) return 'deep';
+  if (vis('done') && document.querySelector('#done .big-pct')) return 'summary';
+  if (vis('intro') && document.querySelector('#intro .btn')) return 'intro';
+  if (!vis('play')) return 'loading';
+  if (document.querySelector('#field.playing')) return 'animating';
+  const d = document.getElementById('dock');
+  if (d.querySelector('.err')) return 'error';
+  if (d.querySelector('.endcard')) return 'end';
+  if (d.querySelector('.result .btn')) return 'result';
+  if (d.querySelector('button')) return 'choose';
+  return 'wait';
+}"""
+SNAP = "() => [document.getElementById('dock').innerText, document.getElementById('bar').innerText].join('|')"
+BAD_TEXT = re.compile(r"undefined|NaN|\[object|Infinity")
+# how long a screen may sit unchanged before it counts as frozen (s); a play's animation runs ~5-15 s
+LIMIT = {"animating": 60, "wait": 45, "loading": 60}
+STILL = 30
+
+
+def serve(root: Path) -> tuple[http.server.ThreadingHTTPServer, int]:
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Quiet, directory=str(root)))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, srv.server_address[1]
+
+
+async def episode(browser, base: str, name: str, mode: str, seed: int, target: int, out: Path, mobile: bool) -> dict:
+    rnd = random.Random(seed)
+    vp = {"width": 390, "height": 844} if mobile else {"width": 1280, "height": 900}
+    ctx = await browser.new_context(viewport=vp, is_mobile=mobile, has_touch=mobile)
+    day = seed % 9 if mode == "daily" else 0
+    # a shifted date (each day's drive), and a seeded Math.random so a failing survivor run can be replayed
+    await ctx.add_init_script(f"""(() => {{ const off = {day} * 864e5, _D = Date;
+      class D extends _D {{ constructor(...a) {{ super(...(a.length ? a : [_D.now() + off])); }} static now() {{ return _D.now() + off; }} }}
+      window.Date = D;
+      let s = {seed} >>> 0; Math.random = () => {{ s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }}; }})();""")
+    page = await ctx.new_page()
+    problems: list[str] = []
+    page.on("pageerror", lambda e: problems.append(f"script error: {e}"))
+    page.on("console", lambda m: m.type == "error" and "googletagmanager" not in m.text and "ERR_" not in m.text
+            and problems.append(f"console error: {m.text[:300]}"))
+    page.on("requestfailed", lambda r: base in r.url and problems.append(f"request failed: {r.url} {r.failure}"))
+    url = f"{base}/index.html" + ("#survivor" if mode == "survivor" else "")
+    await page.goto(url)
+    finished = reloads = steps = 0
+    last_key, since, chaos_done = None, time.time(), set()
+    trail: list[str] = []            # the last screens and actions, printed with a failure
+    first_q = None                   # the quarter a daily drive starts in: a first-half drive ends at halftime
+    act = lambda what: trail.append(f"  > {what}")
+    t_start = time.time()
+    status = "ok"
+    try:
+        while time.time() - t_start < 900 and steps < 5000:
+            steps += 1
+            if problems:
+                status = "error"
+                break
+            st = await page.evaluate(STATE)
+            key = (st, await page.evaluate(SNAP) if st not in ("loading", "modal", "deep") else "")
+            if key != last_key:
+                last_key, since = key, time.time()
+                txt = key[1]
+                trail.append(f"[{st}] {txt[:160]!r}")
+                del trail[:-30]
+                q = re.search(r"\bQ([1-4])\b", txt.split("|")[-1])
+                if mode == "daily" and q:
+                    first_q = first_q or int(q.group(1))
+                    if first_q <= 2 and int(q.group(1)) >= 3:
+                        problems.append(f"a first-half drive went on past halftime (now Q{q.group(1)})")
+                        continue
+                if BAD_TEXT.search(txt):
+                    problems.append(f"broken text on screen ({st}): {BAD_TEXT.search(txt).group(0)!r} in {txt[:200]!r}")
+                    continue
+            elif time.time() - since > LIMIT.get(st, STILL):
+                problems.append(f"frozen: the '{st}' screen did not change for {int(time.time() - since)} s; dock: {key[1][:200]!r}")
+                continue
+            try:
+                if st == "error":
+                    problems.append(f"error shown to the player: {key[1][:300]!r}")
+                elif st in ("modal", "deep"):
+                    await page.wait_for_timeout(rnd.choice([100, 400]))
+                    act("close " + st); await page.click("#mClose" if st == "modal" else "#deepClose", timeout=3000)
+                elif st == "intro":
+                    act("intro Next"); await page.click("#intro .btn", timeout=3000)
+                elif st == "animating":
+                    if rnd.random() < 0.6:
+                        await page.click("#field", timeout=1500)
+                elif st == "result":
+                    if rnd.random() < 0.08 and await page.locator("#dock .replay").count():
+                        await page.click("#dock .replay", timeout=3000)
+                    else:
+                        await page.click("#dock .result .btn", timeout=3000)
+                elif st == "end":
+                    finished += 1
+                    if mode == "daily" or finished >= target:
+                        if mode == "daily":
+                            await page.click("#dock .endcard .btn", timeout=3000)
+                            continue
+                        break
+                    await page.click("#dock .endcard .btn", timeout=3000)
+                elif st == "summary":
+                    if mode == "daily":
+                        finished = max(finished, 1)
+                        break
+                    if finished >= target:
+                        break
+                    await page.get_by_role("button", name="New run").click(timeout=3000)
+                elif st == "choose":
+                    r = rnd.random()
+                    if r < 0.03 and "help" not in chaos_done:
+                        chaos_done.add("help"); act("help"); await page.click("#helpBtn", timeout=3000)
+                    elif r < 0.06 and "stats" not in chaos_done:
+                        chaos_done.add("stats"); act("stats"); await page.click("#statsBtn", timeout=3000)
+                    elif r < 0.09 and "deep" not in chaos_done and await page.locator("#deepBtn").is_visible():
+                        chaos_done.add("deep"); act("player ratings"); await page.click("#deepBtn", timeout=3000)
+                    elif r < 0.12 and "bar" not in chaos_done:
+                        chaos_done.add("bar"); act("game details"); await page.click("#bar", timeout=3000)
+                    elif r < 0.14 and reloads < 2:
+                        reloads += 1
+                        act("RELOAD")
+                        await page.reload()
+                        await page.wait_for_timeout(800)
+                    else:
+                        btns = page.locator("#dock button:visible:not([disabled])")
+                        n = await btns.count()
+                        if n:
+                            # mostly the big calls; sometimes anything (a route, a tempo, a timeout, Back)
+                            big = page.locator("#dock .key.big:visible")
+                            nb = await big.count()
+                            if nb and rnd.random() < 0.55:
+                                b = big.nth(rnd.randrange(nb)); act("tap " + (await b.inner_text())[:40]); await b.click(timeout=3000)
+                            else:
+                                b = btns.nth(rnd.randrange(n)); act("tap " + (await b.inner_text())[:40].replace(chr(10), ' ')); await b.click(timeout=3000)
+                        else:
+                            rcv = page.locator("#field .rcv, #field [data-rcv]")
+                            if await rcv.count():
+                                await rcv.nth(rnd.randrange(await rcv.count())).click(timeout=3000)
+            except Exception:
+                pass                     # a button that moved or vanished between looking and clicking: look again
+            await page.wait_for_timeout(rnd.choice([30, 60, 120]))
+        else:
+            problems.append(f"never finished: {finished} of {target} games after {steps} steps")
+        if not problems and finished < (1 if mode == "daily" else target):
+            problems.append(f"stopped after {finished} of {target} games")
+    finally:
+        if problems:
+            status = "fail"
+            shot = out / f"{name}.png"
+            try:
+                await page.screenshot(path=str(shot), full_page=True)
+            except Exception:
+                pass
+        await ctx.close()
+    return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
+            "secs": round(time.time() - t_start), "problems": problems[:5], "trail": trail if problems else []}
+
+
+async def main(a) -> int:
+    srv, port = serve(Path(a.site).resolve())
+    base = f"http://127.0.0.1:{port}"
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    jobs = [("daily", a.seed + (i * a.day_step), 1) for i in range(a.daily)] + [("survivor", a.seed + 1000 + i, a.games) for i in range(a.survivor)]
+    sem = asyncio.Semaphore(a.jobs)
+    async with async_playwright() as p:
+        kw = {"executable_path": a.chromium} if a.chromium else {}
+        browser = await p.chromium.launch(**kw)
+
+        async def run(i, job):
+            mode, seed, target = job
+            async with sem:
+                r = await episode(browser, base, f"{mode}-{seed}", mode, seed, target, out, mobile=i % 3 != 2)
+            print(f"{r['status']:5s} {r['name']:16s} games {r['finished']}  reloads {r['reloads']}  {r['secs']} s"
+                  + "".join(f"\n      {x}" for x in r["problems"]) + "".join(f"\n        {x}" for x in r["trail"]), flush=True)
+            return r
+        results = await asyncio.gather(*(run(i, j) for i, j in enumerate(jobs)))
+        await browser.close()
+    srv.shutdown()
+    bad = [r for r in results if r["status"] != "ok"]
+    print(f"{len(results) - len(bad)} of {len(results)} episodes clean" + (f"; screenshots in {out}" if bad else ""))
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("site")
+    ap.add_argument("--daily", type=int, default=6, help="daily episodes (each a different day)")
+    ap.add_argument("--survivor", type=int, default=4, help="survivor episodes")
+    ap.add_argument("--games", type=int, default=3, help="games per survivor episode")
+    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--day-step", type=int, default=1, help="seed step between daily episodes (9: the same day each time)")
+    ap.add_argument("--jobs", type=int, default=3, help="episodes at once")
+    ap.add_argument("--chromium", help="path to a Chromium binary (default: Playwright's)")
+    ap.add_argument("--out", default="browser_test_out")
+    sys.exit(asyncio.run(main(ap.parse_args())))
