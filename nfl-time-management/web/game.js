@@ -3668,8 +3668,11 @@
     drawTiles();
     const box = $('done');
     box.textContent = '';
+    // the daily streak: days in a row finished, today included (what brings players back tomorrow)
+    let streak = 0; for (let k = dayN; st.days[k]; k--) streak++;
     box.append(el('div', 'note', `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
-      el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers`));
+      el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers`),
+      el('div', 'streak', streak >= 2 ? `🔥 ${streak}-day streak` : 'Day 1 of your streak · come back tomorrow'));
     if (cc) box.append(cc.el);
     box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller ${today.length > 1 ? 'across today’s spots' : 'on today’s drive'}.`));
     const dbox = dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0)));
@@ -3699,7 +3702,8 @@
         el('span', 'sub', `${rec[0]} better, ${rec[1]} worse${rec[2] ? `, ${rec[2]} the same` : ''}`));
       box.insertBefore(v, box.children[3] || null);
     }
-    const text = `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}\n${rows.join('\n')}\n${SITE}`;
+    const text = `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
+      `${streak >= 2 ? `\n🔥 ${streak}-day streak` : ''}\n${rows.join('\n')}\nCan you beat me? ${SITE}`;
     // sharing is how new players find the game: the button sits right under the result, not below the standings
     const pre = el('div', 'grid-share', text);
     const btn = el('button', 'btn', 'Share your score');
@@ -3707,7 +3711,7 @@
     btn.addEventListener('click', () => shareText(text, pre, 'daily'));
     box.insertBefore(pre, dbox);
     box.insertBefore(btn, dbox);
-    box.append(countdown());
+    box.append(countdown(streak >= 1 ? 'Keep the streak: next drive in ' : null));
     const ad = adBox();
     if (ad) box.append(ad);
   }
@@ -3804,10 +3808,10 @@
     row.append(btn, all);
     box.append(row);
   }
-  function countdown() {
+  function countdown(label) {
     const w = el('div', 'countdown');
     const b = el('b', '', '');
-    w.append(document.createTextNode(today.length > 1 ? 'New spots in ' : 'Next drive in '), b);
+    w.append(document.createTextNode(label || (today.length > 1 ? 'New spots in ' : 'Next drive in ')), b);
     const upd = () => {
       const now = new Date(), next = new Date(now); next.setHours(24, 0, 0, 0);
       let s = Math.max(0, Math.floor((next - now) / 1000));
@@ -3872,6 +3876,21 @@
   }
   function openHelp(auto) {
     track('help_open', { auto: auto === true });     // auto: shown on a first visit (not a tap on ?)
+    // a first visit gets three lines and a button, not the manual: the full help is one tap away on ?
+    if (auto === true) {
+      const ol = el('ol', 'quick');
+      [['Call the play.', 'Run, pass or a trick play, in the last minutes of a real NFL game.'],
+        ['Watch it happen.', 'Every snap is a real NFL play run against your call.'],
+        ['Beat the real coach.', 'Then see how you rank against everyone who played today.']]
+        .forEach(([b, t]) => { const li = el('li'); li.append(el('b', '', b), ' ', t); ol.append(li); });
+      const go = el('button', 'btn', 'Let’s go');
+      go.type = 'button';
+      go.addEventListener('click', closeModal);
+      openModal(SURV ? 'Survivor' : 'One drive a day', [ol, ...(SURV ? [el('p', 'note', 'Win to keep going. One loss ends your run.')] : []), go,
+        el('p', 'note', 'How to play in full: the ? at the top.')]);
+      setTimeout(() => go.focus({ preventScroll: true }), 0);
+      return;
+    }
     const ex = el('div', 'ex');
     ['g', 'y', 'o', 'r'].forEach((m) => ex.append(el('span', `sq ${m}`, GLYPH[m])));
     const ul = el('ul');
