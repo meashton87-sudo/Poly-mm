@@ -30,11 +30,11 @@
   const modeName = () => (SURV ? 'survivor' : 'daily');
   // a drive left half-played: when the page goes to the background mid-drive (closed, or switched away from), once
   // a page load, with how far in it was and whether it was still waiting on the simulator's data
-  const drive = { on: false, calls: 0, t0: 0, kind: null, left: false };
+  const liveDrive = { on: false, calls: 0, t0: 0, kind: null, left: false };
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'hidden' || !drive.on || drive.left) return;
-    drive.left = true;
-    track('drive_leave', { mode: modeName(), kind: drive.kind, calls: drive.calls, secs: Math.round((performance.now() - drive.t0) / 1000),
+    if (document.visibilityState !== 'hidden' || !liveDrive.on || liveDrive.left) return;
+    liveDrive.left = true;
+    track('drive_leave', { mode: modeName(), kind: liveDrive.kind, calls: liveDrive.calls, secs: Math.round((performance.now() - liveDrive.t0) / 1000),
       loading: readyCount === 0, transport_type: 'beacon' });
   });
   // every share ends with the address, so a posted score brings its readers to the game (the website's own host;
@@ -2381,7 +2381,7 @@
     go.addEventListener('click', () => {
       if (!G.started) {
         track('drive_start', { mode: modeName(), kind: sc.category, day: dayN });
-        Object.assign(drive, { on: true, calls: 0, t0: performance.now(), kind: sc.category });
+        Object.assign(liveDrive, { on: true, calls: 0, t0: performance.now(), kind: sc.category });
       }
       G.started = true; persist(); enterField();
     });
@@ -2883,7 +2883,7 @@
       const chosen = passPick ? passPick.key : pick.call ? (ui.oob ? `${pick.call}+oob` : pick.call) : pick.special;
       remember(opts.find((o) => o.key === chosen).action.call);
       const cid = passPick ? passPick.action.call : pick.call;
-      drive.calls++;
+      liveDrive.calls++;
       track('play_call', { mode: modeName(), family: pick.special || (passPick ? 'pass' : (CALL[cid] || {}).family || 'other'), call: cid || pick.special,
         routes_changed: passPick ? ((ui.pass && ui.pass.hist) || []).length : 0, oob: !!ui.oob });
       const q = {};
@@ -2955,7 +2955,7 @@
   async function decideDefense(k) {
     if (busy) return;
     busy = true;
-    drive.calls++;
+    liveDrive.calls++;
     track('defense_call', { mode: modeName(), call: k });
     const r = G.root, me = G.me;
     try {
@@ -3274,7 +3274,7 @@
       state.games.push({ id: sc.id, tag: gameTag(sc), me: sc.player, op: sc.player === sc.home ? sc.away : sc.home,
         mine: res.mine, theirs: res.theirs, ot: inOT, w, tie });
       if (w) state.won += 1; else if (!tie) state.out = true;
-      drive.on = false;
+      liveDrive.on = false;
     track('survivor_game', { result: w ? 'win' : tie ? 'tie' : 'loss', overtime: inOT, streak: state.won });
       persist();
     }
@@ -3678,7 +3678,7 @@
       return `${today[i].player} ${r} ${squeeze(s.decisions || []).map((m) => SQ[m]).join('')}`;
     });
     const met = rec[0] + rec[1] + rec[2], recTxt = `${rec[0]}-${rec[1]}${rec[2] ? `-${rec[2]}` : ''}`;
-    drive.on = false;
+    liveDrive.on = false;
     if (firstFinish) track('daily_finish', { day: dayN, kind: today[0] && today[0].category, score: Math.round(p * 100),
       vs_coach: rec[0] ? 'better' : rec[1] ? 'worse' : met ? 'same' : 'none', snaps: decs.length });
     // one drive: a sentence, not a record
