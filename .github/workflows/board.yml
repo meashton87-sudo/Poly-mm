@@ -43,5 +43,5 @@ jobs:
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
             echo "Cloudflare secrets not set: tests only, no deploy."; exit 0
           fi
-          if [ -n "$SITE_DOMAIN" ]; then sed -i "s#^ALLOWED_ORIGINS = .*#ALLOWED_ORIGINS = \"https://$SITE_DOMAIN,https://www.$SITE_DOMAIN\"#" wrangler.toml; fi
+          if [ -n "$SITE_DOMAIN" ]; then sed -i "s#^ALLOWED_ORIGINS = .*#ALLOWED_ORIGINS = \"https://$SITE_DOMAIN,https://www.$SITE_DOMAIN,https://nfl2mindrill.pages.dev\"#" wrangler.toml; fi
           npx --yes wrangler@3.114.0 deploy

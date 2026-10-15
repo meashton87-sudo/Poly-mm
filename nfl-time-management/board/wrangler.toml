@@ -7,7 +7,7 @@ main = "worker.js"
 compatibility_date = "2025-06-01"
 
 [vars]
-ALLOWED_ORIGINS = "https://nfl2mindrill.com,https://www.nfl2mindrill.com"
+ALLOWED_ORIGINS = "https://nfl2mindrill.com,https://www.nfl2mindrill.com,https://nfl2mindrill.pages.dev"
 
 [[durable_objects.bindings]]
 name = "BOARD"
