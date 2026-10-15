@@ -237,6 +237,29 @@
   }
   const sideFor = (seq) => (hash('side', seedKey(), G.si, seq) % 2 ? 1 : -1);   // +1: strong side on the offense's right
   const lineup = (i) => (teamOf(i).lineup || { off: [], def: [] });
+  // personnel (backs then tight ends, as the NFL names it: 12 is one back, two tight ends): the groupings you can
+  // pick on offense; the play is then drawn from real plays run with it (engine.js samplePlaybook)
+  const PERS = [[11, '3 WR'], [12, '2 TE'], [21, 'FB'], [13, '3 TE']];
+  const persOf = (off) => off.filter((p) => p.pos === 'RB' || p.pos === 'FB').length * 10 + off.filter((p) => p.pos === 'TE').length;
+  // your offense in the personnel you picked: the snap's players, then that game's backups (bench), best first
+  function offLineup(i) {
+    const L = lineup(i), off = L.off;
+    if (i !== G.me || !G.pers || G.pers === persOf(off)) return off;
+    const nb = Math.floor(G.pers / 10), nt = G.pers % 10, nw = 5 - nb - nt, bench = L.bench || [];
+    const core = off.filter((p) => !['RB', 'FB', 'TE', 'WR'].includes(p.pos));
+    const fill = (have, pool, pos, n) => {
+      const out = have.slice(0, n);
+      for (const p of pool) if (out.length < n && !out.includes(p)) out.push(p);
+      while (out.length < n) out.push({ pos, name: `Backup ${pos}`, ovr: 60, stat: 'A backup' });
+      return out;
+    };
+    const byOvr = (a, b) => (b.ovr || 0) - (a.ovr || 0);
+    const backs = fill(off.filter((p) => p.pos === 'RB').concat(off.filter((p) => p.pos === 'FB')), bench.filter((p) => p.pos === 'FB').concat(bench.filter((p) => p.pos === 'RB')), 'RB', nb)
+      .map((p, k) => (k ? { ...p, pos: 'FB' } : { ...p, pos: 'RB' }));
+    const tes = fill(off.filter((p) => p.pos === 'TE').sort(byOvr), bench.filter((p) => p.pos === 'TE'), 'TE', nt);
+    const wrs = fill(off.filter((p) => p.pos === 'WR').sort(byOvr), bench.filter((p) => p.pos === 'WR'), 'WR', nw);
+    return core.concat(backs, tes, wrs);
+  }
   function names(i) {
     const off = lineup(i).off;
     const qb = off.find((p) => p.pos === 'QB'), rb = off.find((p) => p.pos === 'RB');
@@ -431,6 +454,7 @@
     put(off, take('WR'), slotX, 1.7, 'WR');
     put(off, take('QB'), bx, 5.0, 'QB');
     put(off, take('RB'), bx - s * 25, 5.2, 'RB');
+    put(off, take('FB'), bx, 3.0, 'FB');
     const spare = [[bx - s * 78, 1.15], [bx + s * 25, 5.2], [(xX + bx - s * 52) / 2, 1.7]];
     Object.values(by).flat().forEach((p, i) => { const sp = spare[i % spare.length]; put(off, p, sp[0], sp[1]); });
     const g = { EDGE: [], DL: [], LB: [], CB: [], S: [], X: [] };
@@ -566,7 +590,7 @@
     Object.assign(sc, { s, bx: sx(fxBall) });
     sc.layer = put(S('g', {}));
     if (mode === 'snap' || mode === 'pat') {
-      const offI = r.pos, f = formation(lineup(offI).off.slice(), lineup(1 - offI).def.slice(), s, fxBall);
+      const offI = r.pos, f = formation(offLineup(offI).slice(), lineup(1 - offI).def.slice(), s, fxBall);
       if (mode === 'snap' && look != null) showLook(f.def, LOOKS[look], s, fxBall);
       const add = (o, teamI, off) => {
         const team = code(teamI), mine = teamI === G.me;
@@ -901,7 +925,7 @@
   function cast(sc) {
     const off = sc.actors.filter((a) => a.off), def = sc.actors.filter((a) => !a.off);
     const is = (lab) => (a) => a.label === lab;
-    return { off, def, qb: off.find(is('QB')), rb: off.find(is('RB')), recv: off.filter((a) => a.label === 'WR' || a.label === 'TE'),
+    return { off, def, qb: off.find(is('QB')), rb: off.find(is('RB')), fb: off.find(is('FB')), recv: off.filter((a) => a.label === 'WR' || a.label === 'TE'),
       ol: off.filter((a) => OL.includes(a.label) || a.label === 'T' || a.label === 'G'),
       rush: def.filter((a) => a.label === 'EDGE' || a.label === 'DL'), cover: def.filter((a) => a.label === 'CB' || a.label === 'S' || a.label === 'LB') };
   }
@@ -1479,6 +1503,11 @@
       lineplay('pass', side, rushers.filter((d) => K.rush.includes(d)));
       const blitzers = rushers.filter((d) => !K.rush.includes(d));
       blitzers.forEach((d, i) => leg(d, REACT_DEF + 0.1, 'chase', { who: passer.b, gap: 1.6 + i * 0.6, eff: 0.95, lead: 0.2 }));
+      // the fullback stays in: he picks up the first blitzer, else sets up beside the passer
+      if (K.fb && K.fb !== tgt) {
+        if (blitzers.length) leg(K.fb, REACT_OFF, 'chase', { who: blitzers[0].b, gap: 0.9, eff: 0.85, lead: 0.3 });
+        else leg(K.fb, REACT_OFF, 'track', { gain: 2.4, eff: 0.6, fn: (t) => { const Q = qbSpot(t); return [Q[0] + side * 1.6, Q[1] + dir * 1.4]; } });
+      }
       // pressure: one rusher beats his man and is on the passer as he throws
       if (e.pressure) {
         const w = pickOf(rushers);
@@ -1676,6 +1705,12 @@
         else leg(a, REACT_OFF, 'chase', { who: foe.b, gap: 1.0, eff: 0.75, lead: 0.3 });
       });
       if (K.rb && K.rb !== carrier && carrier === qb) leg(K.rb, REACT_OFF, 'go', { x: hole[0] - sg * 1.5, y: fwd(L0, 0.5), eff: 0.8 });
+      // the fullback leads through the hole and takes on the first man there
+      if (K.fb && K.fb !== carrier) {
+        const lb = nearest(K.def.filter((d) => d.label === 'LB'), hole);
+        if (lb) leg(K.fb, REACT_OFF - 0.1, 'chase', { who: lb.b, gap: 0.9, eff: 0.9, lead: 0.4 });
+        else leg(K.fb, REACT_OFF - 0.1, 'go', { x: hole[0], y: fwd(L0, 1.5), eff: 0.9 });
+      }
       const Lend = e.td ? tdL() : inL(fwd(L0, e.yards));
       const xEnd = e.oob ? sidelineX(sg ? (sg > 0 ? FW : 0) : hole[0]) : inX(hole[0] + sg * Math.min(9, Math.abs(e.yards) * 0.5) + jit(3));
       const tEnd = runDown(carrier, Math.max(tLos - 0.15, tMesh + 0.2), [xEnd, Lend], { td: e.td, oob: e.oob, bt: e.bt, eff: 0.95, after: e.yards < 2 ? 0.8 + R() : undefined, from: tMesh });
@@ -2238,7 +2273,7 @@
       const y = LOS_Y - r.ytg * PPY;
       if (y > 4) svg.append(S('line', { x1: SX0, y1: y, x2: SX1, y2: y, stroke: 'var(--chain)', 'stroke-width': 3 }));
     }
-    const f = formation(lineup(offI).off.slice(), lineup(1 - offI).def.slice(), s, bx);
+    const f = formation(offLineup(offI).slice(), lineup(1 - offI).def.slice(), s, bx);
     const put = (o, isOff, team, mine) => {
       const y = isOff ? LOS_Y + o.d * PPY : LOS_Y - o.d * PPY;
       const g = S('g', { class: `pl${mine ? ' me' : ''}`, transform: `translate(${o.x.toFixed(1)},${y.toFixed(1)})`, tabindex: 0, role: 'button',
@@ -2281,7 +2316,7 @@
     const t = (i) => teamOf(i);
     const spec = (i) => [{ ...t(i).kicker, pos: 'K', ovr: t(i).kicker.ovr ?? 77, stat: 'Rated on field goals made over expected' },
       { ...t(i).punter, pos: 'P', ovr: t(i).punter.ovr ?? 77, stat: 'Rated on net punting over expected' }];
-    u.append(unit(`${teamName(code(offI))} offense`, lineup(offI).off, code(offI)),
+    u.append(unit(`${teamName(code(offI))} offense`, offLineup(offI), code(offI)),
       unit(`${teamName(code(1 - offI))} defense`, lineup(1 - offI).def, code(1 - offI)),
       unit('Kickers and punters', [...spec(G.me).map((p) => ({ ...p, name: `${p.name} (${code(G.me)})` })),
         ...spec(1 - G.me).map((p) => ({ ...p, name: `${p.name} (${code(1 - G.me)})` }))], null));
@@ -2509,7 +2544,7 @@
   }
   function persist() {
     state.spots[G.si] = { id: G.scen.id, root: G.root, decisions: G.decisions, log: G.log, seq: G.seq, snapN: G.snapN, over: G.over,
-      result: G.result, started: G.started, pending: G.pending || null };
+      result: G.result, started: G.started, pending: G.pending || null, pers: G.pers || null };
     saveState();
   }
   function resumeSpot(i) {
@@ -2517,7 +2552,7 @@
     let s = state.spots[i];
     if (s && s.id && s.id !== G.scen.id) s = state.spots[i] = null;   // saved on another game (a changed schedule): start fresh
     if (s) Object.assign(G, { root: s.root, decisions: s.decisions || [], log: s.log || [], seq: s.seq || 0, snapN: s.snapN || 0,
-      over: s.over, result: s.result, started: !!s.started, pending: s.pending || null });
+      over: s.over, result: s.result, started: !!s.started, pending: s.pending || null, pers: s.pers || null });
     G.side = sideFor(G.seq);
     return G;
   }
@@ -2754,6 +2789,7 @@
       head.append(el('h2', '', 'Your call'), el('span', 'sub', `${ddText(r)} · ${spotText(r)}`));
       if (G.look != null) d.append(readLine(G.look));
       if (r.clock_running) d.append(tempoPicker(r));
+      if (r.pos === me) d.append(persPicker());
       const fam = el('div', 'keys');
       fam.style.setProperty('--cols', 4);
       Object.entries(FAM).forEach(([f, label], i) => {
@@ -2992,6 +3028,32 @@
     if (!call || !state) return;
     state.tend = ((state.tend || []).concat([call])).slice(-ADAPT_N);
   }
+  // personnel: one row; the field redraws with who is in
+  function persPicker() {
+    const w = el('div', 'tempo pers');
+    w.append(el('span', 'lab', 'Personnel'));
+    const seg = el('div', 'seg');
+    seg.style.gridTemplateColumns = `repeat(${PERS.length}, minmax(0, 1fr))`;
+    seg.setAttribute('role', 'radiogroup');
+    seg.setAttribute('aria-label', 'Personnel: who is on the field');
+    const now = () => G.pers || persOf(lineup(G.me).off);
+    PERS.forEach(([k, sub]) => {
+      const b = el('button', 'segb');
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.append(el('b', '', String(k)), el('small', '', sub));
+      b.classList.toggle('on', now() === k); b.setAttribute('aria-checked', String(now() === k));
+      b.addEventListener('click', () => {
+        if (busy || now() === k) return;
+        G.pers = k;
+        track('personnel', { pers: k });
+        drawField(); drawDock();
+      });
+      seg.append(b);
+    });
+    w.append(seg);
+    return w;
+  }
   function tempoPicker(r) {
     const w = el('div', 'tempo');
     w.append(el('span', 'lab', 'Tempo'));
@@ -3102,7 +3164,10 @@
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
     busy = false;
   }
-  const withTempo = (a) => (G.root.clock_running && ui && ui.tempo ? { ...a, tempo: engineTempo(ui.tempo, G.root) } : a);
+  const withTempo = (a) => {
+    const b = G.pers && G.root.pos === G.me ? { ...a, pers: G.pers } : a;
+    return G.root.clock_running && ui && ui.tempo ? { ...b, tempo: engineTempo(ui.tempo, G.root) } : b;
+  };
   function callAction(id, oob) {
     return withTempo({ to_off: false, play: CALL[id].kind, call: id, oob: !!oob, looks: G.look != null ? 1 << G.look : 0 });
   }

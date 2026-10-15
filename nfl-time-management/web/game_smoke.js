@@ -149,4 +149,29 @@ for (let k = 0; k < 100; k++) {
     console.log(`matchup ${id.padEnd(17)} losing ${lo.toFixed(2)}  real ${mid.toFixed(2)}  winning ${hi.toFixed(2)} EPA`);
   });
 }
+// personnel: a call with 12 (or 21, 13) personnel draws only real plays run with it, where there are enough; the heavy
+// sets run more often against the loaded boxes they draw (the look bucket of the plays drawn)
+{
+  const S = eng.simulator(eng.makeContext(scen(idx.spots[0]).game, { receive2h: idx.spots[0].start.receive2h }));
+  const P = eng.pb;
+  assert.ok(P.ngs && P.ngs.pers, 'playbook.json carries personnel');
+  const share = {};
+  [11, 12, 21, 13].forEach((pers) => {
+    let hit = 0, n = 0;
+    for (const id of ['rb_inside_strong', 'quick_strong', 'pa_short']) {
+      for (let fk = 0; fk < P.nFine; fk += 5) for (let k = 0; k < 40; k++) {
+        const r = S.samplePlaybook(0, P.callIndex[id], fk, (k + 0.5) / 40, 0, 0, 0, undefined, undefined, pers);
+        n++; if (P.ngs.pers[r] === pers) hit++;
+      }
+    }
+    share[pers] = hit / n;
+    assert.ok(hit / n > (pers === 13 ? 0.6 : 0.85), `personnel ${pers}: ${(100 * hit / n).toFixed(1)}% of plays drawn ran it`);
+  });
+  console.log('personnel: plays drawn with the grouping picked', Object.entries(share).map(([k, v]) => `${k} ${(100 * v).toFixed(0)}%`).join('  '));
+  // and through a whole snap
+  const at = { ...root, t: 600, phase: 0, score: [10, 10], pos: 0, down: 1, ytg: 10, yl: 60, to: [3, 3], clock_running: false };
+  const r = sim.step(at, { action: { to_off: false, play: 'run', call: 'rb_inside_strong', looks: 0, pers: 21 }, seed: 777 });
+  const pe = r.log.find((e) => e.ev === 'play');
+  assert.ok(pe && pe.row >= 0 && P.ngs.pers[pe.row] === 21, 'a 21-personnel run is a real 21-personnel run');
+}
 console.log('smoke ok');

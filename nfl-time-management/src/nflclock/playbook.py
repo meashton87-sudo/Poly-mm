@@ -103,7 +103,7 @@ FTN_LOOK = ["starting_hash", "qb_location", "n_defense_box", "n_blitzers"]
 # route against the real coverage, with the real number of pass rushers, pressure and time to throw
 PART_URL = ("https://github.com/nflverse/nflverse-data/releases/download/pbp_participation/"
             "pbp_participation_{season}.parquet")
-PART_COLS = ["route", "defense_man_zone_type", "defense_coverage_type", "number_of_pass_rushers", "was_pressure",
+PART_COLS = ["route", "defense_man_zone_type", "defense_coverage_type", "number_of_pass_rushers", "was_pressure", "offense_personnel",
              "time_to_throw"]
 ROUTES = ["", "go", "post", "corner", "out", "deep_out", "in", "slant", "cross", "hitch", "screen", "flat", "wheel",
           "angle"]
@@ -190,7 +190,29 @@ def _charting(s: pd.DataFrame) -> dict:
     charted = n.notna().to_numpy().astype(np.uint8)
     ttt = pd.to_numeric(col("time_to_throw"), errors="coerce")
     ttt = np.clip(np.round(ttt.fillna(0).to_numpy() * 10), 0, 255).astype(np.uint8)
-    return {"route": route, "cover": shell | (mz << 4), "rush": rushers | (pressure << 4) | (charted << 5), "ttt": ttt}
+    return {"route": route, "cover": shell | (mz << 4), "rush": rushers | (pressure << 4) | (charted << 5), "ttt": ttt,
+            "pers": personnel_code(col("offense_personnel"))}
+
+
+PERSONNEL = (11, 12, 21, 13, 10, 22)   # the groupings the game offers / knows (RBs then TEs; FBs count as backs)
+
+
+def personnel_code(p: pd.Series) -> np.ndarray:
+    """Offensive personnel as the NFL names it (backs, then tight ends: "1 RB, 2 TE, 2 WR" is 12); 0 not charted,
+    255 anything else (an extra lineman, a QB in the backfield)."""
+    def code(v):
+        if not isinstance(v, str) or not v:
+            return 0
+        n = {}
+        for part in v.split(","):
+            k = part.strip().split(" ")
+            if len(k) == 2 and k[0].isdigit():
+                n[k[1]] = n.get(k[1], 0) + int(k[0])
+        ol = n.get("C", 0) + n.get("G", 0) + n.get("T", 0) + n.get("OL", 0)
+        backs, te, wr = n.get("RB", 0) + n.get("FB", 0), n.get("TE", 0), n.get("WR", 0)
+        c = backs * 10 + te
+        return c if ol in (0, 5) and n.get("QB", 1) == 1 and backs + te + wr == 5 and c in PERSONNEL else 255
+    return p.map(code).fillna(0).to_numpy().astype(np.uint8)
 
 
 def _extras(seasons=SEASONS) -> pd.DataFrame:
@@ -592,7 +614,7 @@ def export(lib: pd.DataFrame, path) -> dict:
             "air": _b64(np.where(lib["air"].isna(), -128, np.clip(lib["air"].fillna(0), -20, 100)).astype(np.int8)),
             "carry": _b64((lib["who"].to_numpy().astype(np.uint8) | (lib["bt"].to_numpy().astype(np.uint8) << np.uint8(3)))),
             # the animation: NGS route, coverage, pass rush and time to throw (_charting)
-            **{k: _b64(lib[f"ngs_{k}"].to_numpy().astype(np.uint8)) for k in ("route", "cover", "rush", "ttt")},
+            **{k: _b64(lib[f"ngs_{k}"].to_numpy().astype(np.uint8)) for k in ("route", "cover", "rush", "ttt", "pers")},
         },
         "routes": ROUTES, "shells": SHELLS,
         "events": EVENTS, "penalties": pen_names,
