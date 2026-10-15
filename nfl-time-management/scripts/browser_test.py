@@ -258,6 +258,13 @@ async def main(a) -> int:
     inc = [x for r in results for x in r.get("seps", []) if not x.get("caught") and not x.get("intc") and x.get("kind") != "hail" and x.get("evt") != "throwaway"]
     open_inc = sum(1 for x in inc if x.get("actual", 0) >= 4)
     print(f"passes logged: {sum(len(r.get('seps', [])) for r in results)}, incomplete: {len(inc)}")
+    # "Broken up" needs a defender at the ball (players saw it with nobody near)
+    late = sum(1 for r in results for x in r.get("seps", []) if x.get("late"))
+    print(f"cover man too far to break it up (shown as a bad ball instead): {late} of {len(inc)} incompletions")
+    lonely = [x for r in results for x in r.get("seps", []) if x.get("label") == "Broken up" and x.get("ballD", 0) > 3]
+    if lonely:
+        print(f"FAIL: {len(lonely)} passes called 'Broken up' with no defender within 3 yards of the ball")
+        bad.append({"name": "broken-up"})
     if len(inc) >= 8:
         n = len(inc)
         tail = sum(math.comb(n, k) * 0.15 ** k * 0.85 ** (n - k) for k in range(open_inc, n + 1))
