@@ -106,4 +106,16 @@ assert.strictEqual(b.days[0].date, '2026-01-02'); assert.strictEqual(b.days[0].n
 assert.ok(Math.abs(b.days[0].avg - 0.6) < 1e-9); assert.strictEqual(b.days[0].best, 0.8);
 assert.strictEqual(b.days[b.days.length - 1].date, today); assert.strictEqual(b.days[b.days.length - 1].n, 5);
 assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
+// the page posts as text/plain (a simple cross-origin request, no preflight): read as JSON all the same, with CORS
+{
+  const plain = (path, body) => worker.fetch(new Request(`https://w.example${path}`, { method: 'POST', body: JSON.stringify(body),
+    headers: { 'Content-Type': 'text/plain;charset=UTF-8', Origin: 'https://nfl2mindrill.com', 'CF-Connecting-IP': `10.0.9.${ip++}` } }), env);
+  let q = await plain('/daily', { date: today, key: 'plain-device-key-0000001', p: 0.42, spots: [0.01] });
+  assert.strictEqual(q.status, 200, 'text/plain daily post');
+  assert.strictEqual(q.headers.get('Access-Control-Allow-Origin'), 'https://nfl2mindrill.com');
+  assert.strictEqual((await q.json()).counted, true);
+  q = await plain('/board', { name: 'Plain', best: 2, key: 'plain-device-key-0000001' });
+  assert.strictEqual(q.status, 200, 'text/plain board post');
+  assert.ok((await q.json()).rows.some((x) => x.name === 'Plain'));
+}
 console.log('board worker ok');

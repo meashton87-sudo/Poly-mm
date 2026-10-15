@@ -3394,8 +3394,11 @@
   const myName = () => String(load(NAME_KEY, '') || '').slice(0, 24);
   const slugOf = (name) => `p-${String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'player'}`;
   const redrawBoards = () => document.querySelectorAll('.board').forEach(fillBoard);
+  // posts go as text/plain, a "simple" cross-origin request: no OPTIONS preflight, half the backend requests (the
+  // backend reads the body as JSON whatever its type)
+  const POST_JSON = (body) => ({ method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(body) });
   async function apiBoard(method, body) {
-    const r = await fetch(`${BOARD.api}/board`, method === 'POST' ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+    const r = await fetch(`${BOARD.api}/board`, method === 'POST' ? POST_JSON(body) : {});
     if (r.status === 409) return { taken: true, ...(await r.json()) };
     if (!r.ok) throw new Error(`board ${r.status}`);
     return r.json();
@@ -3407,8 +3410,8 @@
     BOARD.ready = (async () => {
       const meta = document.querySelector('meta[name="board-api"]');
       if (meta && /^(https:\/\/|http:\/\/(127\.0\.0\.1|localhost)[:/])/.test(meta.content)) {      // https, or a local test server
+        // the rows load when a board is shown (boardEl), not on every page load: the daily game never shows one
         BOARD.mode = 'api'; BOARD.api = meta.content.replace(/\/+$/, ''); BOARD.canWrite = true;
-        await apiRefresh();
         return;
       }
       if (!(window.claude && typeof window.claude.use === 'function')) return;
@@ -3712,8 +3715,7 @@
     const box = el('div', 'board daily');
     box.hidden = true;
     const post = async () => {
-      const res = await fetch(`${BOARD.api}/daily`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: localDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)), ...(myName() ? { name: myName() } : {}) }) });
+      const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: localDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)), ...(myName() ? { name: myName() } : {}) }));
       if (!res.ok) throw new Error(`daily ${res.status}`);
       return res.json();
     };
