@@ -3791,6 +3791,8 @@
       else renderSummary();
     });
     card.append(btn);
+    // survivor: an ad after each finished game, below the button (never between the player and it)
+    if (SURV) { const ad = adBox(); if (ad) card.append(ad); }
     d.append(card);
     drawTiles();
   }
@@ -4427,7 +4429,7 @@
     top.append(ch);
     const nm = el('div'), g = groupOf(label);
     nm.append(el('div', 'nm', p.num != null ? `#${p.num} ${p.name}` : p.name), el('div', 'ps', `${team ? teamName(team) + ' · ' : ''}${POS_NAME[label] || label}`));
-    if (p.pct != null) nm.append(el('div', 'ps', `Better than ${p.pct}% of NFL ${POS_PLURAL[g] || 'players'} at the time`));
+    if (p.pct != null) nm.append(el('div', 'ps', `Better than ${p.pct}% of starting ${POS_PLURAL[g] || 'players'} at the time`));
     top.append(nm);
     const nodes = [top];
     if (p.kind) {

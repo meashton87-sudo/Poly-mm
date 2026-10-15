@@ -6,8 +6,9 @@ For each spot (the first snap of a real late-game drive, 2023-2026):
     field then (the player's defense, the opponent's offense) the lineup of that team's nearest snap of the
     game; for 2026, where participation is not published yet, the players who took the most snaps in the game
     at each position, in the personnel the team used most;
-  * how good each player was: his percentile among the league at his position as of the week of the game
-    (players.Ratings.week: only games before it), on the 40-99 scale, with his stat line and archetype;
+  * how good each player was as of the week of the game: his overall rating (overall.ratings_asof: his play over
+    the last few seasons, only games before the week, blended with his contract, draft slot and role), on the
+    40-99 scale, with his place among the position's starters, his stat line (players.Ratings.week) and archetype;
   * what the simulator plays with, all as of the week of the game: the team's pass and run ratings (the last
     rating before the game), the quarterback who played and his rating against the team's usual mix, the
     kicker and punter who kicked in that game and their ratings, the team's call-by-call ratings, the real
@@ -65,7 +66,7 @@ class History:
                 f = pd.read_parquet(p, columns=["nflverse_game_id", "play_id", "possession_team", "offense_players",
                                                 "offense_positions", "defense_players", "defense_positions"])
                 self.part[s] = f.rename(columns={"nflverse_game_id": "game_id"})
-        self.R, self.meas, self.cards, self.pbp_raw = {}, {}, {}, {}
+        self.R, self.meas, self.cards, self.pbp_raw, self.ovr, self.ovr_data = {}, {}, {}, {}, {}, None
         full = pd.read_parquet(PL._get("players", "players.parquet"), columns=["gsis_id", "display_name", "height", "weight"])
         full = full.drop_duplicates("gsis_id").set_index("gsis_id")
         self.names, self.body = full["display_name"].to_dict(), full[["height", "weight"]]
@@ -87,6 +88,14 @@ class History:
         if season not in self.R:
             self.R[season] = PL.Ratings(PL.load_tables((season - 1, season)), self.bundle)
         return self.R[season]
+
+    def overall(self, season: int, week: int) -> pd.DataFrame:
+        """overall.ratings_asof for the week (ovr, pct by gsis id), cached."""
+        if (season, week) not in self.ovr:
+            if self.ovr_data is None:
+                self.ovr_data = O.load_asof()
+            self.ovr[(season, week)] = O.ratings_asof(season, week, self.ovr_data)[["ovr", "pct"]]
+        return self.ovr[(season, week)]
 
     def measures(self, season: int) -> dict:
         if season not in self.meas:
@@ -227,6 +236,9 @@ class History:
                 grp = (R.role.get(pfr) if pfr else None) or rt["grp"].get(pfr) or DEF_POS.get(p) or p
                 placed.append((i, grp if grp in ("EDGE", "DL", "LB", "CB", "S") else DEF_POS.get(p, "LB")))
         line_pct, line_stat = rt["ol"].get(team, (None, None))
+        ov = self.overall(season, week) if week is not None else None
+        if not hasattr(self, "pfr_to_gsis"):
+            self.pfr_to_gsis = {v: k for k, v in R.gsis_to_pfr.items()}
         for gid, label in placed:
             pfr = gid[4:] if gid.startswith("pfr:") else R.gsis_to_pfr.get(gid)
             if season not in self.pfr_names:
@@ -240,6 +252,9 @@ class History:
             else:
                 pct, stat = rt["player"].get(pfr, (None, None)) if pfr else (None, None)
             ovr = O.specialist_ovr(float(pct)) if pct is not None else UNRATED_OVR
+            gsis = gid if not gid.startswith("pfr:") else self.pfr_to_gsis.get(pfr)
+            if ov is not None and gsis in ov.index and np.isfinite(ov.at[gsis, "ovr"]):
+                ovr, pct = ov.at[gsis, "ovr"], ov.at[gsis, "pct"]      # the overall rating, his place among starters
             num, then = self._jersey(season, week, team, gid, pfr)
             if isinstance(then, str) and then.strip():
                 name = then.strip()
@@ -247,7 +262,7 @@ class History:
             if num is not None:
                 rec["num"] = num
             if pct is not None:
-                rec["pct"] = int(round(float(pct) * 100))
+                rec["pct"] = int(np.clip(round(float(pct) * 100), 1, 99))
             if label not in OL_SLOTS:
                 cbs += label == "CB"
                 h, w = (self.body.loc[gid, "height"], self.body.loc[gid, "weight"]) if gid in self.body.index else (None, None)
