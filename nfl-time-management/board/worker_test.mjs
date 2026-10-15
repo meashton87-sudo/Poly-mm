@@ -126,4 +126,18 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual(q.status, 200, 'text/plain board post');
   assert.ok((await q.json()).rows.some((x) => x.name === 'Plain'));
 }
+// names shown publicly: slurs and obscenities are refused however they are spelled; ordinary names that contain the
+// same letters are not; a daily result with a refused name still counts, unnamed
+{
+  let q = await call('POST', { name: 'sh1t h3ad', best: 3, key: 'clean-device-key-000001' });
+  assert.strictEqual(q.status, 409); assert.strictEqual((await q.json()).refused, true);
+  q = await call('POST', { name: 'Dickerson', best: 3, key: 'clean-device-key-000001' });
+  assert.strictEqual(q.status, 200, 'an ordinary name with the same letters');
+  const d = await (await day({ date: today, key: 'clean-device-key-000002', p: 0.5, spots: [0, 0, 0], name: 'F U C K' })).json();
+  assert.strictEqual(d.refused, true); assert.strictEqual(d.counted, true);
+  assert.ok(!d.top.some((x) => /f\s*u\s*c\s*k/i.test(x.name)), 'not on the day list');
+  store.set('runs', (store.get('runs') || []).concat([{ name: 'b!tch', best: 999, at: '2026-01-01', kh: 'x' }]));
+  b = await (await call('GET')).json();
+  assert.ok(!b.rows.some((x) => x.name === 'b!tch'), 'a stored row with such a name is left out');
+}
 console.log('board worker ok');

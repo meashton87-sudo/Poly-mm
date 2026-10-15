@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!--SITE-HEAD-->
-<title>Two-Minute Drill Stats</title>
-<meta name="description" content="How everyone did on the Two-Minute Drill daily drive.">
+<title>Daily Stats | Two-Minute Drill</title>
+<meta name="description" content="How everyone did on the Two-Minute Drill daily drive: players per day, the spread of scores against NFL play-callers, and the day's top scores.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Libre+Franklin:wght@400;500;600;700;800&display=swap">
@@ -69,6 +69,8 @@ ol.top li:last-child { border-bottom: 0; }
 ol.top .n { color: var(--muted); } ol.top .nm { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 ol.top b { font: 900 18px var(--display); }
 .note { color: var(--muted); font-size: 13px; margin: 0; }
+.intro { margin: 2px 0 10px; max-width: 65ch; }
+.intro a { color: var(--turf); }
 .note a { color: inherit; }
 .adbox { border-top: 1px solid var(--line); padding-top: 10px; min-height: 60px; }
 .adbox .adlab { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; text-align: center; }
@@ -80,9 +82,13 @@ ol.top b { font: 900 18px var(--display); }
 <body>
 <div class="wrap">
   <header>
-    <h1>Two-Minute Drill<small>Everyone’s daily stats</small></h1>
+    <h1><a href="./" class="home">Two-Minute Drill</a><small>Everyone’s daily stats</small></h1>
     <a class="play" href="./">Play today ›</a>
   </header>
+<main>
+  <p class="intro">Every day, everyone plays the same real NFL drive. These are the real results from the people who
+    played it: how many finished each day, how their scores spread out, and the best scores of the day. Tap a day to see
+    it. Scores are percentiles against NFL play-callers; <a href="how-it-works">how the score works</a>.</p>
   <div class="tiles" id="tiles" aria-live="polite"></div>
   <section>
     <p class="k">Players per day</p>
@@ -97,8 +103,8 @@ ol.top b { font: 900 18px var(--display); }
   <p class="note">Each player’s first finish of the day counts. The score is how the calls on that day’s drive compare with
     NFL play-callers in the same spot (better than that share of them).</p>
   <div class="adbox" id="ad" hidden></div>
-  <p class="note"><a href="privacy.html">Privacy</a></p>
-  <p class="note">Not affiliated with, endorsed by or sponsored by the National Football League, its teams or players. NFL and team names are trademarks of their respective owners, used here only to identify real games. Play-by-play from the public nflverse data.</p>
+</main>
+<!--SITE-FOOT-->
 </div>
 <script>
 (() => {

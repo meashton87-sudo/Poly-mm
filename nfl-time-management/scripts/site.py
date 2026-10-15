@@ -27,7 +27,7 @@ import numpy as np
 
 WEB = Path(__file__).resolve().parents[1] / "web"
 FILES = ["game.js", "motion.js", "engine.js", "game_worker.js", "game.json", "playbook.json", "engine_data.json",
-         "og.png", "icon.svg", "icon-180.png", "midlogo.png"]      # the link preview card (og_card.html, drawn at 1200x630) and the icons
+         "og.png", "icon.svg", "icon-180.png", "midlogo.png", "favicon.ico"]      # the link preview card (og_card.html, drawn at 1200x630) and the icons
 # the same skeleton the claude.ai artifact host wraps the page in: charset, a viewport that reaches the phone's
 # edges, the safe-area padding and a small reset
 HEAD = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
@@ -99,6 +99,30 @@ GA_TAG = ("<script async src=\"https://www.googletagmanager.com/gtag/js?id={id}\
           "gtag('js',new Date());gtag('config','{id}');</script>")
 
 
+# Every page: the same footer (the site's pages, the contact, the disclaimer and the data credit), its style, and the
+# canonical address of the page
+PAGES = [("", "Play", 1.0), ("how-it-works", "How it works", 0.8), ("about", "About", 0.6), ("stats", "Stats", 0.6),
+         ("privacy", "Privacy", 0.3)]
+FOOT_CSS = ("<style>.sitefoot{max-width:680px;margin:28px auto 0;padding:14px 16px 28px;border-top:1px solid var(--line);"
+            "font-size:12.5px;line-height:1.5;color:var(--muted)}.sitefoot nav{display:flex;flex-wrap:wrap;gap:6px 16px;margin-bottom:8px}"
+            ".sitefoot nav a{color:var(--ink);font-weight:700;text-decoration:none}.sitefoot nav a:hover{text-decoration:underline}"
+            ".sitefoot p{margin:0 0 6px;max-width:72ch}.sitefoot p a{color:inherit}"
+            "h1 a.home{color:inherit;text-decoration:none}</style>")
+FOOT = ('<footer class="sitefoot"><nav aria-label="Site">'
+        + "".join(f'<a href="{p or "./"}">{label}</a>' for p, label, _ in PAGES)
+        + '<a href="https://x.com/TwoMinuteDrill0" rel="noopener">Contact (X)</a></nav>'
+        '<p>Two-Minute Drill is an independent, fan-made game. It is not affiliated with, endorsed by or sponsored by the '
+        'National Football League, its teams, its players or the NFL Players Association. NFL, team names and player names '
+        'are trademarks or property of their respective owners and are used only to identify real games.</p>'
+        '<p>Data: play-by-play, participation and charting from <a href="https://github.com/nflverse" rel="noopener">nflverse</a>; '
+        'FTN Data via nflverse (<a href="https://creativecommons.org/licenses/by-sa/4.0/" rel="noopener">CC BY-SA 4.0</a>).</p>'
+        '<p>© 2026 Two-Minute Drill</p></footer>')
+
+
+def canonical(site_url: str, path: str) -> str:
+    return f'<link rel="canonical" href="{html.escape(site_url.rstrip("/") + "/" + path, quote=True)}">'
+
+
 def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
     """The link preview (X, iMessage, Slack...) and the icons; the image needs the site's full address."""
     e = lambda x: html.escape(x, quote=True)
@@ -120,7 +144,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         raise SystemExit(f"--adsense wants a publisher id like ca-pub-1234567890123456, not {adsense!r}")
     if ad_slot and not re.fullmatch(r"\d{6,12}", ad_slot):
         raise SystemExit(f"--ad-slot wants an ad unit's slot number, not {ad_slot!r}")
-    missing = [f for f in FILES + ["stats.html", "privacy.html"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
+    missing = [f for f in FILES + ["stats.html", "privacy.html", "about.html", "how-it-works.html"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
     if missing:
         raise SystemExit(f"build the game data first; missing in web/: {', '.join(missing)}")
     if out.exists():
@@ -142,18 +166,36 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         commit = ""
     stamp = (commit[:12] or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"))
     # every file the page loads carries the build stamp (game.js reads the meta), so phones never mix two builds
-    extra += f"<meta name=\"build\" content=\"{stamp}\">"
+    extra += f"<meta name=\"build\" content=\"{stamp}\">" + canonical(site_url, "") + FOOT_CSS
+    extra += ('<script type="application/ld+json">' + json.dumps({"@context": "https://schema.org", "@type": "WebSite",
+              "name": "Two-Minute Drill", "url": site_url.rstrip("/") + "/", "description": desc}) + "</script>")
     page = (WEB / "game.html").read_text()
     for js in ("motion.js", "game.js"):
         page = page.replace(f'<script src="{js}"></script>', f'<script src="{js}?v={stamp}"></script>')
-    (out / "index.html").write_text(HEAD.format(extra=extra) + page + "</body></html>\n")
+    (out / "index.html").write_text(HEAD.format(extra=extra) + page.replace("<!--SITE-FOOT-->", FOOT) + "</body></html>\n")
     # the stats page (/stats): its own document; the same analytics tag and backend address
     stats_head = (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Two-Minute Drill stats",
         "How everyone did on the daily drive: players per day, the score spread and the top ten.", "stats") + (
         f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else "")
-    (out / "stats.html").write_text((WEB / "stats.html").read_text().replace("<!--SITE-HEAD-->", stats_head))
+    fill = lambda name, head, path: (out / name).write_text((WEB / name).read_text().replace("<!--SITE-HEAD-->",
+        head + canonical(site_url, path) + FOOT_CSS).replace("<!--SITE-FOOT-->", FOOT))
+    fill("stats.html", stats_head, "stats")
+    # the guide and the about page (content: the same analytics and ad tags as the game)
+    for name, path, title, d in (("how-it-works.html", "how-it-works", "How Two-Minute Drill works",
+                                  "Real NFL late-game situations, 27 play calls, real plays on every snap, and calls graded on win chance."),
+                                 ("about.html", "about", "About Two-Minute Drill",
+                                  "An independent, fan-made NFL play-calling game built on public nflverse data.")):
+        fill(name, (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, title, d, path), path)
     # the privacy page (AdSense wants one): the analytics tag only, no ads on it
-    (out / "privacy.html").write_text((WEB / "privacy.html").read_text().replace("<!--SITE-HEAD-->", GA_TAG.format(id=ga) if ga else ""))
+    fill("privacy.html", (GA_TAG.format(id=ga) if ga else "") + '<link rel="icon" href="icon.svg" type="image/svg+xml">'
+         '<link rel="apple-touch-icon" href="icon-180.png">', "privacy")
+    # for crawlers: every page allowed, and the sitemap of the site's pages
+    base = site_url.rstrip("/")
+    (out / "robots.txt").write_text(f"User-agent: *\nAllow: /\n\nSitemap: {base}/sitemap.xml\n")
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    (out / "sitemap.xml").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        + "".join(f"  <url><loc>{base}/{p}</loc><lastmod>{day}</lastmod><changefreq>{'daily' if p in ('', 'stats') else 'monthly'}</changefreq>"
+                  f"<priority>{pr}</priority></url>\n" for p, _, pr in PAGES) + "</urlset>\n")
     if adsense:                              # ads.txt: who may sell this site's ad space (Google's line, with our id)
         (out / "ads.txt").write_text(f"google.com, {adsense.replace('ca-', '', 1)}, DIRECT, f08c47fec0942fa0\n")
     for f in FILES:
