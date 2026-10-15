@@ -285,7 +285,9 @@ async def main(a) -> int:
     tk = [x for r in results for x in r.get("tackles", [])]
     alone = [x for x in tk if x.get("nd", 0) > 3]
     print(f"tackles: {len(tk)}, nobody within 3 yards: {len(alone)}")
-    # (reported, not yet a gate: a few tackles still end with the nearest man 3+ yards off; being fixed)
+    if alone:
+        print("FAIL: tackled with nobody near", alone[:5])
+        bad.append({"name": "tackles"})
     # forward progress: a carrier never has the ball past where it is spotted (beyond where he got it), so he is
     # never shown driven back from it
     fp = [x for r in results for x in r.get("fps", [])]

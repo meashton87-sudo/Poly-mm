@@ -1028,6 +1028,12 @@
       const start = here(car), defs = free.length ? free : foes(car);
       const tackled = !o.td && !o.oob && !o.free;
       const after0 = tackled ? (o.after ?? (car.label === 'RB' || car.label === 'QB' ? 1.5 + R() : 0.6 + R() * 0.8)) : 0;
+      // a short run after the catch with nobody close: he works sideways toward the nearest man, who comes up to
+      // make the tackle at the same yard line (never a carrier going down alone in the open; players saw it)
+      if (tackled && !o.oob && defs.length && dist(start, endPt) < 4) {
+        const near_ = defs.slice().sort((a, b) => dist(here(a), endPt) - dist(here(b), endPt))[0], q = here(near_);
+        if (dist(q, endPt) > 3) endPt[0] = inX(endPt[0] + clip((q[0] - endPt[0]) * 0.55, -7, 7));
+      }
       // to daylight: the middle of the run bends away from where the defense is headed
       const pts = [];
       const span = dist(start, endPt);
@@ -1566,8 +1572,8 @@
       const endY = e.td ? tdL() : inL(fwd(L0, e.yards));
       const endX = e.oob ? sidelineX(catchPt[0] + out * 6) : inX(catchPt[0] + clip(jit(5) + out * Math.min(Math.abs(yac), 12) * 0.25, -9, 9));
       if (Math.abs(yac) > 4 && !e.bt) say(tCatch, 'Caught', 'boom', { follow: tgt });
-      const tEnd = runDown(tgt, tCatch + 0.05, [endX, endY], { td: e.td, oob: e.oob, bt: e.bt, from: tCatch });
-      finish(tgt, tEnd, [endX, endY]);
+      const ep = [endX, endY], tEnd = runDown(tgt, tCatch + 0.05, ep, { td: e.td, oob: e.oob, bt: e.bt, from: tCatch });
+      finish(tgt, tEnd, ep);
     }
 
     // ---- the run
