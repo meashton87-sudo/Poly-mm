@@ -3664,6 +3664,23 @@
     return { el: box, name: c.name };
   }
 
+  // The rare one: John Madden (no play-by-play from his years, so never a match on tendencies). He is the coach of a
+  // perfect day: every call of the day's drive graded green (the best, or within half a point of win chance of it), at
+  // least MADDEN_MIN of them, and no game lost (a win, or the half ending on a first-half spot)
+  const MADDEN_MIN = 6;
+  function maddenDay(decs) {
+    if (decs.length < MADDEN_MIN || !decs.every((x) => markOf(x.cost) === 'g')) return false;
+    return today.every((_, i) => { const r = state.spots[i] && state.spots[i].result; return r && (r.half === 1 || r.mine > r.theirs); });
+  }
+  function maddenCard() {
+    const box = el('div', 'coach madden');
+    box.append(el('div', 'rare', '★ Rare'), el('div', 'k', 'Today you coached like'), el('div', 'name', 'John Madden'),
+      el('div', 'why', 'Every call you made was the right one, and you won. Boom!'),
+      el('div', 'meta', 'Raiders · 1969–1978 · 103–32–7 · Super Bowl XI champion · never a losing season'));
+    box.title = 'The rare one: every call of the day graded green, at least six calls, and no loss.';
+    return { el: box, name: 'John Madden', rare: true };
+  }
+
   // Survivor overtime (NFL rules since 2025, engine.js _otAfter): tied at the end of regulation, a coin toss, then
   // 10:00 (15:00 in the playoffs, which play on until someone wins) with two timeouts each (three in the playoffs).
   // Both teams get the ball, then the next score wins; a regular-season overtime can end tied, which keeps the run
@@ -4134,7 +4151,7 @@
     const p = decs.length ? percentileVsNFL(decs) : 0;
     const wpa = decs.reduce((a, x) => a + x.wpa, 0);
     const st = load(`${STORE}:stats`, { days: {} });
-    const cc = coachCard(decs, 'Today you coached like');
+    const cc = maddenDay(decs) ? maddenCard() : coachCard(decs, 'Today you coached like');
     st.days[dayN] = { p, wpa, coach: cc ? cc.name : null };
     save(`${STORE}:stats`, st);
     const firstFinish = !state.done;
@@ -4162,6 +4179,7 @@
     });
     const met = rec[0] + rec[1] + rec[2], recTxt = `${rec[0]}-${rec[1]}${rec[2] ? `-${rec[2]}` : ''}`;
     liveDrive.on = false;
+    if (firstFinish && cc && cc.rare) track('madden', { day: dayN });
     if (firstFinish) track('daily_finish', { day: dayN, kind: today[0] && today[0].category, score: Math.round(p * 100),
       vs_coach: rec[0] ? 'better' : rec[1] ? 'worse' : met ? 'same' : 'none', snaps: decs.length });
     // one drive: a sentence, not a record
@@ -4177,7 +4195,7 @@
         el('span', 'sub', `${rec[0]} better, ${rec[1]} worse${rec[2] ? `, ${rec[2]} the same` : ''}`));
       box.insertBefore(v, box.children[3] || null);
     }
-    const text = `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
+    const text = `Two-Minute Drill #${dayN}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}${cc.rare ? ' 🏆' : ''}` : ''}${vs}` +
       `${streak >= 2 ? `\n🔥 ${streak}-day streak` : ''}\n${rows.join('\n')}\nCan you beat me? ${SITE}`;
     // sharing is how new players find the game: the button sits right under the result, not below the standings
     const pre = el('div', 'grid-share', text);
