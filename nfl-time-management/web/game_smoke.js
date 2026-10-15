@@ -97,6 +97,21 @@ for (let k = 0; k < 200; k++) {
   const ro = r.log.find((e) => e.ev === 'runoff');
   assert.ok(ro && Math.abs(ro.t - 3) < 1e-9, `rundown to 0:03: ${JSON.stringify(ro)}`);
 }
+// a timeout called just before 2:00 never carries the clock past it: the two-minute warning still comes
+for (let k = 0; k < 100; k++) {
+  const at = { ...root, t: 120.6, phase: 0, score: [17, 20], pos: 0, down: 2, ytg: 6, yl: 40, to: [2, 3], clock_running: true };
+  const r = sim.step(at, { action: { to_def: true }, seed: 8000 + k });
+  const to = r.log.find((e) => e.ev === 'timeout');
+  assert.ok(to && to.t >= 120, `a timeout before the warning stays before it: ${JSON.stringify(to)}`);
+}
+// yards a throw (game.js pass odds) never past the goal line
+{
+  const fk9 = 3 * 7 * 4 + 0;   // any situation bucket
+  for (const id of ['deep_strong', 'deep_middle', 'pa_deep', 'quick_strong']) {
+    const o = sim.routeOdds(0, eng.pb.callIndex[id], fk9, 0, null, null, 9);
+    assert.ok(!o || o.yds <= 9 + 1e-9, `yards a throw from the 9: ${id} ${o && o.yds}`);
+  }
+}
 // matchups (engine.js MATCH): a call that beats the defense's call does better than the real plays alone, one that
 // loses to it worse (mean EPA of the plays drawn, over every situation)
 {

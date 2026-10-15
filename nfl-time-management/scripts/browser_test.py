@@ -168,12 +168,14 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         # burn the clock to 0:03, timeout, then the kick: the clock must read 0:03 after
                         act("RUN IT DOWN"); rundowns += 1
                         await page.locator("#dock .key:visible", has_text="Run it down").first.click(timeout=3000)
-                        for _ in range(80):
+                        # (a tap while the last call was still grading is ignored: only a run-down that happened counts)
+                        for _ in range(120):
                             await page.wait_for_timeout(100)
                             if "0:03" in await page.evaluate("() => document.getElementById('bar').innerText"):
                                 break
                         else:
-                            problems.append("ran the clock down, but the clock does not read 0:03")
+                            if "ran it down" in (await page.evaluate("() => document.getElementById('dock').innerText")).lower():
+                                problems.append("ran the clock down, but the clock does not read 0:03")
                     elif r < 0.17 and "replay" not in chaos_done and await page.locator("#dock .replay:visible").count() \
                             and await page.locator("#dock .key.big:visible").count():
                         # a call tapped while a replay runs must be taken (it cuts the replay short), never dropped

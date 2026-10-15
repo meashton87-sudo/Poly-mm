@@ -39,6 +39,9 @@
   const FIRE_DRILL = [7.0, 12.0];      // seconds to rush the field-goal unit on with the clock running
   const KNEEL_RUNOFF = [38.0, 40.0];   // seconds run off between kneels (40 s play clock)
   const FIRE_DRILL_LOGIT = -0.3;       // rushed kicks are a little less accurate
+  // the fitted kick model runs long past 52 yards (few kicks there); taper it to the NFL's 2016-26 makes:
+  // 60-61 yd 46%, 64-65 27%, 66+ 23% (the fit said 59/47/40% for a typical kicker indoors)
+  const FG_LONG = [52.0, 0.045, 60.0, 0.05];
   const XP_LOGIT = 0.35;               // an extra point beats a 33-yard field goal (snapped from the middle): 2023-25 ~95.7%
   const FIRE_WINDOW = 25.0;            // seconds left in the half below which a kick with the clock running is a fire drill
   // Clock-aware play calls when the offense needs the clock stopped and has no timeouts (2020-25 data):
@@ -501,7 +504,8 @@
 
     fgProb(dist, team) {
       if (dist > 68) return 0;
-      return sigmoid(this.e.fgLogit(dist, this.ctx) + this.ctx.kickerShift[team]);
+      const long = -FG_LONG[1] * Math.max(0, dist - FG_LONG[0]) - FG_LONG[3] * Math.max(0, dist - FG_LONG[2]);
+      return sigmoid(this.e.fgLogit(dist, this.ctx) + this.ctx.kickerShift[team] + long);
     }
 
     wpFull(team, margin, t, down, ytg, yl, offTo, defTo) {
@@ -612,7 +616,7 @@
       return null;
     }
     // what a pick tends to do here: the share of throws caught, yards a throw, interceptions (weighted real plays)
-    routeOdds(team, callIdx, fk, looks, route, who) {
+    routeOdds(team, callIdx, fk, looks, route, who, toGoal) {
       const P = this.e.pb, s = this.matchOf(callIdx, this.defOfLooks(looks));
       const T = this.routeSet(team, callIdx, fk, false, looks, s, route, WHO_CODE[who] || 0);
       if (!T) return null;
@@ -620,7 +624,7 @@
       T.items.forEach((r, i) => {
         const w = T.cum[i] - (i ? T.cum[i - 1] : 0), f = P.flags[r], ev = P.eventNames[P.event[r]] || '';
         if (f & 1) return;                                             // penalties aside
-        w0 += w; yds += w * P.yards[r];
+        w0 += w; yds += w * (toGoal > 0 ? Math.min(P.yards[r], toGoal) : P.yards[r]);   // a throw gains at most the goal line
         if (!(f & 4) && !(f & 64) && !/sack|scramble|throwaway/.test(ev)) caught += w;
         if ((f & 64) && /interception|pick_six/.test(ev)) picks += w;
       });
@@ -953,7 +957,8 @@
       if (defCall) S.to[d] -= 1;
       if (offCall) S.to[o] -= 1;
       const called = defCall || offCall;
-      if (called) S.t = Math.max(S.t - this.toReact, halfEnd);
+      // (a timeout called before the two-minute warning never carries the clock past it: the warning still comes)
+      if (called) S.t = Math.max(S.t - this.toReact, halfEnd, S.t > g.tmw ? Math.min(S.t, g.tmw + 0.01) : halfEnd);
       runC = runC && !called;
       // kick to win: with the clock running and little left, let it run down, then timeout and kick
       const free = !(act && (act.tempo !== undefined || act.play !== undefined || act.runoff !== undefined));

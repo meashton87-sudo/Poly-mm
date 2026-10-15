@@ -34,6 +34,7 @@ BURN_SECONDS = 8.0           # leading in the last seconds: any snap is played t
 FIRE_DRILL = (7.0, 12.0)     # seconds to rush the field-goal unit on with the clock running
 KNEEL_RUNOFF = (38.0, 40.0)  # seconds run off between kneels (40 s play clock, snapped with 0-2 s left)
 FIRE_DRILL_LOGIT = -0.3      # rushed kicks are a little less accurate
+FG_LONG = (52.0, 0.045, 60.0, 0.05)  # taper past 52 yd to the NFL's 2016-26 makes (60-61 46%, 64-65 27%, 66+ 23%)
 XP_LOGIT = 0.35              # an extra point beats a 33-yard field goal (snapped from the middle): 2023-25 ~95.7%
 FIRE_WINDOW = 25.0           # seconds left in the half below which a kick with the clock running is a fire drill
 # Clock-aware play calls when the offense needs the clock stopped and has no timeouts (2020-25 data):
@@ -167,6 +168,7 @@ class Simulator:
         dist = np.asarray(dist, float)
         z = fg_logit(self.b.fg_model, np.minimum(dist, 70.0), self.ctx.indoor, self.ctx.wind,
                      self.ctx.temp, self.ctx.season) + self.ctx.kicker_shift[np.asarray(team)]
+        z = z - FG_LONG[1] * np.maximum(0.0, dist - FG_LONG[0]) - FG_LONG[3] * np.maximum(0.0, dist - FG_LONG[2])
         return np.where(dist > 68, 0.0, 1.0 / (1.0 + np.exp(-z)))
 
     def wp(self, team, margin, t, down, ytg, yl, off_to, def_to):
@@ -366,7 +368,10 @@ class Simulator:
         if off_call.any():
             S.to[ix[off_call], o[off_call]] -= 1
         called = def_call | off_call
-        S.t[ix[called]] = np.maximum(S.t[ix[called]] - self.to_react, half_end)
+        # (a timeout called before the two-minute warning never carries the clock past it: the warning still comes)
+        t_c = S.t[ix[called]]
+        S.t[ix[called]] = np.maximum(np.maximum(t_c - self.to_react, half_end),
+                                     np.where(t_c > half_end + 120.0, np.minimum(t_c, half_end + 120.01), half_end))
         run_c &= ~called
         # kick to win: with the clock running and little left, let it run down, then timeout and kick
         free = not any(k in act for k in ("tempo", "play", "runoff"))
