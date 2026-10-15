@@ -269,6 +269,8 @@ idx.spots.forEach((sp, si) => {
     if (before.pos === me) honored(before, action, r, tag);
     const b = r.root, lead = b.score[0] - b.score[1];
     if (before.phase === 0 && b.pos !== before.pos) had[b.pos] = true;      // they got the ball: a turnover, a punt, a return score
+    // a kickoff returned for a touchdown is the receiving team's possession too (they score without a snap)
+    if (before.phase === 2 && b.score[1 - before.pos] > before.score[1 - before.pos]) had[1 - before.pos] = true;
     if (!b.ot) flag('overtime state lost', tag);
     if (r.log.some((e) => e.ev === 'period')) {
       count('overtime: another playoff period');
