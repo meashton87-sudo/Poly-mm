@@ -649,6 +649,11 @@ class Simulator:
         yards = np.where(penalty & (yards < 0), -np.minimum(-yards, (100 - yl0) / 2), yards)
 
         new_yl = yl0 - yards
+        # a real fumble drawn closer to the goal than it happened: he crossed the goal line with the ball before
+        # losing it, a touchdown (players saw a receiver fumble standing in the end zone)
+        crossed = turnover & ~penalty & (yards > 0) & (new_yl <= 0)
+        turnover = turnover & ~crossed
+        td_def = td_def & ~crossed
         td_off = td_off | (~turnover & ~penalty & (new_yl <= 0))
         # a safety is where the play ends: a library safety from the 1 drawn at the 11 is a loss of a yard
         safety = ~turnover & ~td_off & (new_yl >= 100)
