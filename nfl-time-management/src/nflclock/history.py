@@ -127,6 +127,27 @@ class History:
                 out[unit] = list(zip(ids, pos))
         return out
 
+    def _bench(self, R: PL.Ratings, game_id: str, team: str, on_field: list) -> list:
+        """The skill players of the game not on the field for the snap, most snaps first: two tight ends, two backs
+        (a fullback first) and two receivers. The daily game swaps them in when you change the personnel."""
+        sn = R.T["snaps"]
+        g = sn[(sn["game_id"] == game_id) & (sn["team"] == team) & (sn["offense_snaps"] > 0)].sort_values("offense_snaps", ascending=False)
+        to_gsis = {v: k for k, v in R.gsis_to_pfr.items()}
+        have = {i for i, _ in on_field}
+        out = []
+        for grp, n in (("TE", 2), ("RB", 2), ("WR", 2)):
+            rows = g[g["position"].map(OFF_POS).fillna("") == grp]
+            if grp == "RB":
+                rows = rows.assign(fb=rows["position"] == "FB").sort_values(["fb", "offense_snaps"], ascending=False)
+            k = 0
+            for r in rows.itertuples():
+                gid = to_gsis.get(r.pfr_player_id, "pfr:" + r.pfr_player_id)
+                if gid in have or r.pfr_player_id in have or k >= n:
+                    continue
+                out.append((gid, "FB" if r.position == "FB" else grp))
+                k += 1
+        return out
+
     def _snapcount_units(self, R: PL.Ratings, game_id: str, team: str) -> dict:
         """The most-used players of the game at each position, in the personnel used most (2026 and gaps)."""
         sn = R.T["snaps"]
@@ -235,6 +256,13 @@ class History:
             recs.append(rec)
         return recs
 
+    def _bench_players(self, R, rt, season, team, members, week) -> list:
+        recs = self._players(R, rt, season, team, "off", members, week)
+        for rec, (_, pos) in zip(recs, members):
+            if pos == "FB":
+                rec["pos"] = "FB"
+        return recs
+
     # ---- the simulator's view of a team that week
     def _strength(self, team: str, season: int, week: int, game_id: str, qb_id) -> dict:
         tr = self.bundle.team_ratings
@@ -298,7 +326,8 @@ class History:
                 "team": team, "coach": CO.COACH_FIX.get(coaches.get(side), coaches.get(side)), "base": st["base"], "qb": st["qb"],
                 "injury_adjustment": st["injury_adjustment"], "kicker": st["kicker"], "punter": st["punter"],
                 "lineup": {"off": self._players(R, rt, season, team, "off", off, week),
-                           "def": self._players(R, rt, season, team, "def", dfn, week)},
+                           "def": self._players(R, rt, season, team, "def", dfn, week),
+                           "bench": self._bench_players(R, rt, season, team, self._bench(R, game_id, team, off), week)},
                 "calls": {c: {"off": v["off"], "def": v["def"]} for c, v in P.team_card(card, team).items()},
             }
             league = st["league"]

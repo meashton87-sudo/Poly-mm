@@ -103,7 +103,7 @@ FTN_LOOK = ["starting_hash", "qb_location", "n_defense_box", "n_blitzers"]
 # route against the real coverage, with the real number of pass rushers, pressure and time to throw
 PART_URL = ("https://github.com/nflverse/nflverse-data/releases/download/pbp_participation/"
             "pbp_participation_{season}.parquet")
-PART_COLS = ["route", "defense_man_zone_type", "defense_coverage_type", "number_of_pass_rushers", "was_pressure",
+PART_COLS = ["route", "defense_man_zone_type", "defense_coverage_type", "number_of_pass_rushers", "was_pressure", "offense_personnel",
              "time_to_throw"]
 ROUTES = ["", "go", "post", "corner", "out", "deep_out", "in", "slant", "cross", "hitch", "screen", "flat", "wheel",
           "angle"]
@@ -190,7 +190,29 @@ def _charting(s: pd.DataFrame) -> dict:
     charted = n.notna().to_numpy().astype(np.uint8)
     ttt = pd.to_numeric(col("time_to_throw"), errors="coerce")
     ttt = np.clip(np.round(ttt.fillna(0).to_numpy() * 10), 0, 255).astype(np.uint8)
-    return {"route": route, "cover": shell | (mz << 4), "rush": rushers | (pressure << 4) | (charted << 5), "ttt": ttt}
+    return {"route": route, "cover": shell | (mz << 4), "rush": rushers | (pressure << 4) | (charted << 5), "ttt": ttt,
+            "pers": personnel_code(col("offense_personnel"))}
+
+
+PERSONNEL = (11, 12, 21, 13, 10, 22)   # the groupings the game offers / knows (RBs then TEs; FBs count as backs)
+
+
+def personnel_code(p: pd.Series) -> np.ndarray:
+    """Offensive personnel as the NFL names it (backs, then tight ends: "1 RB, 2 TE, 2 WR" is 12); 0 not charted,
+    255 anything else (an extra lineman, a QB in the backfield)."""
+    def code(v):
+        if not isinstance(v, str) or not v:
+            return 0
+        n = {}
+        for part in v.split(","):
+            k = part.strip().split(" ")
+            if len(k) == 2 and k[0].isdigit():
+                n[k[1]] = n.get(k[1], 0) + int(k[0])
+        ol = n.get("C", 0) + n.get("G", 0) + n.get("T", 0) + n.get("OL", 0)
+        backs, te, wr = n.get("RB", 0) + n.get("FB", 0), n.get("TE", 0), n.get("WR", 0)
+        c = backs * 10 + te
+        return c if ol in (0, 5) and n.get("QB", 1) == 1 and backs + te + wr == 5 and c in PERSONNEL else 255
+    return p.map(code).fillna(0).to_numpy().astype(np.uint8)
 
 
 def _extras(seasons=SEASONS) -> pd.DataFrame:
@@ -506,19 +528,24 @@ def call_frequencies(lib: pd.DataFrame, prior: float = 20.0) -> np.ndarray:
     return f / f.sum(1, keepdims=True)
 
 
-def oob_odds(lib: pd.DataFrame) -> np.ndarray:
-    """Odds multiplier on getting out of bounds when the ball carrier is trying to, by call: plays where
-    the offense trailed late (wanted the clock stopped) against plays with no clock motive."""
+def oob_odds(lib: pd.DataFrame, motive: str = "want_oob") -> np.ndarray:
+    """Odds multiplier on getting out of bounds, by call, against plays with no clock motive: "want_oob", the
+    ball carrier trying to (the offense trailed late, wanted the clock stopped: 1-3x); "stay_in", trying not to
+    (it led late and wanted the clock running; NFL 2016-2026: outside runs 3.9% out of bounds against 10%,
+    short outside throws 16% against 25%: 0.2-1x)."""
     out = np.ones(len(CALLS))
     ok = ~lib["penalty"] & (lib["yards"] >= 0)
+    if motive == "stay_in":
+        ok &= ~lib["incomplete"]
+    lo, hi = (1.0, 3.0) if motive == "want_oob" else (0.2, 1.0)
     for fam, members in OOB_FAMILIES.items():
         m = lib["call"].isin([CALL_INDEX[c] for c in members]) & ok
         base = lib.loc[m & ~lib["want_oob"] & ~lib["stay_in"], "oob"]
-        want = lib.loc[m & lib["want_oob"], "oob"]
+        want = lib.loc[m & lib[motive], "oob"]
         if len(want) < 50 or base.mean() <= 0:
             continue
         p0, p1 = base.mean(), (want.sum() + 10 * base.mean()) / (len(want) + 10)   # light shrinkage
-        out[[CALL_INDEX[c] for c in members]] = float(np.clip((p1 / (1 - p1)) / (p0 / (1 - p0)), 1.0, 3.0))
+        out[[CALL_INDEX[c] for c in members]] = float(np.clip((p1 / (1 - p1)) / (p0 / (1 - p0)), lo, hi))
     return out
 
 
@@ -587,7 +614,7 @@ def export(lib: pd.DataFrame, path) -> dict:
             "air": _b64(np.where(lib["air"].isna(), -128, np.clip(lib["air"].fillna(0), -20, 100)).astype(np.int8)),
             "carry": _b64((lib["who"].to_numpy().astype(np.uint8) | (lib["bt"].to_numpy().astype(np.uint8) << np.uint8(3)))),
             # the animation: NGS route, coverage, pass rush and time to throw (_charting)
-            **{k: _b64(lib[f"ngs_{k}"].to_numpy().astype(np.uint8)) for k in ("route", "cover", "rush", "ttt")},
+            **{k: _b64(lib[f"ngs_{k}"].to_numpy().astype(np.uint8)) for k in ("route", "cover", "rush", "ttt", "pers")},
         },
         "routes": ROUTES, "shells": SHELLS,
         "events": EVENTS, "penalties": pen_names,
@@ -597,6 +624,7 @@ def export(lib: pd.DataFrame, path) -> dict:
         "pool_shift": _b64(pool_shifts(lib, items, offsets).astype(np.float32)),
         "freq": _b64(call_frequencies(lib).astype(np.float32).ravel()),
         "oob_odds": oob_odds(lib).round(3).tolist(),
+        "stay_odds": oob_odds(lib, "stay_in").round(3).tolist(),
         "seasons": list(SEASONS),
     }
     path.write_text(json.dumps(out, separators=(",", ":"), allow_nan=False))
