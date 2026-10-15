@@ -73,7 +73,7 @@ function cors(req, env) {
 }
 const json = (body, status, headers) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers } });
 const ranked = (all) => shown(all).slice().sort((a, b) => b.best - a.best || String(a.at).localeCompare(String(b.at))).slice(0, TOP)
-  .map(({ name, best, at }) => ({ name, best, at }));            // never the key hash
+  .map(({ name, best, at, life }) => ({ name, best, at, ...(life ? { life: true } : {}) }));   // never the key hash
 async function sha256(s) {
   const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)));
   return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -226,7 +226,8 @@ export async function handle(req, env, storage, hits) {
     if (!all[i].kh) { all[i].kh = kh; await storage.put('runs', all); }       // a row from before names were claimed
     return json({ rows: ranked(all), kept: all[i].best }, 200, h);
   }
-  const row = { name, best, at: new Date().toISOString().slice(0, 10), kh };
+  // life: the run used its one extra life (an ad watched to keep it going): shown with the row
+  const row = { name, best, at: new Date().toISOString().slice(0, 10), kh, ...(body.life === true ? { life: true } : {}) };
   if (i >= 0) all[i] = row; else all.push(row);
   const kept = all.sort((a, b) => b.best - a.best).slice(0, KEEP);
   await storage.put('runs', kept);

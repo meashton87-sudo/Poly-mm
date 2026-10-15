@@ -165,4 +165,10 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.ok(!JSON.stringify(list).includes(hex(lucky)) && !JSON.stringify(list).includes('test-madden-secret'), 'no key or secret shown');
   delete board.env.MADDEN_SECRET;
 }
+// a survivor best that used the extra life carries the mark on the board
+{
+  const q = await (await call('POST', { name: 'Hearty', best: 950, key: 'hearty-device-key-00001', life: true })).json();
+  assert.ok(q.rows.some((x) => x.name === 'Hearty' && x.life === true), 'the ❤️ mark');
+  assert.ok(!q.rows.some((x) => x.name !== 'Hearty' && x.life), 'only on that run');
+}
 console.log('board worker ok');

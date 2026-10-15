@@ -3773,6 +3773,7 @@
     card.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller in this spot.`));
     const btn = el('button', 'btn', SURV ? (state.out ? 'Your run' : 'Next game') : G.si < today.length - 1 ? 'Next spot' : "Today's score");
     btn.type = 'button';
+    if (SURV) card.append(...lifeOffer());
     let went = false;                  // once: the await below leaves room for a second tap
     btn.addEventListener('click', async () => {
       if (went) return;
@@ -3902,13 +3903,13 @@
     return BOARD.ready;
   }
   // a player's best run: kept only when it beats what the board has
-  async function boardPost(name, best) {
+  async function boardPost(name, best, life) {
     name = String(name || '').trim().slice(0, 24);
     best = Math.round(Number(best));
     if (!BOARD.mode || !BOARD.canWrite || !name || !(best >= 0 && best < 1000)) return false;
     if (BOARD.mode === 'api') {
       try {
-        const res = await apiBoard('POST', { name, best, key: deviceKey() });
+        const res = await apiBoard('POST', { name, best, key: deviceKey(), ...(life ? { life: true } : {}) });
         BOARD.rows = res.rows || BOARD.rows;
         BOARD.taken = res.taken ? name : '';
         BOARD.refused = res.refused ? name : '';
@@ -3942,7 +3943,7 @@
       const ol = el('ol', 'brows'), me = myName().toLowerCase();
       BOARD.rows.slice(0, 10).forEach((r, i) => {
         const li = el('li', String(r.name).toLowerCase() === me ? 'me' : '');
-        li.append(el('span', 'n', String(i + 1)), el('span', 'nm', String(r.name)), el('b', '', String(r.best)));
+        li.append(el('span', 'n', String(i + 1)), el('span', 'nm', `${String(r.name)}${r.life ? ' ❤️' : ''}`), el('b', '', String(r.best)));
         if (BOARD.canWrite && BOARD.mode === 'db') {
           const x = el('button', 'x', '×');
           x.type = 'button';
@@ -4053,9 +4054,13 @@
   function renderSurvSummary(redraw) {
     show('done');
     const st = survStats();
-    if (st.last !== state.run) { st.runs += 1; st.best = Math.max(st.best, state.won); st.last = state.run; save(`${STORE}:survstats`, st); }
-    // the board keeps your best (when you can write it and have a name on it)
-    if (BOARD.ready && myName()) BOARD.ready.then(() => boardPost(myName(), st.best));
+    // (a run that took its extra life comes back here when it ends again: its wins count then too)
+    if (st.last !== state.run) { st.runs += 1; st.last = state.run; }
+    if (state.won > st.best || (state.won === st.best && st.bestLife && !state.life)) st.bestLife = !!state.life;
+    st.best = Math.max(st.best, state.won);
+    save(`${STORE}:survstats`, st);
+    // the board keeps your best (when you can write it and have a name on it), marked when it used the extra life
+    if (BOARD.ready && myName()) BOARD.ready.then(() => boardPost(myName(), st.best, !!st.bestLife));
     $('dayLabel').textContent = survLabel();
     drawTiles();
     const box = $('done');
@@ -4096,7 +4101,7 @@
     const again = el('button', 'btn', 'New run');
     again.type = 'button';
     again.addEventListener('click', () => { state = newRun(); saveState(); survOpen(); });
-    box.append(nameInput(), pre, share, again, boardEl());
+    box.append(...lifeOffer(), nameInput(), pre, share, again, boardEl());
     const ad = adBox();
     if (ad) box.append(ad);
     box.append(disclaimer());
@@ -4220,6 +4225,44 @@
   }
   // An ad unit (Google AdSense, the website only: site.py --adsense --ad-slot), only on screens between games, never
   // while a drive is on, labeled as an ad. Nothing without both metas (claude.ai, local copies, the test builds).
+  // survivor: one extra life a run, for a short ad break (only where the site has ads to show)
+  function lifeOffer() {
+    if (!state.out || state.life || !adCodes().length) return [];
+    const life = el('button', 'btn gold', '❤️ Extra life: watch a 15-second ad');
+    life.type = 'button';
+    life.addEventListener('click', () => adBreak(() => {
+      state.out = false; state.life = true; state.pick = null;
+      saveState();
+      track('extra_life', { streak: state.won });
+      survOpen();
+    }));
+    return [life, el('p', 'note', 'Once a run. Your loss stays on your record, and the board marks the run with ❤️.')];
+  }
+  // the ad units the site has (site.py: the banner's meta; the footer units are frames on the page)
+  const adCodes = () => [document.querySelector('meta[name="ad-frame"]'), ...document.querySelectorAll('.adslot iframe')].filter(Boolean);
+  // the extra life's ad break: the banner and the native unit, and a countdown that runs only while the page is in
+  // view; then Continue. Closing it early keeps the run over
+  const AD_BREAK_S = 15;
+  function adBreak(onDone) {
+    track('extra_life_offer_taken');
+    const wrap = el('div', 'adbreak'), ad = adBox(), nat = document.querySelector('.ad-native iframe');
+    if (ad) wrap.append(ad);
+    if (nat) { const f = nat.cloneNode(); f.style.height = '300px'; const b = el('div', 'adbox'); b.append(el('div', 'adlab', 'Advertisement'), f); wrap.append(b); }
+    const go = el('button', 'btn', `Continue in ${AD_BREAK_S}`);
+    go.type = 'button';
+    go.disabled = true;
+    let left = AD_BREAK_S, done = false;
+    const tick = setInterval(() => {
+      if (document.hidden) return;
+      left -= 1;
+      if (left > 0) { go.textContent = `Continue in ${left}`; return; }
+      clearInterval(tick);
+      go.disabled = false; go.textContent = 'Continue your run';
+    }, 1000);
+    go.addEventListener('click', () => { if (go.disabled || done) return; done = true; closeModal(); onDone(); });
+    openModal('Extra life', [el('p', 'note', 'Thanks for supporting the game. Your run continues when the timer ends.'), wrap, go]);
+    onModalClose = () => clearInterval(tick);
+  }
   function adBox() {
     // another network's banner (site.py: web/ads/banner.html, e.g. Adsterra): in a sandboxed frame of its own, so its
     // script can't touch the game or send the page elsewhere (a tap on the ad still opens it in a new tab)

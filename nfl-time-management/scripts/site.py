@@ -102,6 +102,15 @@ SLOT_SIZE = {"banner": "300x250", "native": "100%x300", "leader": "728x90", "mob
 BANNER = ADS / "banner.html"
 
 
+# In the sandboxed frame (no allow-same-origin: the ad can't reach the game) the browser refuses storage and cookies, and
+# a network script that touches them throws before it shows anything: give it working in-memory stand-ins
+STORAGE_SHIM = ("<script>(function(){function M(){var d={};return{getItem:function(k){return k in d?d[k]:null},setItem:function(k,v){d[k]=String(v)},"
+                "removeItem:function(k){delete d[k]},clear:function(){d={}},key:function(i){return Object.keys(d)[i]||null},get length(){return Object.keys(d).length}}}"
+                "['localStorage','sessionStorage'].forEach(function(n){try{window[n].length}catch(e){try{Object.defineProperty(window,n,{value:M(),configurable:true})}catch(e2){}}});"
+                "try{document.cookie}catch(e){var c='';try{Object.defineProperty(document,'cookie',{get:function(){return c},set:function(v){var p=String(v).split(';')[0];"
+                "c=c?c+'; '+p:p},configurable:true})}catch(e2){}}})();</script>")
+
+
 def slot_code(slot: str) -> str:
     f = ADS / f"{slot}.html"
     return f.read_text() if f.exists() and f.read_text().strip() else ""
@@ -276,7 +285,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         if slot_code(slot):
             (out / f"ad-{slot}.html").write_text('<!doctype html><html><head><meta charset="utf-8"><meta name="robots" content="noindex">'
                 '<meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;padding:0;overflow:hidden;'
-                'background:transparent;display:flex;justify-content:center}</style></head><body>' + slot_code(slot) + "</body></html>\n")
+                'background:transparent;display:flex;justify-content:center}</style>' + STORAGE_SHIM + '</head><body>' + slot_code(slot)
+                + "</body></html>\n")
     for f in FILES:
         shutil.copy2(WEB / f, out / f)
     for f, p in PACKED.items():
