@@ -2660,9 +2660,9 @@
       const { specials } = callOptions(r);
       // the kick's real odds on the button (this kicker, this distance, the weather; a rushed kick a little less), so
       // a miss reads as the 1-in-5 it was, not a rigged game
-      const rush = r.clock_running && halfLeft(r.t) < 12;
+      const rush = r.clock_running && halfLeft(r.t) <= 25;          // engine.js FIRE_WINDOW: the unit runs on, a rushed kick
       const pFg = G.info.pFg == null ? null : rush ? 1 / (1 + Math.exp(-(Math.log(G.info.pFg / Math.max(1e-9, 1 - G.info.pFg)) - 0.3))) : G.info.pFg;
-      specials.forEach((k) => extra.push([k, specialLabel(k), k === 'fg' ? `${Math.round(G.info.fgDist)} yards${pFg != null ? ` · ${Math.round(pFg * 100)}% to make` : ''}${rush ? ' · rushed' : ''}` : null]));
+      specials.forEach((k) => extra.push([k, specialLabel(k), k === 'fg' ? `${Math.round(G.info.fgDist)} yards${pFg != null ? ` · ${Math.round(pFg * 100)}% to make` : ''}${rush ? (r.to[me] > 0 ? ' · rushed (a timeout first sets it up)' : ' · rushed') : ''}` : null]));
       if (extra.length) {
         const row = el('div', 'keys');
         row.style.setProperty('--cols', Math.min(extra.length, 4));
@@ -3904,13 +3904,13 @@
   function fillDaily(box, d, p, spotW, again) {
     box.textContent = '';
     box.hidden = false;
+    // one big number on the screen (your score against NFL play-callers); here, where you rank among today's players
     const you = d.you ? d.you.p : p, pt = Math.round(you * 100), others = d.n - 1;
-    let below = 0, ties = -1;
-    d.hist.forEach((c, k) => { if (k < pt) below += c; else if (k === pt) ties += c; });
-    const beat = others > 0 ? (below + Math.max(0, ties) / 2) / others : null;
+    let above = 0, ties = -1;
+    d.hist.forEach((c, k) => { if (k > pt) above += c; else if (k === pt) ties += c; });
     box.append(el('div', 'k', 'Everyone today'));
-    box.append(el('p', 'daily-head', beat == null ? 'You’re the first to finish today. Check back later to see how you stack up.'
-      : `Better than ${Math.round(beat * 100)}% of the ${others.toLocaleString()} other player${others === 1 ? '' : 's'} today`));
+    box.append(el('p', 'daily-head', others <= 0 ? 'You’re the first to finish today. Check back later to see how you stack up.'
+      : `#${(above + 1).toLocaleString()} of ${d.n.toLocaleString()} today${ties > 0 ? ` (tied with ${ties.toLocaleString()})` : ''}`));
     if (d.counted === false && d.you && Math.abs(d.you.p - p) > 0.005) box.append(el('p', 'note', `Your first finish today counts: ${Math.round(d.you.p * 100)}.`));
     // the day's scores, in the buckets your own stats use; yours highlighted
     const dist = el('div', 'dist');
@@ -3933,12 +3933,9 @@
     const sp = el('div', 'dspots');
     d.spots.forEach((x, i) => {
       if (!today[i]) return;
-      let lower = 0;
-      const yp = clip(Math.round(yourW[i] * 100) + 50, 0, 100);
-      x.hist.forEach((c, k) => { if (k < yp) lower += c; });
       const row = el('div', 'dsp');
       row.append(el('b', '', today.length > 1 ? `Spot ${i + 1} · ${today[i].player}` : `Your drive · ${today[i].player}`),
-        el('span', '', `You ${pts(yourW[i])}% · everyone ${pts(x.avg)}%${x.n > 1 ? ` · better than ${Math.round((lower / (x.n - 1 || 1)) * 100)}%` : ''}`));
+        el('span', '', `${pts(yourW[i])}% win chance vs a typical play-caller · today’s average ${pts(x.avg)}%`));
       sp.append(row);
     });
     box.append(sp);
