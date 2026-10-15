@@ -1580,7 +1580,7 @@
       const gap = RUN_GAP[c ? c.base : ''] ?? 26;
       const sg = sign || (id === 'qb_run' ? sc.s * dir : 0) || 0;
       // forward progress: he never has the ball past where it is spotted; on a loss he is met in the backfield
-      const cap = e.td ? 99 : (e.yards || 0) - 0.8, md = Math.min(-4.3, cap - 0.3);
+      const cap = e.td ? 99 : (e.yards || 0) - ((e.yards || 0) < 2 ? 1.6 : 0.8), md = Math.min(-4.3, cap - 0.3);
       const hole = [inX(BX + (sg * gap) / XYD), fwd(L0, Math.min(0.6, cap))];
       if (direct) { fly(0, T_SNAP, bx, L0, carrier.x0, carrier.L0, 0.15); hold(T_SNAP, carrier); } else snapToQb();
       busy.add(carrier);
@@ -1603,7 +1603,7 @@
         const meshPt = carrier.label === 'WR' ? [q0[0] + (c0[0] > q0[0] ? 1.2 : -1.2), fwd(L0, md + 0.1)]
           : across ? [q0[0] + (c0[0] - q0[0]) * 0.3, fwd(L0, md)] : [c0[0] + (hole[0] - c0[0]) * 0.15, fwd(L0, md)];
         const start = carrier.label === 'WR' ? 0.35 : REACT_OFF;
-        const pl = follow(carrier, start, plan(carrier, [c0, meshPt, hole], { eff: carrier.label === 'WR' ? 0.95 : 0.9 }));
+        const pl = follow(carrier, start, plan(carrier, [c0, meshPt, hole], { eff: carrier.label === 'WR' ? 0.95 : 0.9, v1: e.td || e.yards >= 2 ? undefined : 2.5 }));
         let best = 9, bt = 0.7;
         for (let s = 0; s <= pl.T; s += 0.05) { const p = pl.at(s), d = dist([p[0], p[1]], meshPt); if (d < best) { best = d; bt = s; } }
         tMesh = Math.max(T_SNAP + 0.35, start + bt);
