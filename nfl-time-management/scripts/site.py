@@ -82,6 +82,18 @@ def pack(src: Path, dst: Path) -> int:
     return dst.stat().st_size
 
 
+# Google AdSense: the site verification meta and the ad script (in every page's head), and with an ad unit's slot id
+# the pages show that unit on the screens between games (game.js / stats.html read the two metas). Off unless given.
+ADSENSE_TAG = ("<meta name=\"google-adsense-account\" content=\"{id}\">"
+               "<script async src=\"https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={id}\" crossorigin=\"anonymous\"></script>")
+
+
+def ads_head(adsense: str | None, ad_slot: str | None) -> str:
+    if not adsense:
+        return ""
+    return ADSENSE_TAG.format(id=adsense) + (f"<meta name=\"ad-slot\" content=\"{ad_slot}\">" if ad_slot else "")
+
+
 GA_TAG = ("<script async src=\"https://www.googletagmanager.com/gtag/js?id={id}\"></script>"
           "<script>window.dataLayer=window.dataLayer||[];function gtag(){{dataLayer.push(arguments);}}"
           "gtag('js',new Date());gtag('config','{id}');</script>")
@@ -102,8 +114,13 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
 
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
-          site_url: str | None = None) -> Path:
-    missing = [f for f in FILES + ["stats.html"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
+          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None) -> Path:
+    adsense, ad_slot = (adsense or "").strip() or None, (ad_slot or "").strip() or None     # "" (an unset variable): off
+    if adsense and not re.fullmatch(r"ca-pub-\d{16}", adsense):
+        raise SystemExit(f"--adsense wants a publisher id like ca-pub-1234567890123456, not {adsense!r}")
+    if ad_slot and not re.fullmatch(r"\d{6,12}", ad_slot):
+        raise SystemExit(f"--ad-slot wants an ad unit's slot number, not {ad_slot!r}")
+    missing = [f for f in FILES + ["stats.html", "privacy.html"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
     if missing:
         raise SystemExit(f"build the game data first; missing in web/: {', '.join(missing)}")
     if out.exists():
@@ -116,6 +133,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         if not re.fullmatch(r"G-[A-Z0-9]{4,16}", ga):
             raise SystemExit(f"--ga wants a measurement id like G-XXXXXXX, not {ga!r}")
         extra = GA_TAG.format(id=ga) + extra
+    extra += ads_head(adsense, ad_slot)
     if board_api:
         extra += f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">"
     try:
@@ -130,10 +148,14 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         page = page.replace(f'<script src="{js}"></script>', f'<script src="{js}?v={stamp}"></script>')
     (out / "index.html").write_text(HEAD.format(extra=extra) + page + "</body></html>\n")
     # the stats page (/stats): its own document; the same analytics tag and backend address
-    stats_head = (GA_TAG.format(id=ga) if ga else "") + share_tags(site_url, "Two-Minute Drill stats",
+    stats_head = (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Two-Minute Drill stats",
         "How everyone did on the daily drive: players per day, the score spread and the top ten.", "stats") + (
         f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else "")
     (out / "stats.html").write_text((WEB / "stats.html").read_text().replace("<!--SITE-HEAD-->", stats_head))
+    # the privacy page (AdSense wants one): the analytics tag only, no ads on it
+    (out / "privacy.html").write_text((WEB / "privacy.html").read_text().replace("<!--SITE-HEAD-->", GA_TAG.format(id=ga) if ga else ""))
+    if adsense:                              # ads.txt: who may sell this site's ad space (Google's line, with our id)
+        (out / "ads.txt").write_text(f"google.com, {adsense.replace('ca-', '', 1)}, DIRECT, f08c47fec0942fa0\n")
     for f in FILES:
         shutil.copy2(WEB / f, out / f)
     for f, p in PACKED.items():
@@ -157,8 +179,10 @@ if __name__ == "__main__":
     ap.add_argument("--board-api")
     ap.add_argument("--ga", help="Google Analytics measurement id (G-...)")
     ap.add_argument("--site-url", help="the site's address for link previews (default https://<domain>, else nfl2mindrill.com)")
+    ap.add_argument("--adsense", help="Google AdSense publisher id (ca-pub-...); empty: no ads")
+    ap.add_argument("--ad-slot", help="an AdSense display ad unit's slot id, shown between games; empty: AdSense's own placement only")
     a = ap.parse_args()
-    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url)
+    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6
     print(f"site in {o}: {n} files, {size:.1f} MB")

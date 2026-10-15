@@ -3615,6 +3615,8 @@
     again.type = 'button';
     again.addEventListener('click', () => { state = newRun(); saveState(); survOpen(); });
     box.append(nameInput(), pre, share, again, boardEl());
+    const ad = adBox();
+    if (ad) box.append(ad);
     if (!redraw) again.focus({ preventScroll: true });
   }
 
@@ -3706,6 +3708,21 @@
     box.insertBefore(pre, dbox);
     box.insertBefore(btn, dbox);
     box.append(countdown());
+    const ad = adBox();
+    if (ad) box.append(ad);
+  }
+  // An ad unit (Google AdSense, the website only: site.py --adsense --ad-slot), only on screens between games, never
+  // while a drive is on, labeled as an ad. Nothing without both metas (claude.ai, local copies, the test builds).
+  function adBox() {
+    const client = document.querySelector('meta[name="google-adsense-account"]'), slot = document.querySelector('meta[name="ad-slot"]');
+    if (!client || !slot) return null;
+    const box = el('div', 'adbox'), ins = document.createElement('ins');
+    ins.className = 'adsbygoogle';
+    ins.style.display = 'block';
+    Object.assign(ins.dataset, { adClient: client.content, adSlot: slot.content, adFormat: 'auto', fullWidthResponsive: 'true' });
+    box.append(el('div', 'adlab', 'Advertisement'), ins);
+    setTimeout(() => { try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch (e) { box.remove(); } }, 0);
+    return box;
   }
   // Everyone who played today (the website: board/worker.js /daily). Your first result of the day counts once;
   // the box shows where it ranks among the day's players, how they spread, each spot against the average, and the
@@ -3803,6 +3820,12 @@
   }
 
   // ------------------------------------------------------- boxes to tap ---
+  function privacyLink() {
+    const p = el('p', 'note'), a = el('a', '', 'Privacy');
+    a.href = 'privacy.html';
+    p.append(a, ' · what the site keeps, analytics and ads');
+    return p;
+  }
   function openModal(title, nodes) {
     $('mTitle').textContent = title;
     const b = $('mBody'); b.textContent = '';
@@ -3876,6 +3899,7 @@
       ex,
       el('p', 'note', 'Calls: green, the best or as good; yellow, close; orange, costly; red, a big miss. Your score and the share grid count the calls.'),
       more,
+      ...(BUILD ? [privacyLink()] : []),        // the website only (claude.ai has its own)
     ]);
   }
   function openStats() {

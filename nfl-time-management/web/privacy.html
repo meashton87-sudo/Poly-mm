@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!--SITE-HEAD-->
+<title>Two-Minute Drill Privacy</title>
+<meta name="description" content="What the Two-Minute Drill website stores and shares.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800;900&family=Libre+Franklin:wght@400;600;700&display=swap">
+<style>
+/* Same tokens as the game and the stats page */
+:root {
+  --paper: #f3f5f2; --card: #ffffff; --ink: #121a15; --muted: #5a675e; --line: #d3dbd5; --turf: #2c7549;
+  --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "Libre Franklin", "Franklin Gothic Medium", "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; color-scheme: dark;
+} }
+:root[data-theme="dark"] { --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.55 var(--body); padding-top: env(safe-area-inset-top, 0px); }
+.wrap { max-width: 640px; margin: 0 auto; padding: 14px 16px 48px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 8px; }
+h1 { margin: 0; font: 900 30px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
+h1 small { display: block; font: 700 11px var(--body); letter-spacing: .16em; color: var(--muted); margin-top: 4px; }
+h2 { font: 800 20px/1.15 var(--display); text-transform: uppercase; letter-spacing: .02em; margin: 26px 0 6px; text-wrap: balance; }
+p, li { max-width: 65ch; }
+a { color: var(--turf); }
+a.play { font-weight: 700; color: var(--ink); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; background: var(--card); white-space: nowrap; }
+.note { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Two-Minute Drill<small>Privacy</small></h1>
+    <a class="play" href="./">Play today ›</a>
+  </header>
+  <p>Two-Minute Drill is a free football game. No account and no email are needed. Here is everything the website
+    keeps and who sees it.</p>
+
+  <h2>On your device</h2>
+  <p>Your game progress, your stats, your survivor run and the name you choose (if any) are saved in your browser's
+    local storage, so a reload picks up where you left off. Clearing your browser's site data deletes them.</p>
+
+  <h2>Daily results and leaderboards</h2>
+  <p>When you finish the daily drive, your score is sent to our server on Cloudflare so you can see how everyone did.
+    The same goes for your survivor best, if you put a name on the board. What we keep: the score, the date, the name
+    you chose (only if you entered one) and a scrambled form of a random code your browser made up (so the same phone
+    counts once a day and nobody else can take your name). No IP addresses, emails or real names are stored.</p>
+
+  <h2>Analytics</h2>
+  <p>We use Google Analytics to count visits and see which parts of the game people use (for example, how many
+    finish the daily drive), so we can make it better. Google Analytics sets cookies and receives your IP address
+    and device details. See <a href="https://policies.google.com/technologies/partner-sites" rel="noopener">how Google
+    uses information from sites that use its services</a>.</p>
+
+  <h2>Ads</h2>
+  <p>The site may show ads from Google AdSense on screens between games. Google and its partners use cookies to show
+    ads, including ads based on your visits to this and other websites. You can turn off personalized ads in
+    <a href="https://adssettings.google.com" rel="noopener">Google's Ad Settings</a>, or visit
+    <a href="https://www.aboutads.info" rel="noopener">aboutads.info</a> to opt out of other vendors' personalized ads.
+    Visitors in the EU, the UK and Switzerland are asked for consent before personalized ads are shown.</p>
+
+  <h2>Children</h2>
+  <p>The game is meant for a general audience and doesn't knowingly collect personal information from children under 13.</p>
+
+  <h2>Changes</h2>
+  <p>If what the site collects changes, this page will say so.</p>
+  <p class="note">Last updated October 15, 2026.</p>
+</div>
+</body>
+</html>
