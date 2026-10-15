@@ -267,7 +267,9 @@ async function pro(req, env, storage, hits, h, url) {
     try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
   }
   if (url.pathname === '/pay') {
-    const site = String(env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, '');
+    // the buyer goes back to the site he came from (an allowed origin: the site, or the Pro preview), else SITE
+    const allowed = String(env.ALLOWED_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean), origin = req.headers.get('Origin') || '';
+    const site = String(allowed.includes(origin) ? origin : env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, '');
     let r;
     try {
       r = await stripe(env, 'checkout/sessions', { mode: 'payment', 'line_items[0][price]': env.STRIPE_PRICE, 'line_items[0][quantity]': '1',
