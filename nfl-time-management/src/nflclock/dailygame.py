@@ -95,6 +95,17 @@ def candidates(pbp: pd.DataFrame, lib: pd.DataFrame, keep: dict | None = None) -
     return first
 
 
+def _nan_paths(obj, path: str = "") -> list:
+    """Where a NaN or infinity sits in a nested dict/list (JSON cannot carry one): 'spots.3.real.drive', ..."""
+    if isinstance(obj, dict):
+        return [q for k, v in obj.items() for q in _nan_paths(v, f"{path}.{k}" if path else str(k))]
+    if isinstance(obj, (list, tuple)):
+        return [q for i, v in enumerate(obj) for q in _nan_paths(v, f"{path}.{i}")]
+    if isinstance(obj, (float, np.floating)) and not np.isfinite(obj):
+        return [path]
+    return []
+
+
 def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
     bundle = Bundle.load()
     lib = P.labeled_plays()
@@ -154,7 +165,8 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
                 "spread": float(np.nan_to_num(g["spread_line"])),
                 "real": {"season": int(g["season"]), "week": int(g["week"]), "type": str(g["game_type"]),
                          "coach": CO.COACH_FIX.get(c := g["home_coach"] if home_off else g["away_coach"], c), "call": r["real_call"],
-                         "drive": DRIVE_RESULT.get(res, res), "final": {"away": int(r["away_score"]), "home": int(r["home_score"])}},
+                         "drive": None if res is None or (isinstance(res, float) and np.isnan(res)) else DRIVE_RESULT.get(res, res),
+                         "final": {"away": int(r["away_score"]), "home": int(r["home_score"])}},
             })
     # the two teams as they were in each spot's game, in chunks the browser loads a day at a time
     chunks: dict = {}
@@ -191,6 +203,8 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
            "coaches": CO.fingerprints(),
            "asof": {"season": season, "ratings": "our own, 40-99: each player's percentile at his position as of the week of the game"},
            "built": pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds")}
+    for bad in _nan_paths(out) + [f"spots/s{k}:{q}" for k, ch in chunks.items() for q in _nan_paths(ch)]:
+        raise ValueError(f"not a number in the export: {bad}")
     (WEB / "game.json").write_text(json.dumps(out, separators=(",", ":"), default=float, allow_nan=False))
     (WEB / "spots").mkdir(exist_ok=True)
     for stale in (WEB / "spots").glob("*.json"):

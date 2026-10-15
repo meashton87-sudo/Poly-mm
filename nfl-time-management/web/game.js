@@ -3682,10 +3682,12 @@
     two: ['Go for two', 'go for two', 'tries'], nohuddle: ['No huddle', 'hurry', 'snaps on a running clock'],
     blitz: ['Blitz', 'blitz', 'defensive snaps'], load: ['Load the box', 'load the box', 'defensive snaps'], soft: ['Coverage', 'sit back in coverage', 'defensive snaps'] };
   const TEND_LEAN = 0.08, TEND_MIN = 3;        // a lean worth saying: this many points off the NFL, on at least this many calls
-  function tendStore() { return load(`${STORE}:tend`, { seen: {}, t: {}, calls: {}, grade: {}, n: 0 }); }
+  let tendMem = null;          // the tally this session (storage off: it lives here until the page is left)
+  function tendStore() { return load(`${STORE}:tend`, null) || tendMem || { seen: {}, t: {}, calls: {}, grade: {}, n: 0 }; }
   function tendFold(decs, key) {
     const T = tendStore();
     if (!decs || !decs.length || T.seen[key]) return T;
+    tendMem = T;
     T.seen[key] = 1;
     decs.forEach((x) => {
       const m = markOf(x.cost);
