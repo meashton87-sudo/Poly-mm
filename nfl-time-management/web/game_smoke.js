@@ -112,6 +112,18 @@ for (let k = 0; k < 100; k++) {
     assert.ok(!o || o.yds <= 9 + 1e-9, `yards a throw from the 9: ${id} ${o && o.yds}`);
   }
 }
+// a two-point try you call (game.js try2): a real play of that call from the 2; over the calls about the league's rate
+{
+  const at = { ...root, t: 300, phase: 1, score: [20, 14], pos: 0, down: 1, ytg: 10, yl: 15, clock_running: false };
+  let good = 0, n = 0;
+  for (const c of eng.pb.calls) for (let k = 0; k < 300; k++) {
+    const e = sim.step(at, { action: { pat: 'two', call: c.id }, seed: 9000 + k }).log.find((x) => x.ev === 'pat');
+    assert.ok(e && e.two && e.call === eng.pb.callIndex[c.id], `called try logged: ${JSON.stringify(e)}`);
+    n++; if (e.good) good++;
+  }
+  assert.ok(good / n > 0.38 && good / n < 0.6, `called two-point tries convert like the league: ${(good / n).toFixed(3)}`);
+  console.log(`called two-point tries: ${(100 * good / n).toFixed(1)}% good`);
+}
 // matchups (engine.js MATCH): a call that beats the defense's call does better than the real plays alone, one that
 // loses to it worse (mean EPA of the plays drawn, over every situation)
 {

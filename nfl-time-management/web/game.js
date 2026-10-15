@@ -217,6 +217,7 @@
   }
   const onSpot = (r) => { const t = spotText(r); return t === 'midfield' ? 'at midfield' : `on ${t}`; };
   function ddText(r) {
+    if (r.try2) return 'Two-point try';
     const goal = r.ytg >= r.yl;
     return `${ordinal(r.down)} & ${goal ? 'Goal' : Math.max(1, Math.round(r.ytg))}`;
   }
@@ -2094,8 +2095,10 @@
     try {
       if (two) {           // a two-point try is a snap from the 2: a pass that scores or does not
         sc = makeScene({ ...before, phase: SNAP, yl: 2, ytg: 2, down: 1 }, side);
-        const q = { ev: 'play', team: e.team, kind: PASS, call: idx.calls.findIndex((c) => c.id === 'quick_strong'), yards: e.good ? 4 : 0,
-          air: 4, incomplete: !e.good, td: e.good, row: -1, t: before.t };
+        const ci = e.call >= 0 ? e.call : idx.calls.findIndex((c) => c.id === 'quick_strong');
+        const run = idx.calls[ci] && idx.calls[ci].kind === 'run';
+        const q = run ? { ev: 'play', team: e.team, kind: RUN, call: ci, yards: e.good ? 3 : 0, td: e.good, row: -1, t: before.t }
+          : { ev: 'play', team: e.team, kind: PASS, call: ci, yards: e.good ? 4 : 0, air: 4, incomplete: !e.good, td: e.good, row: -1, t: before.t };
         P = choreograph(sc, q, res, true);
       } else {
         sc = makeScene(before, side, look);
@@ -2371,7 +2374,8 @@
           : `${shortName(teamOf(e.team).kicker.name) || teamName(code(e.team))} ${Math.round(e.dist)}-yard field goal: ${e.made ? 'good' : e.blocked ? `blocked${e.retTd ? ', returned for a touchdown' : ''}` : 'no good'}`; t = null; break;
         case 'punt': text = e.foul ? `Roughing the punter on the ${teamName(code(1 - e.team))}: 15 yards and a first down` : e.blocked ? `${teamName(code(e.team))} punt blocked${e.retTd ? ', returned for a touchdown' : ''}` : e.retTd ? `${teamName(code(e.team))} punt returned for a touchdown` :
           `${teamName(code(e.team))} punt${e.touchback ? ', touchback' : `, net ${Math.round(e.net)} yards`}`; t = null; break;
-        case 'pat': text = e.two ? `Two-point try ${e.good ? 'good' : 'fails'}` : `Extra point ${e.good ? 'good' : 'no good'}`; break;
+        case 'pat': text = e.two ? `Two-point try${e.call >= 0 && idx.calls[e.call] ? ` (${idx.calls[e.call].label})` : ''} ${e.good ? 'good' : 'fails'}`
+          : `Extra point ${e.good ? 'good' : 'no good'}`; break;
         case 'kickoff': text = e.onside ? `Onside kick, recovered by the ${teamName(code(e.recovered ? e.team : 1 - e.team))}` :
           e.retTd ? 'Kickoff returned for a touchdown' : `Kickoff${e.tb ? (Math.round(e.yl) === 60 ? ', short of the landing zone' : ', touchback') : ''}: the ${teamName(code(1 - e.team))} start at their own ${Math.round(100 - e.yl)}`; break;
         case 'end': text = (e.t ?? G.root.t) >= 1800 ? 'Halftime' : e.ot ? 'Ballgame' : G.root.ot ? 'End of overtime' : 'End of regulation'; break;
@@ -2543,7 +2547,8 @@
     await cutReplay();                // a replay's last redraw must not show this play's result before it animates
     const seed = hash('step', seedKey(), G.si, G.seq++);
     const before = G.root, side = G.side;
-    const res = (await send({ type: 'step', scen: simScen(), root: G.root, action, seed }, true)).res;
+    // a two-point try you call is shown as a snap from the 2 (root.try2 holds the real try the engine plays)
+    const res = (await send({ type: 'step', scen: simScen(), root: G.root.try2 || G.root, action, seed }, true)).res;
     res.action = action;
     narrate(res.log, action).forEach(([text, t, mine]) => addLog(text, t, mine));
     G.root = res.root;
@@ -2631,6 +2636,7 @@
       return true;
     });
     const specials = [];
+    if (r.try2) return { calls: calls.filter((id) => id !== 'hail_mary'), specials };
     // the kick: rushing the unit on takes 7-12 s with the clock running (engine.js FIRE_DRILL), so under 7 s it needs
     // a timeout first; a try on 4th down in range, in the last 20 s, or a likely make on 3rd down late
     const p = G.info.pFg, kickable = !r.clock_running || th >= 7;
@@ -3028,8 +3034,9 @@
       const fs = calls.reduce((a, id) => a + (freq[id] || 0), 0) || 1;
       calls.forEach((id) => { q[id] = goShare * (freq[id] || 0) / fs; });
       const specs = [];
+      if (r.try2) opts.forEach((o) => { const a = o.action; o.action = { pat: 'two', call: a.call, looks: a.looks, route: a.route, who: a.who }; });
       if (r.clock_running) specs.push(clockSpec(r, tempo, seq));
-      specs.push({ kind: 'call', family: r.down === 4 ? 'fourth_down' : 'play_select', r, opts, chosen, q, situation: situation(r),
+      specs.push({ kind: 'call', family: r.down === 4 ? 'fourth_down' : 'play_select', r: r.try2 || r, opts, chosen, q, situation: situation(r),
         seed: hash('call', seedKey(), G.si, seq) });
       await snapThenGrade(specs, opts.find((o) => o.key === chosen).action);
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
@@ -3153,9 +3160,23 @@
       b.addEventListener('click', async () => {
         if (busy) return;
         busy = true;
+        const sp = { kind, family: spec.family, r, opts: spec.opts.map((x) => ({ key: x.key, label: x.label, action: x.action })),
+          chosen: o.key, q: spec.q(), situation: `${clockOf(r.t).text} ${qLabel(r)}`, seed: hash(kind, seedKey(), G.si, G.seq) };
+        // going for two: graded as a choice, then you call the play, a snap from the 2 (root.try2 is the real try)
+        if (kind === 'pat' && o.key === 'two') {
+          try {
+            const x = (await gradeSpecs({ snap: G.snapN, specs: [sp] }))[0];
+            G.decisions.push(x);
+            G.snapN += 1;
+            G.root = { ...r, phase: SNAP, down: 1, ytg: 2, yl: 2, clock_running: false, try2: { ...r } };
+            addLog('Going for two', r.t, true);
+            persist();
+          } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); busy = false; return; }
+          busy = false;
+          return advance();
+        }
         try {
-          await snapThenGrade([{ kind, family: spec.family, r, opts: spec.opts.map((x) => ({ key: x.key, label: x.label, action: x.action })),
-            chosen: o.key, q: spec.q(), situation: `${clockOf(r.t).text} ${qLabel(r)}`, seed: hash(kind, seedKey(), G.si, G.seq) }], o.action);
+          await snapThenGrade([sp], o.action);
         } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
         busy = false;
       });
