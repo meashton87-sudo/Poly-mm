@@ -559,12 +559,14 @@
       const e = put(S('line', { x1: SX0, x2: SX1, ...attrs }), (Y) => { const y = Y(L); e.setAttribute('y1', y); e.setAttribute('y2', y); });
       return e;
     };
-    // the midfield logo (players asked: it shows where the ball is at a glance)
-    const logo = put(S('g', { class: 'midlogo' }), (Y) => {
-      const y = Y(50), rr = clip(Math.abs(Y(50) - Y(54.5)), 10, 30);
-      logo.setAttribute('transform', `translate(180 ${y}) scale(${(rr / 20).toFixed(3)})`);
+    // the midfield logo (players asked: it shows where the ball is at a glance): sideways at the 50, as on an NFL
+    // field, about 15 yards long (midlogo.png: the 2MD logo cut out of its navy)
+    const logo = put(S('image', { class: 'midlogo', href: 'midlogo.png', preserveAspectRatio: 'xMidYMid meet' }), (Y) => {
+      const len = clip(Math.abs(Y(42.5) - Y(57.5)), 50, 270), wid = len / 1.44, y = Y(50);
+      logo.setAttribute('x', (-len / 2).toFixed(1)); logo.setAttribute('y', (-wid / 2).toFixed(1));
+      logo.setAttribute('width', len.toFixed(1)); logo.setAttribute('height', wid.toFixed(1));
+      logo.setAttribute('transform', `translate(180 ${y.toFixed(1)}) rotate(-90)`);
     });
-    logo.append(S('circle', { r: 20 }), S('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', y: 1 }, '2MD'));
     for (let L = 5; L <= 95; L += 5) hline(L, { stroke: 'var(--chalk)', 'stroke-width': L % 10 ? 0.6 : 1.1, opacity: L % 10 ? 0.6 : 1 });
     [0, 100].forEach((L) => hline(L, { stroke: 'var(--chalk)', 'stroke-width': 2.4 }));
     [-10, 110].forEach((L) => {     // the goalposts on each end line, seen from above

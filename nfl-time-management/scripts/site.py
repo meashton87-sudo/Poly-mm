@@ -27,7 +27,7 @@ import numpy as np
 
 WEB = Path(__file__).resolve().parents[1] / "web"
 FILES = ["game.js", "motion.js", "engine.js", "game_worker.js", "game.json", "playbook.json", "engine_data.json",
-         "og.png", "icon.svg", "icon-180.png"]      # the link preview card (og_card.html, drawn at 1200x630) and the icons
+         "og.png", "icon.svg", "icon-180.png", "midlogo.png"]      # the link preview card (og_card.html, drawn at 1200x630) and the icons
 # the same skeleton the claude.ai artifact host wraps the page in: charset, a viewport that reaches the phone's
 # edges, the safe-area padding and a small reset
 HEAD = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
