@@ -120,12 +120,6 @@
   const SQ = { g: '🟩', y: '🟨', o: '🟧', r: '🟥' };
   const GLYPH = { g: '✓', y: '≈', o: '!', r: '✗' };
   const GRADE_WORD = { g: 'good', y: 'close', o: 'costly', r: 'a big miss' };
-  const WHY = {
-    pass: ['throw it more than most in these spots', 'lean on the run late'],
-    deep: ['take your deep shots', 'keep the ball short'],
-    go: ['go for it on fourth down', 'kick it away on fourth down'],
-    two: ['go for two', 'take the extra point'],
-  };
 
   let idx = null;                 // game.json
   let dayN = 1, today = [];
@@ -1457,11 +1451,15 @@
         if (near_ > 25) leg(d, tThrow + 0.35, 'go', { x: catchPt[0], y: catchPt[1] + dir * 6, eff: 0.85 });
       });
       Wd.run(tCatch);
+      // "Broken up" only with a defender really at the ball: when the cover man could not get there in time (he
+      // started too far off), it was a bad ball, and it says so (players saw "Broken up" with nobody near)
+      const ballD = Math.min(...K.def.map((d) => dist(here(d), catchPt)));
+      const late = !!(broke && ballD > 2.5);
+      if (late) { broke = null; overthrow = true; }
       // (tests: how open the target really was on the field when the ball got there, against the outcome)
-      if (window.__sepLog) {
-        const tq = here(tgt), nd = Math.min(...K.def.map((d) => dist(here(d), tq)));
-        window.__sepLog.push({ evt: e.evt || '', inc: !!e.incomplete, caught, intc, yac: Math.max(0, (e.yards || 0) - air), air, drawn: sepd && sepd.sep, actual: nd, kind });
-      }
+      const sepRow = window.__sepLog ? { evt: e.evt || '', inc: !!e.incomplete, caught, intc, yac: Math.max(0, (e.yards || 0) - air), air,
+        late, drawn: sepd && sepd.sep, actual: Math.min(...K.def.map((d) => dist(here(d), here(tgt)))), ballD, kind } : null;
+      if (sepRow) window.__sepLog.push(sepRow);
       // what happened at the catch point
       if (intc) {
         hold(tCatch, picker);
@@ -1487,6 +1485,7 @@
         if (brk && !thrownAway) leg(brk, tCatch - 0.1, 'go', { x: catchPt[0] + out * 0.5, y: catchPt[1] + dir * 0.4, eff: 0.7 });
         const text = e.evt === 'drop' ? 'Dropped!' : e.evt === 'near_pick' ? 'Almost picked!' : thrownAway ? 'Thrown away'
           : kind === 'hail' ? 'Knocked down' : two ? 'Incomplete: no good' : overthrow ? (air >= 15 ? 'Overthrown' : 'Off target') : broke ? 'Broken up' : 'Incomplete';
+        if (sepRow) sepRow.label = text;
         say(tCatch, text, e.evt === 'near_pick' ? 'boom' : 'info', { x: px(inX(catchPt[0])), L: catchPt[1] });
         if (e.evt === 'drop') down(tCatch + 0.1, tgt);
         leg(tgt, tCatch + 0.1, 'stand');
@@ -3250,7 +3249,9 @@
   function coachMatch(decs) {
     const C = idx.coaches;
     if (!C || !C.coaches || !C.coaches.length) return null;
-    const acc = { pass: [0, 0], deep: [0, 0], go: [0, 0], two: [0, 0] };
+    // per trait: [sum of (you - play-callers), snaps, what you did, what play-callers would have done (expected)]
+    const acc = { pass: [0, 0, 0, 0], deep: [0, 0, 0, 0], go: [0, 0, 0, 0], two: [0, 0, 0, 0] };
+    const add = (k, mine, theirs) => { const a = acc[k]; a[0] += mine - theirs; a[1] += 1; a[2] += mine; a[3] += theirs; };
     decs.forEach((x) => {
       if (x.kind === 'call') {
         let qPlay = 0, qPass = 0, qPassOnly = 0, qDeep = 0, qAll = 0;
@@ -3268,11 +3269,11 @@
         });
         const c = CALL[x.chosenCall || String(x.chosen).replace('+oob', '')];
         if (c && qPlay > 0) {
-          acc.pass[0] += (c.family === 'pass' ? 1 : c.family === 'rpo' ? 0.5 : 0) - qPass / qPlay; acc.pass[1] += 1;
-          if (c.family === 'pass' && qPassOnly > 0) { acc.deep[0] += (DEEP.has(c.id) ? 1 : 0) - qDeep / qPassOnly; acc.deep[1] += 1; }
+          add('pass', c.family === 'pass' ? 1 : c.family === 'rpo' ? 0.5 : 0, qPass / qPlay);
+          if (c.family === 'pass' && qPassOnly > 0) add('deep', DEEP.has(c.id) ? 1 : 0, qDeep / qPassOnly);
         }
-        if (x.family === 'fourth_down' && qAll > 0) { acc.go[0] += (c ? 1 : 0) - qPlay / qAll; acc.go[1] += 1; }
-      } else if (x.kind === 'pat') { acc.two[0] += (x.chosen === 'two' ? 1 : 0) - (x.q.two || 0); acc.two[1] += 1; }
+        if (x.family === 'fourth_down' && qAll > 0) add('go', c ? 1 : 0, qPlay / qAll);
+      } else if (x.kind === 'pat') add('two', x.chosen === 'two' ? 1 : 0, x.q.two || 0);
     });
     const zu = {}, w = {};
     Object.keys(acc).forEach((k) => {
@@ -3287,16 +3288,30 @@
       Object.keys(w).forEach((k) => { if (w[k]) dist += w[k] * (zu[k] - (c.z[k] || 0)) ** 2; });
       if (dist < bd) { bd = dist; best = c; }
     });
+    // the reasons quote your own calls, against what play-callers do in the same spots, and only when the counts
+    // show it (a "lean on the run" to someone who threw on most snaps read as wrong)
     const why = Object.keys(w).filter((k) => w[k] && Math.abs(zu[k]) >= 0.35 && Math.sign(zu[k]) === Math.sign(best.z[k] || 0))
-      .sort((a, b) => w[b] * Math.abs(zu[b]) - w[a] * Math.abs(zu[a])).slice(0, 2).map((k) => WHY[k][zu[k] > 0 ? 0 : 1]);
+      .sort((a, b) => w[b] * Math.abs(zu[b]) - w[a] * Math.abs(zu[a]))
+      .map((k) => whyText(k, zu[k] > 0, acc[k])).filter(Boolean).slice(0, 2);
     return { coach: best, why };
+  }
+  function whyText(k, more, [, n, mine, theirs]) {
+    const a = Math.round(mine), e = Math.round(theirs), na = n - a, ne = n - e;
+    if (more ? a <= e : a >= e) return null;               // rounded, the counts don't show it: say nothing
+    const of = (x, what) => `${x} of ${n} ${what}`;
+    return {
+      pass: more ? `threw on ${of(a, 'plays')} (most play-callers: ${e})` : `ran on ${of(na, 'plays')} (most play-callers: ${ne})`,
+      deep: more ? `went deep on ${of(a, 'throws')} (most: ${e})` : `kept it short on ${of(na, 'throws')} (most: ${ne})`,
+      go: more ? `went for it on ${of(a, 'fourth downs')} (most: ${e})` : `kicked on ${of(na, 'fourth downs')} (most: ${ne})`,
+      two: more ? `went for two ${a} of ${n} times (most: ${e})` : `kicked the extra point ${na} of ${n} times (most: ${ne})`,
+    }[k];
   }
   function coachCard(decs, label) {
     const m = coachMatch(decs);
     if (!m) return null;
     const c = m.coach, box = el('div', 'coach');
     box.append(el('div', 'k', label), el('div', 'name', c.name));
-    const reason = m.why.length ? `Like him, you ${m.why.join(' and ')}.` : 'Your calls sit close to his across the board.';
+    const reason = m.why.length ? `Like him, you ${m.why.join(', and ')}.` : 'Your calls sit close to his across the board.';
     box.append(el('div', 'why', reason));
     const teams = (c.teams || []).map(teamName).join(', ');
     box.append(el('div', 'meta', `${teams} · ${c.from === c.to ? c.from : `${c.from}–${c.to}`} · from ${c.plays.toLocaleString()} late-game snaps`));
