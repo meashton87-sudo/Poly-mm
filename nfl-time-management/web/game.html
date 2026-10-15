@@ -114,6 +114,14 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 
 /* the field */
 .fieldbox { position: relative; border-radius: 12px; overflow: hidden; background: var(--turf); line-height: 0; }
+.playgrid { display: grid; gap: 6px; }
+/* wide screens: the calls beside the field, both on screen at once (no scrolling down to call the play) */
+@media (min-width: 1000px) {
+  .wrap:has(> #play:not([hidden])) { max-width: 1120px; }
+  .playgrid { grid-template-columns: minmax(0, 1.2fr) minmax(340px, 1fr); column-gap: 24px; align-items: start; }
+  .playgrid > * { grid-column: 1; }
+  .playgrid > #dock { grid-column: 2; grid-row: 1 / span 5; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; }
+}
 #field { width: 100%; display: block; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .dot { cursor: pointer; }
 .dot circle.c { stroke-width: 1.6; }
@@ -161,6 +169,14 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .rcv .rt { font-size: 12.5px; color: var(--muted); }
 .rcv.on { border: 2px solid var(--chain); padding: 7px 9px; }
 .rcv .od { grid-column: 2; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* phones: one compact row per receiver (name and route left, the odds right), so the whole list fits under the field */
+@media (max-width: 600px) {
+  .rcvs { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .rcv { grid-template-columns: auto minmax(0, 1fr) auto; padding: 3px 10px; line-height: 1.25; }
+  .rcv.on { padding: 2px 9px; }
+  .rcv .pos { grid-row: span 2; }
+  .rcv .od { grid-column: 3; grid-row: 1 / span 2; text-align: right; max-width: 15.5em; line-height: 1.3; }
+}
 /* the survivor leaderboard */
 .board { display: grid; gap: 8px; text-align: left; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--card); }
 .board .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
@@ -423,7 +439,7 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
   <div id="tiles" class="tiles" aria-label="Today's three spots"></div>
   <section id="intro" class="intro" hidden></section>
   <section id="play" hidden>
-    <div style="display:grid;gap:6px">
+    <div class="playgrid">
       <button id="bar" class="bar" type="button" aria-label="Game details"></button>
       <div id="dd" class="dd"></div>
       <div class="fieldbox"><svg id="field" role="group" aria-label="The whole field, every player shown red to green by his rating"></svg></div>
