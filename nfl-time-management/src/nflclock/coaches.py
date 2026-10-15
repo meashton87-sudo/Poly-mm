@@ -1,8 +1,9 @@
 """Coach fingerprints for the daily game's "You coached like ..." line.
 
-Every head coach since 2016 is described by how his offense played late in close games and halves,
-each measure compared with what the league did in the same situations (so a two-minute drill full of
-passes doesn't make anyone look pass-happy):
+Every head coach since 1999 (nflverse play-by-play) is described by how his offense played late in close
+games and halves, each measure compared with what the league did in the same situations in his own era
+(so a two-minute drill full of passes doesn't make anyone look pass-happy, and a 2003 coach who went for
+it on fourth down reads as aggressive for his time, not timid by today's standards):
 
   pass   dropbacks over expected, by game mode, down, distance and field zone
   deep   throws 20+ yards downfield over expected, among targeted passes in those same spots
@@ -19,12 +20,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import config
+from . import config, data
 from .library import fine_key, game_mode
 
-SEASONS = tuple(range(2016, 2027))
+SEASONS = tuple(range(1999, 2027))
+ERA = 3            # seasons pooled for "what the league did then" (the league passes and gambles more every year)
 SHRINK = {"pass": 120, "deep": 60, "go": 25, "two": 6}
-MIN_PLAYS = 250
+MIN_PLAYS = 150     # late-game snaps; fewer plays sit nearer the league average (SHRINK), so small samples stay modest
 COACH_FIX = {"Klint Kubliak": "Klint Kubiak"}
 
 
@@ -33,6 +35,9 @@ def _load() -> pd.DataFrame:
             "yardline_100", "game_seconds_remaining", "half_seconds_remaining", "posteam_score", "defteam_score",
             "play_type", "qb_dropback", "air_yards", "two_point_attempt", "touchdown", "td_team", "extra_point_attempt",
             "score_differential"]
+    missing = [s for s in SEASONS if s < min(config.MODEL_SEASONS) and not (config.RAW_DIR / f"play_by_play_{s}.parquet").exists()]
+    if missing:                                   # the older seasons only feed the coaches: fetch them here
+        data.download(missing)
     frames = []
     for s in SEASONS:
         p = config.RAW_DIR / f"play_by_play_{s}.parquet"
@@ -46,7 +51,8 @@ def _load() -> pd.DataFrame:
 
 
 def _over_expected(df: pd.DataFrame, flag: pd.Series, cell: pd.Series) -> pd.DataFrame:
-    """Per coach: sum of (flag - league rate in the same cell) and the count."""
+    """Per coach: sum of (flag - league rate in the same cell, in the same era) and the count."""
+    cell = cell.astype(str) + "@" + (df["season"] // ERA).astype(str)
     exp = flag.groupby(cell).transform("mean")
     r = pd.DataFrame({"coach": df["coach"], "x": flag - exp})
     return r.groupby("coach")["x"].agg(["sum", "size"])
@@ -78,7 +84,8 @@ def fingerprints() -> dict:
     feats["two"] = _over_expected(tr, (tr["two_point_attempt"] == 1).astype(float), tr["margin"].clip(-16, 16))
     plays = s.groupby("coach").size()
     seasons = d.groupby("coach")["season"].agg(["min", "max"])
-    teams = d.sort_values("season", kind="stable").groupby("coach")["posteam"].agg(lambda x: list(dict.fromkeys(x)))
+    teams = d[d["posteam"].astype(str).str.len() > 0].sort_values("season", kind="stable").groupby("coach")["posteam"].agg(
+        lambda x: list(dict.fromkeys(x)))
     coaches = plays[plays >= MIN_PLAYS].index
     out, spread = {}, {}
     for k, f in feats.items():

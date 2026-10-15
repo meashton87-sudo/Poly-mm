@@ -446,9 +446,10 @@ no touchdown without the distance, no safety without the end zone, downs, distan
 range. Nothing says which call is best until
 after the snap; then every decision is graded in win probability against all the alternatives and
 against what a typical NFL play-caller does there. Each spot and the day end with the head coach whose
-late-game calls look most like yours ("You called this one like Nick Sirianni"), from 59 coaches'
-2016-26 fingerprints: passes, deep shots, fourth-down tries and two-point tries, each over what the
-league does in the same spots (`coaches.py`). The day's score is a percentile against NFL play-callers
+late-game calls look most like yours ("You called this one like Nick Sirianni"), from 144 head
+coaches' 1999-2026 fingerprints (Cowher, Dungy, Gruden, Holmgren, Shanahan and Schottenheimer through this year's
+first-time coaches): passes, deep shots, fourth-down tries and two-point tries, each over what the league did in
+the same spots in that coach's era (`coaches.py`; the 1999-2015 play-by-play is fetched for this alone). The day's score is a percentile against NFL play-callers
 on the same drive, with a share grid of one square per snap. The simulated callers call like the league, each
 sharpened by his own skill (an option's weight falls by e for each `tau` of win chance it gives up; tau drawn from
 very sharp to loose, and 15% call by frequency alone), so scores spread from 0 to 100 and a typical player lands
