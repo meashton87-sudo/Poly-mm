@@ -124,6 +124,16 @@ for (let k = 0; k < 100; k++) {
   assert.ok(good / n > 0.38 && good / n < 0.6, `called two-point tries convert like the league: ${(good / n).toFixed(3)}`);
   console.log(`called two-point tries: ${(100 * good / n).toFixed(1)}% good`);
 }
+// in field goal range late, tied, the defense calls timeout to save time for a reply even when the offense has none left
+{
+  let calls = 0;
+  for (let k = 0; k < 60; k++) {
+    const at = { ...root, t: 55, phase: 0, score: [17, 17], pos: 0, down: 2, ytg: 6, yl: 18, to: [0, 2], clock_running: true };
+    const r = sim.step(at, { action: { to_off: false, play: 0 }, seed: 9500 + k });
+    if (r.log.some((e) => e.ev === 'timeout' && e.team === 1)) calls++;
+  }
+  assert.ok(calls > 50, `the defense saves time when a field goal would beat it: ${calls}/60`);
+}
 // matchups (engine.js MATCH): a call that beats the defense's call does better than the real plays alone, one that
 // loses to it worse (mean EPA of the plays drawn, over every situation)
 {

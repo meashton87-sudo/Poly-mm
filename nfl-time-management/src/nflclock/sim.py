@@ -340,7 +340,11 @@ class Simulator:
             closing = (margin >= -2) & (margin <= 0) & (t_half <= CLOSE_WINDOW) & (off_to > 0) & (
                 self.fg_prob(yl + FG_SNAP_YARDS, o) >= CLOSE_FG_P)
             off_wants &= ~closing                                 # timeouts are kept for the kick
-            def_wants |= closing & (t_half <= CLOSE_DEF_WINDOW)   # the defense saves time for a reply
+            # the defense saves time for a reply when a field goal would beat it, whatever timeouts the offense has
+            # left (players saw a defense let the clock run out on them with the offense in range and out of timeouts)
+            def_saves = (margin >= -2) & (margin <= 0) & (t_half <= CLOSE_DEF_WINDOW) & (
+                self.fg_prob(yl + FG_SNAP_YARDS, o) >= CLOSE_FG_P)
+            def_wants |= def_saves
             attempt = np.ones(ix.size, bool)
             run_out = np.zeros(ix.size, bool)
         else:
