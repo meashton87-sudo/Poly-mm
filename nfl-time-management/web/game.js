@@ -2450,7 +2450,8 @@
     [`${r.pos === G.me ? 'Your' : `${teamName(op)}`} ball, ${ddText(r)} ${onSpot(r)}`, `You: ${tos(r.to[G.me])}`,
       `${teamName(op)}: ${tos(r.to[1 - G.me])}`].forEach((f) => facts.append(el('span', '', f)));
     box.append(facts);
-    const rc = (sc.real || {}).coach;
+    const rc = (sc.real || {}).coach, feat = !SURV && idx.featured && idx.featured[dayN];
+    if (feat && feat.note && idx.spots[feat.spot] && idx.spots[feat.spot].id === sc.id) box.append(el('p', 'story', feat.note));
     box.append(el('div', 'who', `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
     if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
     const go = el('button', 'btn', 'Next');
@@ -4118,7 +4119,9 @@
       // the end of a half); the day's drive is one of them, the kind rotating from day to day
       const row = idx.schedule[(dayN - 1) % idx.schedule.length], kinds = Object.keys(idx.categories);
       const want = kinds[(dayN - 1) % kinds.length];
-      const ids = [row.find((i) => idx.spots[i].category === want) ?? row[(dayN - 1) % row.length]];
+      // a featured day plays a famous spot (with its story on the intro) instead of the scheduled one
+      const feat = idx.featured && idx.featured[dayN];
+      const ids = feat ? [feat.spot] : [row.find((i) => idx.spots[i].category === want) ?? row[(dayN - 1) % row.length]];
       const teams = await loadTeams(ids);
       today = ids.map((i) => buildScen(idx.spots[i], teams[i]));
       $('dayLabel').textContent = `No. ${dayN} · ${now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;

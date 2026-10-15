@@ -51,7 +51,11 @@ FROZEN = config.ROOT / "src" / "nflclock" / "daily_schedule.json"
 def freeze(game_json=WEB / "game.json", out=FROZEN) -> dict:
     """Write the schedule of a built game.json (the live one) to the frozen file."""
     g = json.loads(game_json.read_text())
-    frozen = {"launch": g["launch"], "spots": [[sp["id"], sp["category"]] for sp in g["spots"]], "schedule": g["schedule"]}
+    feat = {k for f in g.get("featured", {}).values() for k in [f["spot"]]}
+    frozen = {"launch": g["launch"], "spots": [[sp["id"], sp["category"]] for k, sp in enumerate(g["spots"]) if k not in feat],
+              "schedule": g["schedule"],
+              "featured": {d: {"id": g["spots"][f["spot"]]["id"], "category": g["spots"][f["spot"]]["category"], "note": f["note"]}
+                           for d, f in g.get("featured", {}).items()}}
     out.write_text(json.dumps(frozen, separators=(",", ":")) + "\n")
     return {"spots": len(frozen["spots"]), "days": len(frozen["schedule"])}
 
@@ -62,6 +66,10 @@ def candidates(pbp: pd.DataFrame, lib: pd.DataFrame, keep: dict | None = None) -
     s = s.sort_values(["game_id", "row_order"])
     first = s.groupby(["game_id", "fixed_drive"]).head(1)
     first = first[first["down"] == 1]
+    if keep:          # a featured spot may start mid-drive (the snap the story is about): any first-down snap
+        sid = s["game_id"] + "#" + s["play_id"].astype(int).astype(str)
+        extra = s[sid.isin(keep) & (s["down"] == 1) & ~s.index.isin(first.index)]
+        first = pd.concat([first, extra])
     q, gsr, hs = first["qtr"], first["game_seconds_remaining"], first["half_seconds_remaining"]
     m, yl, wp = first["margin"], first["yardline_100"], first["wp"]
     cat = np.select(
@@ -92,17 +100,24 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
     lib = P.labeled_plays()
     P.export(lib, WEB / "playbook.json")
     frozen = json.loads(FROZEN.read_text()) if FROZEN.exists() else None
-    cand = candidates(pbp, lib, keep=dict(map(tuple, frozen["spots"])) if frozen else None)
+    featured = (frozen or {}).get("featured", {})
+    keep = {**dict(map(tuple, frozen["spots"])), **{f["id"]: f["category"] for f in featured.values()}} if frozen else None
+    cand = candidates(pbp, lib, keep=keep)
     rng = np.random.default_rng(seed)
     if frozen:
         by_id = cand.drop_duplicates("spot_id").set_index("spot_id", drop=False)
         missing = [i for i, _ in frozen["spots"] if i not in by_id.index]
         if missing:       # a play renumbered upstream: the build fails rather than move a day's drive
             raise RuntimeError(f"frozen spots missing from the data: {missing[:5]} ({len(missing)})")
+        missing = [f["id"] for f in featured.values() if f["id"] not in by_id.index]
+        if missing:
+            raise RuntimeError(f"featured spots missing from the data: {missing}")
         picks = {cat: by_id.loc[[i for i, c in frozen["spots"] if c == cat]] for cat in CATEGORIES}
         order = [i for i, _ in frozen["spots"]]
         if [i for cat in CATEGORIES for i in picks[cat]["spot_id"]] != order:
             raise RuntimeError("frozen spots are not grouped by kind in CATEGORIES order")
+        # featured days' spots go after all the others, so no index of a frozen spot moves
+        picks["_featured"] = by_id.loc[[f["id"] for f in featured.values()]]
     else:
         picks = {cat: cand[cand["category"] == cat].iloc[lambda d: rng.permutation(len(d))].head(days) for cat in CATEGORIES}
 
@@ -125,7 +140,7 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
             home_off = off == home
             res = r.get("fixed_drive_result")
             spots.append({
-                "id": f"{gid}#{int(r['play_id'])}", "category": cat, "home": home, "away": away, "player": off,
+                "id": f"{gid}#{int(r['play_id'])}", "category": r["category"], "home": home, "away": away, "player": off,
                 "indoor": g["roof"] in ("dome", "closed"), "wind": float(np.nan_to_num(g["wind"])),
                 "temp": None if pd.isna(g["temp"]) else float(g["temp"]),
                 "start": {"qtr": int(r["qtr"]), "clock": float(r["quarter_seconds_remaining"]),
@@ -166,7 +181,11 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
         b, side = P.base_side(c)
         calls.append({"id": c, "label": label, "kind": kind, "say": say, "family": P.FAMILY[c], "base": b, "side": side})
     out = {"launch": LAUNCH.isoformat(), "categories": CATEGORIES, "calls": calls, "models": models,
-           "schedule": schedule, "spots": spots, "spot_chunk": SPOT_CHUNK, "league": league,
+           "schedule": schedule,
+           # a day can feature one spot (a famous one) in place of its scheduled drive: day -> spot index, with its story
+           "featured": {d: {"spot": next(k for k, sp in enumerate(spots) if sp["id"] == f["id"]), "note": f.get("note", "")}
+                        for d, f in featured.items()} if frozen else {},
+           "spots": spots, "spot_chunk": SPOT_CHUNK, "league": league,
            "coaches": CO.fingerprints(),
            "asof": {"season": season, "ratings": "our own, 40-99: each player's percentile at his position as of the week of the game"},
            "built": pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds")}
