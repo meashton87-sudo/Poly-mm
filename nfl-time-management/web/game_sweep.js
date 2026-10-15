@@ -151,7 +151,7 @@ idx.spots.forEach((sp, si) => {
         const before = JSON.parse(JSON.stringify(rt));
         const tempo = ['urgent', 'hurry', 'normal', 'milk'][s % 4];
         const looks = s % 2 ? 1 << ((s >> 1) % 4) : 0;     // half the snaps against one defensive look
-        const r = sim.step(rt, { action: { to_off: false, play: P.calls[ci].kind, call: id, oob: s % 3 === 0, tempo: rt.clock_running ? tempo : undefined, looks }, seed: si * 1000 + ci * 37 + s * 7919 + vi });
+        const r = sim.step(rt, { action: { to_off: false, play: P.calls[ci].kind, call: id, oob: s % 3 === 0, tempo: rt.clock_running ? tempo : undefined, looks, pers: [undefined, 11, 12, 21, 13][(s + vi) % 5] }, seed: si * 1000 + ci * 37 + s * 7919 + vi });
         steps++;
         check(before, r, `spot ${si} v${vi} ${id} s${s}`);
         attrib(before, r, `spot ${si} v${vi} ${id} s${s}`);
@@ -194,7 +194,7 @@ idx.spots.forEach((sp, si) => {
         action = pick === 0 && cur.clock_running ? { to_off: true } : pick === 1 && cur.down <= 3 ? { to_off: false, play: 'spike' } : pick === 2 && cur.down === 4 && sim.fourthInfo(cur).pFg >= 0.05 ? { to_off: false, play: 'fg' }
           : pick === 3 && cur.down === 4 && cur.yl >= 35 ? { to_off: false, play: 'punt' } : pick === 4 && cur.down <= 3 && n % 3 === 0 ? { to_off: false, play: 'kneel' }
           : pick >= 5 && pick <= 7 ? routePick(n + g + si)
-          : { to_off: false, play: P.calls[ci].kind, call: calls[ci], oob: n % 2 === 0, tempo: cur.clock_running ? ['urgent', 'hurry', 'normal', 'milk'][n % 4] : undefined };
+          : { to_off: false, play: P.calls[ci].kind, call: calls[ci], oob: n % 2 === 0, tempo: cur.clock_running ? ['urgent', 'hurry', 'normal', 'milk'][n % 4] : undefined, pers: [undefined, 12, 21, 13][n % 4] };
       } else if (cur.phase === 0) action = { to_def: n % 5 === 0, def: n % 4 ? ['blitz', 'load', 'soft'][n % 3] : undefined, st: ['block', 'safe', 'rush', 'return'][(n + g) % 4] };
       else if (cur.phase === 1 && cur.pos === me) action = { pat: n % 3 ? 'xp' : 'two' };
       else if (cur.phase === 2 && cur.pos === me) action = { kick: ['return', 'touchback', 'onside', 'deep'][(n + g) % 4] };
@@ -256,7 +256,7 @@ idx.spots.forEach((sp, si) => {
     if (cur.phase === 0 && cur.pos === me) {
       const ci = (si * 7 + n * 5) % calls.length;
       action = n % 9 === 0 && cur.down === 4 && cur.yl >= 35 ? { to_off: false, play: 'punt' } : n % 5 === 0 ? routePick(n + si)
-        : { to_off: false, play: P.calls[ci].kind, call: calls[ci], oob: n % 2 === 0, tempo: cur.clock_running ? ['urgent', 'hurry', 'normal', 'milk'][n % 4] : undefined };
+        : { to_off: false, play: P.calls[ci].kind, call: calls[ci], oob: n % 2 === 0, tempo: cur.clock_running ? ['urgent', 'hurry', 'normal', 'milk'][n % 4] : undefined, pers: [undefined, 12, 21, 13][n % 4] };
     } else if (cur.phase === 0) action = { to_def: false, def: ['blitz', 'load', 'soft'][n % 3] };
     else if (cur.phase === 1 && cur.pos === me) action = { pat: n % 4 ? 'xp' : 'two' };
     else if (cur.phase === 2 && cur.pos === me) action = { kick: ['return', 'touchback', 'deep'][n % 3] };
