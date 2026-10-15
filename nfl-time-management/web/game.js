@@ -244,11 +244,13 @@
   // your offense in the personnel you picked: the snap's players, then that game's backups (bench), best first
   function offLineup(i) {
     const L = lineup(i), off = L.off;
-    if (i !== G.me || !G.pers || G.pers === persOf(off)) return off;
-    const nb = Math.floor(G.pers / 10), nt = G.pers % 10, nw = 5 - nb - nt, bench = L.bench || [];
+    if (i !== G.me || ((!G.pers || G.pers === persOf(off)) && !G.persWho)) return off;
+    const P0 = G.pers || persOf(off), nb = Math.floor(P0 / 10), nt = P0 % 10, nw = 5 - nb - nt, bench = L.bench || [];
     const core = off.filter((p) => !['RB', 'FB', 'TE', 'WR'].includes(p.pos));
+    const who = G.persWho || {};
     const fill = (have, pool, pos, n) => {
-      const out = have.slice(0, n);
+      const all = have.concat(pool), want = (who[pos === 'RB' ? 'backs' : pos] || []).map((nm) => all.find((p) => p.name === nm)).filter(Boolean);
+      const out = [...new Set(want.concat(have))].slice(0, n);
       for (const p of pool) if (out.length < n && !out.includes(p)) out.push(p);
       while (out.length < n) out.push({ pos, name: `Backup ${pos}`, ovr: 60, stat: 'A backup' });
       return out;
@@ -261,7 +263,7 @@
     return core.concat(backs, tes, wrs);
   }
   function names(i) {
-    const off = lineup(i).off;
+    const off = offLineup(i);
     const qb = off.find((p) => p.pos === 'QB'), rb = off.find((p) => p.pos === 'RB');
     return { qb: qb ? shortName(qb.name) : null, rb: rb ? shortName(rb.name) : null };
   }
@@ -2544,7 +2546,7 @@
   }
   function persist() {
     state.spots[G.si] = { id: G.scen.id, root: G.root, decisions: G.decisions, log: G.log, seq: G.seq, snapN: G.snapN, over: G.over,
-      result: G.result, started: G.started, pending: G.pending || null, pers: G.pers || null };
+      result: G.result, started: G.started, pending: G.pending || null, pers: G.pers || null, persWho: G.persWho || null };
     saveState();
   }
   function resumeSpot(i) {
@@ -2552,7 +2554,7 @@
     let s = state.spots[i];
     if (s && s.id && s.id !== G.scen.id) s = state.spots[i] = null;   // saved on another game (a changed schedule): start fresh
     if (s) Object.assign(G, { root: s.root, decisions: s.decisions || [], log: s.log || [], seq: s.seq || 0, snapN: s.snapN || 0,
-      over: s.over, result: s.result, started: !!s.started, pending: s.pending || null, pers: s.pers || null });
+      over: s.over, result: s.result, started: !!s.started, pending: s.pending || null, pers: s.pers || null, persWho: s.persWho || null });
     G.side = sideFor(G.seq);
     return G;
   }
@@ -2780,6 +2782,7 @@
   const specialLabel = (k) => (k === 'fg' ? 'Field goal' : k === 'punt' ? 'Punt' : 'Kneel');
 
   function drawDock() {
+    persButton();
     const r = G.root, d = $('dock'), me = G.me;
     d.textContent = '';
     takeBanner(d);
@@ -2789,7 +2792,6 @@
       head.append(el('h2', '', 'Your call'), el('span', 'sub', `${ddText(r)} · ${spotText(r)}`));
       if (G.look != null) d.append(readLine(G.look));
       if (r.clock_running) d.append(tempoPicker(r));
-      if (r.pos === me) d.append(persPicker());
       const fam = el('div', 'keys');
       fam.style.setProperty('--cols', 4);
       Object.entries(FAM).forEach(([f, label], i) => {
@@ -3028,31 +3030,87 @@
     if (!call || !state) return;
     state.tend = ((state.tend || []).concat([call])).slice(-ADAPT_N);
   }
-  // personnel: one row; the field redraws with who is in
-  function persPicker() {
-    const w = el('div', 'tempo pers');
-    w.append(el('span', 'lab', 'Personnel'));
-    const seg = el('div', 'seg');
-    seg.style.gridTemplateColumns = `repeat(${PERS.length}, minmax(0, 1fr))`;
-    seg.setAttribute('role', 'radiogroup');
-    seg.setAttribute('aria-label', 'Personnel: who is on the field');
-    const now = () => G.pers || persOf(lineup(G.me).off);
-    PERS.forEach(([k, sub]) => {
-      const b = el('button', 'segb');
-      b.type = 'button';
-      b.setAttribute('role', 'radio');
-      b.append(el('b', '', String(k)), el('small', '', sub));
-      b.classList.toggle('on', now() === k); b.setAttribute('aria-checked', String(now() === k));
-      b.addEventListener('click', () => {
-        if (busy || now() === k) return;
-        G.pers = k;
-        track('personnel', { pers: k });
-        drawField(); drawDock();
+  // ---- personnel: optional; a button under the field opens the sheet (who is on the field, and why it matters)
+  const PERS_INFO = {
+    11: ['1 RB · 1 TE · 3 WR', 'Spread it out: the NFL’s base set, about 6 snaps in 10.'],
+    12: ['1 RB · 2 TE · 2 WR', 'Balanced: run or play action out of the same look. About 2 in 10.'],
+    21: ['2 RB (a fullback) · 1 TE · 2 WR', 'Power: a lead blocker for the run, and play action off it.'],
+    13: ['1 RB · 3 TE · 1 WR', 'Heavy: short yardage and the goal line.'],
+  };
+  function persButton() {
+    const b = $('persBtn'), r = G && G.root;
+    if (!b) return;
+    const show = !!(r && r.phase === SNAP && r.pos === G.me && !r.try2 && !G.over);
+    b.hidden = !show;
+    if (!show) return;
+    const cur = G.pers || persOf(lineup(G.me).off);
+    b.textContent = '';
+    b.append(document.createTextNode(`Personnel · ${PERS_INFO[cur] ? cur : 'as lined up'}`));
+    const pen = S('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'aria-hidden': 'true' });
+    pen.append(S('path', { d: 'M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4' }));
+    b.append(pen);
+  }
+  function openPers() {
+    if (busy || !G || G.root.pos !== G.me) return;
+    const real = persOf(lineup(G.me).off), L = lineup(G.me);
+    const nodes = [];
+    const render = () => {
+      const cur = G.pers || real;
+      const hint = el('p', 'phint', 'Optional. The play is drawn from real NFL plays run with the grouping you pick; the players you pick are the ones on the field and the ones you can throw to.');
+      const groups = el('div', 'pgroups');
+      PERS.forEach(([k]) => {
+        const [t, sub] = PERS_INFO[k], b = el('button', `pgroup${cur === k ? ' on' : ''}`);
+        b.type = 'button';
+        b.setAttribute('aria-pressed', String(cur === k));
+        const txt = el('div');
+        txt.append(el('div', 't', `${t}${k === real ? ' · as lined up' : ''}`), el('div', 's', sub));
+        b.append(el('b', '', String(k)), txt);
+        b.addEventListener('click', () => { G.pers = k === real && !G.persWho ? null : k; changed(); });
+        groups.append(b);
       });
-      seg.append(b);
-    });
-    w.append(seg);
-    return w;
+      const slots = el('div', 'pslots');
+      const on = offLineup(G.me), skill = on.filter((p) => ['RB', 'FB', 'TE', 'WR'].includes(p.pos));
+      const cand = (pos) => {
+        const g = pos === 'FB' || pos === 'RB' ? ['RB', 'FB'] : [pos];
+        const seen = new Set(), out = [];
+        L.off.concat(L.bench || [], skill).forEach((p) => { if (g.includes(p.pos) && !seen.has(p.name)) { seen.add(p.name); out.push(p); } });
+        return out;
+      };
+      skill.forEach((p, i) => {
+        const row = el('label', 'pslot'), sel = el('select');
+        sel.setAttribute('aria-label', `${p.pos} ${i + 1}`);
+        cand(p.pos).forEach((c) => {
+          const o = el('option', '', `${c.name}${c.ovr ? ` · ${c.ovr}` : ''}${L.off.includes(c) ? '' : ' (backup)'}`);
+          o.value = c.name;
+          if (c.name === p.name) o.selected = true;
+          sel.append(o);
+        });
+        sel.addEventListener('change', () => {
+          const key = p.pos === 'RB' || p.pos === 'FB' ? 'backs' : p.pos;
+          const now = skill.filter((q) => (key === 'backs' ? q.pos === 'RB' || q.pos === 'FB' : q.pos === p.pos)).map((q) => q.name);
+          const j = now.indexOf(p.name), k = now.indexOf(sel.value);
+          if (k >= 0) now[k] = p.name;           // already in: the two swap places
+          now[j] = sel.value;
+          G.persWho = { ...(G.persWho || {}), [key]: now };
+          if (!G.pers) G.pers = real;
+          changed();
+        });
+        row.append(el('span', '', p.pos), sel);
+        slots.append(row);
+      });
+      const done = el('button', 'btn pdone', 'Done');
+      done.type = 'button';
+      done.addEventListener('click', closeModal);
+      const reset = el('button', 'ghost', 'Back to the real lineup');
+      reset.type = 'button';
+      reset.addEventListener('click', () => { G.pers = null; G.persWho = null; changed(); });
+      nodes.length = 0;
+      nodes.push(hint, groups, el('h3', '', 'Who plays'), slots, reset, done);
+      const b = $('mBody'); b.textContent = ''; nodes.forEach((n) => b.append(n));
+    };
+    const changed = () => { track('personnel', { pers: G.pers || real, custom: !!G.persWho }); persist(); drawField(); persButton(); render(); };
+    openModal('Personnel', []);
+    render();
   }
   function tempoPicker(r) {
     const w = el('div', 'tempo');
@@ -4352,6 +4410,7 @@
     $('statsBtn').addEventListener('click', openStats);
     $('bar').addEventListener('click', () => { if (G) spotInfo(); });
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
+    $('persBtn').addEventListener('click', openPers);
     $('deepClose').addEventListener('click', closeDeep);
     $('mClose').addEventListener('click', closeModal);
     $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeModal(); });

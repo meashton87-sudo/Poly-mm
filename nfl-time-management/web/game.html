@@ -223,6 +223,21 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .legend .ramp i { width: 64px; height: 8px; border-radius: 4px; display: inline-block; background: linear-gradient(90deg, hsl(2 82% 52%), hsl(45 92% 55%), hsl(135 62% 48%)); }
 .ghost { border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 6px 12px; font-weight: 700; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .ghost:hover { border-color: var(--muted); }
+.legend .btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+@media (max-width: 420px) { .legend .ramp i { width: 40px; } .legend .ghost { padding: 6px 10px; font-size: 12.5px; } }
+.pgroups { display: grid; gap: 6px; }
+.pgroup { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: center; text-align: left; border: 1px solid var(--line);
+  background: var(--card); color: var(--ink); border-radius: 10px; padding: 8px 10px; cursor: pointer; }
+.pgroup b { font: 900 20px var(--display); }
+.pgroup .t { font: 700 13px var(--body); }
+.pgroup .s { font: 500 12px var(--body); color: var(--muted); }
+.pgroup.on { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.pslots { display: grid; gap: 6px; margin-top: 4px; }
+.pslot { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: center; }
+.pslot span { font: 800 12px var(--body); letter-spacing: .08em; color: var(--muted); }
+.pslot select { width: 100%; min-width: 0; font: 600 14px var(--body); padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+.phint { font-size: 12.5px; color: var(--muted); margin: 2px 0 8px; }
+.pdone { margin-top: 10px; width: 100%; }
 .ghost svg { width: 16px; height: 16px; }
 
 /* the dock under the field: calls, then the result */
@@ -449,8 +464,11 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
       <div class="fieldbox"><svg id="field" role="group" aria-label="The whole field, every player shown red to green by his rating"></svg></div>
       <div class="legend">
         <span class="ramp">worse <i></i> better</span>
+        <span class="btns">
+        <button id="persBtn" class="ghost" type="button" hidden aria-label="Edit personnel"></button>
         <button id="deepBtn" class="ghost" type="button">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>Player ratings</button>
+        </span>
       </div>
       <section id="dock" class="dock" aria-live="polite"></section>
       <details id="pbpBox" class="pbp"><summary>Play-by-play</summary><ol id="pbp"></ol></details>
