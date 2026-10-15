@@ -207,6 +207,15 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   await pro('POST', '/pay', undefined, { origin: 'https://evil.example' });
   assert.strictEqual(new URLSearchParams(stripeCalls[stripeCalls.length - 1][1].body).get('success_url'), 'https://nfl2mindrill.com/?claim={CHECKOUT_SESSION_ID}', 'an unknown origin gets the site');
   for (const e of [env, board.env]) e.ALLOWED_ORIGINS = 'https://nfl2mindrill.com';
+  // a product id instead of a price id: the product, charged $4.99
+  for (const e of [env, board.env]) e.STRIPE_PRICE = 'prod_abc123';
+  await pro('POST', '/pay');
+  const fp = new URLSearchParams(stripeCalls[stripeCalls.length - 1][1].body);
+  assert.strictEqual(fp.get('line_items[0][price_data][product]'), 'prod_abc123');
+  assert.strictEqual(fp.get('line_items[0][price_data][unit_amount]'), '499');
+  assert.strictEqual(fp.get('line_items[0][price_data][currency]'), 'usd');
+  assert.strictEqual(fp.get('line_items[0][price]'), null);
+  for (const e of [env, board.env]) e.STRIPE_PRICE = 'price_123';
   // claiming: a paid session gets a code, the same one again; an unpaid or unknown one gets none
   for (const bad of [{}, { s: 'cs_live_' }, { s: 'nope' }]) assert.strictEqual((await pro('POST', '/claim', bad)).status, 400, JSON.stringify(bad));
   assert.strictEqual((await pro('POST', '/claim', { s: 'cs_test_open1234567890' })).status, 402, 'unpaid');

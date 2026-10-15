@@ -11,7 +11,7 @@ compatibility_date = "2025-06-01"
 [vars]
 ALLOWED_ORIGINS = "https://nfl2mindrill.com,https://www.nfl2mindrill.com,https://nfl2mindrill.pages.dev,https://nfl2mindrill-pro-preview.pages.dev"
 SITE = "https://nfl2mindrill.com"
-STRIPE_PRICE = ""
+STRIPE_PRICE = "prod_VRryrvDrQxpAC7"      # test mode: Two-Minute Drill Pro, $4.99 (the live product's id replaces it at launch)
 
 [[durable_objects.bindings]]
 name = "BOARD"

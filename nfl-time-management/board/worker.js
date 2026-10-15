@@ -22,7 +22,7 @@
 // so responses carry CORS headers for ALLOWED_ORIGINS (comma-separated; "*" = any).
 // Pro (a one-time purchase on Stripe Checkout: Apple Pay, Google Pay, Link and cards on Stripe's own page; needs the
 // secret STRIPE_SECRET (a restricted key: Checkout Sessions read and write) and the vars STRIPE_PRICE (a one-time
-// price id) and SITE; without them /pay answers 503):
+// price id, price_...; or the product id, prod_..., charged PRO_CENTS) and SITE; without them /pay answers 503):
 //   GET    /pro                      -> { on, price }        whether payments are set up, and the price shown
 //   POST   /pay                      -> { url }              a Checkout session: send the player to url; Stripe sends
 //                                                            him back to SITE/?claim=<session id>
@@ -38,7 +38,7 @@
 const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
 const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook'];
 const STRIPE_VERSION = '2026-08-26.dahlia', WEBHOOK_TOLERANCE = 300;   // the API version pinned; a signature older than this is refused
-const PRO_PRICE = '$4.99', PRO_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', SESSION_RE = /^cs_(test|live)_[A-Za-z0-9]{10,200}$/;
+const PRO_PRICE = '$4.99', PRO_CENTS = 499, PRO_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', SESSION_RE = /^cs_(test|live)_[A-Za-z0-9]{10,200}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const clean = (name) => String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
@@ -272,7 +272,10 @@ async function pro(req, env, storage, hits, h, url) {
     const site = String(allowed.includes(origin) ? origin : env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, '');
     let r;
     try {
-      r = await stripe(env, 'checkout/sessions', { mode: 'payment', 'line_items[0][price]': env.STRIPE_PRICE, 'line_items[0][quantity]': '1',
+      const item = String(env.STRIPE_PRICE).startsWith('prod_')
+        ? { 'line_items[0][price_data][currency]': 'usd', 'line_items[0][price_data][product]': env.STRIPE_PRICE, 'line_items[0][price_data][unit_amount]': String(PRO_CENTS) }
+        : { 'line_items[0][price]': env.STRIPE_PRICE };
+      r = await stripe(env, 'checkout/sessions', { mode: 'payment', ...item, 'line_items[0][quantity]': '1',
         success_url: `${site}/?claim={CHECKOUT_SESSION_ID}`, cancel_url: `${site}/?pro=cancel`, integration_identifier: tag() });
     } catch (e) { return json({ error: 'stripe unreachable' }, 502, h); }
     const sess = await r.json().catch(() => ({}));
