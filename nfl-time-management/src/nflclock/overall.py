@@ -89,7 +89,12 @@ def groups(T: dict) -> pd.Series:
     pff = pd.Series({gid: PFF[v] for gid, v in zip(T["players"]["gsis_id"], T["players"]["pff_position"]) if v in PFF})
     defense = g.isin(["EDGE", "DL", "LB", "CB", "S"])
     g.loc[defense] = pff.reindex(g.index[defense]).fillna(g[defense]).to_numpy()
-    return g[~g.index.duplicated()]
+    g = g[~g.index.duplicated()]
+    # before snap counts (2012): the players table's position
+    rest = T["players"].dropna(subset=["gsis_id"]).drop_duplicates("gsis_id")
+    rest = pd.Series(rest["position"].map(POS_GROUP).to_numpy(), index=rest["gsis_id"]).dropna()
+    rest = rest[~rest.index.isin(g.index)]
+    return pd.concat([g, rest])
 
 
 def performance(T: dict, st: pd.DataFrame, ngs: dict, pbp: pd.DataFrame, grp: pd.Series, sw: dict | None = None) -> pd.DataFrame:
@@ -163,7 +168,13 @@ def performance(T: dict, st: pd.DataFrame, ngs: dict, pbp: pd.DataFrame, grp: pd
     dd.index = dd.index.map(to_gsis)
     dd = dd[dd.index.notna()].groupby(level=0).sum()
     box = st.assign(w=lambda x: wts(x))
+    box = box[box[["def_sacks", "def_tackles_for_loss", "def_qb_hits", "def_pass_defended"]].fillna(0).sum(axis=1) > 0]
     bagg = lambda c: (box[c].fillna(0) * box["w"]).groupby(box["player_id"]).sum()
+    # a defender the box score knows but snap counts do not (before 2012): his games stand in for his snaps
+    bg = box.groupby("player_id")["w"].sum()
+    dd = dd.reindex(dd.index.union(bg.index)).fillna(0.0)
+    dd["g"] = np.maximum(dd["g"], bg.reindex(dd.index).fillna(0.0))
+    dd["defense_snaps"] = dd["defense_snaps"].where(dd["defense_snaps"] > 0, dd["g"] * 60)
     for c, src in (("sk", "def_sacks"), ("tfl", "def_tackles_for_loss"), ("hits", "def_qb_hits"), ("pd", "def_pass_defended")):
         dd[c] = bagg(src).reindex(dd.index).fillna(0.0)
     snaps, games, tg = dd["defense_snaps"], dd["g"], dd["def_targets"]

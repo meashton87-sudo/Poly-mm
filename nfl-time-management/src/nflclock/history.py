@@ -262,6 +262,8 @@ class History:
         skill = [(p, OFF_POS[pos_of[p]]) for p, _ in cnt.most_common() if p not in qb and OFF_POS.get(pos_of.get(p, "")) in ("RB", "WR", "TE")]
         line = [(p, OFF_POS[ps]) for p, ps in zip(ros["gsis_id"], ros["position"]) if OFF_POS.get(ps) in ("T", "G", "C")]
         ol = [x for x in line if x[1] == "T"][:2] + [x for x in line if x[1] == "G"][:2] + [x for x in line if x[1] == "C"][:1]
+        for slot, n in (("T", 2), ("G", 2), ("C", 1)):                # the roster has no id for him: a nameless lineman
+            ol += [(f"ol:{slot}{k}", slot) for k in range(n - sum(1 for _, ps in ol if ps == slot))]
         picks = [(p, "QB") for p in qb] + ol
         groups = {"RB": 1, "WR": 3, "TE": 1}
         for p, grp in skill:
@@ -279,6 +281,8 @@ class History:
                 picks.append((p, OFF_POS[ps]))
         if len(picks) == 11:
             out["off"] = picks
+            on = {q for q, _ in picks}
+            out["bench"] = [(p, grp) for p, grp in skill if p not in on][:6]      # the other backs, receivers and tight ends
         # defense: everyone credited with a tackle, sack, hit, pass defended or pick, most first, in the groups a
         # defense fields; the roster fills a group nobody was credited in
         dfn = g[g["defteam"] == team]
@@ -370,6 +374,8 @@ class History:
                 self.pfr_names[season] = {**dict(zip(sn["pfr_player_id"], sn["player"])),
                                           **dict(zip(pl["pfr_id"], pl["display_name"]))}
             name = self.names.get(gid) or self.pfr_names[season].get(pfr, "Unknown")
+            if gid.startswith("ol:"):                                   # a lineman the old roster has no id for
+                name = {"LT": "Left tackle", "LG": "Left guard", "C": "Center", "RG": "Right guard", "RT": "Right tackle"}.get(label, "Lineman")
             if label in OL_SLOTS:
                 pct, stat = line_pct, (line_stat or "").replace("Graded as a unit: ", "His line that season: ")
             else:
@@ -466,6 +472,7 @@ class History:
                 units = {**self._snapcount_units(R, game_id, team), **units}
             if len(units) < 2:
                 units = {**self._boxscore_units(game_id, season, team), **units}
+            bench = self._bench(R, game_id, team, units.get("off", [])) or units.get("bench", [])
             off, dfn = units.get("off", []), units.get("def", [])
             qb_id = next((i for i, p in off if OFF_POS.get(p) == "QB"), None)
             if qb_id is None or qb_id.startswith("pfr:"):
@@ -478,7 +485,7 @@ class History:
                 "injury_adjustment": st["injury_adjustment"], "kicker": st["kicker"], "punter": st["punter"],
                 "lineup": {"off": self._players(R, rt, season, team, "off", off, week),
                            "def": self._players(R, rt, season, team, "def", dfn, week),
-                           "bench": self._bench_players(R, rt, season, team, self._bench(R, game_id, team, off), week)},
+                           "bench": self._bench_players(R, rt, season, team, bench, week)},
                 "calls": {c: {"off": v["off"], "def": v["def"]} for c, v in P.team_card(card, team).items()},
             }
             league = st["league"]
