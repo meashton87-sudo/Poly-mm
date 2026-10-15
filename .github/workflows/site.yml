@@ -72,7 +72,7 @@ jobs:
       # Pro: off until approved. To launch, set PRO_ON to "on" below (one line) and merge: the historic drives and playoff
       # runs build and ship, and the site turns the Pro tab on. See nfl-time-management/board/PRO_LAUNCH.md.
       - name: Export the historic drives and playoff runs (Pro)
-        if: env.PRO_ON == 'on'
+        continue-on-error: true           # the preview and, once PRO_ON is on, the site carry them; the daily game ships either way
         run: python -c "from nflclock import pro; print(pro.build())"
 
       # nothing ships unless all of this passes: a failure here leaves the last good site up
@@ -115,6 +115,20 @@ jobs:
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "no Cloudflare token: skipped"; exit 0; fi
           npx --yes wrangler@3.114.0 pages project create nfl2mindrill --production-branch main 2>/dev/null || true
           npx --yes wrangler@3.114.0 pages deploy _site --project-name nfl2mindrill --branch main --commit-dirty=true
+
+      # An unlisted preview with Pro on (nfl2mindrill-pro-preview.pages.dev; robots told to stay out), for trying Pro and
+      # test-mode purchases before PRO_ON is flipped. The worker sends a buyer back to the site he came from.
+      - name: Publish the Pro preview
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "no Cloudflare token: skipped"; exit 0; fi
+          python scripts/site.py _site_pro --board-api "${{ vars.BOARD_API }}" --site-url https://nfl2mindrill-pro-preview.pages.dev --pro
+          printf 'User-agent: *\nDisallow: /\n' > _site_pro/robots.txt
+          npx --yes wrangler@3.114.0 pages project create nfl2mindrill-pro-preview --production-branch main 2>/dev/null || true
+          npx --yes wrangler@3.114.0 pages deploy _site_pro --project-name nfl2mindrill-pro-preview --branch main --commit-dirty=true
 
       - if: vars.PAGES_DEPLOY == 'true'
         uses: actions/upload-pages-artifact@v3
