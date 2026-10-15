@@ -223,6 +223,36 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   for (let i = 0; i < RATE; i++) await pro('POST', '/restore', { code: 'TMD-AAAA-AAAA-AAAB' }, { ip: '7.7.7.7' });
   assert.strictEqual((await pro('POST', '/restore', { code: 'TMD-AAAA-AAAA-AAAB' }, { ip: '7.7.7.7' })).status, 429, 'guessing codes is rate limited');
   assert.strictEqual((await pro('GET', '/pay')).status, 405);
+  assert.strictEqual(init0.headers['Stripe-Version'], '2026-08-26.dahlia', 'the API version is pinned');
+  assert.match(form.get('integration_identifier'), /^tmd_pro_[a-z]{8}$/, 'sessions carry an integration tag');
+  assert.strictEqual(form.get('payment_method_types'), null, 'payment methods come from the Dashboard, never the call');
+  // the webhook: a signed, paid session gets its code before the buyer is back; the page's claim then finds it
+  const whsec = 'whsec_test_secret_0001';
+  for (const e of [env, board.env]) e.STRIPE_WEBHOOK_SECRET = whsec;
+  const event = (type, id, status) => JSON.stringify({ id: 'evt_1', type, data: { object: { id, object: 'checkout.session', payment_status: status } } });
+  const sign = async (body, t = Math.floor(Date.now() / 1000)) => {
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(whsec), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const mac = Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${t}.${body}`))), (b) => b.toString(16).padStart(2, '0')).join('');
+    return `t=${t},v1=${mac}`;
+  };
+  const hook = (body, sig) => worker.fetch(new Request('https://w.example/stripe-webhook', { method: 'POST', body, headers: { 'Content-Type': 'application/json', 'Stripe-Signature': sig } }), env);
+  let bodyW = event('checkout.session.completed', 'cs_test_hook1234567890', 'paid');
+  assert.strictEqual((await hook(bodyW, 't=1,v1=00')).status, 400, 'an unsigned event is refused');
+  assert.strictEqual((await hook(bodyW, await sign(bodyW, Math.floor(Date.now() / 1000) - 3600))).status, 400, 'an old signature is refused');
+  assert.strictEqual((await hook(bodyW, await sign(bodyW))).status, 200);
+  const hooked = store.get('pro:sess:cs_test_hook1234567890');
+  assert.match(hooked || '', /^TMD-/, 'the webhook minted the code');
+  const n2 = stripeCalls.length;
+  assert.strictEqual((await (await pro('POST', '/claim', { s: 'cs_test_hook1234567890' })).json()).code, hooked, 'the claim finds it without asking Stripe');
+  assert.strictEqual(stripeCalls.length, n2);
+  bodyW = event('checkout.session.completed', 'cs_test_late1234567890', 'unpaid');      // a bank payment still clearing
+  assert.strictEqual((await hook(bodyW, await sign(bodyW))).status, 200);
+  assert.ok(!store.has('pro:sess:cs_test_late1234567890'), 'an unpaid session gets no code');
+  bodyW = event('checkout.session.async_payment_succeeded', 'cs_test_late1234567890', 'paid');
+  await hook(bodyW, await sign(bodyW));
+  assert.match(store.get('pro:sess:cs_test_late1234567890') || '', /^TMD-/, 'the code comes when the payment clears');
+  for (const e of [env, board.env]) delete e.STRIPE_WEBHOOK_SECRET;
+  assert.strictEqual((await hook(bodyW, await sign(bodyW))).status, 503, 'no signing secret: webhooks are off');
   globalThis.fetch = realFetch;
   for (const e of [env, board.env]) { delete e.STRIPE_SECRET; delete e.STRIPE_PRICE; delete e.SITE; }
 }

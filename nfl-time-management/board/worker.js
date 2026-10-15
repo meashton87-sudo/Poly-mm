@@ -21,17 +21,23 @@
 // runs that made them. Posts are limited per IP (RATE_PER_MIN a minute). The page may be served from another host,
 // so responses carry CORS headers for ALLOWED_ORIGINS (comma-separated; "*" = any).
 // Pro (a one-time purchase on Stripe Checkout: Apple Pay, Google Pay, Link and cards on Stripe's own page; needs the
-// secrets STRIPE_SECRET and the vars STRIPE_PRICE (a one-time price id) and SITE; without them /pay answers 503):
+// secret STRIPE_SECRET (a restricted key: Checkout Sessions read and write) and the vars STRIPE_PRICE (a one-time
+// price id) and SITE; without them /pay answers 503):
 //   GET    /pro                      -> { on, price }        whether payments are set up, and the price shown
 //   POST   /pay                      -> { url }              a Checkout session: send the player to url; Stripe sends
 //                                                            him back to SITE/?claim=<session id>
 //   POST   /claim   { s }            -> { code }             after paying: the session's Pro code (the same code
 //                                                            every time for one session; TMD-XXXX-XXXX-XXXX)
 //   POST   /restore { code }         -> { ok, code }         the code on another device (404 for one never issued)
+//   POST   /stripe-webhook           -> { received }         Stripe's events (STRIPE_WEBHOOK_SECRET signs them): a
+//                                                            completed, paid session gets its code here too, so a
+//                                                            buyer who never lands back on the site (closed the tab,
+//                                                            a bank payment that cleared later) still has one to claim
 // A code is 12 letters and digits (no 0/O, 1/I/L) drawn at random: about 60 bits, posted at RATE_PER_MIN an IP.
 // Nothing about the buyer is kept here (Stripe has the receipt); only the session id behind each code.
 const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
-const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore'];
+const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook'];
+const STRIPE_VERSION = '2026-08-26.dahlia', WEBHOOK_TOLERANCE = 300;   // the API version pinned; a signature older than this is refused
 const PRO_PRICE = '$4.99', PRO_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', SESSION_RE = /^cs_(test|live)_[A-Za-z0-9]{10,200}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -216,12 +222,44 @@ function normCode(c) {
 }
 const stripe = (env, path, form) => fetch(`https://api.stripe.com/v1/${path}`, {
   method: form ? 'POST' : 'GET',
-  headers: { Authorization: `Bearer ${env.STRIPE_SECRET}`, ...(form ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}) },
+  headers: { Authorization: `Bearer ${env.STRIPE_SECRET}`, 'Stripe-Version': STRIPE_VERSION,
+    ...(form ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}) },
   body: form ? new URLSearchParams(form) : undefined,
 });
+const tag = () => 'tmd_pro_' + Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => 'abcdefghijklmnopqrstuvwxyz'[b % 26]).join('');
+// the code for a paid session: the one it already has, else a new one (one code per session, whoever asks first)
+async function codeFor(storage, s) {
+  const have = await storage.get(`pro:sess:${s}`);
+  if (have) return have;
+  const code = proCode();
+  await storage.put(`pro:code:${code}`, { s, at: new Date().toISOString() });
+  await storage.put(`pro:sess:${s}`, code);
+  return code;
+}
+// Stripe's signature on a webhook: t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>"> with the endpoint's signing secret
+async function signedByStripe(req, body, secret) {
+  const sig = req.headers.get('Stripe-Signature') || '';
+  const parts = Object.fromEntries(sig.split(',').map((kv) => kv.split('=')).filter((kv) => kv.length === 2));
+  const t = Number(parts.t);
+  if (!Number.isFinite(t) || Math.abs(Date.now() / 1000 - t) > WEBHOOK_TOLERANCE || !parts.v1) return false;
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${t}.${body}`))), (b) => b.toString(16).padStart(2, '0')).join('');
+  return sig.split(',').some((kv) => kv.startsWith('v1=') && same(kv.slice(3), mac));
+}
 async function pro(req, env, storage, hits, h, url) {
   if (url.pathname === '/pro') return req.method === 'GET' ? json({ on: proOn(env), price: PRO_PRICE }, 200, h) : json({ error: 'method' }, 405, h);
   if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
+  if (url.pathname === '/stripe-webhook') {              // from Stripe, not the page: signed, never rate limited
+    if (!env.STRIPE_WEBHOOK_SECRET) return json({ error: 'webhooks are not set up' }, 503, h);
+    const raw = await req.text();
+    if (!(await signedByStripe(req, raw, env.STRIPE_WEBHOOK_SECRET))) return json({ error: 'bad signature' }, 400, h);
+    let ev;
+    try { ev = JSON.parse(raw); } catch (e) { return json({ error: 'bad json' }, 400, h); }
+    const sess = ev && ev.data && ev.data.object;
+    if (['checkout.session.completed', 'checkout.session.async_payment_succeeded'].includes(ev && ev.type) && sess && SESSION_RE.test(String(sess.id || ''))
+        && sess.payment_status && sess.payment_status !== 'unpaid') await codeFor(storage, sess.id);
+    return json({ received: true }, 200, h);
+  }
   if (!proOn(env)) return json({ error: 'payments are not set up yet' }, 503, h);
   if (limited(req, hits)) return json({ error: 'slow down' }, 429, h);
   let body = {};
@@ -233,7 +271,7 @@ async function pro(req, env, storage, hits, h, url) {
     let r;
     try {
       r = await stripe(env, 'checkout/sessions', { mode: 'payment', 'line_items[0][price]': env.STRIPE_PRICE, 'line_items[0][quantity]': '1',
-        success_url: `${site}/?claim={CHECKOUT_SESSION_ID}`, cancel_url: `${site}/?pro=cancel` });
+        success_url: `${site}/?claim={CHECKOUT_SESSION_ID}`, cancel_url: `${site}/?pro=cancel`, integration_identifier: tag() });
     } catch (e) { return json({ error: 'stripe unreachable' }, 502, h); }
     const sess = await r.json().catch(() => ({}));
     if (!r.ok || !sess.url) return json({ error: 'stripe refused the session' }, 502, h);
@@ -242,17 +280,14 @@ async function pro(req, env, storage, hits, h, url) {
   if (url.pathname === '/claim') {
     const s = String(body.s || '');
     if (!SESSION_RE.test(s)) return json({ error: 'session wanted' }, 400, h);
-    const have = await storage.get(`pro:sess:${s}`);
+    const have = await storage.get(`pro:sess:${s}`);       // the webhook may have minted it already
     if (have) return json({ code: have }, 200, h);
     let r;
     try { r = await stripe(env, `checkout/sessions/${s}`); } catch (e) { return json({ error: 'stripe unreachable' }, 502, h); }
     const sess = await r.json().catch(() => ({}));
     if (!r.ok) return json({ error: 'no such session' }, 404, h);
-    if (sess.payment_status !== 'paid') return json({ error: 'not paid' }, 402, h);
-    const code = proCode();
-    await storage.put(`pro:code:${code}`, { s, at: new Date().toISOString() });
-    await storage.put(`pro:sess:${s}`, code);
-    return json({ code }, 200, h);
+    if (sess.payment_status === 'unpaid') return json({ error: 'not paid' }, 402, h);     // 'no_payment_required' counts as paid
+    return json({ code: await codeFor(storage, s) }, 200, h);
   }
   if (url.pathname === '/restore') {
     const code = normCode(body.code);
