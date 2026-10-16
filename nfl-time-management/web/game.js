@@ -254,6 +254,10 @@
   const VS_LOBBY = VS_ON && location.hash === '#vs';
   const VS_ROOM = VS_ON ? ((location.hash.match(/^#vs-([A-HJ-KM-NP-Z2-9]{6})$/) || [])[1] || '') : '';
   const VS = !!VS_ROOM;
+  // the full defensive call (personnel, front, coverage, rush) everywhere: Versus always; elsewhere only when the site
+  // build turns it on (scripts/site.py --fulldef: <meta name="fulldef">), off on the main site until it is approved;
+  // off, the defense is the three looks (blitz, load the box, play it soft)
+  const FULLDEF = VS || !!document.querySelector('meta[name="fulldef"]');
   const VS_DECIDE_MS = 30000;      // the play clock in Versus: 30 seconds a call (board/match.js DECIDE_MS)
   const stateKey = () => (VS ? `${STORE}:vs:${VS_ROOM}` : SURV ? `${STORE}:surv` : DRIVE ? `${STORE}:drive:${DRIVE}` : RUN_N ? `${STORE}:run:${RUN_N}` : `${STORE}:day:${dayN}`);
   const saveState = () => save(stateKey(), state);
@@ -3498,6 +3502,7 @@
     const kick = peek.log.find((e) => e.ev === 'fg' || e.ev === 'punt');
     if (kick) { G.fast = false; return promptChoice(kick.ev === 'fg' ? 'fgdef' : 'puntdef'); }
     G.fast = false;
+    if (!FULLDEF) { ui = { step: 'defense', to: false }; drawDefDock(); toField(); return; }
     ui = { step: 'vdef', dc: VS ? vdefDefault(r) : nflDefault(r, G.dinfo && G.dinfo.dshare), to: false };
     drawFullDefDock();
     toField();
@@ -3593,6 +3598,63 @@
     }
     mark();
   }
+  // the three-button defense (blitz, load the box, play it soft): the main site's until the full call is approved
+  // (FULLDEF off)
+  function drawDefDock() {
+    const r = G.root, d = $('dock');
+    d.textContent = '';
+    takeBanner(d);
+    const head = el('div', 'ask');
+    head.append(el('h2', '', 'Your defense'), el('span', 'sub', `${teamName(code(r.pos))} ball · ${ddText(r)} · ${spotText(r)}`));
+    d.append(head);
+    const keys = el('div', 'keys');
+    keys.style.setProperty('--cols', 3);
+    DEFS.forEach((k, i) => {
+      const b = key(DEF[k].label, DEF[k].sub, 'big def', i);
+      b.addEventListener('click', () => { if (!busy) decideDefenseLooks(k); });
+      keys.append(b);
+    });
+    d.append(keys);
+    if (defTimeoutOk(r)) {
+      const tg = el('div', 'toggle');
+      const lab = el('div', 'lab', 'Timeout first');
+      lab.append(el('small', '', `Stop the clock before their snap · ${r.to[G.me]} left`));
+      const sw = el('button', 'sw2');
+      sw.type = 'button'; sw.id = 'toSwitch';
+      sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(ui.to)); sw.setAttribute('aria-label', 'Timeout first');
+      sw.addEventListener('click', () => { ui.to = !ui.to; sw.setAttribute('aria-checked', String(ui.to)); });
+      tg.append(lab, sw);
+      d.append(tg);
+    }
+    if (VS) return;
+    const auto = el('button', 'chip', 'Let the coordinator call this drive');
+    auto.type = 'button';
+    auto.addEventListener('click', () => { if (busy) return; G.autoDef = true; advance(); });
+    d.append(auto);
+  }
+  async function decideDefenseLooks(k) {
+    if (busy) return;
+    busy = true;
+    liveDrive.calls++;
+    track('defense_call', { mode: modeName(), call: k });
+    const r = G.root, me = G.me;
+    try {
+      const useTo = !!(ui.to && defTimeoutOk(r)), askTo = defTimeoutOk(r), seq = G.seq;
+      const opts = DEFS.map((x) => ({ key: x, label: DEF[x].label, action: { to_def: useTo, def: x } }));
+      const L = (G.dinfo && G.dinfo.looks) || [0.25, 0.25, 0.25, 0.25];
+      const specs = [];
+      if (askTo) {
+        const to = [{ key: 'timeout', label: 'Timeout', action: { to_def: true, def: k } }, { key: 'no_timeout', label: 'Let it run', action: { to_def: false, def: k } }];
+        specs.push({ kind: 'deftime', family: 'def_timeout', r, opts: to, chosen: useTo ? 'timeout' : 'no_timeout',
+          q: coachProbs('def_timeout', r, me) || { timeout: 0.15, no_timeout: 0.85 }, situation: situation(r), seed: hash('deftime', seedKey(), G.si, seq) });
+      }
+      specs.push({ kind: 'defcall', family: 'def_call', r, opts, chosen: k, q: { blitz: L[1] + L[3], load: L[2], soft: L[0] }, situation: situation(r),
+        seed: hash('def', seedKey(), G.si, seq) });
+      await snapThenGrade(specs, opts.find((o) => o.key === k).action);
+    } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
+    busy = false;
+  }
+
   // your defense, graded: against the quick calls that fit the spot (and yours, when it is none of them), every one
   // played out from this snap (the offense reads your call and checks into what beats it); how often NFL defenses
   // line up like each, from the charting of the real plays here
