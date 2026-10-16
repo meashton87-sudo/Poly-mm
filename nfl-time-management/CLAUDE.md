@@ -25,7 +25,10 @@ node web/game_smoke.js                # daily game: every spot's two real teams,
 node web/game_sweep.js                # daily game: every spot x call x tempo, whole games, football invariants, points to the right team, the called play is the play run (~3 min)
 node web/motion_test.js               # daily game animation: player motion stays in the tracking envelope, routes, coverage
 node board/worker_test.mjs            # the website's survivor leaderboard (Cloudflare Worker + Durable Object), storage in memory
-node board/match_test.mjs             # Versus match rooms: sealed calls, college-OT seats, lobby per mode, ranked Elo ladder
+node board/match_test.mjs             # Versus: rooms, lobby, ladder in memory (board/vs_world.mjs), a stand-in engine (a second)
+node board/lazy_sim_test.mjs          # Versus: the room's lazily built simulator equals the engine's, table by table and play by play
+node board/vs_pairs_test.mjs          # Versus: every one of the 992 matchups (32 teams, home and away) played to the end, the rules on every snap
+node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real engine, misbehaving phones; every match replayed and checked
 ```
 
 ## Rules
@@ -45,3 +48,7 @@ node board/match_test.mjs             # Versus match rooms: sealed calls, colleg
   days people have played or are playing. Extend it only by adding days at the end; never reorder it. Its
   `featured` map puts a famous spot (any first-down snap, with a story shown on the intro) on a future day.
 - Decisions are graded "as of" the week of the game: no ratings may use later games.
+- Versus (board/match.js): the room plays the football (web/vs_core.js holds the college-overtime rules, shared with the
+  page); phones only send calls. Each snap's seed is drawn fresh by the room and never sent to a phone (a phone that
+  knew it could see what a call does before making it). lazy_sim_test.mjs and vs_stress.mjs need board/assets/vs (the
+  engine packs and teams.json; the site workflow copies them there before deploying the worker).

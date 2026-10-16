@@ -422,11 +422,12 @@ async function versus(req, env, url) {
   if (!env.MATCH) return json({ error: 'versus is not set up' }, 503, h);
   const allowed = String(env.ALLOWED_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean), origin = req.headers.get('Origin') || '';
   if (allowed.length && !allowed.includes('*') && !allowed.includes(origin)) return json({ error: 'origin' }, 403, h);
-  if (url.pathname === '/vs/quick' || url.pathname === '/vs/ladder' || url.pathname === '/vs/me') {
+  if (url.pathname === '/vs/ladder' || url.pathname === '/vs/me') {
     if ((url.pathname === '/vs/ladder') !== (req.method === 'GET') || !['GET', 'POST'].includes(req.method)) return json({ error: 'method' }, 405, h);
-    const r = await env.MATCH.get(env.MATCH.idFromName(url.pathname === '/vs/quick' ? 'lobby' : 'ladder')).fetch(req);
+    const r = await env.MATCH.get(env.MATCH.idFromName('ladder')).fetch(req);
     return new Response(r.body, { status: r.status, headers: { ...h, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
   }
+  if (url.pathname === '/vs/queue') return env.MATCH.get(env.MATCH.idFromName('lobby')).fetch(req);      // matchmaking (a WebSocket)
   const room = url.searchParams.get('room') || '';
   if (!ROOM_RE.test(room)) return json({ error: 'room' }, 400, h);
   return env.MATCH.get(env.MATCH.idFromName(`room:${room}`)).fetch(req);
@@ -443,7 +444,7 @@ import { ROOM_RE } from './match.js';
 export default {
   fetch(req, env) {
     const url = new URL(req.url);
-    if (['/vs/ws', '/vs/quick', '/vs/ladder', '/vs/me'].includes(url.pathname)) return versus(req, env, url);
+    if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me'].includes(url.pathname)) return versus(req, env, url);
     if (req.method === 'OPTIONS' || ![...PRO_PATHS, '/board', '/daily', '/days', '/madden'].includes(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },

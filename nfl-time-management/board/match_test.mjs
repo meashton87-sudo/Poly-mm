@@ -1,178 +1,336 @@
-// Tests for the versus rooms (match.js), the Durable Object run in memory with fake sockets:  node board/match_test.mjs
+// Tests for versus (match.js): rooms, the lobby and the ladder, run in memory (vs_world.mjs) with a small stand-in
+// engine, so they run anywhere in a second:  node board/match_test.mjs
+// (vs_stress.mjs plays thousands of whole matches with the real engine.)
 import assert from 'node:assert';
-import { Match, HALF_MS, ROOM_RE } from './match.js';
+import { World, FakeClient } from './vs_world.mjs';
+import { ROOM_RE, PLAY_MS, FIRST_MS, FORFEIT_MS, AFK_LIMIT, NOSHOW_MS, ELO, MM } from './match.js';
+import VSCore from '../web/vs_core.js';
 
-class FakeWS {
-  constructor() { this.sent = []; this.closed = false; this.att = null; this.tags = []; }
-  send(s) { if (this.closed) throw new Error('closed'); this.sent.push(JSON.parse(s)); }
-  close() { this.closed = true; }
-  serializeAttachment(a) { this.att = a; }
-  deserializeAttachment() { return this.att; }
-  last(t) { return [...this.sent].reverse().find((m) => m.t === t); }
-}
-globalThis.WebSocketPair = class { constructor() { const c = new FakeWS(), s = new FakeWS(); this[0] = c; this[1] = s; } };
-const RealResponse = globalThis.Response;
-globalThis.Response = class extends RealResponse {
-  constructor(body, init = {}) { super(body, init.status === 101 ? { status: 200 } : init); this.webSocket = init.webSocket; this.realStatus = init.status; }
+// the stand-in engine: a snap gains (seed % 15) - 3 yards; a call 'fg' kicks a field goal (good); 'td' scores
+const PAT = 1, KICKOFF = 2;
+const stub = {
+  pool: { season: 2026, week: 6, league: {}, teams: { KC: { coach: 'A' }, BUF: { coach: 'B' }, CHI: { coach: 'C' }, GB: { coach: 'D' } } },
+  eng: {
+    pb: { callIndex: { inside: 0, slant: 1, td: 2 }, routeNames: ['', 'go'] },
+    makeContext: () => ({}),
+    simulator: () => ({
+      step(root, { action, seed }) {
+        const r = { ...root, score: root.score.slice(), to: root.to.slice() }, log = [];
+        if (r.phase === PAT) {
+          const two = action.pat === 'two', good = two ? seed % 2 === 0 : true;
+          if (good) r.score[r.pos] += two ? 2 : 1;
+          log.push({ ev: 'pat', team: r.pos, two, good, row: -1 });
+          r.phase = KICKOFF;
+          return { root: r, log, done: false };
+        }
+        if (action.play === 'fg') { r.score[r.pos] += 3; r.phase = KICKOFF; log.push({ ev: 'fg', good: true }); return { root: r, log, done: false }; }
+        const y = action.call === 'td' ? 99 : (seed % 15) - 3;
+        log.push({ ev: 'play', yards: y, row: -1 });
+        if (r.yl - y <= 0) { r.score[r.pos] += 6; r.phase = PAT; return { root: r, log, done: false }; }
+        r.yl -= y;
+        if (y >= r.ytg) { r.down = 1; r.ytg = Math.min(10, r.yl); } else if (r.down === 4) { r.pos = 1 - r.pos; r.yl = 100 - r.yl; r.down = 1; r.ytg = 10; } else { r.down += 1; r.ytg -= y; }
+        return { root: r, log, done: false };
+      },
+    }),
+  },
 };
-function room(env = {}) {
-  const store = new Map(), sockets = [];
-  let alarm = null, now = 1_000_000;
-  const ctx = {
-    storage: { get: async (k) => structuredClone(store.get(k)), put: async (k, v) => { store.set(k, structuredClone(v)); },
-      delete: async (k) => store.delete(k), deleteAll: async () => store.clear(), getAlarm: async () => alarm, setAlarm: async (t) => { alarm = t; } },
-    acceptWebSocket: (ws, tags) => { ws.tags = tags; sockets.push(ws); },
-    getWebSockets: (tag) => sockets.filter((w) => !w.closed && (!tag || w.tags.includes(tag))),
-  };
-  const m = new Match(ctx, env);
-  const realNow = Date.now;
-  return { m, store, sockets, clock: (t) => { now = t; Date.now = () => now; }, alarmAt: () => alarm, restore: () => { Date.now = realNow; } };
-}
-const connect = async (R, key, code = 'ABC234', mode = '') => {
-  const res = await R.m.fetch(new Request(`https://w/vs/ws?room=${code}&key=${key}${mode ? `&mode=${mode}` : ''}`, { headers: { Upgrade: 'websocket' } }));
-  return { res, ws: R.sockets[R.sockets.length - 1] };
-};
-const say = (R, ws, msg) => R.m.webSocketMessage(ws, JSON.stringify(msg));
-const K1 = 'device-key-one-0000000001', K2 = 'device-key-two-0000000002', K3 = 'device-key-three-00000003';
+const K = (i) => `device-key-${String(i).padStart(14, '0')}`;
+const state = async (w, code) => w.objects.get(`room:${code}`).store.get('room');
+const kh = async (k) => { const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`vs:${k}`))); return Array.from(d.slice(0, 12), (b) => b.toString(16).padStart(2, '0')).join(''); };
+const addPlayer = (w, k, name, rating, games) => w.obj('ladder').m.sql().exec(
+  'INSERT INTO players (kh, name, rating, games, w, l, peak, streak, updated) VALUES (?, ?, ?, ?, 0, 0, ?, 0, 0)', k, name, rating, games, rating);
 
 assert.ok(ROOM_RE.test('ABC234') && !ROOM_RE.test('ABCD10') && !ROOM_RE.test('abc234') && !ROOM_RE.test('ABCDEFG'), 'room codes');
-const R = room();
-R.clock(1_000_000);
-let { res, ws: a } = await connect(R, K1);
-assert.strictEqual(res.realStatus, 101);
-assert.deepStrictEqual([a.last('hello').seat, a.last('hello').full], [0, false], 'first in: seat 0, waiting');
-assert.strictEqual((await R.m.fetch(new Request('https://w/vs/ws?room=ABC234&key=short', { headers: { Upgrade: 'websocket' } }))).status, 400, 'a key is needed');
-const { ws: b } = await connect(R, K2);
-assert.strictEqual(b.last('hello').seat, 1);
-assert.strictEqual(b.last('hello').seed, a.last('hello').seed, 'one seed for the room');
-assert.deepStrictEqual(a.last('peer'), { t: 'peer', online: [true, true], full: true }, 'both told the room is full');
-assert.strictEqual((await connect(R, K3)).res.status, 409, 'a third device is refused');
 
-// the spot: seat 0 picks it, once
-await say(R, b, { t: 'setup', spot: 'X' });
-assert.strictEqual(b.last('setup'), undefined, 'seat 1 cannot pick');
-await say(R, a, { t: 'setup', spot: '2024_09_NE_TEN#4015' });
-await say(R, a, { t: 'setup', spot: 'other' });
-assert.deepStrictEqual(b.sent.filter((m) => m.t === 'setup'), [{ t: 'setup', spot: '2024_09_NE_TEN#4015' }], 'set once');
+// ---- a friend room: seats, teams, the toss, sealed calls, the server plays the snap
+{
+  const w = new World({ engine: stub });
+  const a = new FakeClient(w, K(1)), b = new FakeClient(w, K(2)), c = new FakeClient(w, K(3));
+  assert.strictEqual(await a.open('ABC234', { mode: 'friend' }), 101);
+  assert.deepStrictEqual([a.last('hello').seat, a.last('hello').full, a.last('hello').phase], [0, false, 'wait'], 'first in: seat 0, waiting');
+  assert.strictEqual(await new FakeClient(w, 'short').open('ABC234'), 400, 'a key is needed');
+  assert.strictEqual(await b.open('ABC234'), 101);
+  assert.strictEqual(b.last('hello').seat, 1);
+  assert.strictEqual(b.last('hello').mode, 'friend', 'the mode is the room\'s');
+  assert.strictEqual(await c.open('ABC234'), 409, 'a third device is refused');
+  a.send({ t: 'team', team: 'KC', name: 'Ann' });
+  await w.settle();
+  b.send({ t: 'team', team: 'KC', name: 'Bo' });
+  await w.settle();
+  assert.deepStrictEqual(b.last('taken'), { t: 'taken', team: 'KC' }, 'never the same team on both sides');
+  b.send({ t: 'team', team: 'XYZ' });
+  b.send({ t: 'team', team: 'kc!' });
+  await w.settle();
+  assert.strictEqual(b.last('start'), undefined, 'a team not in the game is refused');
+  b.send({ t: 'team', team: 'BUF', name: 'Bo' });
+  await w.settle();
+  const st = a.last('start');
+  assert.ok(st && st.ms.cot.pick && st.deadline === w.now + FIRST_MS, 'both teams in: the match starts, the toss first');
+  assert.deepStrictEqual(a.last('teams').teams, ['KC', 'BUF']);
+  b.send({ t: 'team', team: 'CHI' });
+  await w.settle();
+  assert.deepStrictEqual((await state(w, 'ABC234')).teams, ['KC', 'BUF'], 'a team once');
+  // the toss: only the winner answers, and only offense / defense / end
+  const ms = st.ms, P = ms.cot.pick.team, chooser = P === 0 ? a : b, other = P === 0 ? b : a;
+  other.send({ t: 'half', n: 0, half: { pick: 'offense' } });
+  await w.settle();
+  assert.strictEqual(chooser.last('step'), undefined, 'the other team cannot choose');
+  chooser.send({ t: 'half', n: 0, half: { pick: 'end' } });
+  await w.settle();
+  const s0 = a.last('step');
+  assert.deepStrictEqual([s0.n, s0.kind, s0.ms.cot.pick.team, s0.ms.cot.pick.end], [0, 'pick', 1 - P, true], 'the end of the field: the other team picks');
+  other.send({ t: 'half', n: 1, half: { pick: 'end' } });           // not twice
+  await w.settle();
+  const s1 = a.last('step');
+  assert.deepStrictEqual([s1.n, s1.notes[0].choice, s1.notes[0].auto], [1, 'defense', true], 'end again is not an answer: the default, defense');
+  const first = s1.ms.root.pos;
+  assert.strictEqual(first, P, 'they took defense: the toss winner has it first');
+  assert.deepStrictEqual([s1.ms.root.yl, s1.ms.root.down, s1.ms.root.ytg], [25, 1, 10], 'the ball at the 25');
+  // a snap: sealed until both are in; the server plays it
+  const off = first === 0 ? a : b, def = first === 0 ? b : a;
+  off.send({ t: 'half', n: 2, half: { action: { call: 'inside', play: 'run', evil: 1, looks: 99 } } });
+  await w.settle();
+  assert.deepStrictEqual(def.last('locked'), { t: 'locked', n: 2, seat: first }, 'the other side sees a lock');
+  assert.ok(!JSON.stringify(def.inbox).includes('inside'), 'the call never reaches the other side early');
+  off.send({ t: 'half', n: 2, half: { action: { call: 'td' } } });  // locked: no change
+  def.send({ t: 'half', n: 2, half: { def: 'blitz', score: [99, 99] } });
+  await w.settle();
+  const s2 = a.last('step');
+  assert.deepStrictEqual(s2.halves[first], { action: { call: 'inside', play: 'run' } }, 'the first call stays, cleaned');
+  assert.deepStrictEqual(s2.halves[1 - first], { def: 'blitz' }, 'only the defense call');
+  assert.strictEqual(s2.res.action.looks, VSCore.LOOKS.blitz, 'the defense call is the look the play is drawn against');
+  assert.deepStrictEqual(b.last('step'), s2, 'both phones get the same');
+  assert.strictEqual(s2.deadline, w.now + PLAY_MS);
+  // a stale or a future n, or junk: nothing
+  off.send({ t: 'half', n: 2, half: { action: { call: 'td' } } });
+  off.send({ t: 'half', n: 9, half: {} });
+  off.send('not json');
+  off.send(JSON.stringify({ t: 'half', n: 3, half: 'x'.repeat(5000) }));
+  await w.settle();
+  assert.strictEqual(a.last('step').n, 2);
+  // the clock: a missing call is played as the default at the deadline
+  off.send({ t: 'half', n: 3, half: { action: { call: 'slant', play: 'pass' } } });
+  await w.advance(PLAY_MS - 1000);
+  assert.strictEqual(a.last('step').n, 2, 'not before the deadline');
+  await w.advance(1000);
+  assert.deepStrictEqual([a.last('step').n, a.last('step').halves[1 - first]], [3, null], 'the defense defaulted');
+  // reconnect: the decisions since the phone's last, the state now
+  b.drop();
+  await w.settle();
+  assert.deepStrictEqual(a.last('peer').online, [true, false], 'the other side sees the drop');
+  assert.ok(a.last('peer').off[1] > 0);
+  const b2 = new FakeClient(w, b.key);
+  await b2.open('ABC234', { since: 2 });
+  const h = b2.last('hello');
+  assert.deepStrictEqual([h.seat, h.n, h.decisions.map((d) => d.n)], [1, 4, [2, 3]], 'back in its seat, caught up from where it was');
+  assert.deepStrictEqual(h.ms, a.last('step').ms, 'the same state');
+  assert.strictEqual((await state(w, 'ABC234')).off[1], 0, 'back: no forfeit clock');
+  assert.ok(![...a.inbox, ...b.inbox, ...b2.inbox].some((m) => JSON.stringify(m).includes('"seed"')), 'no seed ever reaches a phone');
+  // a second tab of the same phone replaces the first
+  const b3 = new FakeClient(w, b.key);
+  await b3.open('ABC234');
+  assert.strictEqual(b2.closedWith, 4000, 'the older tab is told it was replaced');
+  w.close();
+}
 
-// a snap: sealed until both are in
-await say(R, a, { t: 'half', n: 0, need: [0, 1], half: { action: { call: 'x' } } });
-assert.ok(!b.sent.some((m) => m.t === 'step'), 'no step with one call in');
-assert.deepStrictEqual(b.last('locked'), { t: 'locked', n: 0, seat: 0 }, 'the other side sees a lock, not the call');
-assert.ok(!JSON.stringify(b.sent).includes('"call":"x"'), 'the call itself never reaches the other side early');
-await say(R, a, { t: 'half', n: 0, need: [0, 1], half: { action: { call: 'changed' } } });
-await say(R, b, { t: 'half', n: 0, need: [0, 1], half: { def: 'blitz' } });
-assert.deepStrictEqual(a.last('step'), { t: 'step', n: 0, halves: { 0: { action: { call: 'x' } }, 1: { def: 'blitz' } } }, 'both calls, the first one locked');
-assert.deepStrictEqual(b.last('step'), a.last('step'));
-// a stale or future n is ignored
-await say(R, a, { t: 'half', n: 0, need: [0, 1], half: {} });
-await say(R, a, { t: 'half', n: 5, need: [0, 1], half: {} });
-assert.ok(!a.sent.some((m) => m.t === 'locked' && m.n !== 0), 'n must be the next decision');
-// one side's decision (a try, a kickoff): only that seat
-await say(R, b, { t: 'half', n: 1, need: [1], half: { action: { pat: 'xp' } } });
-assert.deepStrictEqual(a.last('step').halves, { 1: { action: { pat: 'xp' } } });
-// a seat cannot answer for a decision that is not its own
-await say(R, a, { t: 'half', n: 2, need: [1], half: {} });
-assert.strictEqual(a.last('step').n, 1, 'seat 0 cannot fill seat 1');
+// ---- forfeits: gone too long, the play clock left to run, both gone; a reconnect in time saves it
+async function live(w, mode = 'friend') {
+  const a = new FakeClient(w, K(11)), b = new FakeClient(w, K(12));
+  await a.open('FFF234', { mode }); await b.open('FFF234');
+  a.send({ t: 'team', team: 'CHI', name: 'A' }); b.send({ t: 'team', team: 'GB', name: 'B' });
+  await w.settle();
+  return { a, b };
+}
+{
+  const w = new World({ engine: stub });
+  const { a, b } = await live(w);
+  b.drop();
+  await w.advance(FORFEIT_MS - 5000);
+  const b2 = new FakeClient(w, b.key);
+  await b2.open('FFF234');
+  await w.advance(30000);
+  assert.strictEqual(a.last('over'), undefined, 'back in time: no forfeit');
+  b2.drop();
+  await w.advance(FORFEIT_MS);
+  assert.deepStrictEqual([a.last('over').result.winner, a.last('over').result.by, a.last('over').result.loser], [0, 'forfeit', 1], 'gone a minute: a forfeit');
+  w.close();
+}
+{
+  const w = new World({ engine: stub });
+  const { a } = await live(w);
+  // seat 1 never calls anything: the toss defaults, plays default; after AFK_LIMIT in a row it forfeits
+  for (let g = 0; g < 50 && !a.last('over'); g++) {
+    const s = a.last('step') || { ...a.last('start'), n: -1 };
+    if (VSCore.need(s.ms).includes(0)) {
+      const role = VSCore.role(s.ms, 0);
+      a.send({ t: 'half', n: s.n + 1, half: role === 'pick' ? { pick: 'offense' } : role === 'defense' ? { def: 'load' } : { action: { call: 'inside' } } });
+    }
+    await w.advance(PLAY_MS + 10);
+  }
+  const o = a.last('over');
+  assert.deepStrictEqual([o.result.winner, o.result.by, o.result.why], [0, 'forfeit', 'afk'], `the side that never calls forfeits (${AFK_LIMIT} in a row)`);
+  w.close();
+}
+{
+  const w = new World({ engine: stub });
+  const { a, b } = await live(w);
+  a.drop(); await w.advance(1000); b.drop();
+  await w.advance(FORFEIT_MS + 2000);
+  const R = await state(w, 'FFF234');
+  assert.deepStrictEqual([R.result.winner, R.result.loser], [1, 0], 'both gone: the one who left first forfeits');
+  w.close();
+}
 
-// the clock: a missing call is played as the default after HALF_MS
-await say(R, a, { t: 'half', n: 2, need: [0, 1], half: { action: {} } });
-assert.strictEqual(R.alarmAt(), 1_000_000 + HALF_MS);
-R.clock(1_000_000 + HALF_MS);
-await R.m.alarm();
-assert.deepStrictEqual(a.last('step'), { t: 'step', n: 2, halves: { 0: { action: {} }, 1: null } }, 'the walk-away side gets its default');
+// ---- a whole match to the end, rematch (both have to ask; one new room, the same teams)
+{
+  const w = new World({ engine: stub });
+  const { a, b } = await live(w);
+  const c = [a, b];
+  for (let g = 0; g < 200 && !(a.last('step') && a.last('step').result); g++) {
+    const s = a.last('step') || { ...a.last('start'), n: -1 };
+    for (const seat of VSCore.need(s.ms)) {
+      const role = VSCore.role(s.ms, seat);
+      c[seat].send({ t: 'half', n: s.n + 1, half: role === 'pick' ? { pick: 'offense' } : role === 'defense' ? { def: 'soft' } : role === 'pat' ? { two: true } : { action: { call: 'td' } } });
+    }
+    await w.settle();
+  }
+  const fin = a.last('step');
+  assert.ok(fin.result && fin.result.by === 'score' && fin.ms.over, 'the match ends on the field');
+  assert.strictEqual(fin.result.winner, fin.ms.root.score[0] > fin.ms.root.score[1] ? 0 : 1, 'the room says who won');
+  a.send({ t: 'half', n: fin.n + 1, half: {} });
+  await w.settle();
+  assert.strictEqual(a.last('step').n, fin.n, 'nothing after the end');
+  a.send({ t: 'rematch' }); a.send({ t: 'rematch' });
+  await w.settle();
+  assert.deepStrictEqual(b.last('rematch-ask'), { t: 'rematch-ask', seat: 0 });
+  assert.strictEqual(b.last('rematch'), undefined, 'one side asking is not a rematch');
+  b.send({ t: 'rematch' }); b.send({ t: 'rematch' }); a.send({ t: 'rematch' });
+  await w.settle();
+  const codes = new Set([...a.all('rematch'), ...b.all('rematch')].map((m) => m.room));
+  assert.strictEqual(codes.size, 1, 'one new room, however many taps');
+  const nr = [...codes][0], R2 = await state(w, nr);
+  assert.deepStrictEqual([R2.teams, R2.pre, R2.mode], [['CHI', 'GB'], true, 'friend'], 'the same teams, the same two players');
+  assert.strictEqual(await new FakeClient(w, K(99)).open(nr), 409, 'nobody else gets in');
+  w.close();
+}
 
-// reconnecting: the same device gets its seat back and every decision so far
-const { ws: b2 } = await connect(R, K2);
-assert.strictEqual(b.closed, true, 'the old socket is replaced');
-assert.strictEqual(b2.last('hello').seat, 1);
-assert.deepStrictEqual(b2.last('hello').decisions.map((d) => d.n), [0, 1, 2], 'the whole game so far');
-assert.strictEqual(b2.last('hello').spot, '2024_09_NE_TEN#4015');
+// ---- the lobby: ranked by rating (a window that widens), casual first come, never yourself
+{
+  const w = new World({ engine: stub });
+  const p = [0, 1, 2, 3].map((i) => new FakeClient(w, K(20 + i)));
+  for (const i of [0, 1]) addPlayer(w, await kh(p[i].key), `Pro${i}`, 1600, 30);
+  assert.strictEqual(await p[0].queue({ mode: 'ranked', team: 'KC', name: 'Pro0' }), 101);
+  assert.strictEqual(p[0].last('queued').rating, 1600, 'the lobby knows your rating');
+  await p[2].queue({ mode: 'ranked', team: 'CHI', name: 'New2' });
+  await w.advance(MM.TICK_MS);
+  assert.strictEqual(p[0].last('match'), undefined, '1600 and 1000 are not paired at once');
+  await p[1].queue({ mode: 'ranked', team: 'BUF', name: 'Pro1' });
+  const m0 = p[0].last('match'), m1 = p[1].last('match');
+  assert.ok(m0 && m1 && m0.room === m1.room && m0.mode === 'ranked', 'the two strong players are paired with each other');
+  assert.strictEqual(p[2].last('match'), undefined);
+  const R = await state(w, m0.room);
+  assert.deepStrictEqual([R.mode, R.pre, R.teams, R.names], ['ranked', true, ['KC', 'BUF'], ['Pro0', 'Pro1']], 'a ranked room with its two players and teams');
+  // the same device twice is never a match; a second ticket replaces the first
+  const p2b = new FakeClient(w, p[2].key);
+  await p2b.queue({ mode: 'ranked', team: 'GB', name: 'New2' });
+  await w.advance(MM.WIN_OPEN_S * 1000 + 3000);
+  assert.ok(!p[2].last('match') && !p2b.last('match'), 'never matched with itself');
+  assert.strictEqual(w.obj('lobby').ctx.getWebSockets('q').length, 1, 'one ticket per device');
+  // a long wait opens the window: anyone
+  await p[3].queue({ mode: 'ranked', team: 'GB', name: 'New3' });
+  assert.ok(p2b.last('match') && p2b.last('match').room === p[3].last('match').room, 'paired');
+  const R3 = await state(w, p2b.last('match').room);
+  assert.deepStrictEqual(R3.teams, ['GB', null], 'the same team: the second player picks another in the room');
+  // casual: first come; ranked and casual never mix
+  const q = [4, 5, 6].map((i) => new FakeClient(w, K(30 + i)));
+  await q[0].queue({ mode: 'casual', team: 'KC' });
+  await q[1].queue({ mode: 'ranked', team: 'KC', name: 'R' });
+  await w.advance(MM.TICK_MS);
+  assert.ok(!q[0].last('match') && !q[1].last('match'), 'ranked and casual never mix');
+  await q[2].queue({ mode: 'casual', team: 'BUF' });
+  assert.strictEqual(q[0].last('match').room, q[2].last('match').room);
+  assert.strictEqual(await new FakeClient(w, K(40)).queue({ mode: 'ranked', team: 'zz' }), 400, 'a team is needed');
+  // a ranked room only ever comes from the lobby
+  const x = new FakeClient(w, K(41));
+  await x.open('RNK234', { mode: 'ranked' });
+  assert.strictEqual(x.last('hello').mode, 'casual', 'a ranked room made by hand is casual');
+  w.close();
+}
 
-// presence
-await R.m.webSocketClose(b2);
-assert.deepStrictEqual(a.last('peer').online, [true, false], 'the opponent dropped');
+// ---- no-show: a matched player who never comes
+{
+  const w = new World({ engine: stub });
+  const a = new FakeClient(w, K(50)), b = new FakeClient(w, K(51));
+  await a.queue({ mode: 'casual', team: 'KC' }); await b.queue({ mode: 'casual', team: 'BUF' });
+  const code = a.last('match').room;
+  const a2 = new FakeClient(w, K(50));
+  await a2.open(code);
+  await w.advance(NOSHOW_MS + 1000);
+  assert.deepStrictEqual([a2.last('over').result.by, a2.last('over').result.winner, a2.last('over').result.missing], ['noshow', -1, [1]], 'called off, nobody rated');
+  w.close();
+}
 
-// rematch: both have to ask, then one new code for both
-const { ws: b3 } = await connect(R, K2);
-await say(R, a, { t: 'rematch' });
-assert.deepStrictEqual(b3.last('rematch-ask'), { t: 'rematch-ask', seat: 0 }, 'the other side is asked');
-assert.strictEqual(b3.last('rematch'), undefined, 'nobody moves on one ask');
-await say(R, b3, { t: 'rematch' });
-const code1 = a.last('rematch').room;
-assert.ok(ROOM_RE.test(code1) && b3.last('rematch').room === code1, 'the same new room for both');
+{
+  const w = new World({ engine: stub });
+  const a = new FakeClient(w, K(52)), b = new FakeClient(w, K(53));
+  await a.queue({ mode: 'ranked', team: 'KC', name: 'Here' }); await b.queue({ mode: 'ranked', team: 'BUF', name: 'Gone' });
+  const a2 = new FakeClient(w, K(52));
+  await a2.open(a.last('match').room);
+  await w.advance(NOSHOW_MS + 1000);
+  const o = a2.last('over').result, r = a2.last('rated').rated;
+  assert.deepStrictEqual([o.by, o.why, o.winner === a2.last('hello').seat], ['forfeit', 'noshow', true], 'ranked: never showing up is a loss');
+  assert.ok(r.rated && r.ratings[o.loser].after < 1000, 'and rated');
+  w.close();
+}
 
-// expiry
-R.clock(1_000_000 + 7 * 3600_000);
-await R.m.alarm();
-assert.strictEqual(R.store.size, 0, 'an old room is cleared');
-R.restore();
+// ---- the ladder: Elo (provisional K, then K), the floor, the pair cap, a room rated once, ranks
+{
+  const w = new World({ engine: stub });
+  const rep = (room, seats, winner, names = ['', '']) => w.http('ladder', '/vs/report', { room, seats, names, winner, by: 'score' });
+  let r = await rep('AAA222', ['a', 'b'], 0, ['Ann', 'Bo']);
+  assert.deepStrictEqual(r.body.ratings.map((x) => [x.before, x.after, x.games, x.provisional]), [[1000, 1020, 1, true], [1000, 980, 1, true]], 'new players: K 40');
+  assert.deepStrictEqual((await rep('AAA222', ['a', 'b'], 1)).body, r.body, 'a room is rated once (the same answer again)');
+  await rep('AAA223', ['a', 'b'], 0);
+  await rep('AAA224', ['a', 'b'], 0);
+  r = await rep('AAA225', ['a', 'b'], 0);
+  assert.deepStrictEqual([r.body.rated, r.body.reason, r.body.ratings[0].delta], [false, 'pair', 0], `the same two: rated ${ELO.PAIR_CAP} times a day`);
+  await w.advance(86400_000 + 1);
+  r = await rep('AAA226', ['a', 'b'], 1);
+  assert.ok(r.body.rated, 'a day later: rated again');
+  // K after the provisional games; the expected score: an upset moves more than a win over a weaker player
+  addPlayer(w, 'hi', 'Hi', 1400, 50); addPlayer(w, 'lo', 'Lo', 1000, 50);
+  r = await rep('BBB222', ['hi', 'lo'], 0);
+  const fav = 1 / (1 + 10 ** (-400 / 400));
+  assert.deepStrictEqual(r.body.ratings.map((x) => x.delta), [Math.round(1400 + ELO.K * (1 - fav)) - 1400, Math.round(1000 - ELO.K * (1 - fav)) - 1000], 'the favorite wins: a little');
+  r = await rep('BBB223', ['hi', 'lo'], 1);
+  assert.ok(r.body.ratings[1].delta > 15, 'the upset: a lot');
+  addPlayer(w, 'floor', 'F', ELO.FLOOR + 3, 50); addPlayer(w, 'f2', 'G', ELO.FLOOR + 3, 50);
+  r = await rep('CCC222', ['f2', 'floor'], 0);
+  assert.strictEqual(r.body.ratings[1].after, ELO.FLOOR, 'never below the floor');
+  const top = (await w.http('ladder', '/vs/ladder')).body;
+  assert.deepStrictEqual(top.top.map((x) => x.rank), top.top.map((x) => 1 + top.top.filter((y) => y.rating > x.rating).length), 'ranks: a tie shares one');
+  assert.ok(top.top.every((x, i, arr) => !i || arr[i - 1].rating >= x.rating), 'best first');
+  assert.ok(!JSON.stringify(top).includes('"kh"'), 'no device ids on the ladder');
+  assert.strictEqual((await w.http('ladder', '/vs/report', { room: 'DDD222', seats: ['a', 'a'], winner: 0 })).status, 400, 'not against yourself');
+  w.close();
+}
 
-// the lobby: the second player gets the first player's room; a stale one is not offered
-const L = room();
-L.clock(5_000);
-const quick = async (key, mode) => (await L.m.fetch(new Request('https://w/vs/quick', { method: 'POST', body: JSON.stringify({ key, mode }) }))).json();
-const q1 = await quick(K1);
-assert.ok(q1.host && ROOM_RE.test(q1.room));
-assert.deepStrictEqual(await quick(K1), q1, 'asking again: the same open room');
-const q2 = await quick(K2);
-assert.deepStrictEqual(q2, { room: q1.room, host: false, mode: 'casual' }, 'paired');
-const r1 = await quick(K2, 'ranked');
-assert.ok(r1.host && r1.mode === 'ranked' && r1.room !== q1.room, 'ranked has its own queue');
-const q3 = await quick(K3);
-assert.ok(q3.host && q3.room !== q1.room, 'the next player opens a new room');
-L.clock(5_000 + 100_000);
-const q4 = await quick(K1);
-assert.ok(q4.host && q4.room !== q3.room, 'a room nobody took for 90 s is dropped');
-assert.strictEqual((await L.m.fetch(new Request('https://w/vs/quick', { method: 'POST', body: '{}' }))).status, 400);
-L.restore();
-
-// ranked: teams, both report the winner, the ladder moves both ratings
-const lad = room();
-const env = { MATCH: { idFromName: (n) => n, get: () => ({ fetch: (req) => lad.m.fetch(req) }) } };
-const G1 = room(env);
-const { ws: ra } = await connect(G1, K1, 'RNK234', 'ranked');
-const { ws: rb } = await connect(G1, K2, 'RNK234');
-assert.strictEqual(ra.last('hello').mode, 'ranked', 'the mode comes from the first device in');
-await say(G1, ra, { t: 'team', team: 'KC', name: 'Eli' });
-await say(G1, ra, { t: 'team', team: 'BUF', name: 'x' });
-await say(G1, rb, { t: 'team', team: 'kc!', name: 'Matt' });
-assert.deepStrictEqual(rb.last('teams').teams, ['KC', null], 'a team once, a real code only');
-await say(G1, rb, { t: 'team', team: 'KC', name: 'Matt' });
-assert.deepStrictEqual(rb.last('taken'), { t: 'taken', team: 'KC' }, 'never the same team on both sides');
-assert.deepStrictEqual(ra.last('teams').teams, ['KC', null]);
-await say(G1, rb, { t: 'team', team: 'BUF', name: 'Matt' });
-assert.deepStrictEqual(ra.last('teams'), { t: 'teams', teams: ['KC', 'BUF'], names: ['Eli', 'Matt'] });
-await say(G1, ra, { t: 'result', winner: 0 });
-assert.strictEqual(ra.last('rated'), undefined, 'one report while the other side is here: wait');
-await say(G1, rb, { t: 'result', winner: 0 });
-const rated = ra.last('rated').ratings;
-assert.deepStrictEqual(rated, [{ before: 1000, after: 1016 }, { before: 1000, after: 984 }], 'Elo, K 32');
-await say(G1, rb, { t: 'result', winner: 1 });
-assert.strictEqual(ra.sent.filter((m) => m.t === 'rated').length, 1, 'rated once');
-const top = await (await lad.m.fetch(new Request('https://w/vs/ladder'))).json();
-assert.deepStrictEqual(top.top.map((x) => [x.name, x.rating, x.w, x.l]), [['Eli', 1016, 1, 0], ['Matt', 984, 0, 1]]);
-const me = await (await lad.m.fetch(new Request('https://w/vs/me', { method: 'POST', body: JSON.stringify({ key: K2 }) }))).json();
-assert.deepStrictEqual(me, { rating: 984, w: 0, l: 1, t: 0 });
-assert.ok(!JSON.stringify(top).includes(K1), 'only hashes of device keys are kept');
-// disagreeing reports: nobody moves
-const G2 = room(env);
-const { ws: xa } = await connect(G2, K1, 'RNK235', 'ranked');
-const { ws: xb } = await connect(G2, K2, 'RNK235');
-await say(G2, xa, { t: 'result', winner: 0 });
-await say(G2, xb, { t: 'result', winner: 1 });
-assert.deepStrictEqual(xa.last('rated'), { t: 'rated', ratings: null }, 'void');
-// the loser walks out: the winner's report alone counts
-const G3 = room(env);
-const { ws: ya } = await connect(G3, K1, 'RNK236', 'ranked');
-const { ws: yb } = await connect(G3, K2, 'RNK236');
-await G3.m.webSocketClose(yb); yb.close();
-await say(G3, ya, { t: 'result', winner: 0 });
-assert.ok(ya.last('rated').ratings[0].after > ya.last('rated').ratings[0].before, 'a walk-out still loses');
-// casual and friend rooms are never rated
-const G4 = room(env);
-const { ws: za } = await connect(G4, K1, 'CAS234', 'casual');
-await connect(G4, K2, 'CAS234');
-await say(G4, za, { t: 'result', winner: 0 });
-assert.strictEqual(za.last('rated'), undefined);
+// ---- a ranked match end to end: the lobby pairs, the room plays, the room rates; a forfeit is a loss
+{
+  const w = new World({ engine: stub });
+  const a = new FakeClient(w, K(60)), b = new FakeClient(w, K(61));
+  await a.queue({ mode: 'ranked', team: 'KC', name: 'Ann' }); await b.queue({ mode: 'ranked', team: 'BUF', name: 'Bo' });
+  const code = a.last('match').room;
+  const A = new FakeClient(w, a.key), B = new FakeClient(w, b.key);
+  await A.open(code, { mode: 'ranked' }); await B.open(code, { mode: 'ranked' });
+  assert.ok(A.last('start') || A.last('hello').ms, 'both in: the match starts (teams came from the lobby)');
+  A.send({ t: 'result', winner: 0 });                                // phones never say who won
+  B.drop();
+  await w.advance(FORFEIT_MS + 1000);
+  const rated = A.last('rated').rated;
+  assert.deepStrictEqual([A.last('over').result.by, rated.rated, rated.ratings[0].after > 1000, rated.ratings[1].after < 1000], ['forfeit', true, true, true], 'the quitter loses rating');
+  const me = (await w.http('ladder', '/vs/me', { key: B.key })).body;
+  assert.deepStrictEqual([me.games, me.l, me.streak, me.provisional], [1, 1, -1, true]);
+  w.close();
+}
 console.log('match rooms ok');

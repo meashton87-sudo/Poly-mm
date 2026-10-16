@@ -21,3 +21,4 @@ board/.wrangler/
 _site_test/
 browser_test_out/
 board/assets/pro/*.json
+board/assets/vs/
