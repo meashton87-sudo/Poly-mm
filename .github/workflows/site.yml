@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     env:
-      PRO_ON: "off"            # "on" launches Pro (the tab, the archive, the drives, the runs, the purchase)
+      PRO_ON: "on"            # "on" launches Pro (the tab, the archive, the drives, the runs, the purchase)
     defaults:
       run:
         working-directory: nfl-time-management

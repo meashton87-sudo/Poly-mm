@@ -1,6 +1,6 @@
 # Pro launch runbook
 
-Pro is built, deployed and tested in Stripe's sandbox but off. Launch is two secrets and one line.
+Pro is on (`PRO_ON: "on"` in `.github/workflows/site.yml`; `"off"` turns the tab off again). Payments need the two live secrets below; with a test key the worker refuses purchases from the site itself and the Pro tab says "Payments open soon".
 
 ## 1. Stripe (once, the account owner)
 
@@ -19,7 +19,7 @@ Workers & Pages → `two-minute-drill-board` → Settings → Variables and Secr
 | `STRIPE_SECRET` | secret | the live restricted key from step 2 (replacing the sandbox one) |
 | `STRIPE_WEBHOOK_SECRET` | secret | the live signing secret from step 3 (replacing the sandbox one) |
 
-Secrets survive deploys; plain variables set in the dashboard do not, which is why the price id goes in the repo instead.
+Both go in as **Secret** (encrypted) values, never plain text: a secret never shows in a deploy's log or diff. (Plain variables set in the dashboard survive deploys too, `keep_vars` in wrangler.toml, but they are visible.)
 
 ## 3. The repo
 
