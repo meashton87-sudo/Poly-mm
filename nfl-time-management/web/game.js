@@ -230,6 +230,25 @@
   // a playoff run (Pro, pro/runs.json): #run-N plays the Nth one, its games in order, like a day of several spots
   const RUN_N = PRO_ON ? Number((location.hash.match(/^#run-(\d+)$/) || [])[1] || 0) : 0;
   let PRO = null, PRO_RUNS = null;        // pro/drives.json and pro/runs.json, once loaded
+  // Pro grades: a drive's score (better than this many % of NFL play-callers) as a letter. 90 and up is an A, green:
+  // the drive is passed. The best grade on each drive is kept; the ranks count the drives passed
+  const PASS_AT = 90;
+  const GRADE_CUTS = [[90, 'A', 'g'], [80, 'B', 'y'], [70, 'C', 'o'], [60, 'D', 'r'], [0, 'F', 'r']];
+  const gradeOf = (score) => { const [, L, c] = GRADE_CUTS.find(([m]) => score >= m); return { L, c, pass: score >= PASS_AT }; };
+  const PRO_RANKS = [[0, 'Rookie play-caller'], [1, 'Position coach'], [5, 'Coordinator'], [10, 'Head coach'], [16, 'Super Bowl coach'], [Infinity, 'Hall of Fame']];
+  // the rank for this many drives passed (of n): the Hall of Fame is every one of them
+  function proRank(passed, n) {
+    const ladder = PRO_RANKS.map(([k, t]) => [k === Infinity ? n : Math.min(k, n), t]);
+    let i = 0;
+    ladder.forEach(([k], j) => { if (passed >= k) i = j; });
+    const next = ladder.slice(i + 1).find(([k]) => k > passed);
+    return { title: ladder[i][1], next: next ? { at: next[0], title: next[1] } : null };
+  }
+  function gradeBadge(score, cls = '') {
+    const g = gradeOf(score), b = el('span', `grade ${g.c}${cls ? ` ${cls}` : ''}`, g.L);
+    b.setAttribute('aria-label', `Grade ${g.L}${g.pass ? ', passed' : ''}`);
+    return b;
+  }
   // versus (two players, live; the site build's --vs turns it on: <meta name="vs">): #vs the lobby, #vs-CODE a room
   const VS_ON = !!document.querySelector('meta[name="vs"]');
   const VS_LOBBY = VS_ON && location.hash === '#vs';
@@ -624,12 +643,23 @@
   }
   // where the next snap is, in L, after a play (whoever has the ball)
   const losOf = (r) => (r.pos === G.me ? 100 - r.yl : r.yl);
+  // a new call: on a phone, back up to the field (the call is right under it) when the page was scrolled away
+  function toField() {
+    if (window.matchMedia && window.matchMedia('(min-width: 1000px)').matches) return;
+    const f = $('play');
+    if (!f || f.hidden || window.scrollY < 4) return;
+    window.scrollTo({ top: 0, behavior: reduced() ? 'auto' : 'smooth' });
+  }
+  const DOCK_ROOM = 205;    // px under the field on a phone: the call's heading and its first row of keys
   function fieldHeight() {
     const svg = $('field');
     const wpx = svg.parentElement.clientWidth || 360;
-    // room left for the field: the header, the score bar and the dock below it; beside it on wide screens (game.html)
+    // room left for the field: on wide screens the calls sit beside it (game.html); on a phone, what is above it (the
+    // header, the score bar) and the call's first row below it (DOCK_ROOM) fit on the screen with no scrolling
     const side = window.matchMedia && window.matchMedia('(min-width: 1000px)').matches;
-    return Math.round((360 * clip(window.innerHeight - (side ? 280 : 380), 360, side ? 860 : 720)) / wpx);
+    if (side) return Math.round((360 * clip(window.innerHeight - 280, 360, 860)) / wpx);
+    const top = svg.parentElement.getBoundingClientRect().top + window.scrollY;
+    return Math.round((360 * clip(window.innerHeight - clip(top, 60, 260) - DOCK_ROOM, 300, 720)) / wpx);
   }
   // Before the snap the camera frames the play, true to scale (as many yards tall as the field is wide, in the
   // box's shape): a short way behind the offense and well downfield, where the routes go. Kicks and the final
@@ -964,6 +994,8 @@
   function drawField() {
     const sc = makeScene(G.root, G.side);
     scene = sc;
+    // the chips over the field go to the open grass: the half of the screen away from the line of scrimmage
+    sc.svg.parentElement.classList.toggle('chipsdown', camY(sc)(spotGeom(G.root).L) < sc.H / 2);
     if (passing()) {
       if (!ui.pass.routes || ui.pass.routes.length !== eligibles(sc).length) ui.pass.routes = defaultRoutes(sc);
       drawRoutes(sc);
@@ -2491,7 +2523,7 @@
     b.setAttribute('aria-label', `${code(1)} ${r.score[1]}, ${code(0)} ${r.score[0]}, ${ck.text} left in ${r.ot ? 'overtime' : `the ${ordinal(ck.q)} quarter`}. Game details`);
     const dd = $('dd');
     dd.textContent = '';
-    if (r.phase === SNAP) dd.append(el('b', '', r.try2 ? 'Two-point try' : ddText(r)), document.createTextNode(` · ball ${onSpot(r)}${VS ? '' : ` · clock ${r.clock_running ? 'running' : 'stopped'}`}`));
+    if (r.phase === SNAP) dd.append(el('b', '', r.try2 ? 'Two-point try' : ddText(r)), document.createTextNode(` · ${spotText(r)}${VS ? '' : ` · clock ${r.clock_running ? 'running' : 'stopped'}`}`));
     else dd.textContent = r.phase === PAT ? 'Try after the touchdown' : r.phase === KICKOFF ? 'Kickoff' : r.t >= 1800 ? 'Halftime' : 'Final';
   }
   function drawAll() { drawTiles(); drawBar(); drawField(); }
@@ -2859,6 +2891,7 @@
     ui = { step: 'family', fam: null, oob: false, tempo: tempoKeyOf(G.info.tempo) };
     drawField();
     drawDock();
+    toField();
   }
   // kneel: ahead late, or ending the first half; timeout and spike: when you need the time
   function canKneel(r) {
@@ -3467,6 +3500,7 @@
     G.fast = false;
     ui = { step: 'vdef', dc: VS ? vdefDefault(r) : nflDefault(r, G.dinfo && G.dinfo.dshare), to: false };
     drawFullDefDock();
+    toField();
   }
   // your defense in full (every mode): a quick call (a preset for the spot) or any personnel, front, coverage and rush;
   // every part starts on what a defense would call here, so one tap on Call it is enough
@@ -3520,8 +3554,14 @@
       row.append(seg);
       box.append(row);
     });
-    d.append(presets, box, sum, tip);
-    if (!VS && share) d.append(el('p', 'vdeftip', 'NFL %: how often NFL defenses lined up each way in this spot. It starts on the most common.'));
+    // the four parts fold away (a quick call is one tap); open, they stay open from snap to snap
+    const custom = el('details', 'vcustom');
+    custom.open = !!load(`${STORE}:defopen`, false);
+    const cs = el('summary', '', 'Customize: personnel, front, coverage, rush');
+    custom.addEventListener('toggle', () => save(`${STORE}:defopen`, custom.open));
+    custom.append(cs, box);
+    if (!VS && share) custom.append(el('p', 'vdeftip', 'NFL %: how often NFL defenses lined up each way in this spot. It starts on the most common.'));
+    d.append(presets, sum, tip, custom);
     if (!VS && defTimeoutOk(r)) {
       const tg = el('div', 'toggle');
       const lab = el('div', 'lab', 'Timeout first');
@@ -4542,6 +4582,82 @@
     }
     return better / N;
   }
+  // Pro: the end of a historic drive. The grade (A, green, is a pass), the score behind it, what it takes to pass,
+  // your best and your tries, where you stand across every drive, and what really happened
+  function driveCard(p, rec, prev) {
+    const score = Math.round(p * 100), g = gradeOf(score), d = PRO.drives[DRIVE - 1], n = PRO.drives.length;
+    const box = el('div', `gradecard ${g.c}`);
+    const top = el('div', 'gtop');
+    const big = el('div', 'gbig', g.L);
+    const txt = el('div', 'gtxt');
+    txt.append(el('div', 'gk', d.title), el('div', 'gres', g.pass ? 'Passed' : score >= PASS_AT - 10 ? 'So close' : 'Not yet'),
+      el('div', 'gsc', `${score} · better than ${score}% of NFL play\u2011callers`));
+    top.append(big, txt);
+    box.append(top);
+    const bar = el('div', 'gbar');
+    const fill = el('i');
+    fill.style.width = `${Math.min(100, score)}%`;
+    bar.append(fill, el('b', 'gmark'));
+    bar.setAttribute('aria-hidden', 'true');
+    box.append(bar);
+    const lines = [];
+    if (!g.pass) lines.push(`${PASS_AT} passes: ${PASS_AT - score} more ${PASS_AT - score === 1 ? 'point' : 'points'}.`);
+    if (prev && prev.p * 100 >= score + 0.5) lines.push(`Your best here: ${Math.round(prev.p * 100)} (${gradeOf(Math.round(prev.p * 100)).L}).`);
+    else if (prev && score > Math.round(prev.p * 100)) lines.push(`New best: up from ${Math.round(prev.p * 100)}.`);
+    if (rec && rec.tries > 1) lines.push(`Try ${rec.tries}.`);
+    if (lines.length) box.append(el('p', 'gnote', lines.join(' ')));
+    // across every drive: passed, the rank, the next one
+    const ds = load(`${STORE}:drives`, {}), passed = PRO.drives.filter((_, k) => ds[k + 1] && ds[k + 1].p * 100 >= PASS_AT - 0.5).length;
+    const rk = proRank(passed, n);
+    const prog = el('div', 'gprog');
+    prog.append(el('span', 'k', 'Historic drives'), el('b', '', `${passed}/${n} passed`), el('span', 'rk', rk.title));
+    prog.append(driveStrip(ds));
+    if (rk.next) prog.append(el('span', 'sub', `${rk.next.at - passed} more to ${rk.next.title}`));
+    box.append(prog);
+    if (d.note) {
+      const real = el('details', 'greal');
+      real.append(el('summary', '', 'What really happened'), el('p', '', d.note));
+      box.append(real);
+    }
+    return box;
+  }
+  // every historic drive in a row of squares: its best grade's color, gray if not played
+  function driveStrip(ds) {
+    const strip = el('div', 'gstrip');
+    PRO.drives.forEach((dd, k) => {
+      const r = ds[k + 1], sq = el('i', r ? `on ${gradeOf(Math.round(r.p * 100)).c}` : '');
+      sq.title = `${dd.title}${r ? `: ${gradeOf(Math.round(r.p * 100)).L}` : ''}`;
+      strip.append(sq);
+    });
+    return strip;
+  }
+  // a drive played again from the snap: its saved state cleared (its best grade stays)
+  function retryDrive() {
+    try { localStorage.removeItem(stateKey()); } catch (e) { /* storage off */ }
+    track('drive_retry', { drive: DRIVE });
+    location.reload();
+  }
+  function driveActions(rec) {
+    const row = el('div', 'row');
+    const again = el('button', 'btn', rec && rec.p * 100 >= PASS_AT - 0.5 ? 'Play it again' : 'Try again');
+    again.type = 'button';
+    again.addEventListener('click', retryDrive);
+    row.append(again);
+    const ds = load(`${STORE}:drives`, {}), n = PRO.drives.length;
+    // the next drive not yet passed, after this one (then from the top)
+    const order = Array.from({ length: n }, (_, j) => ((DRIVE + j) % n) + 1);
+    const nx = order.find((k) => k !== DRIVE && !(ds[k] && ds[k].p * 100 >= PASS_AT - 0.5));
+    if (nx) {
+      const a = el('a', 'btn ghostbtn', `Next: ${PRO.drives[nx - 1].title}`);
+      a.href = `#drive-${nx}`;
+      a.addEventListener('click', () => setTimeout(() => location.reload(), 0));
+      row.append(a);
+    }
+    const all = el('a', 'btn ghostbtn', 'All drives');
+    all.href = '#archive';
+    row.append(all);
+    return row;
+  }
   function renderSummary() {
     if (!G) resumeSpot(today.length - 1);
     show('done');
@@ -4551,9 +4667,17 @@
     const st = load(`${STORE}:stats`, { days: {} });
     const cc = coachCard(decs, DRIVE || RUN_N ? 'You coached like' : 'Today you coached like');
     const runRec = RUN_N ? today.map((_, i) => { const r = state.spots[i] && state.spots[i].result; return !r ? 0 : r.mine > r.theirs ? 1 : r.mine < r.theirs ? -1 : 0; }) : [];
-    if (DRIVE) {                      // a historic drive: its own record, not a day's
+    let driveRec = null, drivePrev = null;
+    if (DRIVE) {                      // a historic drive: its own record (the best try kept), not a day's
       const ds = load(`${STORE}:drives`, {});
-      ds[DRIVE] = { p, wpa };
+      drivePrev = ds[DRIVE] || null;
+      const r0 = state.spots[0] && state.spots[0].result, won = !!(r0 && r0.mine > r0.theirs);
+      const counted = !!state.tryAt && !!drivePrev && drivePrev.at === state.tryAt;      // this try is in already (the page reopened)
+      driveRec = { p: Math.max(p, drivePrev ? drivePrev.p : 0), wpa: drivePrev && drivePrev.p > p ? drivePrev.wpa : wpa, last: p,
+        tries: (drivePrev && drivePrev.tries || (drivePrev ? 1 : 0)) + (counted ? 0 : 1), won: won || !!(drivePrev && drivePrev.won), at: state.tryAt };
+      if (counted) drivePrev = drivePrev.prev || null;
+      driveRec.prev = drivePrev ? { p: drivePrev.p, tries: drivePrev.tries } : null;
+      ds[DRIVE] = driveRec;
       save(`${STORE}:drives`, ds);
     } else if (RUN_N) {               // a playoff run: its record
       const rs = load(`${STORE}:runs`, {});
@@ -4572,9 +4696,12 @@
     box.textContent = '';
     // the daily streak: days in a row finished, today included (what brings players back tomorrow)
     let streak = 0; for (let k = dayN; st.days[k]; k--) streak++;
-    box.append(el('div', 'note', DRIVE ? `${PRO.drives[DRIVE - 1].title} · your score` : RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · your run` : `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
-      el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers`),
-      el('div', 'streak', DRIVE ? 'Historic drive' : RUN_N ? 'Playoff run' : ARCH_DAY ? 'From the archive' : streak >= 2 ? `🔥 ${streak}-day streak` : 'Day 1 of your streak · come back tomorrow'));
+    if (DRIVE) box.append(driveCard(p, driveRec, drivePrev), driveActions(driveRec));
+    else {
+      box.append(el('div', 'note', RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · your run` : `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
+        el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers`),
+        el('div', 'streak', RUN_N ? 'Playoff run' : ARCH_DAY ? 'From the archive' : streak >= 2 ? `🔥 ${streak}-day streak` : 'Day 1 of your streak · come back tomorrow'));
+    }
     if (RUN_N) {                      // the run's record against the real one
       const run = PRO_RUNS.runs[RUN_N - 1], w = runRec.filter((x) => x > 0).length, l = runRec.filter((x) => x < 0).length, t = today.length - w - l;
       const rw = run.games.filter((g) => g.won).length, rl = run.games.length - rw;
@@ -4587,7 +4714,7 @@
     box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller ${today.length > 1 ? 'across today’s spots' : 'on today’s drive'}.`));
     const dbox = dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0)));
     box.append(dbox);
-    if (ARCH_DAY || DRIVE || RUN_N) { const a = el('a', 'btn', DRIVE ? 'More drives' : RUN_N ? 'More runs' : 'Back to the archive'); a.href = '#archive'; box.append(a); }
+    if (ARCH_DAY || RUN_N) { const a = el('a', 'btn', RUN_N ? 'More runs' : 'Back to the archive'); a.href = '#archive'; box.append(a); }
     else if (PRO_ON && !isPro() && dayN > 1 && BOARD.api) {       // the website: the archive is a Pro purchase there
       const a = el('a', '', 'the Archive'), nudge = el('p', 'note');
       a.href = '#archive';
@@ -4619,7 +4746,7 @@
         el('span', 'sub', `${rec[0]} better, ${rec[1]} worse${rec[2] ? `, ${rec[2]} the same` : ''}`));
       box.insertBefore(v, box.children[3] || null);
     }
-    const text = `${DRIVE ? `Two-Minute Drill · ${PRO.drives[DRIVE - 1].title}` : RUN_N ? `Two-Minute Drill · the ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Two-Minute Drill #${dayN}`}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
+    const text = `${DRIVE ? `Two-Minute Drill · ${PRO.drives[DRIVE - 1].title}\nGrade ${gradeOf(Math.round(p * 100)).L}${p * 100 >= PASS_AT - 0.5 ? ' ✅ passed' : ''}` : RUN_N ? `Two-Minute Drill · the ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Two-Minute Drill #${dayN}`}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
       `${streak >= 2 ? `\n🔥 ${streak}-day streak` : ''}\n${rows.join('\n')}\nCan you beat me? ${SITE}`;
     // sharing is how new players find the game: the button sits right under the result, not below the standings
     const share = { text };
@@ -5115,23 +5242,35 @@
       } else box.append(...proNodes());
       return;
     }
-    box.append(el('h3', '', 'Historic drives'));
     const pro = await loadPro(), ds = load(`${STORE}:drives`, {});
     if (pro && pro.drives.length) {
+      // your record across them: passed (an A), the rank it earns, the next rank, every drive's best grade
+      const n = pro.drives.length, rec = (k) => ds[k + 1], scoreOf = (k) => Math.round(rec(k).p * 100);
+      const passed = pro.drives.filter((_, k) => rec(k) && scoreOf(k) >= PASS_AT).length, played = pro.drives.filter((_, k) => rec(k)).length;
+      const rk = proRank(passed, n);
+      const head = el('div', 'prohead');
+      const ttl = el('div', 'phl');
+      ttl.append(el('span', 'k', 'Your rank'), el('b', '', rk.title), el('span', 'sub', rk.next ? `${rk.next.at - passed} more ${rk.next.at - passed === 1 ? 'pass' : 'passes'} to ${rk.next.title}` : 'Every drive passed. The Hall of Fame.'));
+      const num = el('div', 'phn');
+      num.append(el('b', '', `${passed}/${n}`), el('span', 'k', 'passed'));
+      head.append(ttl, num, driveStrip(ds), el('p', 'note', `Pass a drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play\u2011callers. Replay any drive as often as you like; your best grade counts.${played ? ` Played ${played} of ${n}.` : ''}`));
+      box.append(head, el('h3', '', 'Historic drives'));
       const dl = el('div', 'days');
       pro.drives.forEach((d, k) => {
         const sp = pro.spots[d.spot], opp = sp.player === sp.home ? sp.away : sp.home, a = el('a', 'day drive');
         a.href = `#drive-${k + 1}`;
         const fresh = freshTag(sp.real);
         if (fresh) a.classList.add('fresh');
+        if (rec(k) && scoreOf(k) >= PASS_AT) a.classList.add('passed');
         const tb = el('b', '', fresh ? null : d.title);
         if (fresh) tb.append(el('span', 'freshtag', fresh), d.title);
-        a.append(tb, el('span', 'd', String(sp.real.season)), el('span', 'm', `${teamName(sp.player)} vs ${teamName(opp)}`),
-          el('span', 'sc', ds[k + 1] ? String(Math.round(ds[k + 1].p * 100)) : 'Play'));
+        const right = rec(k) ? el('span', 'gr') : el('span', 'sc', 'Play');
+        if (rec(k)) right.append(gradeBadge(scoreOf(k)), el('small', '', String(scoreOf(k))));
+        a.append(tb, el('span', 'd', String(sp.real.season)), el('span', 'm', `${teamName(sp.player)} vs ${teamName(opp)}`), right);
         dl.append(a);
       });
       box.append(dl);
-    } else box.append(el('p', 'note', 'The historic drives land here with the next build.'));
+    } else box.append(el('h3', '', 'Historic drives'), el('p', 'note', 'The historic drives land here with the next build.'));
     box.append(el('h3', '', 'Playoff runs'));
     const runs = await loadRuns(), rs = load(`${STORE}:runs`, {});
     if (runs && runs.runs.length) {
@@ -5140,7 +5279,7 @@
         const a = el('a', 'day drive'), rec = rs[k + 1];
         a.href = `#run-${k + 1}`;
         a.append(el('b', '', r.title), el('span', 'd', `${r.games.length} games`), el('span', 'm', r.games.map((g) => g.round.replace('Conference Championship', 'Conf.').replace('Divisional', 'Div.').replace('Wild Card', 'WC').replace('Super Bowl', 'SB')).join(' · ')),
-          el('span', 'sc', rec ? `${rec.w}-${rec.l}` : 'Play'));
+          el('span', `sc${rec && rec.w === rec.n ? ' champ' : ''}`, rec ? `${rec.w === rec.n ? '🏆 ' : ''}${rec.w}-${rec.l}` : 'Play'));
         rl.append(a);
       });
       box.append(rl, el('p', 'note', 'Every game of the run in order, each from the spot the team was least likely to win it from. Win them all.'));
@@ -5154,7 +5293,7 @@
       a.href = `#day-${n}`;
       a.append(el('b', '', `No. ${n}`), el('span', 'd', dayDate(n).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })),
         el('span', 'm', `${teamName(sp.player)} vs ${teamName(opp)}${feat ? ' · featured' : ''}`),
-        el('span', 'sc', st.days[n] ? String(Math.round(st.days[n].p * 100)) : 'Play'));
+        st.days[n] ? (() => { const g = el('span', 'gr'); g.append(gradeBadge(Math.round(st.days[n].p * 100)), el('small', '', String(Math.round(st.days[n].p * 100)))); return g; })() : el('span', 'sc', 'Play'));
       list.append(a);
     }
     box.append(list, el('p', 'note', `Pro is on this device · code ${proCode()}`));
@@ -5852,7 +5991,7 @@
         $('dayLabel').textContent = `No. ${dayN} · ${dayDate(dayN).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${ARCH_DAY ? ' · archive' : ''}`;
       }
     } catch (e) { $('boot').textContent = 'Today\'s spots did not load (' + e.message + '). Check your connection and reload.'; return; }
-    state = load(stateKey(), null) || { spots: [], current: 0, done: false };
+    state = load(stateKey(), null) || { spots: [], current: 0, done: false, tryAt: Date.now() };     // tryAt: this try (a drive's record)
     if (!load(`${STORE}:seen`, false)) { openHelp(true); save(`${STORE}:seen`, true); }
     drawTiles();
     startWorkers();

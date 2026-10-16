@@ -107,6 +107,52 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .arch .day .d { color: var(--muted); font-variant-numeric: tabular-nums; }
 .arch .day .m { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .arch .day .sc { font: 800 13px var(--display); background: var(--ink); color: var(--paper); border-radius: 999px; padding: 3px 10px; min-width: 28px; text-align: center; }
+.arch .day .sc.champ { background: linear-gradient(90deg, #f6c544, #e0a526); color: #1a1305; }
+.arch .day .gr { display: inline-flex; align-items: center; gap: 6px; }
+.arch .day .gr small { font: 700 12px var(--body); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 18px; text-align: right; }
+.arch .day.passed { border-color: var(--sq-g); background: linear-gradient(100deg, color-mix(in srgb, var(--sq-g) 14%, transparent), transparent 70%); }
+/* Pro grades: a letter in its color, green (A) is a pass */
+.grade { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; font: 900 17px/1 var(--display); color: var(--sq-ink); background: var(--muted); }
+.grade.g { background: var(--sq-g); } .grade.y { background: var(--sq-y); } .grade.o { background: var(--sq-o); } .grade.r { background: var(--sq-r); }
+.prohead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; padding: 14px; border: 2px solid var(--ink); border-radius: 12px; }
+.prohead .phl { display: grid; gap: 2px; }
+.prohead .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.prohead .phl b { font: 900 26px/1.05 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.prohead .sub { font-size: 13px; color: var(--muted); }
+.prohead .phn { display: grid; justify-items: end; }
+.prohead .phn b { font: 900 34px/1 var(--display); font-variant-numeric: tabular-nums; }
+.prohead .gstrip, .prohead .note { grid-column: 1 / -1; }
+.prohead .note { margin: 0; font-size: 12.5px; color: var(--muted); }
+.gstrip { display: flex; flex-wrap: wrap; gap: 4px; }
+.gstrip i { width: 16px; height: 16px; border-radius: 3px; background: var(--line); }
+.gstrip i.g { background: var(--sq-g); } .gstrip i.y { background: var(--sq-y); } .gstrip i.o { background: var(--sq-o); } .gstrip i.r { background: var(--sq-r); }
+/* the end of a historic drive: the grade */
+.gradecard { display: grid; gap: 10px; text-align: left; padding: 16px; border-radius: 14px; border: 2px solid var(--line); }
+.gradecard.g { border-color: var(--sq-g); background: linear-gradient(160deg, color-mix(in srgb, var(--sq-g) 16%, transparent), transparent 65%); }
+.gradecard.y { border-color: var(--sq-y); } .gradecard.o { border-color: var(--sq-o); } .gradecard.r { border-color: var(--sq-r); }
+.gradecard .gtop { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center; }
+.gradecard .gbig { width: 86px; height: 86px; border-radius: 14px; display: grid; place-items: center; font: 900 64px/1 var(--display); color: var(--sq-ink); background: var(--muted); animation: gradepop .5s cubic-bezier(.2, 1.4, .4, 1) both; }
+.gradecard.g .gbig { background: var(--sq-g); } .gradecard.y .gbig { background: var(--sq-y); } .gradecard.o .gbig { background: var(--sq-o); } .gradecard.r .gbig { background: var(--sq-r); }
+@keyframes gradepop { from { transform: scale(.6); opacity: 0; } to { transform: none; opacity: 1; } }
+.gradecard .gk { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.gradecard .gres { font: 900 30px/1.05 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.gradecard.g .gres { color: var(--sq-g); }
+.gradecard .gsc { font: 600 13.5px var(--body); color: var(--muted); font-variant-numeric: tabular-nums; }
+.gradecard .gbar { position: relative; height: 10px; border-radius: 5px; background: var(--line); }
+.gradecard .gbar i { position: absolute; inset: 0 auto 0 0; border-radius: 5px; background: var(--ink); }
+.gradecard.g .gbar i { background: var(--sq-g); }
+.gradecard .gbar .gmark { position: absolute; left: 90%; top: -4px; bottom: -4px; width: 2px; background: var(--ink); }
+.gradecard .gnote { margin: 0; font: 600 14px var(--body); }
+.gradecard .gprog { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px 10px; align-items: baseline; padding-top: 10px; border-top: 1px solid var(--line); }
+.gradecard .gprog .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.gradecard .gprog b { font: 800 15px var(--body); }
+.gradecard .gprog .rk { font: 800 12px var(--body); letter-spacing: .06em; text-transform: uppercase; }
+.gradecard .gprog .gstrip, .gradecard .gprog .sub { grid-column: 1 / -1; }
+.gradecard .gprog .sub { font-size: 13px; color: var(--muted); }
+.gradecard .greal summary { cursor: pointer; font: 700 12px var(--body); letter-spacing: .08em; text-transform: uppercase; }
+.gradecard .greal p { margin: 6px 0 0; font-size: 14px; line-height: 1.45; }
+.btn.ghostbtn { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
+@media (prefers-reduced-motion: reduce) { .gradecard .gbig { animation: none; } }
 .pro { border: 2px solid var(--ink); border-radius: 12px; padding: 14px; display: grid; gap: 8px; }
 .pro .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
 .pro .price { font: 900 34px/1 var(--display); }
@@ -273,14 +319,37 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .replay { justify-self: start; }
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
 .ballmove { transition: transform .6s cubic-bezier(.3, .7, .2, 1); }
-.legend { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); }
-.legend .ramp { display: flex; align-items: center; gap: 6px; }
-.legend .ramp i { width: 64px; height: 8px; border-radius: 4px; display: inline-block; background: linear-gradient(90deg, hsl(2 82% 52%), hsl(45 92% 55%), hsl(135 62% 48%)); }
+/* over the top of the field (downfield: open grass before the snap): the down, the color key, personnel, ratings.
+   Out of the way while a play runs */
+.fov { position: absolute; top: 6px; left: 6px; right: 6px; display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; line-height: 1.2; pointer-events: none; transition: opacity .2s ease; }
+.fov > * { pointer-events: auto; }
+.fov [hidden] { display: none; }
+.fieldbox:has(#field.playing) .fov { opacity: 0; pointer-events: none; }
+.fieldbox:has(#field.playing) .fov > * { pointer-events: none; }
+.fovl { display: grid; gap: 4px; justify-items: start; min-width: 0; }
+.fov .dd { min-height: 0; text-align: left; background: rgba(10, 16, 12, .72); color: #fff; border-radius: 8px; padding: 4px 8px; font-size: 12px; }
+/* the chips go to the half of the screen away from the line of scrimmage (game.js drawField): the open grass */
+.fieldbox.chipsdown .fov { top: auto; bottom: 6px; align-items: flex-end; }
+.fov .dd b { color: #fff; }
+.fov .dd:empty { display: none; }
+.fov .ramp { display: flex; align-items: center; gap: 5px; font: 600 10.5px var(--body); color: #fff; background: rgba(10, 16, 12, .55); border-radius: 999px; padding: 2px 8px; }
+.fov .ramp i { width: 34px; height: 6px; border-radius: 3px; display: inline-block; background: linear-gradient(90deg, hsl(2 82% 52%), hsl(45 92% 55%), hsl(135 62% 48%)); }
+.fov .btns { display: flex; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
+.fov .ghost { background: rgba(10, 16, 12, .72); color: #fff; border-color: rgba(255, 255, 255, .28); padding: 5px 9px; font-size: 12px; gap: 4px; }
+.fov .ghost:hover { border-color: #fff; }
+.fov .ghost svg { width: 13px; height: 13px; }
 .ghost { border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 6px 12px; font-weight: 700; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .ghost:hover { border-color: var(--muted); }
-.legend .btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-@media (max-width: 420px) { .legend { gap: 6px; } .legend .ramp { gap: 4px; font-size: 11px; } .legend .ramp i { width: 28px; }
-  .legend .btns { flex-wrap: nowrap; gap: 5px; } .legend .ghost { padding: 5px 9px; font-size: 12px; gap: 4px; } .legend .ghost svg { width: 13px; height: 13px; } }
+/* playing on a phone: a slimmer header and mode switch, so the field and the calls fill the screen */
+@media (max-width: 999px) { @supports selector(:has(*)) {
+  body:has(#play:not([hidden])) .top h1 { font-size: 21px; }
+  body:has(#play:not([hidden])) .top h1 small { font-size: 9.5px; margin-top: 1px; }
+  body:has(#play:not([hidden])) .top .in { padding-block: 3px; }
+  .wrap:has(> #play:not([hidden])) { padding-top: 6px; gap: 6px 10px; flex-flow: row wrap; justify-content: center; align-items: center; }
+  .wrap:has(> #play:not([hidden])) > #play { flex-basis: 100%; min-width: 0; }
+  .wrap:has(> #play:not([hidden])) .modes a { padding: 4px 12px; font-size: 11px; }
+  .wrap:has(> #play:not([hidden])) .tiles span { width: 22px; height: 22px; font-size: 12px; border-width: 1.5px; }
+} }
 .pgroups { display: grid; gap: 6px; }
 .pgroup { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: center; text-align: left; border: 1px solid var(--line);
   background: var(--card); color: var(--ink); border-radius: 10px; padding: 8px 10px; cursor: pointer; }
@@ -349,6 +418,10 @@ a.chip { color: var(--ink); text-decoration: none; display: inline-block; }
 .vdef .segb small { font-size: 10px; line-height: 1.15; }
 .vdef .segb small.pct { font: 700 9.5px/1.1 var(--body); letter-spacing: .02em; opacity: .8; }
 .vpresets { display: flex; flex-wrap: wrap; gap: 6px; }
+.vcustom { border: 1px solid var(--line); border-radius: 10px; padding: 0 10px; background: var(--card); }
+.vcustom > summary { cursor: pointer; padding: 9px 0; font: 700 12px var(--body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.vcustom[open] { padding-bottom: 10px; }
+.vcustom[open] > summary { color: var(--ink); }
 .vdefsum { font: 800 13px/1.3 var(--body); color: var(--ink); text-wrap: balance; }
 .vdeftip { margin: 0; font: 500 12.5px/1.4 var(--body); color: var(--muted); text-wrap: pretty; }
 .toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; background: var(--card); }
@@ -425,10 +498,17 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 /* the real game a spot comes from, on its intro */
 .intro .game { font: 800 15px var(--body); letter-spacing: .02em; text-align: center; text-wrap: balance; }
 /* the last result, riding on top of the next call */
-.result.banner { gap: 6px; padding-bottom: 12px; margin-bottom: 4px; border-bottom: 1px solid var(--line); animation: none; }
-.result.banner .res-play .yd { font-size: 19px; }
-.result.banner .res-top .sq { width: 38px; height: 38px; font-size: 18px; }
-.result.banner .res-top .sq.swing { font-size: 15px; }
+/* your last play, kept small above their next snap: the headline, the swing and the grade; the rest a tap away
+   (game.js takeBanner) */
+.result.banner { gap: 4px; padding-bottom: 8px; margin-bottom: 2px; border-bottom: 1px solid var(--line); animation: none; }
+.result.banner .res-play { font-size: 12.5px; line-height: 1.3; }
+.result.banner .res-play .yd { font-size: 16px; }
+.result.banner .res-play .wc { margin-top: 1px; font-size: 11.5px; }
+.result.banner .res-top { gap: 8px; }
+.result.banner .res-top .sq { width: 32px; height: 32px; font-size: 15px; }
+.result.banner .res-top .sq.swing { font-size: 13px; }
+.result.banner .verdict { font-size: 12.5px; }
+.result.banner > .res-acts, .result.banner > .mline, .result.banner > .btn { display: none; }
 /* you against the real coach */
 .h2h-day { display: grid; justify-items: center; gap: 2px; }
 .h2h-day .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
@@ -549,15 +629,16 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
   <section id="play" hidden>
     <div class="playgrid">
       <button id="bar" class="bar" type="button" aria-label="Game details"></button>
-      <div id="dd" class="dd"></div>
-      <div class="fieldbox"><svg id="field" role="group" aria-label="The whole field, every player shown red to green by his rating"></svg></div>
-      <div class="legend">
-        <span class="ramp">worse <i></i> better</span>
-        <span class="btns">
-        <button id="persBtn" class="ghost" type="button" hidden aria-label="Edit personnel"></button>
-        <button id="deepBtn" class="ghost" type="button">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>Player ratings</button>
-        </span>
+      <div class="fieldbox"><svg id="field" role="group" aria-label="The whole field, every player shown red to green by his rating"></svg>
+        <!-- on the field, out of the way of the calls below it: the down, the color key, personnel and the ratings -->
+        <div class="fov">
+          <div class="fovl"><div id="dd" class="dd"></div><span class="ramp" aria-label="Player dots: red is worse, green is better">worse <i></i> better</span></div>
+          <span class="btns">
+          <button id="persBtn" class="ghost" type="button" hidden aria-label="Edit personnel"></button>
+          <button id="deepBtn" class="ghost" type="button" aria-label="Player ratings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><span class="lb">Ratings</span></button>
+          </span>
+        </div>
       </div>
       <section id="dock" class="dock" aria-live="polite"></section>
       <details id="pbpBox" class="pbp"><summary>Play-by-play</summary><ol id="pbp"></ol></details>
