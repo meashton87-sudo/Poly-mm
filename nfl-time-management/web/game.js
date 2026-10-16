@@ -4820,7 +4820,8 @@
       note.hidden = true;
       card.append(note);
       box.append(card, driveActions(driveRec));
-      if (firstFinish) racePass(p, decs, note);
+      // the pass goes to the Gauntlet once; one that never got an answer (the page closed while sending) goes again
+      if (firstFinish || (state.raceTok && state.raceSent === false)) racePass(p, decs, note);
     }
     else {
       box.append(el('div', 'note', RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · your run` : `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
@@ -5402,18 +5403,33 @@
   // started), so only a try started in the Gauntlet can count; a reloaded try keeps its own
   async function raceStart() {
     if (!PRO_ON || !BOARD.api || !proCode()) return;
-    try {
-      const d = await raceCall('/race/start', { code: proCode(), key: deviceKey(), drive: DRIVE });
-      if (d.ok && d.tok && state && !state.done) { state.raceTok = d.tok; saveState(); }
-    } catch (e) { /* no connection: this try cannot count */ }
+    const d = await raceRetry('/race/start', () => ({ code: proCode(), key: deviceKey(), drive: DRIVE }));
+    if (d && d.ok && d.tok && state && !state.done) { state.raceTok = d.tok; saveState(); }
+  }
+  // a call to the board that must get through (a try's token, a pass): a busy board (429 slow down, 5xx) or no
+  // connection is tried again, waiting longer each time (about 2 minutes in all); any other answer is final
+  async function raceRetry(path, body, waits = [2, 4, 8, 15, 30, 60]) {
+    for (let i = 0; ; i++) {
+      let d = null;
+      try { d = await raceCall(path, body()); } catch (e) { d = null; }
+      const busy = !d || d.status >= 500 || (d.status === 429 && !/one drive at a time|too fast/.test(d.error || ''));
+      if (!busy || i >= waits.length) return d;
+      await sleep(waits[i] * 1000 * (0.75 + 0.5 * Math.random()));
+    }
   }
   // a passed historic drive, for the Gauntlet (once you have entered): its calls go with it, for the check
   async function racePass(p, decs, note) {
-    if (!isPro() || !BOARD.api || p * 100 < PASS_AT - 0.5) return;
+    if (!BOARD.api || p * 100 < PASS_AT - 0.5) return;
+    // Pro not confirmed yet (offline at load): keep the pass for the next time this drive opens
+    if (!isPro()) { if (PRO_LIVE === null && state.raceTok) { state.raceSent = false; saveState(); } return; }
     const calls = decs.map((x) => ({ k: x.kind, f: x.family, c: x.chosen, s: x.snap, w: x.wps.map((o) => [o.key, Math.round(o.wp * 1e4) / 1e4]) }));
+    state.raceSent = false; saveState();
     try {
-      const d = await raceCall('/race/pass', { code: proCode(), key: deviceKey(), drive: DRIVE, p: clip(p, 0, 1), decs: calls, tryAt: state.tryAt || null, tok: state.raceTok || null,
-        res: state.spots.map((x) => (x && x.result ? [x.result.mine, x.result.theirs] : null)) });
+      note.textContent = `${RACE_NAME}: sending your pass…`; note.hidden = false;
+      const d = await raceRetry('/race/pass', () => ({ code: proCode(), key: deviceKey(), drive: DRIVE, p: clip(p, 0, 1), decs: calls, tryAt: state.tryAt || null, tok: state.raceTok || null,
+        res: state.spots.map((x) => (x && x.result ? [x.result.mine, x.result.theirs] : null)) }), [2, 4, 8, 15, 30, 35, 60]);
+      if (!d) throw new Error('no connection');
+      state.raceSent = true; saveState();
       if (d.rows) RACE.view = d;
       const n = d.n || 24;
       if (d.ok && d.me) {
@@ -5427,7 +5443,7 @@
         note.append(`This pass would count in the race. `, a, ' (then pass it again).');
         note.hidden = false;
       } else if (d.error) { note.textContent = `${RACE_NAME}: ${d.error}`; note.hidden = false; }
-    } catch (e) { note.textContent = `${RACE_NAME}: no connection, so this pass didn't reach the board. Pass it again to count it.`; note.hidden = false; }
+    } catch (e) { note.textContent = `${RACE_NAME}: no connection, so this pass hasn't reached the board yet. Reopen this drive when you're back online and it is sent again.`; note.hidden = false; }
   }
   // on the Daily and Survivor tabs, once it is on: a bar to the race
   function raceBar() {
