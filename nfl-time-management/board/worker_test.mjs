@@ -269,6 +269,22 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.match(store.get('pro:sess:cs_test_late1234567890') || '', /^TMD-/, 'the code comes when the payment clears');
   for (const e of [env, board.env]) delete e.STRIPE_WEBHOOK_SECRET;
   assert.strictEqual((await hook(bodyW, await sign(bodyW))).status, 503, 'no signing secret: webhooks are off');
+  // the Pro data: only to a valid code, never as a plain file
+  const assets = { fetch: async (rq) => (new URL(rq.url).pathname === '/pro/d0.json'
+    ? new Response('{"0":{"home":{}}}', { status: 200, headers: { 'Content-Type': 'application/json' } }) : new Response('nf', { status: 404 })) };
+  for (const e of [env, board.env]) e.ASSETS = assets;
+  const data = (body, o = {}) => pro('POST', '/pro/data', body, o);
+  assert.strictEqual((await data({ name: 'd0.json' })).status, 403, 'no code');
+  assert.strictEqual((await data({ code: 'TMD-AAAA-AAAA-AAAA', name: 'd0.json' })).status, 403, 'a code never issued');
+  assert.strictEqual((await data({ code, name: '../worker.js' })).status, 404, 'only the Pro files');
+  assert.strictEqual((await data({ code, name: 'd9.json' })).status, 404, 'a file not there');
+  r = await data({ code, name: 'd0.json' });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.headers.get('Cache-Control'), 'private, no-store');
+  assert.deepStrictEqual(await r.json(), { 0: { home: {} } }, 'the file, to a valid code');
+  assert.strictEqual((await call('GET', undefined, { path: '/pro/d0.json' })).status, 404, 'the plain file path is not served');
+  for (const e of [env, board.env]) delete e.ASSETS;
+  assert.strictEqual((await data({ code, name: 'd0.json' })).status, 503, 'no assets deployed');
   globalThis.fetch = realFetch;
   for (const e of [env, board.env]) { delete e.STRIPE_SECRET; delete e.STRIPE_PRICE; delete e.SITE; }
 }

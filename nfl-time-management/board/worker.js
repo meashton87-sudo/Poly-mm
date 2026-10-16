@@ -29,6 +29,9 @@
 //   POST   /claim   { s }            -> { code }             after paying: the session's Pro code (the same code
 //                                                            every time for one session; TMD-XXXX-XXXX-XXXX)
 //   POST   /restore { code }         -> { ok, code }         the code on another device (404 for one never issued)
+//   POST   /pro/data { code, name }  -> the file               the Pro data (board/assets/pro: drives.json, d0.json,
+//                                                            runs.json, r0.json, ...) to a valid code only; the files
+//                                                            are never served as plain assets (403 without a code)
 //   POST   /stripe-webhook           -> { received }         Stripe's events (STRIPE_WEBHOOK_SECRET signs them): a
 //                                                            completed, paid session gets its code here too, so a
 //                                                            buyer who never lands back on the site (closed the tab,
@@ -36,7 +39,8 @@
 // A code is 12 letters and digits (no 0/O, 1/I/L) drawn at random: about 60 bits, posted at RATE_PER_MIN an IP.
 // Nothing about the buyer is kept here (Stripe has the receipt); only the session id behind each code.
 const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
-const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook'];
+const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook', '/pro/data'];
+const PRO_FILE_RE = /^(drives|runs|d\d{1,3}|r\d{1,3})\.json$/;
 const STRIPE_VERSION = '2026-08-26.dahlia', WEBHOOK_TOLERANCE = 300;   // the API version pinned; a signature older than this is refused
 const PRO_PRICE = '$4.99', PRO_CENTS = 499, PRO_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', SESSION_RE = /^cs_(test|live)_[A-Za-z0-9]{10,200}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -299,6 +303,15 @@ async function pro(req, env, storage, hits, h, url) {
     if (!code) return json({ error: 'a code looks like TMD-XXXX-XXXX-XXXX' }, 400, h);
     const row = await storage.get(`pro:code:${code}`);
     return row ? json({ ok: true, code }, 200, h) : json({ error: 'unknown code' }, 404, h);
+  }
+  if (url.pathname === '/pro/data') {
+    const code = normCode(body.code), name = String(body.name || '');
+    if (!PRO_FILE_RE.test(name)) return json({ error: 'no such file' }, 404, h);
+    if (!code || !(await storage.get(`pro:code:${code}`))) return json({ error: 'a valid Pro code is needed' }, 403, h);
+    if (!env.ASSETS) return json({ error: 'the Pro data is not deployed' }, 503, h);
+    const file = await env.ASSETS.fetch(new Request(new URL(`/pro/${name}`, req.url), { method: 'GET' }));
+    if (!file.ok) return json({ error: 'no such file' }, 404, h);
+    return new Response(file.body, { status: 200, headers: { ...h, 'Content-Type': 'application/json', 'Cache-Control': 'private, no-store' } });
   }
   return json({ error: 'not found' }, 404, h);
 }

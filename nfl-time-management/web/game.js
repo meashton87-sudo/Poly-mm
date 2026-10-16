@@ -4678,7 +4678,22 @@
   // The code the purchase gives is kept here and is all a device needs; the same code restores Pro on another.
   const PRO_KEY = `${STORE}:pro`;
   const proCode = () => String((load(PRO_KEY, null) || {}).code || '');
-  const isPro = () => !!proCode();
+  // Pro is on only once the board has confirmed the code this page load (proVerify): a code typed into the browser's
+  // storage opens nothing, and the Pro data itself is served by the board to a valid code only (proFile)
+  let PRO_LIVE = null;                     // true: confirmed; false: no code or refused; null: could not ask (offline)
+  const isPro = () => PRO_LIVE === true;
+  function proOff(why) { PRO_LIVE = false; if (proCode()) { try { localStorage.removeItem(PRO_KEY); } catch (e) { /* no storage */ } if (why) toast(why); } }
+  async function proVerify() {
+    const code = proCode();
+    if (!code || !PRO_ON) { PRO_LIVE = false; return; }
+    if (!BOARD.api) { PRO_LIVE = null; return; }
+    try {
+      const r = await fetch(`${BOARD.api}/restore`, POST_JSON({ code }));
+      if (r.ok) { PRO_LIVE = true; return; }
+      if (r.status === 404 || r.status === 400) { proOff('That Pro code is not valid any more'); return; }
+      PRO_LIVE = null;                                                   // the board is down: neither on nor off
+    } catch (e) { PRO_LIVE = null; }
+  }
   async function proApi(path, body) {
     if (!BOARD.api) throw new Error('no backend here');
     const r = await fetch(`${BOARD.api}${path}`, body ? POST_JSON(body) : POST_JSON({}));
@@ -4695,6 +4710,7 @@
     try {
       const d = await proApi('/claim', { s });
       save(PRO_KEY, { code: d.code, at: Date.now() });
+      PRO_LIVE = true;
       track('pro_unlocked');
       toast('Pro unlocked');
     } catch (e) { toast('The purchase could not be confirmed: ' + e.message); }
@@ -4704,8 +4720,8 @@
     box.append(el('div', 'k', 'Two-Minute Drill Pro'), el('div', 'price', '$4.99 · once'));
     const ul = el('ul');
     [`The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed, with its score and stats`,
-      'Coming: 20 historic drives. Mahomes’ 13 seconds, the Minneapolis Miracle, the Philly Special, 28–3…',
-      'Coming: playoff runs. A team’s whole postseason, every late-game spot, to call in order'].forEach((t) => ul.append(el('li', '', t)));
+      'The historic drives. Mahomes’ 13 seconds, the Minneapolis Miracle, the Philly Special, 28–3 and more, each from its real spot',
+      'The playoff runs. A team’s whole postseason, every late-game spot in order. Win them all'].forEach((t) => ul.append(el('li', '', t)));
     box.append(ul);
     if (isPro()) {
       box.append(el('p', '', `Pro is on. Your code: ${proCode()}. Keep it: it unlocks Pro on any other device.`));
@@ -4729,6 +4745,7 @@
       try {
         const d = await proApi('/restore', { code: inp.value });
         save(PRO_KEY, { code: d.code, at: Date.now() });
+        PRO_LIVE = true;
         track('pro_restored');
         toast('Pro restored');
         if (location.hash === '#archive') location.reload(); else location.hash = '#archive';
@@ -4739,27 +4756,34 @@
     if (!BOARD.api) { buy.disabled = true; go.disabled = true; }
     return [box];
   }
-  // the historic drives (nflclock.pro: pro/drives.json and pro/d{k}.json, the teams in chunks); null where not built
+  // The Pro data (nflclock.pro: drives.json, d{k}.json, runs.json, r{k}.json) is not on the site: the board serves
+  // each file to a valid Pro code (POST /pro/data). null where the board has none or refuses the code.
+  async function proFile(name) {
+    if (!BOARD.api || !proCode()) return null;
+    let r;
+    try { r = await fetch(`${BOARD.api}/pro/data`, POST_JSON({ code: proCode(), name })); } catch (e) { return null; }
+    if (r.status === 403) { proOff('That Pro code is not valid any more'); return null; }
+    if (!r.ok) return null;
+    return r.json().catch(() => null);
+  }
   async function loadPro() {
-    if (PRO) return PRO;
-    try { const r = await fetch(asset('pro/drives.json')); if (!r.ok) return null; PRO = await r.json(); } catch (e) { return null; }
+    if (!PRO) PRO = await proFile('drives.json');
     return PRO;
   }
   async function loadProTeams(i) {
-    const per = PRO.spot_chunk || 20, r = await fetch(asset(`pro/d${Math.floor(i / per)}.json`));
-    if (!r.ok) throw new Error('drive data ' + r.status);
-    return r.json();
+    const per = PRO.spot_chunk || 20, c = await proFile(`d${Math.floor(i / per)}.json`);
+    if (!c) throw new Error('the drive data could not be loaded');
+    return c;
   }
   async function loadRuns() {
-    if (PRO_RUNS) return PRO_RUNS;
-    try { const r = await fetch(asset('pro/runs.json')); if (!r.ok) return null; PRO_RUNS = await r.json(); } catch (e) { return null; }
+    if (!PRO_RUNS) PRO_RUNS = await proFile('runs.json');
     return PRO_RUNS;
   }
   // the teams of spots kept in chunked files (prefix + chunk index), by spot index
   async function loadChunks(prefix, per, ids) {
     const teams = {};
-    await Promise.all([...new Set(ids.map((i) => Math.floor(i / (per || 20))))].map((k) => fetch(asset(`${prefix}${k}.json`))
-      .then((r) => { if (!r.ok) throw new Error('spot data ' + r.status); return r.json(); }).then((c) => Object.assign(teams, c))));
+    await Promise.all([...new Set(ids.map((i) => Math.floor(i / (per || 20))))].map((k) => proFile(`${prefix}${k}.json`)
+      .then((c) => { if (!c) throw new Error('the run data could not be loaded'); Object.assign(teams, c); })));
     return teams;
   }
   // the Pro screen: the historic drives and every past day, newest first, with your score where you played; the
@@ -4771,7 +4795,12 @@
     box.textContent = '';
     box.append(el('h2', '', 'Pro'));
     if (!isPro()) {
-      box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''} and the historic drives: play any of them, graded like the day it ran.`), ...proNodes());
+      box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''}, the historic drives and the playoff runs: play any of them, graded like the day it ran.`));
+      if (PRO_LIVE === null && proCode()) {              // a code is kept here but the board could not confirm it
+        const again = el('button', 'btn', 'Try again');
+        again.type = 'button'; again.addEventListener('click', () => location.reload());
+        box.append(el('p', '', 'Your Pro code could not be checked (no connection to the board). Try again in a moment.'), again);
+      } else box.append(...proNodes());
       return;
     }
     box.append(el('h3', '', 'Historic drives'));
@@ -4847,6 +4876,7 @@
       const now = new Date();
       dayN = ARCH_DAY || dayOf(now);
       await proClaimFromUrl();
+      await proVerify();
       if (ARCH || (ARCH_DAY && (!isPro() || ARCH_DAY >= dayOf(now))) || ((DRIVE || RUN_N) && !isPro())) { await renderArchive(now); return; }
       if (SURV) {
         state = load(stateKey(), null) || newRun();
@@ -4859,7 +4889,7 @@
         PRO_RUNS = await loadRuns();
         const run = PRO_RUNS && PRO_RUNS.runs[RUN_N - 1];
         if (!run) { location.replace(location.pathname + '#archive'); return; }
-        const teams = await loadChunks('pro/r', PRO_RUNS.spot_chunk, run.games.map((g) => g.spot));
+        const teams = await loadChunks('r', PRO_RUNS.spot_chunk, run.games.map((g) => g.spot));
         today = run.games.map((g) => {
           const sc = buildScen(PRO_RUNS.spots[g.spot], teams[g.spot]);
           sc.story = `${g.round}, ${g.home ? 'vs' : 'at'} the ${teamName(g.opp)}. That day the ${teamName(run.team)} ${g.won ? 'won' : 'lost'} ${g.score}.`;
