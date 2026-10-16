@@ -4623,6 +4623,56 @@
   // scores 0 and a little better 100 (half of the players scored 0); against the whole range they spread from 0 to
   // 100 and a typical player lands near the middle. Days 1-3 compared with frequency-only callers (nearly all 90+).
   const PCT_FROM = 4, PCT_TAU_LO = 0.003, PCT_TAU_HI = 0.3, PCT_FREQ = 0.15;
+  // The score from day RESULT_FROM on (and every historic drive and playoff run): the calls AND the result. Each
+  // simulated play-caller makes his calls as above and then plays his games out: he wins each with the win chance his
+  // calls leave (the spot's best start less what they gave up). You and he are scored alike: RESULT_W for each game
+  // won (half for a tie), less the win chance the calls gave up. A win with the league's calls is about 75-80; a 90
+  // takes the win and calls better than most of the play-callers who also won; a loss with the right calls still
+  // beats the play-callers who lost with worse ones, and in a long shot (a Hail Mary spot) that is most of them.
+  const RESULT_W = 0.1, RESULT_FROM = 6;
+  const resultScored = () => !!(DRIVE || RUN_N || dayN >= RESULT_FROM);
+  function spotGroups() {
+    const out = [];
+    for (let i = 0; i < today.length; i++) {
+      const s = state.spots[i];
+      if (!s || !s.decisions || !s.decisions.length) continue;
+      const r = s.result, res = !r ? 0 : r.mine > r.theirs ? 1 : r.mine === r.theirs ? 0.5 : 0;
+      out.push({ decs: s.decisions, res, start: s.decisions[0].bestWp });
+    }
+    return out;
+  }
+  function scoreVsNFL(decs) {
+    if (!resultScored()) return percentileVsNFL(decs);
+    const groups = spotGroups();
+    if (!groups.length) return percentileVsNFL(decs);
+    const my = groups.reduce((a, g) => a + RESULT_W * g.res - g.decs.reduce((b, x) => b + x.cost, 0), 0);
+    const R = rng(hash('pct2', dayN, DRIVE, RUN_N)), N = 6000;
+    const lnLo = Math.log(PCT_TAU_LO), lnSpan = Math.log(PCT_TAU_HI) - lnLo;
+    const weights = (x, tau) => {
+      const w = x.wps.map((o) => (x.q[o.key] || 0) * (tau ? Math.exp((o.wp - x.bestWp) / tau) : 1));
+      const t = w.reduce((a, b) => a + b, 0);
+      return t > 0 ? w.map((v) => v / t) : w.map(() => 1 / w.length);
+    };
+    const freqW = groups.map((g) => g.decs.map((x) => weights(x, 0)));
+    let better = 0;
+    for (let s = 0; s < N; s++) {
+      const tau = R() < PCT_FREQ ? 0 : Math.exp(lnLo + R() * lnSpan);
+      let m = 0;
+      groups.forEach((g, gi) => {
+        let tot = 0;
+        for (let i = 0; i < g.decs.length; i++) {
+          const x = g.decs[i], w = tau ? weights(x, tau) : freqW[gi][i], u = R();
+          let acc = 0, pick = x.wps[x.wps.length - 1];
+          for (let j = 0; j < x.wps.length; j++) { acc += w[j]; if (u <= acc) { pick = x.wps[j]; break; } }
+          tot += Math.max(0, x.bestWp - pick.wp);
+        }
+        const win = R() < clip(g.start - tot, 0.002, 0.998) ? 1 : 0;
+        m += RESULT_W * win - tot;
+      });
+      if (m < my - 1e-9) better += 1; else if (Math.abs(m - my) <= 1e-9) better += 0.5;
+    }
+    return better / N;
+  }
   function percentileVsNFL(decs) {
     const my = decs.reduce((a, x) => a + x.cost, 0);
     const R = rng(hash('pct', dayN)), N = 4000;
@@ -4657,7 +4707,7 @@
     const big = el('div', 'gbig', g.L);
     const txt = el('div', 'gtxt');
     txt.append(el('div', 'gk', d.title), el('div', 'gres', g.pass ? 'Passed' : score >= PASS_AT - 10 ? 'So close' : 'Not yet'),
-      el('div', 'gsc', `${score} · better than ${score}% of NFL play\u2011callers`));
+      el('div', 'gsc', `${score} · better than ${score}% of NFL play\u2011callers, the calls and the result`));
     top.append(big, txt);
     box.append(top);
     const bar = el('div', 'gbar');
@@ -4728,7 +4778,7 @@
     if (!G) resumeSpot(today.length - 1);
     show('done');
     const decs = allDecisions();
-    const p = decs.length ? percentileVsNFL(decs) : 0;
+    const p = decs.length ? scoreVsNFL(decs) : 0;
     const wpa = decs.reduce((a, x) => a + x.wpa, 0);
     const st = load(`${STORE}:stats`, { days: {} });
     const cc = coachCard(decs, DRIVE || RUN_N ? 'You coached like' : 'Today you coached like');
@@ -4771,7 +4821,7 @@
     }
     else {
       box.append(el('div', 'note', RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · your run` : `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
-        el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers`),
+        el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers${resultScored() ? ', the calls and the result' : ''}`),
         el('div', 'streak', RUN_N ? 'Playoff run' : ARCH_DAY ? 'From the archive' : streak >= 2 ? `🔥 ${streak}-day streak` : 'Day 1 of your streak · come back tomorrow'));
     }
     if (RUN_N) {                      // the run's record against the real one
@@ -5319,7 +5369,7 @@
       rules.append(el('summary', '', 'Rules'));
       const ul = el('ul');
       [`Open to Pro players: one entry per Pro code, under a name everyone can see (no slurs or obscenities: names like that are refused).`,
-        `Pass a historic drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play-callers. Each drive counts once, the first time you pass it after entering.`,
+        `Pass a historic drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play-callers. The score counts the calls and the result: a win with so-so calls is a B, an A takes the win and sharp calls (or a long shot lost with near-perfect ones). Each drive counts once, the first time you pass it after entering.`,
         `The board ranks by drives passed, then by who got there first (the server's clock). The first to pass all ${n} wins ${racePrize()}.`,
         'Every pass keeps the calls behind it. A winning run is checked call by call before the prize goes out; a run that doesn’t hold up is taken off the board.',
         'One drive at a time: passes come in at most one every 30 seconds.'].forEach((t) => ul.append(el('li', '', t)));
@@ -5345,7 +5395,8 @@
     if (!isPro() || !BOARD.api || p * 100 < PASS_AT - 0.5) return;
     const calls = decs.map((x) => ({ k: x.kind, f: x.family, c: x.chosen, s: x.snap, w: x.wps.map((o) => [o.key, Math.round(o.wp * 1e4) / 1e4]) }));
     try {
-      const d = await raceCall('/race/pass', { code: proCode(), key: deviceKey(), drive: DRIVE, p: clip(p, 0, 1), decs: calls, tryAt: state.tryAt || null });
+      const d = await raceCall('/race/pass', { code: proCode(), key: deviceKey(), drive: DRIVE, p: clip(p, 0, 1), decs: calls, tryAt: state.tryAt || null,
+        res: state.spots.map((x) => (x && x.result ? [x.result.mine, x.result.theirs] : null)) });
       if (d.rows) RACE.view = d;
       const n = d.n || 24;
       if (d.ok && d.me) {
@@ -5480,7 +5531,7 @@
       ttl.append(el('span', 'k', 'Your rank'), el('b', '', rk.title), el('span', 'sub', rk.next ? `${rk.next.at - passed} more ${rk.next.at - passed === 1 ? 'pass' : 'passes'} to ${rk.next.title}` : 'Every drive passed. The Hall of Fame.'));
       const num = el('div', 'phn');
       num.append(el('b', '', `${passed}/${n}`), el('span', 'k', 'passed'));
-      head.append(ttl, num, driveStrip(ds), el('p', 'note', `Pass a drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play\u2011callers. Replay any drive as often as you like; your best grade counts.${played ? ` Played ${played} of ${n}.` : ''}`));
+      head.append(ttl, num, driveStrip(ds), el('p', 'note', `Pass a drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play\u2011callers, counting the calls and the result. Replay any drive as often as you like; your best grade counts.${played ? ` Played ${played} of ${n}.` : ''}`));
       box.append(head, el('h3', '', 'Historic drives'));
       const dl = el('div', 'days');
       pro.drives.forEach((d, k) => {
