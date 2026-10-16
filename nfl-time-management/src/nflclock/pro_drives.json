@@ -1,5 +1,48 @@
 [
  {
+  "title": "Seahawks at Broncos, live",
+  "id": "2026_06_SEA_DEN#live",
+  "note": "Thursday Night Football, Oct 15, 2026. Seattle trails 14–11 with 3:24 left after a holding call on Grey Zabel pushed them back to their own 26. Darnold, Smith-Njigba and Shaheed against a Denver secondary without Pat Surtain II and Talanoa Hufanga. Your ball, 1st & 10: tie it, win it, or watch Denver run it out.",
+  "live": {
+   "game": "2026_06_SEA_DEN",
+   "season": 2026,
+   "week": 6,
+   "home": "DEN",
+   "away": "SEA",
+   "player": "SEA",
+   "qtr": 4,
+   "clock": 204,
+   "score": [
+    11,
+    14
+   ],
+   "down": 1,
+   "ytg": 10,
+   "yl": 74,
+   "to": [
+    3,
+    3
+   ],
+   "receive2h": "SEA",
+   "out": {
+    "SEA": [
+     "Drake Thomas",
+     "Chazz Surratt",
+     "Zach Charbonnet"
+    ],
+    "DEN": [
+     "Pat Surtain II",
+     "Talanoa Hufanga"
+    ]
+   },
+   "start": {
+    "SEA": {
+     "RB": "George Holani"
+    }
+   }
+  }
+ },
+ {
   "title": "13 Seconds",
   "id": "2021_20_BUF_KC#4062",
   "note": "2021 Divisional, Bills at Chiefs, Jan 23, 2022. Allen's touchdown to Gabriel Davis put Buffalo up 36–33 with 13 seconds left. Your ball at your own 25, three timeouts. Mahomes needed two throws to get Butker a 49-yarder; the Chiefs won 42–36 in overtime."
