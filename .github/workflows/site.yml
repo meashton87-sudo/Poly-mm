@@ -34,7 +34,7 @@ jobs:
     env:
       PRO_ON: "on"            # "on" launches Pro (the tab, the archive, the drives, the runs, the purchase)
       VS_ON: "off"            # "on" turns on Versus (two players live) on the site; the Pro preview always has it
-      FULLDEF_ON: "off"       # "on" turns on the full defensive call (personnel, front, coverage, rush) in the daily and survivor; the Pro preview always has it
+      FULLDEF_ON: "on"       # "on" turns on the full defensive call (personnel, front, coverage, rush) in the daily and survivor; the Pro preview always has it
     defaults:
       run:
         working-directory: nfl-time-management

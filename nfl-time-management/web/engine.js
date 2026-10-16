@@ -97,6 +97,8 @@
   const DC_ROWS_CAP = 3e6;            // plays kept in the shared sets a draw widens to (12 MB), _rowSet
   const DC_READ = 4;                  // daily game: an offense that reads your call favors what beats it, by
                                       // exp(DC_READ x its edge in EPA) (a quantal response; the edges are small)
+  // how sharply it reads (act.read: true, or a number: a spot's harder computer opponent reads by more)
+  const readOf = (act) => (typeof act.read === 'number' ? act.read : 1);
   const DC = {
     pers: { heavy: [1, 3], base: [4, 4], nickel: [5, 5], dime: [6, 7] },         // defensive backs on the field
     front: { light: [1, 6], even: [7, 7], loaded: [8, 15] },                      // men in the box
@@ -725,9 +727,9 @@
 
     // daily game: a call of this kind ('run' or 'pass'), as often as NFL play-callers make each in situation fk; against
     // your defensive call (def, or the whole call dc) the offense checks into the calls that beat it (MATCH_AUDIBLE)
-    pickCall(kind, fk, u, def, dc) {
+    pickCall(kind, fk, u, def, dc, read = 1) {
       const P = this.e.pb, nC = P.calls.length;
-      const tilt = (c) => (def ? Math.exp(MATCH_AUDIBLE * P.match[c][def]) : dc ? Math.exp(DC_READ * dcEffect(P.dcEff, P.calls[c].id, dc).s) : 1);
+      const tilt = (c) => (def ? Math.exp(MATCH_AUDIBLE * P.match[c][def]) : dc ? Math.exp(DC_READ * read * dcEffect(P.dcEff, P.calls[c].id, dc).s) : 1);
       const w = (c) => P.freq[fk * nC + c] * tilt(c);
       let tot = 0;
       for (let c = 0; c < nC; c++) if (P.calls[c].kind === kind) tot += w(c);
@@ -743,14 +745,14 @@
     // daily game: an offense that reads your whole defensive call leans to the run or the pass by how each does
     // against it here: DC_READ times the gap between its pass calls' and its run calls' edges (EPA, as often as
     // play-callers make each), on the logit of passing
-    dcLean(fk, dc) {
+    dcLean(fk, dc, read = 1) {
       const P = this.e.pb, nC = P.calls.length, m = { run: [0, 0], pass: [0, 0] };
       for (let c = 0; c < nC; c++) {
         const f = P.freq[fk * nC + c], k = P.calls[c].kind;
         if (f > 0 && m[k]) { m[k][0] += f * dcEffect(P.dcEff, P.calls[c].id, dc).s; m[k][1] += f; }
       }
       const avg = (x) => (x[1] > 0 ? x[0] / x[1] : 0);
-      return DC_READ * (avg(m.pass) - avg(m.run));
+      return DC_READ * read * (avg(m.pass) - avg(m.run));
     }
     // what NFL defenses called in situation fk (the real plays of every call's pool, as often as play-callers make
     // each call): the share of each personnel group, front, coverage and rush, as charted (DC). Null without charting
@@ -907,7 +909,7 @@
       const key = `${pool}|${pass ? 1 : 0}|${ri}|${who}|${pers}`;
       this._dcRefs = this._dcRefs || new WeakMap();
       let cache = this._dcRefs.get(cdf);
-      if (!cache) { cache = new Map(); this._dcRefs.set(cdf, cache); }
+      if (!cache) { cache = new Map(); cache.uid = this._dcRefN = (this._dcRefN || 0) + 1; this._dcRefs.set(cdf, cache); }
       let R = cache.get(key);
       if (R) return R;
       const P = this.e.pb, N = P.ngs, lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
@@ -928,7 +930,8 @@
       // edge: what the offense's plays the call is about are worth here over the situation's pool (its own weights:
       // the team, the call's intent), the level a draw's plays are moved to before the defense's effect
       const pm = P.dcPoolMean[pool];
-      R = { edge: nA >= PB_LOOK_MIN && wA > 0 ? mA / wA - pm : null, shareB: wA + wB > 0 ? wB / (wA + wB) : 0, items, cum, tot: wB };
+      // (id: the reference exactly, for the draws' caches: a table built against one is never reused for another)
+      R = { id: `${cache.uid}:${key}`, edge: nA >= PB_LOOK_MIN && wA > 0 ? mA / wA - pm : null, shareB: wA + wB > 0 ? wB / (wA + wB) : 0, items, cum, tot: wB };
       cache.set(key, R);
       return R;
     }
@@ -942,7 +945,7 @@
     // plays), and a handful of them against a rare defense never decide what it is worth (their mean is noise; s is
     // the estimate). The plays it is not about (ref) are added as they are, with their share of the situation's
     _dcT(cdf, pool, set, dc, L, s, ri, who, pers, pass, ref) {
-      const key = `dc|${set ? set.id : pool}|${dc.pers}|${dc.front}|${dc.cover}|${dc.rush}|${L.join('.')}|${s || 0}|${ri}|${who}|${pers}|${pass ? 1 : 0}|${ref.edge == null ? '' : ref.edge.toFixed(5)}|${ref.shareB.toFixed(5)}|${ref.tot}`;
+      const key = `dc|${set ? set.id : pool}|${dc.pers}|${dc.front}|${dc.cover}|${dc.rush}|${L.join('.')}|${s || 0}|${ri}|${who}|${pers}|${pass ? 1 : 0}|${ref.id}`;
       let cache;
       if (set) cache = this._dcSet = this._dcSet || new Map();
       else {
@@ -1053,7 +1056,7 @@
     _wideRows(c, fk, grp) {
       const P = this.e.pb, zone = fk % N_ZONE, region = dcRegion(zone), short = dcShort(fk), kind = (id) => (id.startsWith('pa_') ? 'pa' : id.startsWith('roll') ? 'roll'
         : id.startsWith('rpo') || id === 'hail_mary' || id.startsWith('trick') ? id : 'drop');
-      const id = `w${grp ? 'g' + kind(P.calls[c].id) : c}|${zone}|${short ? 1 : 0}`;
+      const id = `w${grp ? `g${kind(P.calls[c].id)}${P.calls[c].kind}` : c}|${zone}|${short ? 1 : 0}`;
       return this._rowSet(id, (seen) => {
         const calls = grp ? P.calls.map((cc, j) => j).filter((j) => kind(P.calls[j].id) === kind(P.calls[c].id) &&
           (P.calls[j].kind === 'pass') === (P.calls[c].kind === 'pass')) : [c];
@@ -1439,7 +1442,7 @@
         const pr = this.e.lib.passRate[fk];
         let lg = Math.log(pr / (1 - pr)) + ctx.proe[o] / Math.max(pr * (1 - pr), 0.1);
         if (aware && S.to[o] === 0 && tHalf <= CLOCK_PASS_WINDOW) lg += CLOCK_PASS_SHIFT;
-        if (act && act.read && dcValid(act.dc) && this.pbCdf) lg += this.dcLean(fk, act.dc);
+        if (act && act.read && dcValid(act.dc) && this.pbCdf) lg += this.dcLean(fk, act.dc, readOf(act));
         kind = u[1] < sigmoid(lg) ? PASS : RUN;
       }
       S.plays += 1;
@@ -1466,7 +1469,7 @@
           // defense's call. Versus: no check into a better one (the other phone never sees the defense's call); the
           // daily game (act.read: the computer's offense reads your defense) checks into calls that beat it
           const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl);
-          callIdx = this.pickCall(kind === PASS ? 'pass' : 'run', fk, u[4], null, act.read ? act.dc : null);
+          callIdx = this.pickCall(kind === PASS ? 'pass' : 'run', fk, u[4], null, act.read ? act.dc : null, readOf(act));
           if (callIdx >= 0) {
             const m = dcEffect(this.e.pb.dcEff, this.e.pb.calls[callIdx].id, act.dc);
             match = m.s; why = m.why.slice(0, 3);

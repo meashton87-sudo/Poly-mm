@@ -61,9 +61,9 @@
     NYJ: ['Jets', '#125740'], PHI: ['Eagles', '#004C54'], PIT: ['Steelers', '#FFB612'], SF: ['49ers', '#AA0000'],
     SEA: ['Seahawks', '#69BE28'], TB: ['Buccaneers', '#D50A0A'], TEN: ['Titans', '#4B92DB'], WAS: ['Commanders', '#5A1414'],
     // college teams, for a featured college game (src/nflclock/custom_spots.json); never in Versus
-    OSU: ['Buckeyes', '#BB0000'], IU: ['Hoosiers', '#990000'],
+    OSU: ['Buckeyes', '#BB0000'], IU: ['Hoosiers', '#990000'], ALA: ['Crimson Tide', '#9E1B32'], TENN: ['Volunteers', '#FF8200'],
   };
-  const COLLEGE = new Set(['OSU', 'IU']);
+  const COLLEGE = new Set(['OSU', 'IU', 'ALA', 'TENN']);
   const FAM = { run: 'Run', pass: 'Pass', rpo: 'RPO', trick: 'Trick' };
   // the trick plays (playbook.py): what each one is, on its key
   const TRICK_SUB = { trick_flea: 'Hand off, pitch it back, go deep', trick_reverse: 'Fake one way, a receiver comes back the other',
@@ -3140,6 +3140,10 @@
   // your calls it has seen. Each look's real share here is weighted by exp(ADAPT * conf * edge), edge being how well
   // that look does against your calls by the matchup chart (engine.js MATCH), -1 to +1.
   const ADAPT = 1.4, ADAPT_N = 12, ADAPT_DECAY = 0.85;
+  // a spot's harder computer opponent (cpu: 'hard'): its offense reads your defensive call by more, its defense
+  // leans on your habits harder and sooner
+  const CPU_HARD = { read: 2, adapt: 2, seen: 2 };
+  const cpuHard = () => !VS && !!(G.scen && G.scen.cpu === 'hard');
   const LOOK_DEFKEY = ['soft', 'blitz', 'load', 'blitz'];
   const HABIT = { run: 'runs', deep: 'deep shots', short: 'short passes' };
   const EXPECT = { load: 'more loaded boxes', blitz: 'more pressure', soft: 'more men in coverage' };
@@ -3157,8 +3161,8 @@
       LOOK_DEFKEY.forEach((d, b) => { edge[b] -= w * (m[d] || 0); });
     });
     if (!wsum) return { p, note: null };
-    const conf = tend.length / (tend.length + 4);
-    const q = p.map((x, b) => x * Math.exp(ADAPT * conf * (edge[b] / wsum)));
+    const hard = cpuHard(), conf = tend.length / (tend.length + (hard ? CPU_HARD.seen : 4));
+    const q = p.map((x, b) => x * Math.exp(ADAPT * (hard ? CPU_HARD.adapt : 1) * conf * (edge[b] / wsum)));
     const z = q.reduce((a, x) => a + x, 0) || 1;
     const out = q.map((x) => x / z);
     // said out loud once it is a real lean on a real habit: what you keep calling, and what they show more of
@@ -3652,7 +3656,7 @@
     const r = G.root, me = G.me;
     try {
       const useTo = !!(ui.to && defTimeoutOk(r)), askTo = defTimeoutOk(r), seq = G.seq;
-      const act = (x) => ({ to_def: useTo, dc: { ...x }, read: true });
+      const act = (x) => ({ to_def: useTo, dc: { ...x }, read: cpuHard() ? CPU_HARD.read : true });
       const keys = presetsFor(r), mine = keys.find((k) => sameDc(PRESET[k].dc, dc)) || 'yours';
       const opts = keys.map((k) => ({ key: k, label: PRESET[k].label, action: act(PRESET[k].dc) }));
       if (mine === 'yours') opts.push({ key: 'yours', label: vdefText(dc), action: act(dc) });
