@@ -69,7 +69,15 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
 - The Gauntlet (board/worker.js /race*, game.js racePanel): the contest on the historic drives. A Pro code enters once under
   a public name (blocked() names refused); a drive counts the first time it is passed (an A, 90+, and the game won) after entering and after
   RACE_FROM (4 pm Eastern, Oct 16 2026 by default); each pass keeps its calls (race:audit) for the check before a prize.
-  The first to pass all RACE_N (24) wins. `DELETE /race?id=` with the admin token takes a run off the board.
+  The first to pass all RACE_N (24) wins. `DELETE /race?id=` (or `?name=`) with the admin token takes a run off the board.
+  The check before a prize: web/admin.html (site.py copies it to /admin.html with only the board-api meta: noindex, not
+  linked, no analytics; the token is pasted and kept in sessionStorage) reads GET /race/admin (every entry, each pass's
+  grade, try length and a hash of its calls) and /race/admin?id= (the calls), flags short tries, The Miami Miracle before
+  its fix (MIAMI_FIX in the page) and the same calls from two entries, and voids one pass (POST /race/admin/void: n, nAt
+  and the winner worked out again, the audit kept under race:void:) or takes a run off. Optional worker vars: RACE_TO (an
+  end time: no try or pass after it) and NEXT_CONTEST (a line shown with the results). The panel shows the results
+  (champion, 2nd, 3rd, standings, next contest) once there is a winner or it is over; #gauntlet (#gauntlet-results) is
+  the panel on its own, the link the results share.
 - Accounts (board/worker.js /auth*, game.js authNodes/proVerify): Pro can belong to an account (Sign in with Google: the
   ID token is verified in the worker; or a one-use emailed link via Resend). Off (503, hidden on the page) without
   GOOGLE_CLIENT_ID (wrangler.toml var; site.py --google-client-id puts the same id in the page) or RESEND_KEY + MAIL_FROM.

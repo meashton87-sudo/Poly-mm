@@ -210,6 +210,8 @@
   const DRIVE = PRO_ON ? Number((location.hash.match(/^#drive-(\d+)$/) || [])[1] || 0) : 0;
   // a playoff run (Pro, pro/runs.json): #run-N plays the Nth one, its games in order, like a day of several spots
   const RUN_N = PRO_ON ? Number((location.hash.match(/^#run-(\d+)$/) || [])[1] || 0) : 0;
+  // the Gauntlet on its own (#gauntlet, or #gauntlet-results: the link the results share), for everyone, Pro or not
+  const GAUNTLET = PRO_ON && /^#gauntlet(-results)?$/.test(location.hash);
   let PRO = null, PRO_RUNS = null;        // pro/drives.json and pro/runs.json, once loaded
   // Pro grades: a drive's score (better than this many % of NFL play-callers) as a letter. 90 and up is an A, green:
   // the drive is passed. The best grade on each drive is kept; the ranks count the drives passed
@@ -5680,28 +5682,35 @@
   // the board's clock (a phone's own can be minutes off): the countdown and the Live chip go by it
   const raceSkew = (d) => { const t = Date.parse(d && d.now); if (Number.isFinite(t)) RACE.skew = t - Date.now(); };
   const raceNow = () => Date.now() + (RACE.skew || 0);
+  const raceOver = (v) => !!v && (v.over || (!!v.to && raceNow() >= Date.parse(v.to)));     // past the end (the board's clock)
   // the contest's panel: what it is, live status, your entry (or how to enter), the board, the rules
   function racePanel() {
     const box = el('div', 'race');
     box.setAttribute('aria-live', 'polite');
     const draw = () => {
-      const v = RACE.view, me = v && v.me, n = (v && v.n) || (PRO ? PRO.drives.length : 24);
+      const v = RACE.view, n = (v && v.n) || (PRO ? PRO.drives.length : 24);
       box.textContent = '';
       const head = el('div', 'rhead');
-      const live = v && raceNow() >= Date.parse(v.from);
-      const chip = el('span', `rchip${v && v.winner ? ' won' : live ? ' live' : ''}`, v && v.winner ? 'Won' : live ? 'Live' : v ? `Starts in ${hms(Date.parse(v.from) - raceNow())}` : '…');
+      const live = v && raceNow() >= Date.parse(v.from), over = raceOver(v);
+      const chip = el('span', `rchip${v && (v.winner || over) ? ' won' : live ? ' live' : ''}`, over ? 'Final' : v && v.winner ? 'Won' : live ? 'Live' : v ? `Starts in ${hms(Date.parse(v.from) - raceNow())}` : '…');
       chipEl = chip;
       head.append(el('span', 'rk', 'The contest'), chip);
-      box.append(head, el('h3', 'rtitle', RACE_NAME),
-        el('p', 'rlead', `${n} historic drives. Pass every one, an A (${PASS_AT} or better) on each. The first to do it wins ${racePrize()}.`));
+      box.append(head, el('h3', 'rtitle', RACE_NAME));
+      // a winner, or past the end: the results take the panel (the board stays open for 2nd and 3rd until the end)
+      if (v && (v.winner || over)) { raceFinal(v, n, over); return; }
+      box.append(el('p', 'rlead', `${n} historic drives. Pass every one, an A (${PASS_AT} or better) on each. The first to do it wins ${racePrize()}.`));
       if (!v) { box.append(el('p', 'note', BOARD.api ? 'Loading the leaderboard…' : 'The leaderboard is on nfl2mindrill.com.')); return; }
-      if (v.winner) box.append(el('p', 'rwin', `🏆 ${v.winner.name} passed all ${n} first, ${new Date(v.winner.at).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}. The board is still open: climb it.`));
       const stats = el('div', 'rstats');
       stats.append(el('span', '', `${v.entrants} in the race`), el('span', '', `${v.passes} drive${v.passes === 1 ? '' : 's'} passed`));
       if (v.rows[0] && v.rows[0].n) stats.append(el('span', '', `Leader: ${v.rows[0].name}, ${v.rows[0].n}/${n}`));
       box.append(stats);
-      // you
-      const you = el('div', 'ryou');
+      box.append(youBox(v, n, live));
+      raceBoard(v, n, RACE.full ? v.rows.length : 10);
+      box.append(raceRules(n));
+    };
+    // you: your entry and where you stand, or how to enter
+    const youBox = (v, n, live) => {
+      const me = v.me, you = el('div', 'ryou');
       if (me) {
         const bar = el('div', 'rbar'), fill = el('i');
         fill.style.width = `${(100 * me.n) / n}%`;
@@ -5760,12 +5769,14 @@
       } else {
         const a = el('a', 'btn', 'Get Pro to enter');
         a.href = '#proBuy';
-        a.addEventListener('click', (ev) => { ev.preventDefault(); const t = document.querySelector('.arch .pro'); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+        a.addEventListener('click', (ev) => { ev.preventDefault(); const t = document.querySelector('.arch .pro'); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); else location.hash = '#archive'; });
         you.append(el('div', 'rme', 'Want in?'), el('p', 'note', `Pro opens the ${n} historic drives and your entry. One code, one entry.`), a);
       }
-      box.append(you);
-      // the board
-      const rows = v.rows.slice(0, RACE.full ? v.rows.length : 10);
+      return you;
+    };
+    // the board: the top `top` rows (and the button for the rest)
+    const raceBoard = (v, n, top) => {
+      const me = v.me, rows = v.rows.slice(0, top);
       if (rows.length) {
         const ol = el('ol', 'rboard');
         rows.forEach((x, i) => {
@@ -5777,13 +5788,15 @@
           ol.append(li);
         });
         box.append(ol);
-        if (v.rows.length > 10) {
+        if (v.rows.length > 10 && top < Infinity) {
           const more = el('button', 'btn ghostbtn', RACE.full ? 'Top 10' : `Full board (${v.rows.length})`);
           more.type = 'button';
           more.addEventListener('click', () => { RACE.full = !RACE.full; draw(); });
           box.append(more);
         }
       } else box.append(el('p', 'note', 'Nobody on the board yet. The first pass takes the lead.'));
+    };
+    const raceRules = (n) => {
       const rules = el('details', 'rrules');
       rules.append(el('summary', '', 'Rules'));
       const ul = el('ul');
@@ -5794,7 +5807,39 @@
         '2nd and 3rd to pass all 24: 2nd picks a future daily too, 3rd gets a shout-out on the site and our socials.',
         'One drive at a time: passes come in at most one every 30 seconds.'].forEach((t) => ul.append(el('li', '', t)));
       rules.append(ul);
-      box.append(rules);
+      return rules;
+    };
+    // the results: the champion, 2nd and 3rd (the first three to pass all of them, in order; once it is over, the top
+    // of the standings for a place nobody finished), what's next, the full standings, a link to share
+    const raceFinal = (v, n, over) => {
+      const me = v.me, fin = v.rows.filter((x) => x.done), when = (t) => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      const champ = v.winner || fin[0];
+      box.append(el('p', 'rlead', champ ? `${champ.name} passed all ${n} historic drives first and is the Gauntlet Champion.` : `The Gauntlet is over. Nobody passed all ${n}: the standings are final.`));
+      const pod = el('ol', 'rpod'), prize = [racePrize(), 'Picks a future daily', 'A shout-out on the site and our socials'];
+      ['Champion', '2nd', '3rd'].forEach((label, i) => {
+        const x = fin[i] || (over ? v.rows.filter((r) => !r.done)[i - fin.length] : null), li = el('li', `rp${i + 1}${x ? '' : ' open'}`);
+        li.append(el('span', 'rpk', x && !x.done ? ordinal(i + 1) : label), el('b', 'rpn', x ? `${i ? '' : '🏆 '}${x.name}` : 'Open'),
+          el('span', 'rps', x ? (x.done ? `All ${n} · ${when(x.done)}` : `${x.n}/${n} passed`) : `The next to pass all ${n} takes it`));
+        if (x && x.done) li.append(el('span', 'rpz', prize[i]));
+        pod.append(li);
+      });
+      box.append(pod);
+      if (!over) box.append(el('p', 'note', `The board stays open for 2nd and 3rd: pass all ${n} to take a place.`));
+      if (me && over) box.append(el('p', 'rmefin', `You: ${me.name}, ${me.n}/${n} passed${me.rank ? `, ${ordinal(me.rank)} place` : ''}.`));
+      else if (!over && (me || isPro())) box.append(youBox(v, n, true));
+      if (v.next) {                                   // the next contest (the board's NEXT_CONTEST): only when it is set
+        const nx = el('div', 'rnext');
+        nx.append(el('span', 'rk', 'Next contest'), el('p', '', v.next));
+        box.append(nx);
+      }
+      box.append(el('div', 'rk', over ? 'Final standings' : 'Standings'));
+      raceBoard(v, n, Infinity);
+      const share = el('button', 'btn ghostbtn', 'Share the results'), txt = el('p', 'rsharetxt');
+      share.type = 'button';
+      txt.textContent = `${RACE_NAME} results: ${champ ? `${champ.name} is the Gauntlet Champion, all ${n} historic drives passed.` : 'the final standings.'} ${location.origin}${location.pathname}#gauntlet-results`;
+      txt.hidden = true;
+      share.addEventListener('click', () => { txt.hidden = false; shareText(txt.textContent, txt, 'gauntlet'); });
+      box.append(share, txt, raceRules(n));
     };
     let shown = false, chipEl = null;                     // the panel is built before it is on the page: the first fetch goes anyway
     // someone typing a name: the panel is not redrawn under them (a redraw rebuilds the form and loses what was typed)
@@ -5811,7 +5856,7 @@
     // the countdown: only the chip's text each second; the whole panel once, when it goes live
     RACE.timer = setInterval(() => {
       const v = RACE.view;
-      if (!v || v.winner) return;
+      if (!v || v.winner || raceOver(v)) return;
       const left = Date.parse(v.from) - raceNow();
       if (left > 0) { if (chipEl) chipEl.textContent = `Starts in ${hms(left)}`; } else if (left > -1500 && !typing()) draw();
     }, 1000);
@@ -5867,7 +5912,7 @@
   }
   // on the Daily and Survivor tabs, once it is on: a bar to the race
   function raceBar() {
-    if (!PRO_ON || !BOARD.api || ARCH || ARCH_DAY || DRIVE || RUN_N || VS || document.querySelector('.racebar')) return;
+    if (!PRO_ON || !BOARD.api || ARCH || ARCH_DAY || DRIVE || RUN_N || VS || GAUNTLET || document.querySelector('.racebar')) return;
     const a = el('a', 'racebar');
     a.href = '#archive';
     a.append(el('b', '', `🏁 ${RACE_NAME}`), el('span', '', 'First to pass all 24 historic drives wins. Leaderboard →'));
@@ -5972,6 +6017,17 @@
     if (ago === 0) return 'TONIGHT';
     if (ago === 1) return 'LAST NIGHT';
     return `${day.toLocaleDateString(undefined, { weekday: 'short' }).toUpperCase()} NIGHT`;
+  }
+  // #gauntlet: the contest's panel alone (the link the results share), then the way to the drives
+  function renderGauntlet() {
+    track('gauntlet_open', { pro: isPro() });
+    show('arch');
+    const box = $('arch');
+    box.textContent = '';
+    if (!BOARD.api) { box.append(el('p', 'note', 'The Gauntlet is on nfl2mindrill.com.')); return; }
+    const a = el('a', 'btn ghostbtn gtodrives', isPro() ? 'Play the historic drives' : 'Pro: the historic drives');
+    a.href = '#archive';
+    box.append(racePanel(), a);
   }
   // the Pro screen: the historic drives and every past day, newest first, with your score where you played; the
   // pitch when Pro is not on
@@ -6698,7 +6754,7 @@
     fieldTaps();
     boardInit();
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
-    $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
+    $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE || GAUNTLET ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
     $('modeArch').hidden = !PRO_ON;
     raceBar();
     if (PRO_BUILT && !PRO_ON) {
@@ -6742,6 +6798,7 @@
         vsConnect();
         return;
       }
+      if (GAUNTLET) { renderGauntlet(); return; }
       if (ARCH || (ARCH_DAY && (!isPro() || ARCH_DAY >= dayOf(now))) || ((DRIVE || RUN_N) && !isPro())) { await renderArchive(now); return; }
       if (SURV) {
         state = load(stateKey(), null) || newRun();
