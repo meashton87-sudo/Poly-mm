@@ -222,7 +222,11 @@
   const SURV = location.hash === '#survivor';
   // Pro is off until it is turned on in the site build (scripts/site.py --pro: <meta name="pro">): no tab, no
   // archive, no drives, no purchase
-  const PRO_ON = !!document.querySelector('meta[name="pro"]');
+  // ... and, when the build sets a launch time (scripts/site.py --pro-at: <meta name="pro-at">), not before it: a page
+  // open at that moment turns it on then (proLaunch)
+  const PRO_BUILT = !!document.querySelector('meta[name="pro"]');
+  const PRO_AT = Date.parse((document.querySelector('meta[name="pro-at"]') || {}).content || '') || 0;
+  let PRO_ON = PRO_BUILT && Date.now() >= PRO_AT;
   // the archive (Pro): #archive lists every past day, #day-N plays one (its own saved state, like the day it was)
   const ARCH = PRO_ON && location.hash === '#archive', ARCH_DAY = PRO_ON ? Number((location.hash.match(/^#day-(\d+)$/) || [])[1] || 0) : 0;
   // a historic drive (Pro, pro/drives.json): #drive-N plays the Nth one, with its own saved state
@@ -5172,6 +5176,12 @@
   let PRO_LIVE = null;                     // true: confirmed; false: no code or refused; null: could not ask (offline)
   const isPro = () => PRO_LIVE === true;
   function proOff(why) { PRO_LIVE = false; if (proCode()) { try { localStorage.removeItem(PRO_KEY); } catch (e) { /* no storage */ } if (why) toast(why); } }
+  // the launch time came with the page open: the Pro tab appears, and a code bought earlier is checked
+  function proLaunch() {
+    PRO_ON = true;
+    $('modeArch').hidden = false;
+    proVerify();
+  }
   async function proVerify() {
     const code = proCode();
     if (!code || !PRO_ON) { PRO_LIVE = false; return; }
@@ -5196,7 +5206,7 @@
     const q = new URLSearchParams(location.search), s = q.get('claim');
     if (!s && !q.has('pro')) return;
     history.replaceState(null, '', location.pathname + location.hash);
-    if (!s || !PRO_ON) return;
+    if (!s || !PRO_BUILT) return;                // (a purchase is claimed whenever it comes back, launched or not)
     try {
       const d = await proApi('/claim', { s, key: deviceKey() });
       save(PRO_KEY, { code: d.code, at: Date.now() });
@@ -5986,6 +5996,12 @@
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
     $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
     $('modeArch').hidden = !PRO_ON;
+    if (PRO_BUILT && !PRO_ON) {
+      const at = () => { if (!PRO_ON && Date.now() >= PRO_AT) proLaunch(); };
+      if (PRO_AT - Date.now() < 864e5) setTimeout(at, PRO_AT - Date.now() + 50);
+      document.addEventListener('visibilitychange', at);      // (a background tab's timer runs late)
+      setInterval(at, 15000);
+    }
     $('modeVs').hidden = !VS_ON;
     if (VS || VS_LOBBY) { $('modeDaily').removeAttribute('aria-current'); $('modeVs').setAttribute('aria-current', 'page'); }
     $('statsBtn').addEventListener('click', openStats);
