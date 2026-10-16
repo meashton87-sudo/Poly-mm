@@ -239,6 +239,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   await pro('POST', '/pay');
   const fn = new URLSearchParams(stripeCalls[stripeCalls.length - 1][1].body);
   assert.strictEqual(fn.get('line_items[0][price_data][product_data][name]'), 'Two-Minute Drill Pro');
+  assert.strictEqual(fn.get('line_items[0][price_data][product_data][tax_code]'), 'txcd_10201001', 'a tax code: Managed Payments needs one');
   assert.strictEqual(fn.get('line_items[0][price_data][unit_amount]'), '499');
   assert.strictEqual(fn.get('line_items[0][price_data][product]'), null);
   assert.strictEqual(fn.get('line_items[0][price]'), null);

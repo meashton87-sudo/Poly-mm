@@ -42,7 +42,8 @@ const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
 const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook', '/pro/data'];
 const PRO_FILE_RE = /^(drives|runs|d\d{1,3}|r\d{1,3})\.json$/;
 const STRIPE_VERSION = '2026-08-26.dahlia', WEBHOOK_TOLERANCE = 300;   // the API version pinned; a signature older than this is refused
-const PRO_PRICE = '$4.99', PRO_CENTS = 499, PRO_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', SESSION_RE = /^cs_(test|live)_[A-Za-z0-9]{10,200}$/;
+const PRO_PRICE = '$4.99', PRO_CENTS = 499, PRO_TAX_CODE = 'txcd_10201001',    // video games, downloaded, non-subscription: the product's category; Managed Payments refuses a line without one
+  PRO_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', SESSION_RE = /^cs_(test|live)_[A-Za-z0-9]{10,200}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const clean = (name) => String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
@@ -287,7 +288,7 @@ async function pro(req, env, storage, hits, h, url) {
       const item = price.startsWith('price_') ? { 'line_items[0][price]': price }
         : { 'line_items[0][price_data][currency]': 'usd', 'line_items[0][price_data][unit_amount]': String(PRO_CENTS),
           ...(price.startsWith('prod_') ? { 'line_items[0][price_data][product]': price }
-            : { 'line_items[0][price_data][product_data][name]': 'Two-Minute Drill Pro',
+            : { 'line_items[0][price_data][product_data][name]': 'Two-Minute Drill Pro', 'line_items[0][price_data][product_data][tax_code]': PRO_TAX_CODE,
               'line_items[0][price_data][product_data][description]': 'Every past daily, the historic drives and the playoff runs. One code, any device.' }) };
       r = await stripe(env, 'checkout/sessions', { mode: 'payment', ...item, 'line_items[0][quantity]': '1',
         success_url: `${site}/?claim={CHECKOUT_SESSION_ID}`, cancel_url: `${site}/?pro=cancel`, integration_identifier: tag() });
