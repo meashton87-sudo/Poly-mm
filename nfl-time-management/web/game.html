@@ -64,6 +64,11 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .arch .lead { margin: 0; font-size: 15px; }
 .arch h3 { margin: 6px 0 0; font: 800 12px var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
 .arch .days { display: grid; gap: 6px; }
+.arch .day.live { border: 2px solid #e5342b; box-shadow: 0 0 0 3px rgba(229,52,43,.18); }
+.arch .livetag { display: inline-block; margin-right: 8px; padding: 2px 7px; border-radius: 999px; background: #e5342b; color: #fff;
+  font: 800 11px/1.4 var(--body); letter-spacing: .12em; vertical-align: 2px; animation: livepulse 1.6s ease-in-out infinite; }
+@keyframes livepulse { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .arch .livetag { animation: none; } }
 .arch .day.drive { grid-template-columns: minmax(0, 1.2fr) 40px minmax(0, 1fr) auto; }
 .arch .day.drive b { font-size: 15px; line-height: 1.1; }
 .arch .day { display: grid; grid-template-columns: 54px 50px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; color: inherit; text-decoration: none; font-size: 13.5px; }

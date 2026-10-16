@@ -3859,7 +3859,8 @@
     const realCall = rl.call && CALL[rl.call] ? CALL[rl.call].label : 'a play';
     const lead0 = sc.start.score[sc.player === sc.home ? 1 : 0] - sc.start.score[sc.player === sc.home ? 0 : 1];
     const drive = !rl.drive ? '' : rl.drive === 'ran out the clock' ? (lead0 > 0 ? 'they ran out the clock' : 'time ran out on them') : `the drive ended in a ${rl.drive}`;
-    card.append(el('p', 'real', `In the real game (${gameTag(sc)}), ${rl.coach || 'the coach'} called "${realCall}" here; ${drive}.`));
+    card.append(el('p', 'real', rl.live ? `This one is live (${gameTag(sc)}): see how ${rl.coach || 'the coach'} actually called it.`
+      : `In the real game (${gameTag(sc)}), ${rl.coach || 'the coach'} called "${realCall}" here; ${drive}.`));
     const cc = coachCard(G.decisions, 'You called this one like');
     if (cc) card.append(cc.el);
     const wpa = G.decisions.reduce((a, x) => a + x.wpa, 0);
@@ -4811,7 +4812,10 @@
       pro.drives.forEach((d, k) => {
         const sp = pro.spots[d.spot], opp = sp.player === sp.home ? sp.away : sp.home, a = el('a', 'day drive');
         a.href = `#drive-${k + 1}`;
-        a.append(el('b', '', d.title), el('span', 'd', String(sp.real.season)), el('span', 'm', `${teamName(sp.player)} vs ${teamName(opp)}`),
+        if (sp.real && sp.real.live) a.classList.add('live');
+        const tb = el('b', '', sp.real && sp.real.live ? null : d.title);
+        if (sp.real && sp.real.live) tb.append(el('span', 'livetag', 'LIVE'), d.title);
+        a.append(tb, el('span', 'd', String(sp.real.season)), el('span', 'm', `${teamName(sp.player)} vs ${teamName(opp)}`),
           el('span', 'sc', ds[k + 1] ? String(Math.round(ds[k + 1].p * 100)) : 'Play'));
         dl.append(a);
       });
