@@ -35,7 +35,7 @@ jobs:
       PRO_ON: "on"            # "on" launches Pro (the tab, the archive, the drives, the runs, the purchase)
       PRO_AT: ""   # and not before this time (UTC, e.g. "2026-10-16T18:00:00Z"): the page turns Pro on then; "" for at once
       VS_ON: "off"            # "on" turns on Versus (two players live) on the site; the Pro preview always has it
-      ADS_ON: "off"          # "on" shows the ads (AdSense and the units in web/ads); "off": no ads anywhere, and no extra life
+      ADS_ON: "on"           # "on" shows the ads (AdSense and the units in web/ads); "off": no ads anywhere, and no extra life
       FULLDEF_ON: "on"       # "on" turns on the full defensive call (personnel, front, coverage, rush) in the daily and survivor; the Pro preview always has it
     defaults:
       run:
