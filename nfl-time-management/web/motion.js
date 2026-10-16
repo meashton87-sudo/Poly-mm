@@ -115,19 +115,23 @@
   }
 
   // The fastest speed profile under the envelope (forward pass: speeding up; backward pass: braking), from speed
-  // v0 at the start to at most v1 at the end; returns the samples with their times.
+  // v0 at the start to at most v1 at the end; returns the samples with their times. He comes in at v0 whatever this
+  // path's effort, and no faster than he can brake does he slow: a path that asks more (a stop he can't make in its
+  // length, a top speed under the one he has) is run as fast as that allows (past the end, he coasts: World.step).
   function profile(R, en, v0, v1) {
     const n = R.P.length, v = new Float64Array(n);
-    v[0] = Math.min(v0, en.top);
+    v[0] = v0;
+    const slowest = (i) => Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] - 2 * en.brake * (R.s[i] - R.s[i - 1])));
     for (let i = 1; i < n; i++) {
       const ds = R.s[i] - R.s[i - 1];
-      v[i] = Math.min(R.vlim[i], en.top, Math.sqrt(v[i - 1] * v[i - 1] + 2 * fwdAcc(en, v[i - 1]) * ds));
+      v[i] = Math.min(R.vlim[i], Math.max(slowest(i), Math.min(en.top, Math.sqrt(v[i - 1] * v[i - 1] + 2 * fwdAcc(en, v[i - 1]) * ds))));
     }
     if (v1 != null) v[n - 1] = Math.min(v[n - 1], v1);
-    for (let i = n - 2; i >= 0; i--) {
+    for (let i = n - 2; i >= 1; i--) {
       const ds = R.s[i + 1] - R.s[i];
       v[i] = Math.min(v[i], Math.sqrt(v[i + 1] * v[i + 1] + 2 * en.brake * 0.85 * ds));
     }
+    for (let i = 1; i < n; i++) v[i] = Math.max(v[i], slowest(i));
     const t = new Float64Array(n);
     for (let i = 1; i < n; i++) {
       const ds = R.s[i] - R.s[i - 1], vm = (v[i] + v[i - 1]) / 2;
@@ -187,13 +191,16 @@
   //   track  {fn, eff, gain}             stay on a moving point fn(t) -> [x, y]
   //   stick  {who, dx, dy}               engaged: locked to another body (a block, a tackle) at an offset
   //   stand  {}                          slow down and stand
+  const SEP = 0.9;
+  const HIT = 14;           // yd/s^2: the hardest change of velocity at contact (a block, a tackle) in one step           // yards: the closest two teammates come when neither is on a set path or in a block
   function World(opts) {
     this.dt = (opts && opts.dt) || DT;
+    this.field = (opts && opts.field) || null;           // [left, right] sidelines: a run to a spot or a chase pulls up there
     this.bodies = [];
     this.t = 0;
   }
   World.prototype.add = function (o) {
-    const b = { id: o.id, g: o.g, x: o.x, y: o.y, vx: 0, vy: 0, spd: o.spd || 1, legs: [], hx: [], hy: [], ref: o.ref };
+    const b = { id: o.id, g: o.g, x: o.x, y: o.y, vx: 0, vy: 0, spd: o.spd || 1, legs: [], hx: [], hy: [], ref: o.ref, team: o.team };
     this.bodies.push(b);
     return b;
   };
@@ -237,8 +244,9 @@
       if (l > m) { dvx *= m / l; dvy *= m / l; }
     }
     b.vx += dvx; b.vy += dvy;
-    const s2 = hyp(b.vx, b.vy);
-    if (s2 > en.top) { b.vx *= en.top / s2; b.vy *= en.top / s2; }
+    // over his top speed (a lower effort than he was running at): he brakes down to it, never drops to it at once
+    const s2 = hyp(b.vx, b.vy), cap = Math.max(en.top, s - en.brake * dt);
+    if (s2 > cap) { b.vx *= cap / s2; b.vy *= cap / s2; }
     b.x += b.vx * dt; b.y += b.vy * dt;
   }
   // the velocity that brings a body to point (x, y) and stops it there, at most `top`
@@ -253,7 +261,10 @@
     const dt = this.dt, t = this.t;
     for (const b of this.bodies) {
       const L = legAt(b, t);
-      if (L && L.kind === 'path') {
+      // a path used up while still moving (a route run through its end, a pursuit cut short): he carries his
+      // momentum and pulls up within his envelope, as a player does, instead of stopping dead on the spot
+      const spent = L && L.kind === 'path' && t + dt - L.t0 > L.plan.T + 1e-9;
+      if (L && L.kind === 'path' && !spent) {
         const p = L.plan.at(t + dt - L.t0);
         b.vx = (p[0] - b.x) / dt; b.vy = (p[1] - b.y) / dt;
         b.nx = p[0]; b.ny = p[1];
@@ -261,8 +272,9 @@
       }
       const eff = L && L.eff != null ? L.eff : 1, en = envOf(b.g, b.spd, eff);
       let vd = [0, 0];
-      if (!L || L.kind === 'stand') vd = [0, 0];
-      else if (L.kind === 'go') vd = arrive(b, L.x, L.y, en.top, en.brake, L.stop !== false);
+      const F = this.field, inF = (x) => (F ? clip(x, F[0] - 0.5, F[1] + 0.5) : x);
+      if (!L || L.kind === 'stand' || spent) vd = [0, 0];
+      else if (L.kind === 'go') vd = arrive(b, inF(L.x), L.y, en.top, en.brake, L.stop !== false);
       else if (L.kind === 'chase') {
         const w = L.who, d = hyp(w.x - b.x, w.y - b.y);
         const lead = clip(d / Math.max(en.top, 1), 0, 1.4) * (L.lead == null ? 1 : L.lead);
@@ -271,7 +283,7 @@
           const gx = b.x - ax, gy = b.y - ay, gl = hyp(gx, gy) || 1;
           ax += (gx / gl) * L.gap; ay += (gy / gl) * L.gap;
         }
-        vd = arrive(b, ax, ay, en.top, en.brake, !!L.gap);
+        vd = arrive(b, inF(ax), ay, en.top, en.brake, !!L.gap || (F != null && inF(ax) !== ax));
       } else if (L.kind === 'mirror' || L.kind === 'track') {
         let px, py, qx, qy;
         if (L.kind === 'mirror') {
@@ -305,13 +317,31 @@
         // locked on, but never faster than the other man is moving plus a lunge
         const gx = tx - b.x, gy = ty - b.y, gl = hyp(gx, gy), mx = Math.min(hyp(w.vx, w.vy) + 3, envOf(b.g, b.spd, 1).top) * dt;
         const k = gl > mx ? mx / gl : 1;
-        b.nx = b.x + gx * k; b.ny = b.y + gy * k;
-        b.vx = (b.nx - b.x) / dt; b.vy = (b.ny - b.y) / dt;
+        // (the contact: his velocity comes round to the other man's hard, as a hit does, but not in a single frame)
+        let vx = (gx * k) / dt, vy = (gy * k) / dt;
+        const cx = vx - b.vx, cy = vy - b.vy, cl = hyp(cx, cy), cm = HIT * dt;
+        if (cl > cm) { vx = b.vx + (cx / cl) * cm; vy = b.vy + (cy / cl) * cm; }
+        b.vx = vx; b.vy = vy;
+        b.nx = b.x + vx * dt; b.ny = b.y + vy * dt;
         continue;
       }
       const ox = b.x, oy = b.y;
       steer(b, vd[0], vd[1], eff, dt);
       b.nx = b.x; b.ny = b.y; b.x = ox; b.y = oy;
+    }
+    // teammates moving on their own (running to a spot, chasing, standing, in coverage) never end up on top of each
+    // other: two closer than SEP ease apart, side by side (a man on a planned path or locked in a block holds his line)
+    const free = this.bodies.filter((b) => { const L = legAt(b, t); return b.team != null && b.nx != null && (!L || !(L.kind === 'path' || L.kind === 'stick')); });
+    for (let i = 0; i < free.length; i++) {
+      for (let j = i + 1; j < free.length; j++) {
+        const a = free[i], c = free[j];
+        if (a.team !== c.team) continue;
+        let dx = c.nx - a.nx, dy = c.ny - a.ny, d = hyp(dx, dy);
+        if (d >= SEP) continue;
+        if (d < 1e-6) { dx = a.id < c.id ? 1 : -1; dy = 0; d = 1; }
+        const push = Math.min((SEP - d) * 0.5, 0.035), ux = dx / d, uy = dy / d;       // at most 0.7 yd/s each
+        a.nx -= ux * push; a.ny -= uy * push; c.nx += ux * push; c.ny += uy * push;
+      }
     }
     for (const b of this.bodies) {
       if (b.nx != null) { b.x = b.nx; b.y = b.ny; }
@@ -324,6 +354,19 @@
     if (!this.bodies.length) return;
     if (!this.bodies[0].hx.length) for (const b of this.bodies) { b.hx.push(b.x); b.hy.push(b.y); }
     while (this.t < T - 1e-9) this.step();
+  };
+  // back to time t (a step boundary at or before it): the tracks after it are dropped and every body is where and
+  // as fast as it was then, so a job can be given from that moment on and the world run forward again
+  World.prototype.rewind = function (t) {
+    const k = Math.max(0, Math.min(Math.floor(t / this.dt + 1e-9), this.bodies.length ? this.bodies[0].hx.length - 1 : 0));
+    for (const b of this.bodies) {
+      if (!b.hx.length) continue;
+      b.hx.length = k + 1; b.hy.length = k + 1;
+      b.x = b.hx[k]; b.y = b.hy[k];
+      b.vx = k ? (b.hx[k] - b.hx[k - 1]) / this.dt : 0; b.vy = k ? (b.hy[k] - b.hy[k - 1]) / this.dt : 0;
+      b.nx = b.x; b.ny = b.y; b.pv = null;
+    }
+    this.t = k * this.dt;
   };
   World.prototype.state = function (b) { return { x: b.x, y: b.y, vx: b.vx, vy: b.vy, s: hyp(b.vx, b.vy) }; };
 

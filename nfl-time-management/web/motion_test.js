@@ -23,7 +23,10 @@ for (let n = 0; n < 400; n++) {
   check(vmax <= E.top * eff + 0.05 || vmax <= v0 + 0.05, `${g} path at effort ${eff.toFixed(2)}: ${vmax.toFixed(2)} yd/s > ${(E.top * eff).toFixed(2)}`);
   const T = p.T * (1.1 + rnd());
   const q = M.planPath(pts, g, { T, v0 });
-  check(Math.abs(q.T - T) < 0.06 && q.late === 0, `${g} timed path: ${q.T.toFixed(2)} s for ${T.toFixed(2)} s`);
+  // (on time; or early only where he comes in too fast to slow down in the path's length: nobody brakes harder)
+  const len = pts.slice(1).reduce((a, p, i) => a + Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]), 0);
+  const cantSlow = v0 * v0 / (2 * E.brake) > len * 0.5;
+  check((Math.abs(q.T - T) < 0.06 || (cantSlow && q.T < T)) && q.late === 0, `${g} timed path: ${q.T.toFixed(2)} s for ${T.toFixed(2)} s`);
   const z = q.at(q.T + 1);
   check(Math.hypot(z[0] - pts[pts.length - 1][0], z[1] - pts[pts.length - 1][1]) < 1e-6, `${g} path does not end at its last point`);
 }
