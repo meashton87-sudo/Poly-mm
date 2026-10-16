@@ -3859,7 +3859,7 @@
     const realCall = rl.call && CALL[rl.call] ? CALL[rl.call].label : 'a play';
     const lead0 = sc.start.score[sc.player === sc.home ? 1 : 0] - sc.start.score[sc.player === sc.home ? 0 : 1];
     const drive = !rl.drive ? '' : rl.drive === 'ran out the clock' ? (lead0 > 0 ? 'they ran out the clock' : 'time ran out on them') : `the drive ended in a ${rl.drive}`;
-    card.append(el('p', 'real', rl.live ? `This one is live (${gameTag(sc)}): see how ${rl.coach || 'the coach'} actually called it.`
+    card.append(el('p', 'real', rl.live ? `Straight from ${rl.date ? new Date(rl.date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }) : 'this week'} (${gameTag(sc)}): see how ${rl.coach || 'the coach'} actually called it.`
       : `In the real game (${gameTag(sc)}), ${rl.coach || 'the coach'} called "${realCall}" here; ${drive}.`));
     const cc = coachCard(G.decisions, 'You called this one like');
     if (cc) card.append(cc.el);
@@ -4788,6 +4788,16 @@
       .then((c) => { if (!c) throw new Error('the run data could not be loaded'); Object.assign(teams, c); })));
     return teams;
   }
+  // a drive from a game just played: "TONIGHT", "LAST NIGHT", then the weekday for the rest of the week; nothing after
+  function freshTag(real) {
+    if (!real || !real.live || !real.date) return '';
+    const day = new Date(real.date + 'T12:00:00'), now = new Date();
+    const ago = Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12) - day) / 864e5);
+    if (ago < 0 || ago > 6) return '';
+    if (ago === 0) return 'TONIGHT';
+    if (ago === 1) return 'LAST NIGHT';
+    return `${day.toLocaleDateString(undefined, { weekday: 'short' }).toUpperCase()} NIGHT`;
+  }
   // the Pro screen: the historic drives and every past day, newest first, with your score where you played; the
   // pitch when Pro is not on
   async function renderArchive(now) {
@@ -4812,9 +4822,10 @@
       pro.drives.forEach((d, k) => {
         const sp = pro.spots[d.spot], opp = sp.player === sp.home ? sp.away : sp.home, a = el('a', 'day drive');
         a.href = `#drive-${k + 1}`;
-        if (sp.real && sp.real.live) a.classList.add('live');
-        const tb = el('b', '', sp.real && sp.real.live ? null : d.title);
-        if (sp.real && sp.real.live) tb.append(el('span', 'livetag', 'LIVE'), d.title);
+        const fresh = freshTag(sp.real);
+        if (fresh) a.classList.add('fresh');
+        const tb = el('b', '', fresh ? null : d.title);
+        if (fresh) tb.append(el('span', 'freshtag', fresh), d.title);
         a.append(tb, el('span', 'd', String(sp.real.season)), el('span', 'm', `${teamName(sp.player)} vs ${teamName(opp)}`),
           el('span', 'sc', ds[k + 1] ? String(Math.round(ds[k + 1].p * 100)) : 'Play'));
         dl.append(a);

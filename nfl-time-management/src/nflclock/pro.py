@@ -121,7 +121,7 @@ def live_spot(hist, games: pd.DataFrame, pbp: pd.DataFrame, d: dict) -> tuple:
                       "ytg": float(L["ytg"]), "yl": float(L["yl"]), "to": list(L["to"]), "running": False, "phase": "snap",
                       "receive2h": L["receive2h"]},
             "spread": float(pd.to_numeric(g["spread_line"], errors="coerce") or 0.0),
-            "real": {"season": L["season"], "week": L["week"], "type": str(g["game_type"]), "live": True,
+            "real": {"season": L["season"], "week": L["week"], "type": str(g["game_type"]), "live": True, "date": L.get("date") or str(g["gameday"]),
                      "coach": CO.coach_name(g["home_coach"] if L["player"] == L["home"] else g["away_coach"], L["player"], L["season"]),
                      "call": None, "drive": None, "final": None},
             "league": league}
