@@ -20,7 +20,7 @@ import re
 import json
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -324,6 +324,16 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         shutil.copy2(f, out / "spots" / f.name)
     # The Pro data (web/pro, nflclock.pro.build) is never copied here: the board worker serves it (POST /pro/data)
     # only to a valid Pro code, so it cannot be fetched from the site without the purchase.
+    # the daily reminder (game.js reminderNodes): a calendar event every day at the hour the player picks, for Apple and
+    # Outlook calendars (Google's gets its own link); a floating time, so it is that hour wherever the phone is
+    start = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y%m%d")
+    for h in (8, 12, 19):
+        (out / f"remind-{h}.ics").write_text("\r\n".join([
+            "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//nfl2mindrill//Two-Minute Drill//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+            "BEGIN:VEVENT", f"UID:tmd-daily-{h}@nfl2mindrill.com", f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+            f"DTSTART:{start}T{h:02d}0000", "DURATION:PT10M", "RRULE:FREQ=DAILY", "SUMMARY:Two-Minute Drill: today's drive",
+            f"DESCRIPTION:Keep your streak going: {base}", f"URL:{base}", "BEGIN:VALARM", "ACTION:DISPLAY",
+            "DESCRIPTION:Two-Minute Drill: today's drive", "TRIGGER:PT0M", "END:VALARM", "END:VEVENT", "END:VCALENDAR"]) + "\r\n", newline="")
     if domain:
         (out / "CNAME").write_text(domain.strip() + "\n")
     (out / ".nojekyll").write_text("")          # serve the files as they are

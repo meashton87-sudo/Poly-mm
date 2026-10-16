@@ -1018,6 +1018,22 @@
   const RELEASE = { quick: 2.3, screen: 1.6, deep: 2.8, pa: 3.0, roll: 3.0, hail: 4.3, rpo: 1.35, flea: 3.7, tpass: 3.3 };
   const flight = (air) => (Math.abs(air) + 7) / (25 - 0.09 * clip(air, 0, 60));              // seconds the ball is in the air
   const PLAY_SPEED = 1;        // real time, your snaps and theirs
+  // the player's own speed-up (1x, 1.5x, 2x: the button on the field), kept on the device; a tap on the field skips
+  const SPEEDS = [1, 1.5, 2], SPEED_KEY = `${STORE}:speed`;
+  const playSpeed = () => { const v = Number(load(SPEED_KEY, 1)); return SPEEDS.includes(v) ? v : 1; };
+  function speedBtn() {
+    const b = $('speedBtn');
+    if (!b) return;
+    const show = () => { b.textContent = `${playSpeed()}\u00d7`; b.setAttribute('aria-label', `Play speed ${playSpeed()} times. Tap to change`); };
+    show();
+    b.hidden = false;
+    b.addEventListener('click', () => {
+      const v = SPEEDS[(SPEEDS.indexOf(playSpeed()) + 1) % SPEEDS.length];
+      save(SPEED_KEY, v); show();
+      toast(v === 1 ? 'Plays at real speed' : `Plays at ${v}\u00d7 speed. Tap the field to skip one`);
+      track('play_speed', { speed: v });
+    });
+  }
   // the routes a call's target runs when the real play was not charted, and the routes the rest run
   const CALL_ROUTE = { quick: ['slant', 'out', 'hitch'], quick_middle: ['slant', 'cross', 'in'], screen: ['screen'],
     deep: ['go', 'post', 'corner', 'deep_out', 'in'], deep_middle: ['post', 'in', 'go'], pa: ['in', 'post', 'cross', 'deep_out'],
@@ -2481,7 +2497,7 @@
     const pre = k0 < 0 ? res.log : res.log.slice(0, k0), ro = pre.find((x) => x.ev === 'runoff');
     const tos = pre.filter((x) => x.ev === 'timeout'), snapT = ro ? ro.t : tos.length ? tos[tos.length - 1].t : before.t;
     const clk = { t0: before.t, snap: snapT, end: Math.min(res.root.t, snapT) };
-    await runPlan(sc, P, PLAY_SPEED, clk);
+    await runPlan(sc, P, PLAY_SPEED * playSpeed(), clk);
     fadeNext = true;
     lastBall = null;
     return true;
@@ -3878,6 +3894,67 @@
   }
 
   // ------------------------------------------------------- after the snap ---
+  // why the better call was better, in one line: what it does for you in this kind of decision, and how often NFL
+  // play-callers make it here (the grade itself is the simulation's: thousands of games from this spot each way)
+  function whyLine(x) {
+    if (!x || x.cost < 0.0005 || x.best === x.chosen) return '';
+    const b = x.best, c = x.chosen, nfl = Math.round(((x.q && x.q[b]) || 0) * 100);
+    let why = '';
+    if (x.kind === 'clock') {
+      why = { timeout: 'Stopping the clock now keeps the seconds you need for more snaps.',
+        spike: 'A spike stops the clock and saves your timeout for when you need it more.',
+        kneel: 'Ahead with the ball: a kneel runs the clock with no chance of a turnover.',
+        rundown: 'In range: run it down to 0:03, then kick. They never get the ball back.',
+        milk: 'Ahead: every second you take off the clock is one they don\u2019t get.',
+        nohuddle: 'Behind with the clock running: the no-huddle gets the next snap off sooner.',
+        huddle: 'No need to rush here: the huddle uses clock you can afford.' }[b] || '';
+      if (!why && c === 'timeout') why = 'That timeout was worth more later in the drive.';
+      if (!why && c === 'spike') why = 'The spike wasted a down you could use.';
+    } else if (x.kind === 'deftime') {
+      why = b === 'timeout' ? 'Stop the clock now: every second they run off is one you won\u2019t have with the ball.'
+        : 'Hold the timeout: it buys more later than it saves now.';
+    } else if (x.kind === 'defcall') why = `${x.bestLabel} matches up better with what the offense likes to do here.`;
+    else if (x.kind === 'pat') why = `${x.bestLabel} is worth more from here, given the score and the time left.`;
+    else if (x.kind === 'kick' || x.kind === 'freekick') why = `${x.bestLabel} leaves them worse field position for the time left.`;
+    else {
+      // a play call: what the better one does that yours didn't, from the down, the clock and the kind of call
+      const dn = +((x.situation || '').match(/\b([1-4])(?:st|nd|rd|th) &/) || [])[1] || 0;
+      const sec = ((m) => (m ? +m[1] * 60 + +m[2] : 999))((x.situation || '').match(/^(\d+):(\d\d)/));
+      const kick = (l) => /field goal|kick/i.test(l), punt = (l) => /punt/i.test(l), pass = (l) => /pass|deep|screen|quick|throw|hail|shot/i.test(l);
+      const run = (l) => /run|RB |inside|outside|off tackle|sneak|keeper|draw/i.test(l) && !pass(l);
+      const BL = x.bestLabel, CL = x.chosenLabel;
+      if (kick(CL) && dn && dn < 4) why = `Kicking on ${['', '1st', '2nd', '3rd'][dn]} down gives up downs you could use to get closer, or score six.`;
+      else if (kick(BL)) why = 'Take the points: the kick is a good bet from here, and the clock is short.';
+      else if (punt(BL)) why = 'Punt it: pinning them deep is worth more than the chance of converting here.';
+      else if (dn === 4 && (punt(CL) || kick(CL))) why = `Go for it: with ${sec < 180 ? 'this little time' : 'this much at stake'}, keeping the ball is worth the risk.`;
+      else if (pass(BL) && run(CL) && sec < 150) why = 'With the clock running down, a pass can stop the clock and gain more than a run.';
+      else if (run(BL) && pass(CL)) why = sec < 150 ? 'A run keeps it simple: fewer ways to lose the ball, and the yards come.' : 'A run fits this down and distance better than a throw.';
+      else why = `${BL} wins more of the simulated games from this down, distance and clock than ${CL}.`;
+    }
+    return `${why}${nfl >= 1 ? ` NFL play-callers make that call ${nfl}% of the time here.` : ''}`;
+  }
+  // the drive's calls, explained: each one that cost something, worst first, with the better call and why
+  function callsExplained(decs) {
+    const bad = decs.filter((x) => markOf(x.cost) !== 'g').sort((a, b) => b.cost - a.cost);
+    const det = el('details', 'explain');
+    det.append(el('summary', '', bad.length ? `Your calls, explained (${bad.length} to learn from)` : 'Your calls, explained'));
+    const inn = el('div', 'in');
+    if (!bad.length) inn.append(el('p', 'note', `Every one of your ${decs.length} calls was the best call or close to it. Coach of the year.`));
+    bad.slice(0, 8).forEach((x) => {
+      const m = markOf(x.cost), row = el('div', 'xrow');
+      const chip = el('span', `chip-g sq ${m}`, GLYPH[m]);
+      chip.setAttribute('aria-hidden', 'true');
+      const t = el('div', 'xt');
+      t.append(el('div', 'xs', x.situation || KIND_NAME[x.kind] || 'Call'),
+        el('div', 'xc', `${x.chosenLabel} \u2192 ${x.bestLabel} (${pts(x.cost)}% win chance)`), el('div', 'xw', whyLine(x)));
+      row.append(chip, t);
+      inn.append(row);
+    });
+    const good = decs.length - bad.length;
+    if (bad.length && good) inn.append(el('p', 'note', `The other ${good} call${good === 1 ? ' was' : 's were'} the best or close to it.`));
+    det.append(inn);
+    return det;
+  }
   const KIND_NAME = { clock: 'Before the snap', call: 'Play call', deftime: 'Timeout', defcall: 'Defense', pat: 'Try', kick: 'Kickoff', freekick: 'Free kick',
     fgdef: 'Field goal defense', puntdef: 'Punt defense' };
   function optionTable(x) {
@@ -3969,6 +4046,7 @@
       if (x.cost < 0.0005 || x.best === x.chosen) v.append(el('b', '', 'the best one.'));
       else if (xm === 'g') v.append(el('b', '', 'as good as any'), document.createTextNode(` (${x.bestLabel} ${pts(x.cost)}%).`));
       else v.append(document.createTextNode(`${GRADE_WORD[xm]}; `), el('b', '', x.bestLabel), document.createTextNode(` was better (${pts(x.cost)}% win chance).`));
+      if (xm !== 'g' && whyLine(x)) v.append(el('span', 'why', ` ${whyLine(x)}`));
     });
     wrap.append(v);
     const acts = el('div', 'res-acts');
@@ -4945,12 +5023,7 @@
     const dbox = dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0)));
     box.append(dbox);
     if (ARCH_DAY || RUN_N) { const a = el('a', 'btn', RUN_N ? 'More runs' : 'Back to the archive'); a.href = '#archive'; box.append(a); }
-    else if (PRO_ON && !isPro() && dayN > 1 && BOARD.api) {       // the website: the archive is a Pro purchase there
-      const a = el('a', '', 'the Archive'), nudge = el('p', 'note');
-      a.href = '#archive';
-      nudge.append('Missed a day? Every past daily is in ', a, ' (Pro).');
-      box.append(nudge);
-    }
+    else if (PRO_ON && !isPro() && BOARD.api) box.append(proValueCard());       // the website: what Pro adds, after the free drive
     const rec = [0, 0, 0];             // against the real coaches: better, worse, the same (a W-L-T record)
     const rows = today.map((_, i) => {
       const s = state.spots[i]; if (!s) return '';
@@ -4964,9 +5037,12 @@
     if (firstFinish) track('daily_finish', { day: dayN, kind: today[0] && today[0].category, score: Math.round(p * 100),
       vs_coach: rec[0] ? 'better' : rec[1] ? 'worse' : met ? 'same' : 'none', snaps: decs.length });
     // one drive: a sentence, not a record
-    const one = today.length === 1 ? (rec[0] ? 'Beat the real coach' : rec[1] ? 'Lost to the real coach' : 'Matched the real coach') : null;
+    const hh0 = today.length === 1 && state.spots[0] ? headToHead(0, state.spots[0].result) : null;
+    const one = today.length === 1 ? (hh0 ? (rec[0] ? `Beat ${hh0.coach}` : rec[1] ? `${hh0.coach} did better` : `Matched ${hh0.coach}`)
+      : rec[0] ? 'Beat the real coach' : rec[1] ? 'Lost to the real coach' : 'Matched the real coach') : null;
     const vs = met ? (one ? `\n${one}` : `\nVs the real coaches: ${recTxt}`) : '';
-    if (met && one) {
+    if (met && one && hh0) box.insertBefore(hhCard(hh0), box.children[3] || null);      // beating the real coach is the hook: say who
+    else if (met && one) {
       const v = el('div', 'h2h-day');
       v.append(el('span', 'k', 'Vs the real coach'), el('b', '', rec[0] ? 'Better' : rec[1] ? 'Worse' : 'Same'));
       box.insertBefore(v, box.children[3] || null);
@@ -4997,10 +5073,156 @@
       if (!state.madden) { state.madden = code; saveState(); track('madden', { day: dayN }); }
     };
     box.insertBefore(btn, dbox);
+    const img = el('button', 'btn ghostbtn', 'Share as a picture');
+    img.type = 'button';
+    img.addEventListener('click', () => shareImage({
+      title: DRIVE ? PRO.drives[DRIVE - 1].title : RUN_N ? `The ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Daily #${dayN}`,
+      score: Math.round(p * 100), grade: DRIVE ? gradeOf(Math.round(p * 100)).L : null,
+      line: `Better than ${Math.round(p * 100)}% of NFL play-callers`,
+      coach: () => (share.text.match(/Coached like ([^\n]+)/) || [])[1] || null,
+      vs: met ? (one || `Vs the real coaches: ${recTxt}`) : null, beat: rec[0] > rec[1] ? 1 : rec[1] > rec[0] ? -1 : 0,
+      streak: !DRIVE && !RUN_N && !ARCH_DAY ? streak : 0,
+      rows: today.map((sp, i) => ({ team: sp.player, res: (rows[i] || '').split(' ')[1] || '', marks: squeeze((state.spots[i] && state.spots[i].decisions) || []) })) }));
+    box.insertBefore(img, dbox);
+    box.insertBefore(callsExplained(decs), dbox);
     box.append(countdown(streak >= 1 ? 'Keep the streak: next drive in ' : null));
+    if (!DRIVE && !RUN_N && !ARCH_DAY) box.append(reminderNodes());
     const ad = adBox();
     if (ad) box.append(ad);
     box.append(disclaimer());
+  }
+  // ---- the daily habit: the streak in the top bar, and a reminder in the player's own calendar (a daily event at the
+  // hour they pick: Google Calendar's own page, or a .ics file site.py writes for Apple and Outlook calendars)
+  function curStreak() {
+    const st = load(`${STORE}:stats`, { days: {} }), d = dayOf(new Date());
+    let n = 0; for (let k = st.days[d] ? d : d - 1; st.days[k]; k--) n++;
+    return n;
+  }
+  const REMIND_HOURS = [[8, 'Morning, 8 am'], [12, 'Lunch, noon'], [19, 'Evening, 7 pm']];
+  function reminderNodes() {
+    const box = el('div', 'remind');
+    const open = el('button', 'btn ghostbtn', '\u23f0 Remind me every day');
+    open.type = 'button';
+    open.addEventListener('click', () => {
+      box.textContent = '';
+      box.append(el('div', 'k', 'A daily reminder in your calendar'));
+      const times = el('div', 'rtimes'), links = el('div', 'rlinks');
+      let h = 8;
+      const draw = () => {
+        times.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.h === h)));
+        const t = new Date(); t.setDate(t.getDate() + 1);
+        const ymd = `${t.getFullYear()}${String(t.getMonth() + 1).padStart(2, '0')}${String(t.getDate()).padStart(2, '0')}`, hh = String(h).padStart(2, '0');
+        const g = el('a', 'btn', 'Google Calendar');
+        g.href = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent('Two-Minute Drill: today\u2019s drive')}`
+          + `&details=${encodeURIComponent(`Keep your streak going: https://${SITE}`)}&recur=${encodeURIComponent('RRULE:FREQ=DAILY')}&dates=${ymd}T${hh}0000/${ymd}T${hh}1000`;
+        g.target = '_blank'; g.rel = 'noopener';
+        const a = el('a', 'btn ghostbtn', 'Apple / Outlook');
+        a.href = `remind-${h}.ics`;
+        [g, a].forEach((x) => x.addEventListener('click', () => { track('reminder', { hour: h, cal: x === g ? 'google' : 'ics' }); save(`${STORE}:remind`, h); }));
+        links.textContent = '';
+        links.append(g, a);
+      };
+      REMIND_HOURS.forEach(([hr, lab]) => {
+        const b = el('button', 'chip', lab);
+        b.type = 'button'; b.dataset.h = hr;
+        b.addEventListener('click', () => { h = hr; draw(); });
+        times.append(b);
+      });
+      draw();
+      box.append(times, links, el('p', 'note', 'A new drive is up every day at midnight, your time.'));
+    });
+    box.append(open);
+    if (load(`${STORE}:remind`, null) != null) open.textContent = '\u23f0 Reminder set \u00b7 change it';
+    return box;
+  }
+  // ---- your result as a picture (for Instagram, X, the group chat): drawn on a canvas, the phone's share sheet when it
+  // takes files, else saved as a file
+  async function shareImage(o) {
+    const W = 1080, H = 1350, cv = document.createElement('canvas'), x = cv.getContext('2d');
+    cv.width = W; cv.height = H;
+    try { await document.fonts.ready; } catch (e) { /* no font API */ }
+    const css = getComputedStyle(document.documentElement), col = (v, d) => (css.getPropertyValue(v) || '').trim() || d;
+    const DISP = '"Big Shoulders Display", "Arial Narrow", sans-serif', BODY = '"Libre Franklin", Arial, sans-serif';
+    const MK = { g: col('--sq-g', '#3d9a56'), y: col('--sq-y', '#d2ad2e'), o: col('--sq-o', '#e27c37'), r: col('--sq-r', '#d0463f') };
+    // the field: dark green, yard lines
+    const bg = x.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, '#0f2a18'); bg.addColorStop(1, '#173d24');
+    x.fillStyle = bg; x.fillRect(0, 0, W, H);
+    x.strokeStyle = 'rgba(255,255,255,.07)'; x.lineWidth = 3;
+    for (let y = 90; y < H; y += 110) { x.beginPath(); x.moveTo(0, y); x.lineTo(W, y); x.stroke(); }
+    x.textAlign = 'center'; x.fillStyle = '#fff';
+    x.font = `900 64px ${DISP}`; x.fillText('TWO-MINUTE DRILL', W / 2, 130);
+    x.font = `700 34px ${BODY}`; x.fillStyle = 'rgba(255,255,255,.75)'; x.fillText(o.title.toUpperCase(), W / 2, 185);
+    x.fillStyle = '#fff'; x.font = `900 300px ${DISP}`; x.fillText(o.grade || String(o.score), W / 2, 470);
+    x.font = `600 38px ${BODY}`; x.fillText(o.grade ? `${o.score} \u00b7 ${o.line}` : o.line, W / 2, 545);
+    const coach = typeof o.coach === 'function' ? o.coach() : o.coach;
+    // (the lines below the score, centred in the room above the footer)
+    const nRows = Math.min(4, o.rows.length), blockH = (o.vs ? 90 : 0) + (coach ? 70 : 0) + nRows * 100 + (o.streak >= 2 ? 110 : 0);
+    let y = Math.max(630, 600 + (H - 160 - 600 - blockH) / 2);
+    if (o.vs) {
+      x.font = `900 66px ${DISP}`; x.fillStyle = o.beat > 0 ? MK.g : o.beat < 0 ? MK.r : '#fff';
+      x.fillText(o.vs.toUpperCase(), W / 2, y + 10, W - 80); y += 90;
+    }
+    if (coach) { x.font = `600 36px ${BODY}`; x.fillStyle = 'rgba(255,255,255,.85)'; x.fillText(`Coached like ${coach}`, W / 2, y, W - 80); y += 70; }
+    // the calls, one row of squares per spot
+    const SQ = 74, GAP = 14;
+    o.rows.slice(0, 4).forEach((r) => {
+      const n = Math.max(1, r.marks.length), w = n * SQ + (n - 1) * GAP, lab = `${r.team} ${r.res}`.trim();
+      x.font = `800 40px ${DISP}`; x.textAlign = 'right'; x.fillStyle = '#fff';
+      const x0 = (W - w) / 2 + 60;
+      x.fillText(lab, x0 - 24, y + SQ * 0.68);
+      r.marks.forEach((m, i) => {
+        x.fillStyle = MK[m] || '#666';
+        const xx = x0 + i * (SQ + GAP);
+        x.beginPath(); x.roundRect ? x.roundRect(xx, y, SQ, SQ, 12) : x.rect(xx, y, SQ, SQ); x.fill();
+      });
+      x.textAlign = 'center'; y += SQ + 26;
+    });
+    if (o.streak >= 2) { x.font = `900 60px ${DISP}`; x.fillStyle = '#ffb547'; x.fillText(`\ud83d\udd25 ${o.streak}-DAY STREAK`, W / 2, y + 60); }
+    x.font = `700 40px ${BODY}`; x.fillStyle = '#fff'; x.fillText(`Can you beat me? ${SITE}`, W / 2, H - 70);
+    const blob = await new Promise((res) => cv.toBlob(res, 'image/png'));
+    if (!blob) { toast('Could not make the picture'); return; }
+    const file = new File([blob], `two-minute-drill-${o.title.replace(/\W+/g, '-').toLowerCase()}.png`, { type: 'image/png' });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], text: `Can you beat me? https://${SITE}` });
+        track('share', { what: 'image', method: 'sheet' });
+        return;
+      }
+    } catch (e) { if (e && e.name === 'AbortError') return; }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = file.name;
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast('Picture saved');
+    track('share', { what: 'image', method: 'download' });
+  }
+  // ---- what Pro adds, shown to a free player right after the free daily (the moment they want more)
+  function startPurchase(buy) {
+    buy.disabled = true;
+    (async () => {
+      try { track('pro_pay'); const d = await proApi('/pay', authSession() ? { session: authSession() } : {}); location.href = d.url; } catch (e) {
+        if (/sign-in has expired/.test(e.message)) authClear();
+        toast(/not set up/.test(e.message) ? 'Payments open soon' : 'Could not start the purchase: ' + e.message);
+        buy.disabled = false;
+      }
+    })();
+  }
+  function proValueCard() {
+    const box = el('div', 'pro provalue'), days = Math.max(0, dayOf(new Date()) - 1);
+    box.append(el('div', 'k', 'Want more? Two-Minute Drill Pro'), el('div', 'price', '$4.99 \u00b7 once, yours for good'));
+    const ul = el('ul');
+    ['The Gauntlet: race everyone through the historic drives. $50 and the Champion title to the first to pass them all',
+      'The historic drives: Mahomes\u2019 13 seconds, the Minneapolis Miracle, the Philly Special, 28\u20133 and more, from their real spots',
+      'Playoff runs: coach a team through its whole postseason, every late-game spot in order',
+      `The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed`].forEach((t) => ul.append(el('li', '', t)));
+    const row = el('div', 'row'), buy = el('button', 'btn', 'Unlock Pro \u00b7 $4.99'), more = el('a', 'btn ghostbtn', 'See what\u2019s inside');
+    buy.type = 'button';
+    buy.addEventListener('click', () => { track('pro_value_buy'); startPurchase(buy); });
+    more.href = '#archive';
+    row.append(buy, more);
+    box.append(ul, row, el('p', 'note', 'Apple Pay, Google Pay or a card on Stripe\u2019s secure page. Signed in, it goes on your account for every device.'));
+    track('pro_value_seen');
+    return box;
   }
   // An ad unit (Google AdSense, the website only: site.py --adsense --ad-slot), only on screens between games, never
   // while a drive is on, labeled as an ad. Nothing without both metas (claude.ai, local copies, the test builds).
@@ -5902,14 +6124,7 @@
     }
     const row = el('div', 'row'), buy = el('button', 'btn', 'Unlock · $4.99');
     buy.type = 'button';
-    buy.addEventListener('click', async () => {
-      buy.disabled = true;
-      try { track('pro_pay'); const d = await proApi('/pay', authSession() ? { session: authSession() } : {}); location.href = d.url; } catch (e) {
-        if (/sign-in has expired/.test(e.message)) authClear();
-        toast(/not set up/.test(e.message) ? 'Payments open soon' : 'Could not start the purchase: ' + e.message);
-        buy.disabled = false;
-      }
-    });
+    buy.addEventListener('click', () => startPurchase(buy));
     row.append(buy);
     box.append(row, el('p', 'note', acctPro() || !authSession() ? 'Apple Pay, Google Pay or a card, on Stripe’s secure page. One code, up to 3 of your devices.'
       : `Apple Pay, Google Pay or a card, on Stripe’s secure page. Signed in as ${(ACCT.me && ACCT.me.email) || 'you'}: Pro goes on your account, for any device you sign in on.`));
@@ -6713,6 +6928,7 @@
     $('bar').addEventListener('click', () => { if (G) spotInfo(); });
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
     $('persBtn').addEventListener('click', openPers);
+    speedBtn();
     $('deepClose').addEventListener('click', closeDeep);
     $('mClose').addEventListener('click', closeModal);
     $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeModal(); });
@@ -6773,7 +6989,8 @@
         const ids = dayIds(dayN);
         const teams = await loadTeams(ids);
         today = ids.map((i) => buildScen(idx.spots[i], teams[i]));
-        $('dayLabel').textContent = `No. ${dayN} · ${dayDate(dayN).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${ARCH_DAY ? ' · archive' : ''}`;
+        const stk = ARCH_DAY ? 0 : curStreak();
+        $('dayLabel').textContent = `No. ${dayN} · ${dayDate(dayN).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${ARCH_DAY ? ' · archive' : ''}${stk >= 2 ? ` · \ud83d\udd25${stk}` : ''}`;
       }
     } catch (e) { $('boot').textContent = 'Today\'s spots did not load (' + e.message + '). Check your connection and reload.'; return; }
     const fresh = !load(stateKey(), null);

@@ -607,6 +607,25 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 .result.banner > .res-acts, .result.banner > .mline, .result.banner > .btn { display: none; }
 /* you against the real coach */
 .h2h-day { display: grid; justify-items: center; gap: 2px; }
+/* the grade's reason, under the call; the drive's calls explained on the final card */
+.verdict .why { display: block; margin-top: 3px; font-size: 13px; color: var(--muted); }
+.explain { text-align: left; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.explain summary { cursor: pointer; padding: 10px 12px; font-weight: 700; }
+.explain .in { display: grid; gap: 10px; padding: 0 12px 12px; }
+.explain .xrow { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; }
+.explain .xs { font-size: 12px; color: var(--muted); letter-spacing: .02em; }
+.explain .xc { font-weight: 700; }
+.explain .xw { font-size: 13px; color: var(--muted); }
+/* the daily reminder */
+.remind { display: grid; gap: 8px; justify-items: center; }
+.remind .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.remind .rtimes, .remind .rlinks { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.remind .chip[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.remind .btn { width: auto; }
+.provalue { text-align: left; }
+.provalue .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.provalue .row .btn { width: auto; flex: 1 1 auto; }
+.provalue a.btn, .remind a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
 .h2h-day .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
 .h2h-day b { font: 900 40px/1 var(--display); letter-spacing: .04em; }
 .h2h-day .sub { font-size: 13px; color: var(--muted); }
@@ -733,6 +752,7 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
         <div class="fov">
           <div class="fovl"><div id="dd" class="dd"></div><span class="ramp" aria-label="Player dots: red is worse, green is better">worse <i></i> better</span></div>
           <span class="btns">
+          <button id="speedBtn" class="ghost" type="button" hidden aria-label="Play speed">1×</button>
           <button id="persBtn" class="ghost" type="button" hidden aria-label="Edit personnel"></button>
           <button id="deepBtn" class="ghost" type="button" aria-label="Player ratings">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><span class="lb">Ratings</span></button>
