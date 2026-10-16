@@ -4901,11 +4901,28 @@
     if (!vs.pool) vs.pool = await fetch(asset('teams.json')).then((r) => { if (!r.ok) throw new Error('teams ' + r.status); return r.json(); });
     return vs.pool;
   }
-  // college overtime: the toss (seeded: the same on both phones) picks who has the ball first; the start of a
-  // possession (round 3 on: a two-point play)
+  // college overtime: the toss (seeded: the same on both phones) picks who chooses first: offense, defense or the end
+  // of the field (then the other team picks offense or defense). The choice alternates: the toss loser has it in the
+  // 2nd overtime, the winner in the 3rd, and so on. The start of a possession (round 3 on: a two-point play)
+  const COT_PICKS = { offense: 'Offense', defense: 'Defense', end: 'End of the field' };
+  const cotChooser = (c) => (c.round % 2 ? c.toss : 1 - c.toss);
   function cotStart() {
-    const first = rng(hash('toss', `vs${vs.seed}`, 0))() < 0.5 ? 0 : 1;
-    return { cot: { round: 1, idx: 0, order: [first, 1 - first], score0: [0, 0] } };
+    const toss = rng(hash('toss', `vs${vs.seed}`, 0))() < 0.5 ? 0 : 1;
+    return { cot: { round: 1, idx: 0, order: [toss, 1 - toss], score0: [0, 0], toss, pick: { team: toss, end: false } } };
+  }
+  // the choosing team's answer (null: they ran out of time, so defense, the usual pick)
+  function cotPick(choice) {
+    const c = G.cot, P = c.pick.team, nm = teamName(code(P));
+    if (choice === 'end' && !c.pick.end) {
+      addLog(`The ${nm} take the end of the field: the ${teamName(code(1 - P))} choose offense or defense`, COT_T, P === G.me);
+      c.pick = { team: 1 - P, end: true };
+      G.root = { ...G.root, pos: 1 - P };
+      return;
+    }
+    const first = choice === 'offense' ? P : 1 - P;
+    addLog(`The ${nm} choose ${choice === 'offense' ? 'offense' : 'defense'}${choice ? '' : ' (out of time)'}: ${teamName(code(first))} ball first`, COT_T, P === G.me);
+    c.pick = null; c.order = [first, 1 - first]; c.idx = 0;
+    G.root = possRoot(first, c.round, G.root.score, G.root.to);
   }
   function possRoot(team, round, score, to) {
     const base = { t: COT_T, pos: team, score: score.slice(), down: 1, ytg: 10, yl: 25, to: to.slice(), clock_running: false, phase: SNAP, credit: 0, free_kick: false };
@@ -4934,10 +4951,10 @@
       return;
     }
     if (sc[0] !== sc[1]) return cotEnd(sc);
-    c.round += 1; c.idx = 0; c.order = [c.order[1], c.order[0]]; c.score0 = sc.slice();
-    G.root = possRoot(c.order[0], c.round, sc, c.round >= 3 ? [0, 0] : [1, 1]);
-    addLog(`${ordinal(c.round)} overtime, tied ${sc[G.me]}–${sc[1 - G.me]}${c.round === 2 ? ': a touchdown has to go for two' : c.round >= 3 ? ': a two-point play each' : ''}`, COT_T, true);
-    addLog(`${teamName(code(c.order[0]))} ball${c.round >= 3 ? '' : ' at the 25'}`, COT_T, c.order[0] === G.me);
+    c.round += 1; c.idx = 0; c.score0 = sc.slice();
+    c.pick = { team: cotChooser(c), end: false };
+    G.root = possRoot(c.pick.team, c.round, sc, c.round >= 3 ? [0, 0] : [1, 1]);
+    addLog(`${ordinal(c.round)} overtime, tied ${sc[G.me]}–${sc[1 - G.me]}${c.round === 2 ? ': a touchdown has to go for two' : c.round >= 3 ? ': a two-point play each' : ''}. The ${teamName(code(c.pick.team))} choose`, COT_T, true);
   }
   function cotEnd(sc) { G.root = { ...G.root, score: sc, phase: DONE }; }
 
@@ -5034,11 +5051,11 @@
     if (G.started || G.over) enterField(); else renderIntro();
   }
   function renderVsIntro() {
-    const box = $('intro'), me = code(G.me), op = code(1 - G.me), first = G.cot.order[0];
+    const box = $('intro'), me = code(G.me), op = code(1 - G.me), first = G.cot.toss;
     const oppName = vs.names[1 - vs.seat];
     box.append(el('div', 'cat', `${VS_MODES[vs.mode] || 'Versus'} · College overtime`),
       el('div', 'game', `Your ${teamName(me)} vs ${oppName ? `${oppName}’s` : 'their'} ${teamName(op)}`), el('div', 'big', 'Overtime'));
-    box.append(el('p', 'story', `Each team gets the ball at the other’s 25, no clock. From the second overtime, a touchdown has to go for two; from the third, it’s a two-point play each. Ahead after both teams have had it, you win. ${first === G.me ? 'You won the toss: you have the ball first.' : `The ${teamName(op)} have the ball first.`}`));
+    box.append(el('p', 'story', `Each team gets the ball at the other’s 25, no clock. From the second overtime, a touchdown has to go for two; from the third, it’s a two-point play each. Ahead after both teams have had it, you win. ${first === G.me ? 'You won the toss: you choose offense, defense or the end of the field.' : `The ${teamName(op)} won the toss and choose first.`} The choice alternates every overtime.`));
     box.append(el('div', 'who', `You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap.`));
     const go = el('button', 'btn', 'Kick it off');
     go.type = 'button';
@@ -5219,7 +5236,7 @@
     const r = G.root, n = G.vsN;
     if (vs.waiting === n) return;
     clearInterval(vs.timer); vs.clockEnd = 0;
-    const need = r.phase === SNAP ? [0, 1] : [vsSeatOf(r.pos)];
+    const need = G.cot && G.cot.pick ? [vsSeatOf(G.cot.pick.team)] : r.phase === SNAP ? [0, 1] : [vsSeatOf(r.pos)];
     vs.last = { t: 'half', n, need, half };
     vs.waiting = n;
     vsSend(vs.last);
@@ -5239,6 +5256,12 @@
     const off = half(r.pos), def = half(1 - r.pos);
     vs.oppLocked = -1;
     G.vsN = d.n + 1;
+    if (G.cot && G.cot.pick) {
+      const h = d.halves[vsSeatOf(G.cot.pick.team)];
+      cotPick(h && COT_PICKS[h.pick] && (h.pick !== 'end' || !G.cot.pick.end) ? h.pick : null);
+      persist();
+      return null;
+    }
     if (r.phase === SNAP && off && off.timeout && r.to[r.pos] > 0 && !r.try2) {
       G.root = { ...r, to: r.to.slice(), clock_running: false };
       G.root.to[r.pos] -= 1;
@@ -5310,6 +5333,13 @@
     }
     G.fast = false;
     const mine = r.pos === G.me;
+    if (G.cot && G.cot.pick) {
+      if (G.cot.pick.team !== G.me) { vs.idle = true; drawAll(); vsWaitPick(); return 'stop'; }
+      if (vs.waiting === G.vsN) { status('Locked in. Waiting…'); return 'stop'; }
+      vsClockStart();
+      vsPromptPick();
+      return 'stop';
+    }
     if (r.phase === SNAP) {
       if (vs.waiting === G.vsN) { status('Locked in. Waiting for your opponent…'); return 'stop'; }
       vsClockStart();
@@ -5325,6 +5355,37 @@
     vs.idle = true;
     status(`The ${teamName(code(r.pos))} line up for the try…`);
     return 'stop';
+  }
+  // the overtime choice: offense, defense or the end of the field (the end: they pick offense or defense)
+  function vsPromptPick() {
+    const c = G.cot, d = $('dock');
+    drawAll();
+    d.textContent = '';
+    takeBanner(d);
+    const head = el('div', 'ask');
+    const why = c.pick.end ? 'They took the end of the field' : c.round === 1 ? 'You won the toss' : `${ordinal(c.round)} overtime: your choice`;
+    head.append(el('h2', '', why), el('span', 'sub', c.pick.end ? 'Offense or defense?' : 'Offense, defense or the end of the field?'));
+    d.append(head);
+    const keys = el('div', 'keys'), opts = c.pick.end ? ['offense', 'defense'] : ['offense', 'defense', 'end'];
+    const subs = { offense: 'You have the ball first', defense: 'They go first; you know what you need', end: 'Pick the end zone; they choose offense or defense' };
+    keys.style.setProperty('--cols', opts.length);
+    opts.forEach((o, i) => {
+      const b = key(COT_PICKS[o], subs[o], 'big def', i);
+      b.addEventListener('click', () => { if (busy) return; track('vs_pick', { pick: o, round: c.round }); vsSubmit({ pick: o }); });
+      keys.append(b);
+    });
+    d.append(keys);
+  }
+  function vsWaitPick() {
+    const c = G.cot, d = $('dock'), nm = teamName(code(c.pick.team));
+    d.textContent = '';
+    takeBanner(d);
+    const head = el('div', 'ask');
+    head.append(el('h2', '', c.pick.end ? 'You took the end of the field' : c.round === 1 ? `The ${nm} won the toss` : `${ordinal(c.round)} overtime`),
+      el('span', 'sub', `The ${nm} choose ${c.pick.end ? 'offense or defense' : 'offense, defense or the end of the field'}…`));
+    const st = el('div', 'status');
+    st.append(el('span', 'spin'), el('span', '', 'Waiting for their choice'));
+    d.append(head, st);
   }
   function vsEndCard() {
     const r = G.root, mine = r.score[G.me], theirs = r.score[1 - G.me], d = $('dock'), rounds = G.cot ? G.cot.round : 1;
