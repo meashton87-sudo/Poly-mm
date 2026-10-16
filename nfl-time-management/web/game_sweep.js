@@ -140,6 +140,9 @@ function kickCheck(r, kick, tag, free) {
 }
 let steps = 0, t0 = Date.now();
 // 1) every spot x every call x seeds, from the spot's start (our ball spots) and from a few synthetic states
+// a defensive call in full, every combination in turn
+const fullDef = (k) => ({ pers: ['heavy', 'base', 'nickel', 'dime'][k % 4], front: ['light', 'even', 'loaded'][(k >> 2) % 3],
+  cover: ['c0', 'c1', '2man', 'c2', 'c3', 'c4', 'c6', 'prevent'][(k >> 1) % 8], rush: [3, 4, 5, 6][(k >> 3) % 4] });
 idx.spots.forEach((sp, si) => {
   const sim = eng.simulator(eng.makeContext(scen(sp), { receive2h: sp.start.receive2h }));
   const root = rootOf(sp);
@@ -195,7 +198,11 @@ idx.spots.forEach((sp, si) => {
           : pick === 3 && cur.down === 4 && cur.yl >= 35 ? { to_off: false, play: 'punt' } : pick === 4 && cur.down <= 3 && n % 3 === 0 ? { to_off: false, play: 'kneel' }
           : pick >= 5 && pick <= 7 ? routePick(n + g + si)
           : { to_off: false, play: P.calls[ci].kind, call: calls[ci], oob: n % 2 === 0, tempo: cur.clock_running ? ['urgent', 'hurry', 'normal', 'milk'][n % 4] : undefined, pers: [undefined, 12, 21, 13][n % 4] };
-      } else if (cur.phase === 0) action = { to_def: n % 5 === 0, def: n % 4 ? ['blitz', 'load', 'soft'][n % 3] : undefined, st: ['block', 'safe', 'rush', 'return'][(n + g) % 4] };
+      } else if (cur.phase === 0) {
+        action = { to_def: n % 5 === 0, st: ['block', 'safe', 'rush', 'return'][(n + g) % 4] };
+        if (n % 4 === 1) action.def = ['blitz', 'load', 'soft'][n % 3];
+        else if (n % 4) action.dc = fullDef(n + g + si), action.read = true;      // the full call (personnel, front, coverage, rush)
+      }
       else if (cur.phase === 1 && cur.pos === me) action = { pat: n % 3 ? 'xp' : 'two' };
       else if (cur.phase === 2 && cur.pos === me) action = { kick: ['return', 'touchback', 'onside', 'deep'][(n + g) % 4] };
       const before = JSON.parse(JSON.stringify(cur));
@@ -217,6 +224,10 @@ idx.spots.forEach((sp, si) => {
         if (e.foul && !((e.ev === 'fg' && action.st === 'block') || (e.ev === 'punt' && action.st === 'rush'))) flag('a roughing flag without the rush', `game ${si}.${g} step ${n} ${tag}`);
       }
       if (action.def) lookHit(r, { blitz: 10, load: 4, soft: 1 }[action.def]);
+      if (action.dc) for (const e of r.log) if (e.ev === 'play' && e.call >= 0) {
+        count('full defense: snaps');
+        if (!Array.isArray(e.why)) flag('a snap against a full defensive call has no matchup reasons', `game ${si}.${g} step ${n}`);
+      }
       cur = r.root;
       if (r.done) break;
     }
@@ -257,7 +268,7 @@ idx.spots.forEach((sp, si) => {
       const ci = (si * 7 + n * 5) % calls.length;
       action = n % 9 === 0 && cur.down === 4 && cur.yl >= 35 ? { to_off: false, play: 'punt' } : n % 5 === 0 ? routePick(n + si)
         : { to_off: false, play: P.calls[ci].kind, call: calls[ci], oob: n % 2 === 0, tempo: cur.clock_running ? ['urgent', 'hurry', 'normal', 'milk'][n % 4] : undefined, pers: [undefined, 12, 21, 13][n % 4] };
-    } else if (cur.phase === 0) action = { to_def: false, def: ['blitz', 'load', 'soft'][n % 3] };
+    } else if (cur.phase === 0) action = n % 2 ? { to_def: false, def: ['blitz', 'load', 'soft'][n % 3] } : { to_def: false, dc: fullDef(n + si), read: true };
     else if (cur.phase === 1 && cur.pos === me) action = { pat: n % 4 ? 'xp' : 'two' };
     else if (cur.phase === 2 && cur.pos === me) action = { kick: ['return', 'touchback', 'deep'][n % 3] };
     const before = JSON.parse(JSON.stringify(cur)), tag = `ot ${si} step ${n}`;

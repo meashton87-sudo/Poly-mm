@@ -92,6 +92,7 @@
   // PB_LOOK_MIN plays), and the matchup of the two calls (dcMatch: a sum of football reasons) tilts the draw like
   // MATCH, capped at DC_CAP
   const DC_CAP = 1.5;
+  const DC_LEAN = 1.5;                // daily game: the offense's run/pass lean per point of matchup gap (dcLean)
   const DC = {
     pers: { heavy: [1, 3], base: [4, 4], nickel: [5, 5], dime: [6, 7] },         // defensive backs on the field
     front: { light: [1, 6], even: [7, 7], loaded: [8, 15] },                      // men in the box
@@ -770,10 +771,11 @@
     }
 
     // daily game: a call of this kind ('run' or 'pass'), as often as NFL play-callers make each in situation fk; against
-    // your defensive call (def) the offense checks into the calls that beat it (MATCH_AUDIBLE)
-    pickCall(kind, fk, u, def) {
+    // your defensive call (def, or the whole call dc) the offense checks into the calls that beat it (MATCH_AUDIBLE)
+    pickCall(kind, fk, u, def, dc) {
       const P = this.e.pb, nC = P.calls.length;
-      const w = (c) => P.freq[fk * nC + c] * (def ? Math.exp(MATCH_AUDIBLE * P.match[c][def]) : 1);
+      const tilt = (c) => (def ? Math.exp(MATCH_AUDIBLE * P.match[c][def]) : dc ? Math.exp(MATCH_AUDIBLE * dcMatch(P.calls[c].id, dc).s) : 1);
+      const w = (c) => P.freq[fk * nC + c] * tilt(c);
       let tot = 0;
       for (let c = 0; c < nC; c++) if (P.calls[c].kind === kind) tot += w(c);
       if (!(tot > 0)) return -1;
@@ -784,6 +786,44 @@
         if (acc >= u * tot) return c;
       }
       return last;
+    }
+    // daily game: an offense that reads your whole defensive call leans to the run or the pass by how each beats it
+    // here: DC_LEAN times the gap between its pass calls' and its run calls' matchups (as often as play-callers make
+    // each), on the logit of passing. A light box with dime gets run at; a stacked box with base gets thrown on
+    dcLean(fk, dc) {
+      const P = this.e.pb, nC = P.calls.length, m = { run: [0, 0], pass: [0, 0] };
+      for (let c = 0; c < nC; c++) {
+        const f = P.freq[fk * nC + c], k = P.calls[c].kind;
+        if (f > 0 && m[k]) { m[k][0] += f * dcMatch(P.calls[c].id, dc).s; m[k][1] += f; }
+      }
+      const avg = (x) => (x[1] > 0 ? x[0] / x[1] : 0);
+      return DC_LEAN * (avg(m.pass) - avg(m.run));
+    }
+    // what NFL defenses called in situation fk (the real plays of every call's pool, as often as play-callers make
+    // each call): the share of each personnel group, front, coverage and rush, as charted (DC). Null without charting
+    dcShares(fk) {
+      const P = this.e.pb, N = P.ngs, nC = P.calls.length;
+      if (!N || !N.dpers) return null;
+      const acc = { pers: {}, front: {}, cover: {}, rush: {} };
+      const inR = (x, [a, b]) => x >= a && x <= b;
+      const bump = (part, k, w) => { if (k !== undefined) acc[part][k] = (acc[part][k] || 0) + w; };
+      for (let c = 0; c < nC; c++) {
+        const f = P.freq[fk * nC + c];
+        if (!(f > 0)) continue;
+        const pool = P.poolOf[c * P.nFine + fk], lo = P.offsets[pool], hi = P.offsets[pool + 1], w = f / Math.max(hi - lo, 1);
+        for (let i = lo; i < hi; i++) {
+          const r = P.items[i], box = P.look ? P.look[r] >> 4 : 0, sh = N.cover[r] & 15, ru = N.rush[r] & 15, db = N.dpers[r];
+          if (db) bump('pers', Object.keys(DC.pers).find((k) => inR(db, DC.pers[k])), w);
+          if (box) bump('front', Object.keys(DC.front).find((k) => inR(box, DC.front[k])), w);
+          if (sh) bump('cover', Object.keys(DC.cover).find((k) => DC.cover[k].includes(sh)), w);
+          if (ru && P.calls[c].kind === 'pass') bump('rush', Object.keys(DC.rush).find((k) => inR(ru, DC.rush[k])), w);
+        }
+      }
+      for (const part of Object.keys(acc)) {
+        const t = Object.values(acc[part]).reduce((a, b) => a + b, 0);
+        for (const k of Object.keys(acc[part])) acc[part][k] = t ? acc[part][k] / t : 0;
+      }
+      return acc;
     }
     // the matchup of call c against the defense's call def ('blitz' | 'load' | 'soft'), or against a one-look mask
     matchOf(c, def) { return c >= 0 && def ? this.e.pb.match[c][def] : 0; }
@@ -1333,6 +1373,7 @@
         const pr = this.e.lib.passRate[fk];
         let lg = Math.log(pr / (1 - pr)) + ctx.proe[o] / Math.max(pr * (1 - pr), 0.1);
         if (aware && S.to[o] === 0 && tHalf <= CLOCK_PASS_WINDOW) lg += CLOCK_PASS_SHIFT;
+        if (act && act.read && dcValid(act.dc) && this.pbCdf) lg += this.dcLean(fk, act.dc);
         kind = u[1] < sigmoid(lg) ? PASS : RUN;
       }
       S.plays += 1;
@@ -1355,10 +1396,11 @@
             pbRow = this.samplePlaybook(o, callIdx, fk, u[2], act.oob ? 1 : oobWant, act.looks, match, act.route, who, act.pers);
           }
         } else if (act && dcValid(act.dc) && this.pbCdf && (kind === RUN || kind === PASS)) {
-          // Versus: no call in from the offense: a call of the kind it chose, as often as play-callers make it here
-          // (no check into a better one: the offense never sees the defense's call), against the defense's call
+          // no call from the offense: a call of the kind it chose, as often as play-callers make it here, against the
+          // defense's call. Versus: no check into a better one (the other phone never sees the defense's call); the
+          // daily game (act.read: the computer's offense reads your defense) checks into calls that beat it
           const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl);
-          callIdx = this.pickCall(kind === PASS ? 'pass' : 'run', fk, u[4], null);
+          callIdx = this.pickCall(kind === PASS ? 'pass' : 'run', fk, u[4], null, act.read ? act.dc : null);
           if (callIdx >= 0) {
             const m = dcMatch(this.e.pb.calls[callIdx].id, act.dc);
             match = m.s; why = m.why.slice(0, 3);
