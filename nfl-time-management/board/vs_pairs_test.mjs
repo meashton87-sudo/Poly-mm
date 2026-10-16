@@ -26,7 +26,7 @@ for (const t of T) {
 const R = VSCore.rng(+(process.argv[2] || 7));
 const pick = (a) => a[Math.floor(R() * a.length)];
 const calls = eng.pb.calls;
-const stats = { matches: 0, decisions: 0, plays: 0, rounds: {}, td: 0, fg: 0, two: 0, picks: { offense: 0, defense: 0, end: 0 }, homeWins: 0 };
+const stats = { matches: 0, decisions: 0, plays: 0, dcs: 0, why: 0, tricks: 0, rounds: {}, td: 0, fg: 0, two: 0, picks: { offense: 0, defense: 0, end: 0 }, homeWins: 0 };
 const t0 = Date.now();
 for (const h of T) {
   for (const a of T) {
@@ -41,7 +41,7 @@ for (const h of T) {
         let x = null;
         if (R() < 0.92) {
           if (role === 'pick') { x = { pick: pick(ms.cot.pick.end ? ['offense', 'defense'] : VSCore.PICKS) }; stats.picks[x.pick]++; }
-          else if (role === 'defense') x = { def: pick(['blitz', 'load', 'soft']) };
+          else if (role === 'defense') { x = { dc: { pers: pick(VSCore.DC.pers), front: pick(VSCore.DC.front), cover: pick(VSCore.DC.cover), rush: pick(VSCore.DC.rush) } }; stats.dcs++; }
           else if (role === 'pat') x = R() < 0.4 ? { two: true } : { action: { pat: 'xp' } };
           else if (R() < 0.05 && ms.root.down === 4) x = { action: { play: 'fg' } };
           else { const c = pick(calls); x = { action: { call: c.id, play: c.kind, looks: 0, ...(R() < 0.3 ? { pers: pick([11, 12, 21, 13]) } : {}) } }; }
@@ -56,6 +56,14 @@ for (const h of T) {
         stats.plays++;
         for (const e of out.res.log) { if (e.ev === 'pat' && e.two) stats.two++; if (e.ev === 'fg') { stats.fga = (stats.fga || 0) + 1; if (e.made) { stats.fg++; assert.strictEqual(ms.root.score[e.team] - before.root.score[e.team], 3, `${h}-${a}: a field goal is 3`); } } }
         if (out.res.log.some((e) => e.td || e.ev === 'td')) stats.td++;
+        // the defense's call reaches the engine, and the play says why the matchup went as it did
+        const dh = halves[1 - before.root.pos];
+        if (before.root.phase === VSCore.SNAP && dh && dh.dc) {
+          assert.deepStrictEqual(out.res.action.dc, dh.dc, `${h}-${a}: the defense's call is played`);
+          const pe = out.res.log.find((e) => e.ev === 'play' && e.call >= 0);
+          if (pe) { assert.ok(Array.isArray(pe.why), `${h}-${a}: the matchup's reasons`); stats.why++; }
+        }
+        if (out.res.action.seen !== undefined) stats.tricks++;
       }
       const r = ms.root;
       // the rules, every snap

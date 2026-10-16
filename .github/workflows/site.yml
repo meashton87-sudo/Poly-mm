@@ -117,7 +117,7 @@ jobs:
           rm -rf assets/pro && mkdir -p assets/pro && cp ../web/pro/*.json assets/pro/
           # Versus: the room plays the football with the same engine and data as the site (and the 32 teams)
           rm -rf assets/vs && mkdir -p assets/vs && cp ../_site_test/engine_data.pack ../_site_test/playbook.pack ../web/teams.json assets/vs/
-          node worker_test.mjs && node match_test.mjs && node lazy_sim_test.mjs && node vs_pairs_test.mjs "$GITHUB_RUN_NUMBER"
+          node worker_test.mjs && node match_test.mjs && node lazy_sim_test.mjs && node vs_pairs_test.mjs "$GITHUB_RUN_NUMBER" && node vs_balance_test.mjs
           node vs_stress.mjs 400 "$GITHUB_RUN_NUMBER" 24       # 400 whole matches, real engine, phones misbehaving: all must check out
           if [ -n "$SITE_DOMAIN" ]; then sed -i "s#^ALLOWED_ORIGINS = .*#ALLOWED_ORIGINS = \"https://$SITE_DOMAIN,https://www.$SITE_DOMAIN,https://nfl2mindrill.pages.dev,https://nfl2mindrill-pro-preview.pages.dev\"#" wrangler.toml; fi
           npx --yes wrangler@4.144.0 deploy

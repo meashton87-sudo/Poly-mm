@@ -20,7 +20,9 @@
   'use strict';
   const SNAP = 0, PAT = 1, KICKOFF = 2, DONE = 3;      // engine.js phases
   const COT_T = 900;           // the engine's clock in overtime: held here, never run (college overtime has none)
-  const LOOKS = { blitz: (1 << 1) | (1 << 3), load: 1 << 2, soft: 1 << 0 };    // engine.js DEF_LOOKS
+  // the defense's call (engine.js DC): personnel, front, coverage, pass rush
+  const DC = { pers: ['heavy', 'base', 'nickel', 'dime'], front: ['light', 'even', 'loaded'],
+    cover: ['c0', 'c1', '2man', 'c2', 'c3', 'c4', 'c6', 'prevent'], rush: [3, 4, 5, 6] };
   const PICKS = ['offense', 'defense', 'end'];
   const PLAYS = new Set(['run', 'pass', 'kneel', 'spike', 'fg', 'punt']);     // engine.js PLAY
   const WHO = new Set(['RB', 'WR', 'TE']);                                    // engine.js WHO_CODE
@@ -55,7 +57,7 @@
   // the coin toss (toss: the team that won it, 0 or 1, the server's coin); the winner chooses first
   function start(toss) {
     toss = toss ? 1 : 0;
-    return { root: possRoot(toss, 1, [0, 0], [1, 1]), seq: 0, over: false, winner: -1,
+    return { root: possRoot(toss, 1, [0, 0], [1, 1]), seq: 0, over: false, winner: -1, tricks: [0, 0],
       cot: { round: 1, idx: 0, order: [toss, 1 - toss], score0: [0, 0], toss, pick: { team: toss, end: false } } };
   }
   const chooser = (c) => (c.round % 2 ? c.toss : 1 - c.toss);
@@ -81,7 +83,6 @@
     if (typeof a.call === 'string' && pb && pb.callIndex && pb.callIndex[a.call] !== undefined) o.call = a.call;
     if (typeof a.play === 'string' && PLAYS.has(a.play)) o.play = a.play;
     if (a.oob === true) o.oob = true;
-    if (Number.isInteger(a.looks) && a.looks >= 0 && a.looks < 16) o.looks = a.looks;
     if (Number.isInteger(a.pers) && a.pers >= 10 && a.pers <= 33) o.pers = a.pers;
     if (typeof a.route === 'string' && pb && pb.routeNames && pb.routeNames.includes(a.route)) o.route = a.route;
     if (typeof a.who === 'string' && WHO.has(a.who)) o.who = a.who;
@@ -89,12 +90,18 @@
     if (a.pat === 'two' || a.pat === 'xp') o.pat = a.pat;
     return o;
   }
+  // the defense's call, cleaned: every part known, or nothing (the default)
+  function cleanDef(d) {
+    if (!d || typeof d !== 'object') return null;
+    const o = { pers: d.pers, front: d.front, cover: d.cover, rush: +d.rush };
+    return DC.pers.includes(o.pers) && DC.front.includes(o.front) && DC.cover.includes(o.cover) && DC.rush.includes(o.rush) ? o : null;
+  }
   // a seat's half of a decision, cleaned for its role (null: not its decision, or nothing usable: the default)
   function cleanHalf(ms, seat, h, pb) {
     const r = role(ms, seat);
     if (!r || !h || typeof h !== 'object') return null;
     if (r === 'pick') return PICKS.includes(h.pick) && !(h.pick === 'end' && ms.cot.pick.end) ? { pick: h.pick } : null;
-    if (r === 'defense') return LOOKS[h.def] ? { def: h.def } : null;
+    if (r === 'defense') { const dc = cleanDef(h.dc); return dc ? { dc } : null; }
     if (r === 'pat') {
       if (h.two === true) return { two: true };
       const a = cleanAction(h.action, pb);
@@ -102,6 +109,9 @@
     }
     if (h.timeout === true) return { timeout: true };
     const a = cleanAction(h.action, pb);
+    // the calls the page offers here only (game.js callOptions): a sneak needs 3 yards or less to go; no Hail Mary
+    // (overtime has no clock to beat)
+    if (a && (a.call === 'hail_mary' || (a.call === 'qb_sneak' && ms.root.ytg > 3))) { delete a.call; delete a.route; delete a.who; }
     return a ? { action: a } : null;
   }
 
@@ -182,13 +192,19 @@
     if (r.phase === SNAP) {
       a = off && off.action ? { ...off.action } : (r.try2 ? { pat: 'two' } : {});
       if (r.try2) a.pat = 'two';
-      const d = def && LOOKS[def.def] ? def.def : null;
-      if (d) { if (a.call !== undefined) a.looks = LOOKS[d]; else if (!r.try2) a.def = d; }
+      if (def && def.dc) a.dc = { ...def.dc };
+      // a trick play the defense has seen this match works less well (engine.js dcMatch 'seen_it')
+      const trick = typeof a.call === 'string' && a.call.startsWith('trick');
+      if (trick) a.seen = (ms.tricks || [0, 0])[r.pos];
       a.to_off = false; a.to_def = false;
     } else a = off && off.action ? { ...off.action } : { pat: 'xp' };
     ms.seq += 1;
     const res = step(r.try2 || r, a, seed >>> 0);
     res.action = a;
+    if (r.phase === SNAP && typeof a.call === 'string' && a.call.startsWith('trick')) {
+      ms.tricks = (ms.tricks || [0, 0]).slice();
+      ms.tricks[r.pos] += 1;
+    }
     if (a.philly) res.log.forEach((x) => { if (x.ev === 'pat') x.philly = true; });
     ms.root = res.root;
     if (res.done) ms.root.phase = DONE;
@@ -217,6 +233,20 @@
     }
     return out;
   }
+  // the snap as the defense called it, for the field and the play-by-play: its shell, its rush and its box (the real
+  // play behind the outcome was run against that defense when enough of them were, engine.js sampleVsDefense)
+  const SHELL = { c0: 'cover0', c1: 'cover1', '2man': '2man', c2: 'cover2', c3: 'cover3', c4: 'cover4', c6: 'cover6', prevent: 'prevent' };
+  const MAN = new Set(['c0', 'c1', '2man']);
+  function called(e, dc) {
+    e.dc = { ...dc };
+    e.shell = SHELL[dc.cover];
+    e.man = MAN.has(dc.cover);
+    const lo = { 3: 3, 4: 4, 5: 5, 6: 6 }[dc.rush], hi = dc.rush === 6 ? 7 : lo;
+    if (e.kind === 1 && !(e.rushers >= lo && e.rushers <= hi)) e.rushers = lo;
+    const box = { light: [5, 6, 6], even: [7, 7, 7], loaded: [8, 9, 8] }[dc.front];
+    e.look = { ...(e.look || {}), blitz: dc.rush >= 5 };
+    if (!(e.look.box >= box[0] && e.look.box <= box[1])) e.look.box = box[2];
+  }
   // the engine's step for a match, as apply() wants it: one simulator for the two teams, the plays described
   // (makeSim: how to build it; the server's is board/lazy_sim.js, the same plays in a fraction of the memory)
   function stepper(eng, pool, home, away, makeSim) {
@@ -224,7 +254,10 @@
     const sim = makeSim ? makeSim(eng, ctx) : eng.simulator(ctx);
     return (root, action, seed) => {
       const r = sim.step(root, { action, seed });
-      r.log.forEach((e) => { if (e.ev === 'play' && e.row >= 0) Object.assign(e, describe(eng.pb, e.row)); });
+      r.log.forEach((e) => {
+        if (e.ev === 'play' && e.row >= 0) Object.assign(e, describe(eng.pb, e.row));
+        if (e.ev === 'play' && action && action.dc) called(e, action.dc);
+      });
       return r;
     };
   }
@@ -253,8 +286,8 @@
     return walk(JSON.parse(new TextDecoder().decode(u8.subarray(8, base))));
   }
 
-  const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, LOOKS, PICKS, hash, rng, buildGame, possRoot, start, chooser, need, role,
-    cleanAction, cleanHalf, apply, after, describe, stepper, unpack };
+  const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, hash, rng, buildGame, possRoot, start, chooser, need, role,
+    cleanAction, cleanDef, cleanHalf, apply, after, describe, stepper, unpack };
   if (typeof module !== 'undefined' && module.exports) module.exports = VSCore;
   else global.VSCore = VSCore;
 })(typeof self !== 'undefined' ? self : this);

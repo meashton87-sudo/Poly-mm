@@ -7,9 +7,10 @@
 // (web/vs_core.js), and sends the result and the new state to both. Nothing a phone says can change the score: it
 // only ever sends a call, and the room checks that call against the playbook.
 //
-// The room keeps the play clock: a decision not in by its deadline (PLAY_MS after the last snap) is played as the
-// default (null: the engine's own call). A player who misses AFK_LIMIT decisions in a row, or whose phone is gone
-// for FORFEIT_MS, forfeits. A ranked match is rated by the room when it ends (the ladder object), never by a phone.
+// The room keeps the play clock: each player has DECIDE_MS to call, from the moment the call comes up on the phone
+// ({t:'ready'}), and never past PLAY_MS after the last snap (WATCH_MS to watch it, then the clock); a half not in by
+// its seat's deadline is played as the default (null: the engine's own call). A player who misses AFK_LIMIT
+// decisions in a row, or whose phone is gone for FORFEIT_MS, forfeits. A ranked match is rated by the room when it ends (the ladder object), never by a phone.
 //
 //   GET  /vs/ws?room=CODE&key=DEVICEKEY&mode=M&since=N (WebSocket)  the room: seat by device, the calls, the plays
 //   GET  /vs/queue?key=DEVICEKEY&mode=ranked|casual&team=T&name=X (WebSocket)  matchmaking: a room when paired
@@ -17,10 +18,12 @@
 //   POST /vs/me {key}                                                  your rating, record and rank
 //
 // Client -> room: {t:'team', team, name}  this seat's team (once; {t:'taken'} if the other seat has it)
+//                 {t:'ready', n}  decision n is up on the phone: its play clock starts ({t:'clock'} back)
 //                 {t:'half', n, half}  its half of decision n    {t:'rematch'}  {t:'ping'}
-// Room -> client: {t:'hello', seat, mode, teams, names, full, online, off, phase, n, ms, decisions, deadline, now,
+// Room -> client: {t:'hello', seat, mode, teams, names, full, online, off, phase, n, ms, decisions, deadline, dl, now,
 //                   result, rated}   on connecting (decisions: the last ones from `since`, to catch up)
 //                 {t:'start', ms, deadline, now}  {t:'step', n, halves, kind, res, notes, ms, deadline, now, result}
+//                 {t:'clock', n, deadline, now}  this seat's deadline for decision n (dl: both seats')
 //                 {t:'locked', n, seat}  {t:'peer', online, off, now}  {t:'teams', teams, names}  {t:'taken', team}
 //                 {t:'over', result}  {t:'rated', rated}  {t:'rematch-ask', seat}  {t:'rematch', room}
 // Lobby -> client: {t:'queued', mode, size, wait, rating}  {t:'match', room, mode}
@@ -28,15 +31,20 @@ import NFLClockEngine from '../web/engine.js';
 import VSCore from '../web/vs_core.js';
 import { lazySimulator } from './lazy_sim.js';
 
+// each seat's deadline for the decision in play (a room from before the per-seat clock: the decision's)
+const dls = (R) => (Array.isArray(R.dl) && R.dl.length === 2 ? R.dl.slice() : [R.deadline, R.deadline]);
+
 export const ROOM_RE = /^[A-HJ-KM-NP-Z2-9]{6}$/;
 const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const KEY_RE = /^[A-Za-z0-9_-]{16,128}$/;
 const TEAM_RE = /^[A-Z]{2,3}$/;
 const MODES = ['ranked', 'casual', 'friend'];
-export const PLAY_MS = 45_000;             // a decision's deadline after the last snap: about 15 s to watch it, 30 to call
-export const FIRST_MS = 75_000;            // the first decision (the coin toss): the intro too
+export const WATCH_MS = 15_000;            // after a snap: the play to watch (at most) before the play clock runs anyway
+export const DECIDE_MS = 30_000;           // the play clock: 30 seconds to call, from the moment the call comes up
+export const PLAY_MS = WATCH_MS + DECIDE_MS;    // a decision's last moment after the last snap
+export const FIRST_MS = 75_000;            // the first decision (the coin toss): the intro too, then the clock
 export const FORFEIT_MS = 60_000;          // a phone gone this long in a live match: that side forfeits
-export const AFK_LIMIT = 3;                // decisions in a row left to the play clock: that side forfeits
+export const AFK_LIMIT = 2;                // decisions in a row left to the play clock: that side forfeits
 export const NOSHOW_MS = 60_000;           // a matched room nobody filled (or no team picked) in this long: called off
 const ROOM_TTL_MS = 6 * 3600_000;          // a room is cleared this long after it was made
 const MAX_MSG = 4096, MAX_N = 2000, CATCHUP = 40;
@@ -115,7 +123,7 @@ export class Match {
     const decisions = [];
     for (let i = since; i < R.n; i++) { const d = await this.ctx.storage.get(`d:${i}`); delete d.seed; decisions.push(d); }
     server.send(JSON.stringify({ t: 'hello', seat, mode: R.mode, room: R.room, teams: R.teams, names: R.names, full: R.seen[0] && R.seen[1],
-      online: this.online(), off: R.off, phase: R.phase, n: R.n, ms: R.ms, ms0: since === 0 ? R.ms0 || null : null, decisions, deadline: R.deadline, now,
+      online: this.online(), off: R.off, phase: R.phase, n: R.n, ms: R.ms, ms0: since === 0 ? R.ms0 || null : null, decisions, deadline: R.deadline, dl: dls(R), now,
       result: R.result, rated: R.rated }));
     this.broadcast({ t: 'peer', online: this.online(), off: R.off, full: R.seen[0] && R.seen[1], now });
     const pend = await this.ctx.storage.get('pend');
@@ -160,16 +168,18 @@ export class Match {
     R.phase = 'live';
     R.n = 0;
     R.deadline = now + FIRST_MS;
+    R.dl = [R.deadline, R.deadline];
     R.started = now;
     R.defaults = [0, 0];
-    this.broadcast({ t: 'start', ms: R.ms, deadline: R.deadline, now });
+    this.broadcast({ t: 'start', ms: R.ms, deadline: R.deadline, dl: R.dl, now });
   }
 
   // the next time the room has to act: a deadline, a forfeit, a no-show, a rating to retry, the end of the room
   async schedule(R) {
     const t = [R.created + ROOM_TTL_MS];
     if (R.phase === 'live') {
-      t.push(R.deadline);
+      const pend = await this.ctx.storage.get('pend'), dl = dls(R);
+      for (const s of VSCore.need(R.ms)) if (!(pend && pend.n === R.n && s in pend.halves)) t.push(dl[s]);    // the calls still out
       for (const s of [0, 1]) if (R.off[s]) t.push(R.off[s] + FORFEIT_MS);
     }
     if (R.phase === 'wait' && R.pre) t.push(R.created + NOSHOW_MS);
@@ -212,6 +222,16 @@ export class Match {
       return;
     }
     if (m.t === 'rematch') return this.rematch(R, seat);
+    if (m.t === 'ready') {
+      // the call is up on this phone: its 30 seconds start (never later than the decision's last moment)
+      if (R.phase !== 'live' || m.n !== R.n || !VSCore.need(R.ms).includes(seat)) return;
+      R.dl = dls(R);
+      R.dl[seat] = Math.min(R.dl[seat], now + DECIDE_MS);
+      await this.save(R);
+      try { ws.send(JSON.stringify({ t: 'clock', n: R.n, deadline: R.dl[seat], now })); } catch (e) { /* closing */ }
+      await this.schedule(R);
+      return;
+    }
     if (m.t !== 'half' || R.phase !== 'live' || m.n !== R.n || R.n >= MAX_N) return;
     if (!VSCore.need(R.ms).includes(seat)) return;
     let pend = await this.ctx.storage.get('pend');
@@ -240,13 +260,14 @@ export class Match {
     R.ms = out.ms;
     R.n = pend.n + 1;
     R.deadline = now + PLAY_MS;
+    R.dl = [R.deadline, R.deadline];
     let result = null;
     if (out.ms.over) {
       R.phase = 'over';
       result = R.result = { winner: out.ms.winner, by: 'score', score: out.ms.root.score.slice(), round: out.ms.cot.round };
     }
     await this.save(R);
-    this.broadcast({ t: 'step', ...d, deadline: R.deadline, now, result });
+    this.broadcast({ t: 'step', ...d, deadline: R.deadline, dl: R.dl, now, result });
     if (result) { this.steppers.clear(); return this.rate(R); }
     const afk = [0, 1].filter((s) => R.defaults[s] >= AFK_LIMIT);
     if (afk.length === 2) return this.finish(R, { winner: -1, by: 'abandoned' });
@@ -328,7 +349,10 @@ export class Match {
         return this.finish(R, first < 0 ? { winner: -1, by: 'abandoned' } : { winner: 1 - first, by: 'forfeit', loser: first, why: 'left' });
       }
       if (late.length === 1) return this.finish(R, { winner: 1 - late[0], by: 'forfeit', loser: late[0], why: 'left' });
-      if (now >= R.deadline - 50) {
+      // a seat's play clock out: its call is the default; every call in: the snap
+      const pend0 = await this.ctx.storage.get('pend'), dl0 = dls(R);
+      const out0 = (p, dl, r) => VSCore.need(r.ms).filter((s) => !(p && p.n === r.n && s in p.halves) && now >= dl[s] - 50);
+      if (out0(pend0, dl0, R).length) {
         let E;
         try { E = await loadEngine(this.env); } catch (e) {
           console.error('vs engine', e && e.message);
@@ -342,8 +366,13 @@ export class Match {
         if (!R2 || R2.phase !== 'live' || R2.n !== R.n) return R2 && this.schedule(R2);
         let pend = await this.ctx.storage.get('pend');
         if (!pend || pend.n !== R2.n) pend = { n: R2.n, halves: {} };
-        for (const s of VSCore.need(R2.ms)) if (!(s in pend.halves)) { pend.halves[s] = null; R2.defaults[s] += 1; }
-        return this.commit(R2, pend, E, Date.now());
+        const late = out0(pend, dls(R2), R2);
+        for (const s of late) { pend.halves[s] = null; R2.defaults[s] += 1; }
+        if (VSCore.need(R2.ms).every((s) => s in pend.halves)) return this.commit(R2, pend, E, Date.now());
+        await this.ctx.storage.put('pend', pend);
+        await this.save(R2);
+        for (const s of late) this.broadcast({ t: 'locked', n: pend.n, seat: s });
+        return this.schedule(R2);
       }
     }
     if (R.phase === 'wait' && R.pre && now >= R.created + NOSHOW_MS) {

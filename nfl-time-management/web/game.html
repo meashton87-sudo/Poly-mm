@@ -340,6 +340,15 @@ a.chip { color: var(--ink); text-decoration: none; display: inline-block; }
 .segb:hover { background: var(--key); }
 .segb.on { background: var(--ink); color: var(--paper); }
 .segb.on small { color: var(--paper); opacity: .75; }
+.seg.n { grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); }
+.vdef { display: grid; gap: 7px; }
+.vdef .vrow { grid-template-columns: 74px minmax(0, 1fr); gap: 6px; }
+.vdef .lab { letter-spacing: .04em; font-size: 10.5px; }
+.vdef .segb b { font-size: 12px; letter-spacing: .02em; }
+.vdef .segb { min-height: 42px; padding-inline: 2px; }
+.vdef .segb small { font-size: 10px; line-height: 1.15; }
+.vdefsum { font: 800 13px/1.3 var(--body); color: var(--ink); text-wrap: balance; }
+.vdeftip { margin: 0; font: 500 12.5px/1.4 var(--body); color: var(--muted); text-wrap: pretty; }
 .toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; background: var(--card); }
 .toggle .lab { font-weight: 600; font-size: 14px; }
 .toggle .lab small { display: block; color: var(--muted); font-weight: 500; font-size: 12px; }

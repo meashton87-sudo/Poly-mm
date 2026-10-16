@@ -104,7 +104,7 @@ FTN_LOOK = ["starting_hash", "qb_location", "n_defense_box", "n_blitzers"]
 PART_URL = ("https://github.com/nflverse/nflverse-data/releases/download/pbp_participation/"
             "pbp_participation_{season}.parquet")
 PART_COLS = ["route", "defense_man_zone_type", "defense_coverage_type", "number_of_pass_rushers", "was_pressure", "offense_personnel",
-             "time_to_throw"]
+             "time_to_throw", "defense_personnel"]
 ROUTES = ["", "go", "post", "corner", "out", "deep_out", "in", "slant", "cross", "hitch", "screen", "flat", "wheel",
           "angle"]
 ROUTE_CODE = {"GO": 1, "POST": 2, "CORNER": 3, "QUICK OUT": 4, "OUT": 4, "DEEP OUT": 5, "IN/DIG": 6, "IN": 6,
@@ -179,7 +179,8 @@ def _participation(seasons=SEASONS) -> pd.DataFrame:
 
 def _charting(s: pd.DataFrame) -> dict:
     """The NGS charting packed for the browser (0 = not charted): route code; coverage shell (bits 0-3) with man (1)
-    or zone (2) in bits 4-5; pass rushers (bits 0-3), pressure (4) and charted (5); time to throw in tenths."""
+    or zone (2) in bits 4-5; pass rushers (bits 0-3), pressure (4) and charted (5); time to throw in tenths; the
+    offense's personnel; the defense's (dpers: defensive backs on the field, defense_db_count)."""
     col = lambda c: s[c] if c in s else pd.Series(np.nan, index=s.index)
     route = col("route").map(ROUTE_CODE).fillna(0).to_numpy().astype(np.uint8)
     shell = col("defense_coverage_type").map(SHELL_CODE).fillna(0).to_numpy().astype(np.uint8)
@@ -191,7 +192,26 @@ def _charting(s: pd.DataFrame) -> dict:
     ttt = pd.to_numeric(col("time_to_throw"), errors="coerce")
     ttt = np.clip(np.round(ttt.fillna(0).to_numpy() * 10), 0, 255).astype(np.uint8)
     return {"route": route, "cover": shell | (mz << 4), "rush": rushers | (pressure << 4) | (charted << 5), "ttt": ttt,
-            "pers": personnel_code(col("offense_personnel"))}
+            "pers": personnel_code(col("offense_personnel")), "dpers": defense_db_count(col("defense_personnel"))}
+
+
+DB_POS = {"CB", "S", "FS", "SS", "DB", "SAF"}
+
+
+def defense_db_count(p: pd.Series) -> np.ndarray:
+    """Defensive backs on the field ("4 DL, 2 LB, 5 DB" or, from 2025, "3 CB, 2 DT, 1 FS, 2 ILB, 2 OLB, 1 SS": 5, a
+    nickel defense), 1-7; 0 not charted or not 11 defenders."""
+    def code(v):
+        if not isinstance(v, str) or not v:
+            return 0
+        n, db = 0, 0
+        for part in v.split(","):
+            k = part.strip().split(" ")
+            if len(k) == 2 and k[0].isdigit():
+                n += int(k[0])
+                db += int(k[0]) if k[1] in DB_POS else 0
+        return min(max(db, 1), 7) if n == 11 else 0
+    return p.map(code).fillna(0).to_numpy().astype(np.uint8)
 
 
 PERSONNEL = (11, 12, 21, 13, 10, 22)   # the groupings the game offers / knows (RBs then TEs; FBs count as backs)
@@ -613,8 +633,9 @@ def export(lib: pd.DataFrame, path) -> dict:
             # for the animation only: air yards (-128 = not thrown), carrier group (bits 0-2) and broken tackle (bit 3)
             "air": _b64(np.where(lib["air"].isna(), -128, np.clip(lib["air"].fillna(0), -20, 100)).astype(np.int8)),
             "carry": _b64((lib["who"].to_numpy().astype(np.uint8) | (lib["bt"].to_numpy().astype(np.uint8) << np.uint8(3)))),
-            # the animation: NGS route, coverage, pass rush and time to throw (_charting)
-            **{k: _b64(lib[f"ngs_{k}"].to_numpy().astype(np.uint8)) for k in ("route", "cover", "rush", "ttt", "pers")},
+            # the animation: NGS route, coverage, pass rush and time to throw (_charting); Versus' defensive calls
+            # draw against the real coverage, rush, box and defensive personnel
+            **{k: _b64(lib[f"ngs_{k}"].to_numpy().astype(np.uint8)) for k in ("route", "cover", "rush", "ttt", "pers", "dpers")},
         },
         "routes": ROUTES, "shells": SHELLS,
         "events": EVENTS, "penalties": pen_names,

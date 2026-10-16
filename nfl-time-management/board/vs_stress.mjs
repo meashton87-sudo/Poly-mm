@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { World, FakeClient } from './vs_world.mjs';
-import { PLAY_MS, FIRST_MS, FORFEIT_MS, NOSHOW_MS, ELO, loadEngine } from './match.js';
+import { PLAY_MS, WATCH_MS, DECIDE_MS, FIRST_MS, FORFEIT_MS, NOSHOW_MS, ELO, loadEngine } from './match.js';
 import VSCore from '../web/vs_core.js';
 import { lazySimulator } from './lazy_sim.js';
 
@@ -84,6 +84,8 @@ class Bot {
       this.ms = m.ms; this.n = m.n + 1;
       if (m.result) return this.finish(m.result);
       this.think();
+    } else if (m.t === 'clock') {
+      clocks.set(`${this.room}:${m.n}:${this.seat}`, m.deadline);     // the room's word on this seat's 30 seconds
     } else if (m.t === 'over') {
       this.finish(m.result);
     } else if (m.t === 'rematch') {
@@ -111,7 +113,11 @@ class Bot {
     if (!need.includes(this.seat) || this.answered === this.n) return;
     const n = this.n;
     this.answered = n;
-    const late = chance(this.mood.slow), delay = late ? between(PLAY_MS - 5000, PLAY_MS + 15000) : between(300, 12000);
+    // the call comes up after the play is watched (a phone that never says so: the decision's last moment rules)
+    const up = between(800, WATCH_MS), late = chance(this.mood.slow);
+    const delay = up + (late ? between(DECIDE_MS - 5000, DECIDE_MS + 15000) : between(300, 20000));
+    if (!chance(0.1)) w.later(up, () => { if (!this.over && this.live() && this.n === n) this.c.send({ t: 'ready', n }); });
+    if (chance(0.03)) w.later(up + 2000, () => { if (this.live()) this.c.send({ t: 'ready', n: n + 1 }); });   // a confused one
     w.later(delay, () => this.answer(n));
     // the phone drops sometimes while thinking: back after a while (or never: a quitter)
     if (chance(this.mood.drop)) {
@@ -129,9 +135,10 @@ class Bot {
     const role = VSCore.role(this.ms, this.seat);
     if (!role) return;
     let half;
-    if (chance(this.mood.junk)) { stats.junk++; half = pick([null, 'x', 42, { pick: 'sideways' }, { def: 'prevent' }, { action: { call: 'nope', play: 'teleport', looks: -5, pers: 999 } }, { two: 'yes' }, { action: [] }]); }
+    if (chance(this.mood.junk)) { stats.junk++; half = pick([null, 'x', 42, { pick: 'sideways' }, { def: 'prevent' }, { dc: { pers: 'nickel', front: 'even', cover: 'c9', rush: 4 } }, { dc: { pers: 'x', rush: 5 } }, { dc: 'blitz' },
+      { action: { call: 'nope', play: 'teleport', looks: -5, pers: 999 } }, { two: 'yes' }, { action: [] }]); }
     else if (role === 'pick') half = { pick: pick(this.ms.cot.pick.end ? ['offense', 'defense'] : VSCore.PICKS) };
-    else if (role === 'defense') half = { def: pick(['blitz', 'load', 'soft']) };
+    else if (role === 'defense') half = { dc: { pers: pick(VSCore.DC.pers), front: pick(VSCore.DC.front), cover: pick(VSCore.DC.cover), rush: pick(VSCore.DC.rush) } };
     else if (role === 'pat') half = chance(0.45) ? { two: true } : { action: { pat: 'xp' } };
     else if (chance(0.04)) half = { timeout: true };
     else if (chance(0.06)) half = { action: { play: pick(['fg', 'punt', 'kneel', 'spike']), to_off: false } };
@@ -145,7 +152,7 @@ class Bot {
     if (chance(0.02)) this.c.send({ t: 'half', n: n + 3, half: {} });                            // a confused phone
   }
 }
-const friends = [], results = new Map(), phoneFinal = [], leaks = [];
+const friends = [], results = new Map(), phoneFinal = [], leaks = [], clocks = new Map();
 const T0 = w.now;
 const bots = Array.from({ length: PLAYERS }, (_, i) => new Bot(i));
 // friend matches: two bots waiting for a friend get a room code
@@ -180,8 +187,14 @@ function checkRoom(code, o, room) {
   for (let i = 0; i < room.n; i++) {
     const d = o.store.get(`d:${i}`);
     assert.ok(d && d.n === i, `${code}: decision ${i} kept`);
-    const limit = i === 0 ? room.started + FIRST_MS : prevAt + PLAY_MS;
+    // the decision's last moment, or sooner: each seat's own 30 seconds from its call coming up, once every seat
+    // still out had one
+    const cap = i === 0 ? room.started + FIRST_MS : prevAt + PLAY_MS;
+    const dls = VSCore.need(ms).map((s) => Math.min(cap, clocks.get(`${code}:${i}:${s}`) ?? cap));
+    const limit = Math.max(...dls);
     assert.ok(d.at <= limit + 100, `${code}: decision ${i} played ${d.at - limit} ms after its deadline`);
+    for (const x of dls) assert.ok(x <= cap, `${code}: decision ${i}: a seat's clock past the decision's last moment`);
+    if (dls.some((x) => x < cap)) stats.clocked = (stats.clocked || 0) + 1;
     prevAt = d.at;
     for (const s of VSCore.need(ms)) if (d.halves[s] == null) stats.defaults++;
     const out = VSCore.apply(ms, d.halves, step, d.seed);
