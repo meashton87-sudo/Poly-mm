@@ -1021,6 +1021,9 @@
   const CALL_ROUTE = { quick: ['slant', 'out', 'hitch'], quick_middle: ['slant', 'cross', 'in'], screen: ['screen'],
     deep: ['go', 'post', 'corner', 'deep_out', 'in'], deep_middle: ['post', 'in', 'go'], pa: ['in', 'post', 'cross', 'deep_out'],
     roll: ['out', 'cross', 'corner'], hail: ['go'], rpo: ['slant', 'hitch', 'out'], flea: ['go', 'post'], tpass: ['go', 'post', 'corner'] };
+  // the timing routes: how far past the break (yards along it) the ball meets him at the soonest (a hitch: at the end
+  // of his step back to the ball)
+  const BREAK_OUT = { hitch: 99, out: 2.5, deep_out: 2.5, in: 2 };
   const OTHER_ROUTES = { short: ['hitch', 'out', 'slant', 'cross', 'in'], deep: ['go', 'post', 'in', 'corner', 'deep_out', 'hitch'],
     hail: ['go'] };
   const GROUP = { QB: 'QB', RB: 'RB', WR: 'WR', TE: 'TE', LT: 'OL', LG: 'OL', C: 'OL', RG: 'OL', RT: 'OL', T: 'OL', G: 'OL',
@@ -1617,10 +1620,36 @@
       const deep = held ? Math.min(air, e.yards ?? air) : air;
       const r = Motion.routeOnField(routeName, deep, tgt.b.x, out, dir, L0, Math.abs(tgt.b.y - L0), R());
       let catchPt = [inX(r.catchAt[0]), inL(fwd(L0, deep))];
-      let tCatch = tThrow + flight(deep);
-      const rpts = r.toCatch.slice(0, -1).map((p) => [inX(p[0]), inL(p[1])]).concat([catchPt]);
+      let rpts = r.toCatch.slice(0, -1).map((p) => [inX(p[0]), inL(p[1])]).concat([catchPt]);
       const tStart = tgt === qb ? T_SNAP + 0.6 : tgt === K.rb && kind !== 'screen' ? 0.5 : REACT_OFF;
-      const tp = plan(tgt, rpts, { T: tCatch - tStart, v1: routeName === 'hitch' || routeName === 'screen' ? 0 : undefined });
+      // the ball's flight: the length of the throw, from where the quarterback lets it go (on his drop), at the
+      // ball's speed (flight: about 24 yards a second, deep balls lofted a little slower)
+      const qRel = passer === qb && !philly && kind !== 'flea' ? qPlan.at(Math.max(0, tThrow - T_SNAP)) : null;
+      const flightTo = (c) => (qRel ? Math.hypot(c[0] - qRel[0], c[1] - qRel[1]) / (25 - 0.09 * clip(deep, 0, 60)) : flight(deep));
+      let tCatch = tThrow + flightTo(catchPt), v1 = routeName === 'hitch' || routeName === 'screen' ? 0 : undefined, timed = true;
+      // a timing route (a hitch, an out, a dig, a deep out): the throw (when it was charted) is thrown on time, before
+      // he turns, and the ball meets him coming out of his break: caught where he is, running flat out, when it gets
+      // there, a step or two past the break (never at the end of the route with the ball hanging in the air while
+      // he gets there). Thrown late, he is further along the break (a hitch sits down facing the passer and waits).
+      const cutK = BREAK_OUT[routeName];
+      if (cutK != null && !thrownAway && rpts.length >= 3) {
+        const top = rpts[1], tail = [inX(r.catchAt[0]), r.catchAt[1]];
+        const legL = Math.hypot(tail[0] - top[0], tail[1] - top[1]), [ux, uy] = unit(tail[0] - top[0], tail[1] - top[1]);
+        const ptAt = (k) => [inX(top[0] + ux * k), catchPt[1]];
+        for (let k = Math.min(cutK, legL); ; k = Math.min(legL, k + 0.5)) {
+          const c = ptAt(k), arr = tStart + plan(tgt, [rpts[0], top, c]).T, ball = tThrow + flightTo(c);
+          catchPt = c; tCatch = Math.max(ball, arr);
+          if (arr >= ball - 0.05 || k >= legL) break;
+        }
+        rpts = [rpts[0], top, catchPt];
+        // a hitch on time comes back to the ball; early, he settles facing the passer, and it comes to him
+        if (routeName === 'hitch') {
+          const sit = plan(tgt, rpts, { v1: 0 });
+          v1 = tStart + sit.T <= tCatch ? 0 : undefined;
+          timed = v1 === undefined;
+        }
+      }
+      const tp = plan(tgt, rpts, { T: timed ? tCatch - tStart : undefined, v1 });
       if (tp.late > 0.02) tCatch += tp.late;
       follow(tgt, tStart, tp);
       // the rush and the line
