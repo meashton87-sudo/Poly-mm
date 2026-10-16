@@ -46,6 +46,13 @@ DRIVE_RESULT = {"Touchdown": "touchdown", "Field goal": "field goal", "Punt": "p
 # wrong game. With the file, a build keeps the same spots in the same order on the same days. Extend it only by
 # adding days at the end.
 FROZEN = config.ROOT / "src" / "nflclock" / "daily_schedule.json"
+# spots built by hand (a game the play-by-play does not have: college), with both teams' records: a featured day can
+# name one by id. They go after every other spot, so no frozen index moves.
+CUSTOM = config.ROOT / "src" / "nflclock" / "custom_spots.json"
+
+
+def custom_spots() -> dict:
+    return {k: v for k, v in json.loads(CUSTOM.read_text()).items() if not k.startswith("_")} if CUSTOM.exists() else {}
 
 
 def freeze(game_json=WEB / "game.json", out=FROZEN) -> dict:
@@ -159,7 +166,8 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
     P.export(lib, WEB / "playbook.json")
     frozen = json.loads(FROZEN.read_text()) if FROZEN.exists() else None
     featured = (frozen or {}).get("featured", {})
-    keep = {**dict(map(tuple, frozen["spots"])), **{f["id"]: f["category"] for f in featured.values()}} if frozen else None
+    custom = custom_spots()
+    keep = {**dict(map(tuple, frozen["spots"])), **{f["id"]: f["category"] for f in featured.values() if f["id"] not in custom}} if frozen else None
     seasons = sorted(set(SCENARIO_SEASONS) | {int(k[:4]) for k in (keep or {})})
     pbp = data.load(tuple(range(min(2016, min(seasons) - 2), max(seasons) + 1)))    # two seasons before the earliest: its team ratings
     cand = candidates(pbp, lib, keep=keep)
@@ -169,7 +177,7 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
         missing = [i for i, _ in frozen["spots"] if i not in by_id.index]
         if missing:       # a play renumbered upstream: the build fails rather than move a day's drive
             raise RuntimeError(f"frozen spots missing from the data: {missing[:5]} ({len(missing)})")
-        missing = [f["id"] for f in featured.values() if f["id"] not in by_id.index]
+        missing = [f["id"] for f in featured.values() if f["id"] not in by_id.index and f["id"] not in custom]
         if missing:
             raise RuntimeError(f"featured spots missing from the data: {missing}")
         picks = {cat: by_id.loc[[i for i, c in frozen["spots"] if c == cat]] for cat in CATEGORIES}
@@ -177,7 +185,7 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
         if [i for cat in CATEGORIES for i in picks[cat]["spot_id"]] != order:
             raise RuntimeError("frozen spots are not grouped by kind in CATEGORIES order")
         # featured days' spots go after all the others, so no index of a frozen spot moves
-        picks["_featured"] = by_id.loc[[f["id"] for f in featured.values()]]
+        picks["_featured"] = by_id.loc[[f["id"] for f in featured.values() if f["id"] not in custom]]
     else:
         picks = {cat: cand[cand["category"] == cat].iloc[lambda d: rng.permutation(len(d))].head(days) for cat in CATEGORIES}
 
@@ -191,6 +199,15 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
 
     spots = [spot_record(r, games.loc[r["game_id"]], receive2h) for df in picks.values() for _, r in df.iterrows()]
     chunks = team_chunks(hist, spots, games)
+    # the hand-built spots, last: their own teams, the league as it was at the end of their season
+    for cid in sorted(custom):
+        c = custom[cid]
+        sp = json.loads(json.dumps(c["spot"]))
+        ls = tr[tr["season"] == sp["real"]["season"]]
+        ls = ls[ls["week"] == ls["week"].max()].iloc[0]
+        sp["league"] = {k: round(float(ls[k]), 5) for k in ("mu_pass", "mu_rush", "home_pass", "home_rush")}
+        chunks.setdefault(len(spots) // SPOT_CHUNK, {})[str(len(spots))] = c["teams"]
+        spots.append(sp)
     n = {cat: len(df) for cat, df in picks.items()}
     offs = {cat: sum(n[c] for c in list(CATEGORIES)[:i]) for i, cat in enumerate(CATEGORIES)}
     if frozen:

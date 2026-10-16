@@ -254,10 +254,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     extra += ('<script type="application/ld+json">' + json.dumps({"@context": "https://schema.org", "@type": "WebSite",
               "name": "Two-Minute Drill", "url": site_url.rstrip("/") + "/", "description": desc}) + "</script>")
     page = (WEB / "game.html").read_text()
-    for js in ("motion.js", "game.js"):
+    for js in ("motion.js", "vs_core.js", "game.js"):     # vs_core.js: college overtime's rules (Versus, a college game)
         page = page.replace(f'<script src="{js}"></script>', f'<script src="{js}?v={stamp}"></script>')
-    if vs:                                   # Versus: the college-overtime rules the room plays by (web/vs_core.js)
-        page = page.replace('<script src="game.js', f'<script src="vs_core.js?v={stamp}"></script><script src="game.js', 1)
     (out / "index.html").write_text(HEAD.format(extra=extra + AD_CSS) + page.replace("<!--SITE-FOOT-->", foot_ads() + FOOT) + "</body></html>\n")
     # the stats page (/stats): its own document; the same analytics tag and backend address
     stats_head = (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Two-Minute Drill stats",

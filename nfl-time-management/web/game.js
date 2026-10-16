@@ -60,7 +60,10 @@
     MIN: ['Vikings', '#4F2683'], NE: ['Patriots', '#002244'], NO: ['Saints', '#D3BC8D'], NYG: ['Giants', '#0B2265'],
     NYJ: ['Jets', '#125740'], PHI: ['Eagles', '#004C54'], PIT: ['Steelers', '#FFB612'], SF: ['49ers', '#AA0000'],
     SEA: ['Seahawks', '#69BE28'], TB: ['Buccaneers', '#D50A0A'], TEN: ['Titans', '#4B92DB'], WAS: ['Commanders', '#5A1414'],
+    // college teams, for a featured college game (src/nflclock/custom_spots.json); never in Versus
+    OSU: ['Buckeyes', '#BB0000'], IU: ['Hoosiers', '#990000'],
   };
+  const COLLEGE = new Set(['OSU', 'IU']);
   const FAM = { run: 'Run', pass: 'Pass', rpo: 'RPO', trick: 'Trick' };
   // the trick plays (playbook.py): what each one is, on its key
   const TRICK_SUB = { trick_flea: 'Hand off, pitch it back, go deep', trick_reverse: 'Fake one way, a receiver comes back the other',
@@ -2333,8 +2336,8 @@
       return d;
     };
     const t = (i) => teamOf(i);
-    const spec = (i) => [{ ...t(i).kicker, pos: 'K', ovr: t(i).kicker.ovr ?? 77, stat: 'Rated on field goals made over expected' },
-      { ...t(i).punter, pos: 'P', ovr: t(i).punter.ovr ?? 77, stat: 'Rated on net punting over expected' }];
+    const spec = (i) => [{ ...t(i).kicker, pos: 'K', ovr: t(i).kicker.ovr ?? 77, stat: t(i).kicker.stat || 'Rated on field goals made over expected' },
+      { ...t(i).punter, pos: 'P', ovr: t(i).punter.ovr ?? 77, stat: t(i).punter.stat || 'Rated on net punting over expected' }];
     u.append(unit(`${teamName(code(offI))} offense`, offLineup(offI), code(offI)),
       unit(`${teamName(code(1 - offI))} defense`, lineup(1 - offI).def, code(1 - offI)),
       unit('Kickers and punters', [...spec(G.me).map((p) => ({ ...p, name: `${p.name} (${code(G.me)})` })),
@@ -2393,7 +2396,7 @@
     };
     const ck = clockOf(r.t), over = r.phase === DONE;
     const mid = el('span', 'mid');
-    if (VS && G.cot) mid.append(el('span', 'q', over ? (G.cot.round > 1 ? `FINAL/${G.cot.round}OT` : 'FINAL/OT') : `${G.cot.round > 1 ? G.cot.round : ''}OT`),
+    if (G.cot) mid.append(el('span', 'q', over ? (G.cot.round > 1 ? `FINAL/${G.cot.round}OT` : 'FINAL/OT') : `${G.cot.round > 1 ? G.cot.round : ''}OT`),
       el('span', 'clk', over ? '' : G.cot.round >= 3 ? 'Two-point' : `${G.cot.idx ? '2nd' : '1st'} poss`));
     else mid.append(el('span', 'q', over ? (r.t >= 1800 ? 'HALF' : r.ot ? 'FINAL/OT' : needsOvertime(r) ? 'END Q4' : 'FINAL') : qLabel(r)),
       el('span', `clk${r.clock_running && !over ? ' run' : ''}`, over ? '0:00' : ck.text));
@@ -2586,10 +2589,12 @@
   }
   // the real game a spot comes from: "2023 · Week 14" or "2024 · Divisional Round"
   const ROUND = { WC: 'Wild Card Round', DIV: 'Divisional Round', CON: 'Conference Championship', SB: 'Super Bowl' };
+  const COLLEGE_ROUND = { B1G: 'Big Ten Championship' };
   function gameTag(sc) {
     const rl = sc.real || {};
-    return `${rl.season} · ${ROUND[rl.type] || `Week ${rl.week}`}`;
+    return `${rl.season} · ${ROUND[rl.type] || COLLEGE_ROUND[rl.type] || `Week ${rl.week}`}`;
   }
+  const matchLine = (sc) => (sc.neutral ? `${teamName(sc.away)} vs ${teamName(sc.home)}${sc.site ? ` · ${sc.site}` : ''}` : `${teamName(sc.away)} at ${teamName(sc.home)}`);
   // the kind of spot, as this one is: "Tied, or end of the half" says which ("End of the half" above "Down by 4")
   const catLabel = (sc) => (sc.category !== 'tight' ? idx.categories[sc.category] : sc.start.qtr <= 2 ? 'End of the half' : 'Tied game');
   function renderIntro() {
@@ -2607,7 +2612,7 @@
     box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : DRIVE ? 'Historic drive'
       : RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · Game ${G.si + 1} of ${today.length} · ${PRO_RUNS.runs[RUN_N - 1].games[G.si].round}`
         : (today.length > 1 ? `Spot ${G.si + 1} of ${today.length} · ` : ARCH_DAY ? `No. ${dayN}, from the archive · ` : 'Today’s drive · ') + catLabel(sc)),
-      el('div', 'game', `${gameTag(sc)} · ${teamName(sc.away)} at ${teamName(sc.home)}`), big);
+      el('div', 'game', `${gameTag(sc)} · ${matchLine(sc)}`), big);
     const mu = el('div', 'matchup');
     const t = (c, i) => {
       const d = el('div', 't');
@@ -2667,6 +2672,7 @@
       drawAll();
       if (r.phase === DONE) return finishSpot();
       if (VS) { if ((await vsAdvance(r)) === 'stop') return; continue; }
+      if (G.cot) { if ((await cotAdvance(r)) === 'stop') return; continue; }
       if (r.pos === G.me) G.autoDef = false;
       if (r.phase === SNAP && r.pos === G.me) return promptOffense();
       if (r.phase === SNAP && !G.autoDef) return promptDefense();
@@ -3240,6 +3246,7 @@
     return out;
   }
   async function snapThenGrade(specs, action) {
+    if (cotDaily()) { const res = await cotPlay(action); cotShowResult(res); return; }
     if (VS) {
       const r = G.root;
       vsSubmit(r.phase === SNAP && r.pos !== G.me ? { def: action.def, to_def: !!action.to_def } : { action });
@@ -3480,6 +3487,13 @@
           chosen: o.key, q: spec.q(), situation: `${clockOf(r.t).text} ${qLabel(r)}`, seed: hash(kind, seedKey(), G.si, G.seq) };
         // going for two: graded as a choice, then you call the play, a snap from the 2 (root.try2 is the real try)
         if (kind === 'pat' && o.key === 'two' && VS) { busy = false; vsSubmit({ two: true }); return; }
+        if (kind === 'pat' && o.key === 'two' && cotDaily()) {           // overtime: not graded
+          G.root = { ...r, phase: SNAP, down: 1, ytg: 2, yl: 2, clock_running: false, try2: { ...r } };
+          addLog('Going for two', r.t, true);
+          persist();
+          busy = false;
+          return advance();
+        }
         if (kind === 'pat' && o.key === 'two') {
           try {
             const x = (await gradeSpecs({ snap: G.snapN, specs: [sp] }))[0];
@@ -3798,6 +3812,115 @@
   const isPlayoff = (sc) => !!ROUND[(sc.real || {}).type];
   // tied at the end of regulation: overtime, played out (the daily drive too: a playoff game can't end tied)
   const needsOvertime = (r) => r.phase === DONE && r.t <= 0 && !r.ot && r.score[0] === r.score[1];
+  // college overtime's play-by-play lines (web/vs_core.js notes): Versus and a college game's overtime
+  function cotLog(notes) {
+    const tn = (t) => teamName(code(t)), mine = (t) => t === G.me;
+    for (const x of notes || []) {
+      if (x.k === 'pick') addLog(`The ${tn(x.team)} choose ${x.choice}${x.auto ? ' (out of time)' : ''}: ${tn(x.first)} ball first`, VSCore.COT_T, mine(x.team));
+      else if (x.k === 'end') addLog(`The ${tn(x.team)} take the end of the field: the ${tn(1 - x.team)} choose offense or defense`, VSCore.COT_T, mine(x.team));
+      else if (x.k === 'timeout') addLog(`Timeout, ${tn(x.team)}`, VSCore.COT_T, mine(x.team));
+      else if (x.k === 'two') addLog('Going for two', VSCore.COT_T, mine(x.team));
+      else if (x.k === 'must2') addLog('Second overtime on: a touchdown has to go for two', VSCore.COT_T, mine(x.team));
+      else if (x.k === 'poss') addLog(`${tn(x.team)} ball${x.round >= 3 ? ': a two-point play' : ' at the 25'}`, VSCore.COT_T, mine(x.team));
+      else if (x.k === 'round') addLog(`${ordinal(x.round)} overtime, tied ${x.score[G.me]}–${x.score[1 - G.me]}${x.round === 2 ? ': a touchdown has to go for two' : x.round >= 3 ? ': a two-point play each' : ''}. The ${tn(x.chooser)} choose`, VSCore.COT_T, mine(x.chooser));
+    }
+  }
+  // A college game tied at the end goes to college overtime (web/vs_core.js, the rules Versus plays by): a coin toss,
+  // the winner's choice of offense, defense or the end of the field (alternating each overtime), the ball at the 25,
+  // a touchdown going for two from the 2nd overtime, two-point plays from the 3rd. Their choice is defense, the usual
+  // one. The engine's win model knows NFL rules only, so overtime calls are not graded: the day's grade is regulation's.
+  const cotDaily = () => !VS && !!G.cot;
+  function collegeOvertime() {
+    track('overtime', { day: dayN, college: true });
+    const r = G.root, them = teamName(code(1 - G.me));
+    const toss = rng(hash('toss', seedKey(), G.si))() < 0.5 ? G.me : 1 - G.me;
+    const ms = VSCore.start(toss);
+    G.cot = { ...ms.cot, score0: r.score.slice() };
+    G.root = { ...ms.root, score: r.score.slice() };
+    G.over = false; G.result = null;
+    addLog(`Tied ${r.score[G.me]}–${r.score[1 - G.me]}: college overtime. ${toss === G.me ? 'You won the coin toss' : `The ${them} won the coin toss`}`, VSCore.COT_T, true);
+    persist();
+    advance();
+  }
+  function cotPick(choice) {
+    const out = VSCore.apply({ root: G.root, cot: G.cot, seq: G.seq, over: false, winner: -1 }, { [G.cot.pick.team]: { pick: choice } }, null, 0);
+    G.root = out.ms.root; G.cot = out.ms.cot;
+    cotLog(out.notes);
+    persist();
+  }
+  // a snap in college overtime: the engine plays it (no clock), then the overtime's rules
+  async function cotPlay(action) {
+    const r = G.root;
+    const a = { ...action, to_off: false, to_def: false, ...(r.try2 ? { pat: 'two' } : {}) };
+    const res = await stepWith(a);
+    const ms = { root: G.root, cot: G.cot, seq: G.seq, over: false, winner: -1 }, notes = [];
+    VSCore.after(ms, notes);
+    G.root = ms.root; G.cot = ms.cot;
+    if (ms.over) G.root.phase = DONE;
+    cotLog(notes);
+    persist();
+    return res;
+  }
+  function cotShowResult(res, head) {
+    drawAll();
+    const d = $('dock');
+    d.textContent = '';
+    const main = res.log.find((e) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(e.ev));
+    const lines = (main ? narrate([main], res.action) : narrate(res.log, res.action).reverse());
+    const wrap = el('div', 'result'), top = el('div', 'res-top'), txt = el('div', 'res-play');
+    txt.append(el('span', 'yd', head || headline(main, res.log)), document.createTextNode(lines.length ? lines[0][0] : ''));
+    top.append(txt);
+    wrap.append(top);
+    const mu = main ? matchupLine(main, res.action) : null;
+    if (mu) wrap.append(el('div', `mline ${mu.good ? 'won' : 'lost'}`, mu.text));
+    wrap.append(el('div', 'note', 'Overtime calls aren’t graded.'));
+    const btn = el('button', 'btn', G.root.phase === DONE ? 'Final' : 'Next play');
+    btn.type = 'button';
+    let went = false;
+    btn.addEventListener('click', async () => { if (went) return; went = true; await cutReplay(); if (!busy) advance(); else went = false; });
+    wrap.append(btn);
+    d.append(wrap);
+  }
+  // the next thing in college overtime: the choice (yours, or theirs: defense), your snap, their snap (your defense),
+  // a try
+  async function cotAdvance(r) {
+    const c = G.cot;
+    if (c.pick) {
+      if (c.pick.team === G.me) { cotPromptPick(); return 'stop'; }
+      cotPick('defense');
+      return 'again';
+    }
+    if (r.phase === SNAP && r.pos === G.me) { promptOffense(); return 'stop'; }
+    if (r.phase === SNAP) { promptDefense(); return 'stop'; }
+    if (r.phase === PAT && r.pos === G.me) { promptChoice('pat'); return 'stop'; }
+    status(`The ${teamName(code(r.pos))} line up for the try`, G.log.length ? G.log[G.log.length - 1][0] : '', !G.fast);
+    busy = true;
+    let res;
+    try { res = await cotPlay({}); } catch (e) { busy = false; fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); return 'stop'; }
+    busy = false;
+    cotShowResult(res);
+    return 'stop';
+  }
+  function cotPromptPick() {
+    const c = G.cot, d = $('dock');
+    drawAll();
+    d.textContent = '';
+    takeBanner(d);
+    const head = el('div', 'ask');
+    const why = c.pick.end ? 'They took the end of the field' : c.round === 1 ? 'You won the toss' : `${ordinal(c.round)} overtime: your choice`;
+    head.append(el('h2', '', why), el('span', 'sub', c.pick.end ? 'Offense or defense?' : 'Offense, defense or the end of the field?'));
+    d.append(head);
+    const keys = el('div', 'keys'), opts = c.pick.end ? ['offense', 'defense'] : ['offense', 'defense', 'end'];
+    const label = { offense: 'Offense', defense: 'Defense', end: 'End of the field' };
+    const subs = { offense: 'You have the ball first', defense: 'They go first; you know what you need', end: 'Pick the end zone; they choose offense or defense' };
+    keys.style.setProperty('--cols', opts.length);
+    opts.forEach((o, i) => {
+      const b = key(label[o], subs[o], 'big def', i);
+      b.addEventListener('click', () => { if (busy) return; track('ot_pick', { pick: o, round: c.round }); cotPick(o); advance(); });
+      keys.append(b);
+    });
+    d.append(keys);
+  }
   function overtime() {
     track('overtime', { day: dayN });
     const r = G.root, po = isPlayoff(G.scen), d = $('dock'), them = teamName(code(1 - G.me));
@@ -3833,7 +3956,7 @@
 
   async function finishSpot() {
     if (VS) return vsEndCard();
-    if (!G.result && needsOvertime(G.root)) return overtime();
+    if (!G.result && needsOvertime(G.root)) return G.scen.college ? collegeOvertime() : overtime();
     if (!G.result || (G.result.half === 1 && G.result.v !== 2)) {      // v2: halftime valued at halftime
       status('Final whistle…');
       const r = G.root;
@@ -3847,7 +3970,7 @@
     drawAll();
     const res = G.result, sc = G.scen, d = $('dock');
     // (res.ot: a result from before overtime was played, settled with the win chance)
-    const inOT = !!G.root.ot, tie = res.mine === res.theirs;
+    const inOT = !!G.root.ot || cotDaily(), tie = res.mine === res.theirs;
     if (SURV && res.ot == null && !res.counted) {   // survivor: a win counts, a loss ends the run, a tie after overtime neither
       res.counted = true;
       const w = res.mine > res.theirs;
@@ -3881,7 +4004,7 @@
     const lead0 = sc.start.score[sc.player === sc.home ? 1 : 0] - sc.start.score[sc.player === sc.home ? 0 : 1];
     const drive = !rl.drive ? '' : rl.drive === 'ran out the clock' ? (lead0 > 0 ? 'they ran out the clock' : 'time ran out on them') : `the drive ended in a ${rl.drive}`;
     card.append(el('p', 'real', rl.live ? `Straight from ${rl.date ? new Date(rl.date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }) : 'this week'} (${gameTag(sc)}): see how ${rl.coach || 'the coach'} actually called it.`
-      : `In the real game (${gameTag(sc)}), ${rl.coach || 'the coach'} called "${realCall}" here; ${drive}.`));
+      : rl.summary ? `In the real game (${gameTag(sc)}): ${rl.summary}.` : `In the real game (${gameTag(sc)}), ${rl.coach || 'the coach'} called "${realCall}" here; ${drive}.`));
     const cc = coachCard(G.decisions, 'You called this one like');
     if (cc) card.append(cc.el);
     const wpa = G.decisions.reduce((a, x) => a + x.wpa, 0);
@@ -5076,7 +5199,7 @@
   // the team picker: your team for every versus match until you change it
   function vsTeamPicker(onPick, skip) {
     const wrap = el('div', 'vsteams'), cur = vsMyTeam();
-    Object.keys(TEAMS).filter((c) => c !== skip).sort((a, b) => teamName(a).localeCompare(teamName(b))).forEach((c) => {
+    Object.keys(TEAMS).filter((c) => c !== skip && !COLLEGE.has(c)).sort((a, b) => teamName(a).localeCompare(teamName(b))).forEach((c) => {
       const b = el('button', `vsteam${c === cur ? ' on' : ''}`);
       b.type = 'button';
       const sw = el('span', 'sw'); sw.style.background = color(c);
@@ -5298,7 +5421,6 @@
     const before = G.root;
     G.vsN = d.n + 1;
     if (vs.waiting < G.vsN) vs.waiting = -1;
-    const tn = (t) => teamName(code(t)), mine = (t) => t === G.me;
     let out = null;
     if (d.res) {
       await cutReplay();
@@ -5312,15 +5434,7 @@
       res.animated = await animatePlay(before, res, side, false, look);
       out = { res, d };
     } else if (d.kind === 'timeout') out = { res: { log: [], action: { to_off: true } }, head: 'Timeout', d };
-    for (const x of d.notes || []) {
-      if (x.k === 'pick') addLog(`The ${tn(x.team)} choose ${x.choice}${x.auto ? ' (out of time)' : ''}: ${tn(x.first)} ball first`, VSCore.COT_T, mine(x.team));
-      else if (x.k === 'end') addLog(`The ${tn(x.team)} take the end of the field: the ${tn(1 - x.team)} choose offense or defense`, VSCore.COT_T, mine(x.team));
-      else if (x.k === 'timeout') addLog(`Timeout, ${tn(x.team)}`, VSCore.COT_T, mine(x.team));
-      else if (x.k === 'two') addLog('Going for two', VSCore.COT_T, mine(x.team));
-      else if (x.k === 'must2') addLog('Second overtime on: a touchdown has to go for two', VSCore.COT_T, mine(x.team));
-      else if (x.k === 'poss') addLog(`${tn(x.team)} ball${x.round >= 3 ? ': a two-point play' : ' at the 25'}`, VSCore.COT_T, mine(x.team));
-      else if (x.k === 'round') addLog(`${ordinal(x.round)} overtime, tied ${x.score[G.me]}–${x.score[1 - G.me]}${x.round === 2 ? ': a touchdown has to go for two' : x.round >= 3 ? ': a two-point play each' : ''}. The ${tn(x.chooser)} choose`, VSCore.COT_T, mine(x.chooser));
-    }
+    cotLog(d.notes);
     G.root = d.ms.root; G.cot = d.ms.cot; G.seq = d.ms.seq;
     persist();
     return out;
@@ -5358,7 +5472,7 @@
     vs.ui = 'card';
     // the play clock runs whether or not Next is tapped: the card gives way with 30 seconds left on it
     clearTimeout(vs.cardTimer);
-    if (!vs.result) vs.cardTimer = setTimeout(go, Math.max(4000, vs.deadline - 30000 - vsNow()));
+    vs.cardTimer = setTimeout(go, vs.result ? 8000 : Math.max(4000, vs.deadline - 30000 - vsNow()));     // the last play: then the final
   }
   // the next decision of the match: one the room already played, yours (a prompt, on the play clock) or theirs (wait)
   async function vsAdvance(r) {

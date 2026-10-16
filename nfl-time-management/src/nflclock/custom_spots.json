@@ -1,0 +1,96 @@
+{
+  "_about": "Spots built by hand (a game nflverse has no play-by-play for: college). Each is played like any spot: the engine draws real NFL plays; the teams below are the starters as the official box score lists them. Ratings (ovr) are ours, on the same 40-99 scale; no percentile against NFL starters is shown for college players. dailygame.build appends these after every other spot (no frozen index moves); daily_schedule.json's featured map puts one on a day by id.",
+  "2025_B1G_IND_OSU#final": {
+    "spot": {
+      "id": "2025_B1G_IND_OSU#final", "category": "drill", "home": "OSU", "away": "IU", "player": "OSU",
+      "college": true, "neutral": true, "site": "Lucas Oil Stadium, Indianapolis",
+      "indoor": true, "wind": 0.0, "temp": null,
+      "start": {"qtr": 4, "clock": 645.0, "score": [13, 10], "pos": "OSU", "down": 1, "ytg": 10.0, "yl": 90.0, "to": [3, 3], "running": false, "phase": "snap", "receive2h": "IU"},
+      "spread": 4.5,
+      "real": {"season": 2025, "week": 15, "type": "B1G", "coach": "Ryan Day", "call": null, "drive": "missed field goal",
+               "final": {"away": 13, "home": 10},
+               "summary": "Ryan Day's Buckeyes went 81 yards in 15 plays, burned 7:57, threw incomplete on 3rd-and-1 at the Indiana 9 and missed a 27-yard field goal wide left with 2:51 to go. Indiana ran out the clock"}
+    },
+    "teams": {
+      "home": {
+        "team": "OSU", "coach": "Ryan Day",
+        "base": {"off_pass": 0.04, "off_rush": -0.03, "def_pass": -0.09, "def_rush": -0.06, "proe": 0.0},
+        "qb": {"name": "Julian Sayin", "adjustment": 0.03},
+        "injury_adjustment": {"off_pass": 0.0, "off_rush": 0.0, "def_pass": 0.0, "def_rush": 0.0},
+        "kicker": {"name": "Jayden Fielding", "rating": -0.35, "ovr": 55, "stat": "16 of 20 on field goals in 2025"},
+        "punter": {"name": "Joe McGuire", "rating": -0.1, "ovr": 64, "stat": "About 42 yards a punt in 2025"},
+        "lineup": {
+          "off": [
+            {"pos": "QB", "name": "Julian Sayin", "num": 10, "ovr": 84, "stat": "In this game: 21 of 29, 258 yards, a touchdown; sacked 5 times", "kind": "Pocket passer", "why": "Wins from the pocket with timing and accuracy."},
+            {"pos": "LT", "name": "Austin Siereveld", "num": 67, "ovr": 70, "stat": "Started at left tackle"},
+            {"pos": "LG", "name": "Luke Montgomery", "num": 51, "ovr": 72, "stat": "Started at left guard"},
+            {"pos": "C", "name": "Carson Hinzman", "num": 75, "ovr": 73, "stat": "Started at center"},
+            {"pos": "RG", "name": "Tegra Tshabola", "num": 77, "ovr": 66, "stat": "Started at right guard"},
+            {"pos": "RT", "name": "Phillip Daniels", "num": 70, "ovr": 68, "stat": "Started at right tackle"},
+            {"pos": "RB", "name": "Bo Jackson", "num": 25, "ovr": 74, "stat": "In this game: 17 carries, 83 yards", "kind": "Power back", "why": "Runs through contact and grinds out tough yards."},
+            {"pos": "WR", "name": "Jeremiah Smith", "num": 4, "ovr": 97, "stat": "In this game: 8 catches, 144 yards", "kind": "Deep threat", "why": "Stretches the field and wins deep."},
+            {"pos": "TE", "name": "Max Klare", "num": 86, "ovr": 74, "stat": "Started at tight end", "kind": "Possession TE", "why": "A reliable short-area target."},
+            {"pos": "WR", "name": "Carnell Tate", "num": 17, "ovr": 88, "stat": "Caught Ohio State's touchdown in this game", "kind": "Route runner", "why": "Gets open with sharp routes."},
+            {"pos": "TE", "name": "Will Kacmarek", "num": 89, "ovr": 68, "stat": "Started at tight end", "kind": "Blocking TE", "why": "An extra blocker first; rarely the target."}
+          ],
+          "def": [
+            {"pos": "EDGE", "name": "Caden Curry", "num": 92, "ovr": 84, "stat": "Started at defensive end"},
+            {"pos": "DL", "name": "Kayden McDonald", "num": 98, "ovr": 86, "stat": "Started at defensive tackle"},
+            {"pos": "DL", "name": "Tywone Malone", "num": 95, "ovr": 72, "stat": "Started at defensive tackle"},
+            {"pos": "EDGE", "name": "Kenyatta Jackson Jr.", "num": 97, "ovr": 76, "stat": "Started at defensive end"},
+            {"pos": "LB", "name": "Sonny Styles", "num": 0, "ovr": 93, "stat": "Started at linebacker"},
+            {"pos": "LB", "name": "Arvell Reese", "num": 8, "ovr": 95, "stat": "Started at linebacker"},
+            {"pos": "CB", "name": "Davison Igbinosun", "num": 1, "ovr": 80, "stat": "Started at cornerback"},
+            {"pos": "CB", "name": "Jermaine Mathews Jr.", "num": 7, "ovr": 82, "stat": "Started at cornerback"},
+            {"pos": "CB", "name": "Lorenzo Styles Jr.", "num": 3, "ovr": 76, "stat": "Started in the secondary"},
+            {"pos": "S", "name": "Caleb Downs", "num": 2, "ovr": 97, "stat": "All-American safety"},
+            {"pos": "S", "name": "Jaylen McClain", "num": 18, "ovr": 78, "stat": "Started all 14 games in 2025; 6 tackles in this one"}
+          ],
+          "bench": [
+            {"pos": "WR", "name": "Brandon Inniss", "ovr": 76, "stat": "Ohio State's third receiver"}
+          ]
+        }
+      },
+      "away": {
+        "team": "IU", "coach": "Curt Cignetti",
+        "base": {"off_pass": 0.05, "off_rush": 0.02, "def_pass": -0.07, "def_rush": -0.07, "proe": -0.03},
+        "qb": {"name": "Fernando Mendoza", "adjustment": 0.06},
+        "injury_adjustment": {"off_pass": 0.0, "off_rush": 0.0, "def_pass": 0.0, "def_rush": 0.0},
+        "kicker": {"name": "Nico Radicic", "rating": 0.1, "ovr": 90, "stat": "Big Ten Kicker of the Year: his only miss of 2025 came in this game, from 39"},
+        "punter": {"name": "Mitch McCarthy", "rating": 0.0, "ovr": 70, "stat": "Indiana's punter"},
+        "lineup": {
+          "off": [
+            {"pos": "QB", "name": "Fernando Mendoza", "num": 15, "ovr": 95, "stat": "Won the Heisman Trophy a week after this game", "kind": "Pocket passer", "why": "Stands in the pocket and pushes the ball downfield."},
+            {"pos": "LT", "name": "Carter Smith", "num": 65, "ovr": 78, "stat": "Started at left tackle"},
+            {"pos": "LG", "name": "Drew Evans", "num": 62, "ovr": 72, "stat": "Started at left guard"},
+            {"pos": "C", "name": "Pat Coogan", "num": 78, "ovr": 76, "stat": "Started at center"},
+            {"pos": "RG", "name": "Bray Lynch", "num": 74, "ovr": 72, "stat": "Started at right guard"},
+            {"pos": "RT", "name": "Zen Michalski", "num": 75, "ovr": 68, "stat": "Started at right tackle"},
+            {"pos": "RB", "name": "Roman Hemby", "num": 1, "ovr": 78, "stat": "Started at running back", "kind": "Receiving back", "why": "A pass-catching threat out of the backfield."},
+            {"pos": "WR", "name": "Omar Cooper Jr.", "num": 3, "ovr": 86, "stat": "Started at receiver", "kind": "Route runner", "why": "Gets open with sharp routes."},
+            {"pos": "TE", "name": "Riley Nowakowski", "num": 37, "ovr": 70, "stat": "Started at tight end", "kind": "Possession TE", "why": "A reliable short-area target."},
+            {"pos": "WR", "name": "Elijah Sarratt", "num": 13, "ovr": 85, "stat": "Caught the go-ahead 17-yard touchdown in this game", "kind": "Physical receiver", "why": "A big target who wins contested catches."},
+            {"pos": "WR", "name": "Charlie Becker", "num": 80, "ovr": 72, "stat": "His 33-yard catch on third down iced this game", "kind": "Deep threat", "why": "Stretches the field and wins deep."}
+          ],
+          "def": [
+            {"pos": "EDGE", "name": "Mikail Kamara", "num": 6, "ovr": 84, "stat": "Started on the defensive line"},
+            {"pos": "DL", "name": "Tyrique Tucker", "num": 95, "ovr": 74, "stat": "Started on the defensive line"},
+            {"pos": "DL", "name": "Mario Landino", "num": 97, "ovr": 72, "stat": "Started on the defensive line"},
+            {"pos": "EDGE", "name": "Stephen Daley", "num": 8, "ovr": 80, "stat": "Started on the defensive line"},
+            {"pos": "LB", "name": "Aiden Fisher", "num": 4, "ovr": 88, "stat": "Started at linebacker"},
+            {"pos": "LB", "name": "Rolijah Hardy", "num": 21, "ovr": 78, "stat": "Started at linebacker"},
+            {"pos": "LB", "name": "Isaiah Jones", "num": 46, "ovr": 72, "stat": "Started at linebacker"},
+            {"pos": "CB", "name": "D'Angelo Ponds", "num": 5, "ovr": 90, "stat": "Started at cornerback"},
+            {"pos": "CB", "name": "Jamari Sharpe", "num": 22, "ovr": 78, "stat": "Started at cornerback"},
+            {"pos": "S", "name": "Louis Moore", "num": 7, "ovr": 80, "stat": "Started at safety"},
+            {"pos": "S", "name": "Amare Ferrell", "num": 1, "ovr": 78, "stat": "Started at safety"}
+          ],
+          "bench": [
+            {"pos": "RB", "name": "Kaelon Black", "ovr": 74, "stat": "Indiana's other running back"},
+            {"pos": "WR", "name": "E.J. Williams Jr.", "ovr": 72, "stat": "Indiana receiver"}
+          ]
+        }
+      }
+    }
+  }
+}
