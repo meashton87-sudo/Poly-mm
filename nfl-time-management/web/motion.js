@@ -334,7 +334,8 @@
   // charting of 2022-2025 targets (median catch depth / time to throw): slant 6 yd / 1.9 s, quick out 3 / 2.3,
   // hitch 5 / 2.4, shallow cross 4 / 2.8, dig 12 / 2.9, deep out 13 / 2.8, post 16 / 2.7, corner 19 / 3.0,
   // go 24 / 2.6, wheel 16 / 2.7, screen -3 / 1.6, flat -2 / 2.6, angle 3 / 2.7. `at` is where on the route the
-  // catch is made: 'depth' (where the route reaches depth D) or a distance out along the last leg.
+  // catch is made: 'depth' (where the route reaches depth D) or a distance out along the last leg. A hitch plants
+  // just past the depth and turns back to the ball, under a yard (a longer comeback has the ball waiting on him).
   function route(name, D, d0, u) {
     const r = u == null ? 0.5 : u, s0 = -d0;
     switch (name) {
@@ -346,7 +347,7 @@
       case 'in': { const s = Math.max(D, 5); return { pts: [[0, s0], [0, s], [-20, s + 0.5]], at: -(6 + 4 * r) }; }
       case 'slant': return { pts: [[0, s0], [0, 1.6], [-26, 1.6 + 26 * 0.72]], at: 'depth', minD: 3 };
       case 'cross': return { pts: [[0, s0], [-1.5, 1.4], [-38, Math.max(D, 1) + 1.6]], at: -(9 + 7 * r) };
-      case 'hitch': { const s = Math.max(D, 3) + 1.3; return { pts: [[0, s0], [0, s], [-0.7, s - 1.3]], at: 'end' }; }
+      case 'hitch': { const s = Math.max(D, 3) + 0.8; return { pts: [[0, s0], [0, s], [-0.4, s - 0.8]], at: 'end' }; }
       case 'screen': return { pts: [[0, s0], [0.4, s0 - 0.4], [-1.2, Math.min(D, -0.5)]], at: 'end' };
       case 'flat': return { pts: [[0, s0], [2.2, s0 + 1.6], [12, Math.max(D, -1) + 0.6]], at: 6 + 3 * r };
       case 'wheel': return { pts: [[0, s0], [5, s0 + 1.8], [9, 1.5], [10.5, Math.max(D, 8) + 16]], at: 'depth', minD: 4 };
