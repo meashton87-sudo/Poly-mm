@@ -13,6 +13,13 @@ ALLOWED_ORIGINS = "https://nfl2mindrill.com,https://www.nfl2mindrill.com,https:/
 SITE = "https://nfl2mindrill.com"
 STRIPE_PRICE = "prod_VRryrvDrQxpAC7"      # test mode: Two-Minute Drill Pro, $4.99 (the live product's id replaces it at launch)
 
+# The Pro data (board/assets/pro, put there by the site workflow): never served as plain files (run_worker_first), only
+# by the worker to a valid Pro code (POST /pro/data)
+[assets]
+directory = "./assets"
+binding = "ASSETS"
+run_worker_first = true
+
 [[durable_objects.bindings]]
 name = "BOARD"
 class_name = "Board"
