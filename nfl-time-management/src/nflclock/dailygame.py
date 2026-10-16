@@ -203,7 +203,9 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
     for cid in sorted(custom):
         c = custom[cid]
         sp = json.loads(json.dumps(c["spot"]))
-        ls = tr[tr["season"] == sp["real"]["season"]]
+        # the league as it was then (a season before the ratings start, e.g. a college game in 2022: the nearest one)
+        yr = min(tr["season"].unique(), key=lambda y: (abs(int(y) - int(sp["real"]["season"])), -int(y)))
+        ls = tr[tr["season"] == yr]
         ls = ls[ls["week"] == ls["week"].max()].iloc[0]
         sp["league"] = {k: round(float(ls[k]), 5) for k in ("mu_pass", "mu_rush", "home_pass", "home_rush")}
         chunks.setdefault(len(spots) // SPOT_CHUNK, {})[str(len(spots))] = c["teams"]
