@@ -15,7 +15,7 @@ const RealResponse = globalThis.Response;
 globalThis.Response = class extends RealResponse {
   constructor(body, init = {}) { super(body, init.status === 101 ? { status: 200 } : init); this.webSocket = init.webSocket; this.realStatus = init.status; }
 };
-function room() {
+function room(env = {}) {
   const store = new Map(), sockets = [];
   let alarm = null, now = 1_000_000;
   const ctx = {
@@ -24,12 +24,12 @@ function room() {
     acceptWebSocket: (ws, tags) => { ws.tags = tags; sockets.push(ws); },
     getWebSockets: (tag) => sockets.filter((w) => !w.closed && (!tag || w.tags.includes(tag))),
   };
-  const m = new Match(ctx, {});
+  const m = new Match(ctx, env);
   const realNow = Date.now;
   return { m, store, sockets, clock: (t) => { now = t; Date.now = () => now; }, alarmAt: () => alarm, restore: () => { Date.now = realNow; } };
 }
-const connect = async (R, key, code = 'ABC234') => {
-  const res = await R.m.fetch(new Request(`https://w/vs/ws?room=${code}&key=${key}`, { headers: { Upgrade: 'websocket' } }));
+const connect = async (R, key, code = 'ABC234', mode = '') => {
+  const res = await R.m.fetch(new Request(`https://w/vs/ws?room=${code}&key=${key}${mode ? `&mode=${mode}` : ''}`, { headers: { Upgrade: 'websocket' } }));
   return { res, ws: R.sockets[R.sockets.length - 1] };
 };
 const say = (R, ws, msg) => R.m.webSocketMessage(ws, JSON.stringify(msg));
@@ -111,12 +111,14 @@ R.restore();
 // the lobby: the second player gets the first player's room; a stale one is not offered
 const L = room();
 L.clock(5_000);
-const quick = async (key) => (await L.m.fetch(new Request('https://w/vs/quick', { method: 'POST', body: JSON.stringify({ key }) }))).json();
+const quick = async (key, mode) => (await L.m.fetch(new Request('https://w/vs/quick', { method: 'POST', body: JSON.stringify({ key, mode }) }))).json();
 const q1 = await quick(K1);
 assert.ok(q1.host && ROOM_RE.test(q1.room));
 assert.deepStrictEqual(await quick(K1), q1, 'asking again: the same open room');
 const q2 = await quick(K2);
-assert.deepStrictEqual(q2, { room: q1.room, host: false }, 'paired');
+assert.deepStrictEqual(q2, { room: q1.room, host: false, mode: 'casual' }, 'paired');
+const r1 = await quick(K2, 'ranked');
+assert.ok(r1.host && r1.mode === 'ranked' && r1.room !== q1.room, 'ranked has its own queue');
 const q3 = await quick(K3);
 assert.ok(q3.host && q3.room !== q1.room, 'the next player opens a new room');
 L.clock(5_000 + 100_000);
@@ -124,4 +126,53 @@ const q4 = await quick(K1);
 assert.ok(q4.host && q4.room !== q3.room, 'a room nobody took for 90 s is dropped');
 assert.strictEqual((await L.m.fetch(new Request('https://w/vs/quick', { method: 'POST', body: '{}' }))).status, 400);
 L.restore();
+
+// ranked: teams, both report the winner, the ladder moves both ratings
+const lad = room();
+const env = { MATCH: { idFromName: (n) => n, get: () => ({ fetch: (req) => lad.m.fetch(req) }) } };
+const G1 = room(env);
+const { ws: ra } = await connect(G1, K1, 'RNK234', 'ranked');
+const { ws: rb } = await connect(G1, K2, 'RNK234');
+assert.strictEqual(ra.last('hello').mode, 'ranked', 'the mode comes from the first device in');
+await say(G1, ra, { t: 'team', team: 'KC', name: 'Eli' });
+await say(G1, ra, { t: 'team', team: 'BUF', name: 'x' });
+await say(G1, rb, { t: 'team', team: 'kc!', name: 'Matt' });
+assert.deepStrictEqual(rb.last('teams').teams, ['KC', null], 'a team once, a real code only');
+await say(G1, rb, { t: 'team', team: 'KC', name: 'Matt' });
+assert.deepStrictEqual(rb.last('taken'), { t: 'taken', team: 'KC' }, 'never the same team on both sides');
+assert.deepStrictEqual(ra.last('teams').teams, ['KC', null]);
+await say(G1, rb, { t: 'team', team: 'BUF', name: 'Matt' });
+assert.deepStrictEqual(ra.last('teams'), { t: 'teams', teams: ['KC', 'BUF'], names: ['Eli', 'Matt'] });
+await say(G1, ra, { t: 'result', winner: 0 });
+assert.strictEqual(ra.last('rated'), undefined, 'one report while the other side is here: wait');
+await say(G1, rb, { t: 'result', winner: 0 });
+const rated = ra.last('rated').ratings;
+assert.deepStrictEqual(rated, [{ before: 1000, after: 1016 }, { before: 1000, after: 984 }], 'Elo, K 32');
+await say(G1, rb, { t: 'result', winner: 1 });
+assert.strictEqual(ra.sent.filter((m) => m.t === 'rated').length, 1, 'rated once');
+const top = await (await lad.m.fetch(new Request('https://w/vs/ladder'))).json();
+assert.deepStrictEqual(top.top.map((x) => [x.name, x.rating, x.w, x.l]), [['Eli', 1016, 1, 0], ['Matt', 984, 0, 1]]);
+const me = await (await lad.m.fetch(new Request('https://w/vs/me', { method: 'POST', body: JSON.stringify({ key: K2 }) }))).json();
+assert.deepStrictEqual(me, { rating: 984, w: 0, l: 1, t: 0 });
+assert.ok(!JSON.stringify(top).includes(K1), 'only hashes of device keys are kept');
+// disagreeing reports: nobody moves
+const G2 = room(env);
+const { ws: xa } = await connect(G2, K1, 'RNK235', 'ranked');
+const { ws: xb } = await connect(G2, K2, 'RNK235');
+await say(G2, xa, { t: 'result', winner: 0 });
+await say(G2, xb, { t: 'result', winner: 1 });
+assert.deepStrictEqual(xa.last('rated'), { t: 'rated', ratings: null }, 'void');
+// the loser walks out: the winner's report alone counts
+const G3 = room(env);
+const { ws: ya } = await connect(G3, K1, 'RNK236', 'ranked');
+const { ws: yb } = await connect(G3, K2, 'RNK236');
+await G3.m.webSocketClose(yb); yb.close();
+await say(G3, ya, { t: 'result', winner: 0 });
+assert.ok(ya.last('rated').ratings[0].after > ya.last('rated').ratings[0].before, 'a walk-out still loses');
+// casual and friend rooms are never rated
+const G4 = room(env);
+const { ws: za } = await connect(G4, K1, 'CAS234', 'casual');
+await connect(G4, K2, 'CAS234');
+await say(G4, za, { t: 'result', winner: 0 });
+assert.strictEqual(za.last('rated'), undefined);
 console.log('match rooms ok');

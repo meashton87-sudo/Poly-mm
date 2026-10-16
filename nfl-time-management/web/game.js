@@ -2393,13 +2393,15 @@
     };
     const ck = clockOf(r.t), over = r.phase === DONE;
     const mid = el('span', 'mid');
-    mid.append(el('span', 'q', over ? (r.t >= 1800 ? 'HALF' : r.ot ? 'FINAL/OT' : needsOvertime(r) ? 'END Q4' : 'FINAL') : qLabel(r)),
+    if (VS && G.cot) mid.append(el('span', 'q', over ? (G.cot.round > 1 ? `FINAL/${G.cot.round}OT` : 'FINAL/OT') : `${G.cot.round > 1 ? G.cot.round : ''}OT`),
+      el('span', 'clk', over ? '' : G.cot.round >= 3 ? 'Two-point' : `${G.cot.idx ? '2nd' : '1st'} poss`));
+    else mid.append(el('span', 'q', over ? (r.t >= 1800 ? 'HALF' : r.ot ? 'FINAL/OT' : needsOvertime(r) ? 'END Q4' : 'FINAL') : qLabel(r)),
       el('span', `clk${r.clock_running && !over ? ' run' : ''}`, over ? '0:00' : ck.text));
     b.append(side(1, false), mid, side(0, true));
     b.setAttribute('aria-label', `${code(1)} ${r.score[1]}, ${code(0)} ${r.score[0]}, ${ck.text} left in ${r.ot ? 'overtime' : `the ${ordinal(ck.q)} quarter`}. Game details`);
     const dd = $('dd');
     dd.textContent = '';
-    if (r.phase === SNAP) dd.append(el('b', '', ddText(r)), document.createTextNode(` · ball ${onSpot(r)} · clock ${r.clock_running ? 'running' : 'stopped'}`));
+    if (r.phase === SNAP) dd.append(el('b', '', r.try2 ? 'Two-point try' : ddText(r)), document.createTextNode(` · ball ${onSpot(r)}${VS ? '' : ` · clock ${r.clock_running ? 'running' : 'stopped'}`}`));
     else dd.textContent = r.phase === PAT ? 'Try after the touchdown' : r.phase === KICKOFF ? 'Kickoff' : r.t >= 1800 ? 'Halftime' : 'Final';
   }
   function drawAll() { drawTiles(); drawBar(); drawField(); }
@@ -2559,12 +2561,12 @@
   // ------------------------------------------------------------- the spot ---
   function newSpot(i) {
     const sc = today[i];
-    return { si: i, scen: sc, me: sc.player === sc.home ? 0 : 1, root: startRoot(sc), decisions: [], log: [],
-      seq: 0, snapN: 0, over: false, result: null, side: 1, fast: false, started: false, vsN: 0 };
+    return { si: i, scen: sc, me: VS ? vs.seat : sc.player === sc.home ? 0 : 1, root: startRoot(sc), decisions: [], log: [],
+      seq: 0, snapN: 0, over: false, result: null, side: 1, fast: false, started: false, vsN: 0, ...(VS ? cotStart() : {}) };
   }
   function persist() {
     state.spots[G.si] = { id: G.scen.id, root: G.root, decisions: G.decisions, log: G.log, seq: G.seq, snapN: G.snapN, over: G.over,
-      result: G.result, started: G.started, pending: G.pending || null, pers: G.pers || null, persWho: G.persWho || null, vsN: G.vsN || 0 };
+      result: G.result, started: G.started, pending: G.pending || null, pers: G.pers || null, persWho: G.persWho || null, vsN: G.vsN || 0, cot: G.cot || null };
     saveState();
   }
   function resumeSpot(i) {
@@ -2572,7 +2574,7 @@
     let s = state.spots[i];
     if (s && s.id && s.id !== G.scen.id) s = state.spots[i] = null;   // saved on another game (a changed schedule): start fresh
     if (s) Object.assign(G, { root: s.root, decisions: s.decisions || [], log: s.log || [], seq: s.seq || 0, snapN: s.snapN || 0,
-      over: s.over, result: s.result, started: !!s.started, pending: s.pending || null, pers: s.pers || null, persWho: s.persWho || null, vsN: s.vsN || 0 });
+      over: s.over, result: s.result, started: !!s.started, pending: s.pending || null, pers: s.pers || null, persWho: s.persWho || null, vsN: s.vsN || 0, cot: s.cot || G.cot || null });
     G.side = sideFor(G.seq);
     return G;
   }
@@ -2601,6 +2603,7 @@
     const state_ = lead > 0 ? `Up by ${lead}` : lead < 0 ? `Down by ${-lead}` : 'Tied';
     const big = el('div', 'big', state_);
     big.append(el('span', 'left', left));
+    if (VS) return renderVsIntro();
     box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : DRIVE ? 'Historic drive'
       : RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · Game ${G.si + 1} of ${today.length} · ${PRO_RUNS.runs[RUN_N - 1].games[G.si].round}`
         : (today.length > 1 ? `Spot ${G.si + 1} of ${today.length} · ` : ARCH_DAY ? `No. ${dayN}, from the archive · ` : 'Today’s drive · ') + catLabel(sc)),
@@ -3827,7 +3830,7 @@
   }
 
   async function finishSpot() {
-    if (VS) { if (!G.result && needsOvertime(G.root)) return vsOvertime(); return vsEndCard(); }
+    if (VS) return vsEndCard();
     if (!G.result && needsOvertime(G.root)) return overtime();
     if (!G.result || (G.result.half === 1 && G.result.v !== 2)) {      // v2: halftime valued at halftime
       status('Final whistle…');
@@ -4878,19 +4881,71 @@
   }
 
   // -------------------------------------------------------------- versus ---
-  // Two players, one fourth-quarter spot: the team with the ball calls the offense, the other calls the defense,
-  // both on their own phone. The room (board/match.js) seals the calls: each side's half of a decision goes out only
-  // when every half it needs is in. Both phones run the same simulator with the same seed (seedKey: the room's), so
-  // the same two calls play the same snap on both; each draws it from its own side.
+  // Two players, college overtime: each brings a team, each team gets the ball at the other's 25 with no clock, a
+  // touchdown from the second overtime on must go for two, from the third on it is a two-point play each; ahead after
+  // both have had it wins. The team with the ball calls the offense, the other the defense, each on their own phone.
+  // The room (board/match.js) seals the calls: each side's half of a decision goes out only when every half it needs
+  // is in. Both phones run the same simulator with the same seed (seedKey: the room's), so the same two calls play
+  // the same snap on both; each draws it from its own side. Modes: ranked (rated, the ladder), casual, a friend.
   const VS_LOOKS = { blitz: (1 << 1) | (1 << 3), load: 1 << 2, soft: 1 << 0 };    // engine.js DEF_LOOKS
   const VS_CLOCK = 30;               // seconds to lock a call; the room plays the default at 40
-  const vs = { ws: null, seat: -1, seed: 0, spot: null, full: false, online: [false, false], got: {}, waiting: -1, last: null,
-    started: false, timer: null, retry: 0, closedByUs: false };
+  const COT_T = 900;                 // the engine's clock in overtime: held here, never run (college overtime has none)
+  const VS_TEAM_KEY = `${STORE}:vsteam`;
+  const VS_MODES = { ranked: 'Ranked', casual: 'Casual', friend: 'Friend match' };
+  const vs = { ws: null, seat: -1, seed: 0, mode: 'friend', teams: [null, null], taken: '', names: ['', ''], full: false, online: [false, false],
+    got: {}, waiting: -1, last: null, started: false, timer: null, retry: 0, closedByUs: false, rated: null, pool: null };
   const vsSeatOf = (team) => (team === G.me ? vs.seat : 1 - vs.seat);
   const vsLink = (room) => `${location.origin}${location.pathname}#vs-${room}`;
+  const vsMyTeam = () => { const t = load(VS_TEAM_KEY, ''); return TEAMS[t] ? t : ''; };
+  async function vsLoadPool() {
+    if (!vs.pool) vs.pool = await fetch(asset('teams.json')).then((r) => { if (!r.ok) throw new Error('teams ' + r.status); return r.json(); });
+    return vs.pool;
+  }
+  // college overtime: the toss (seeded: the same on both phones) picks who has the ball first; the start of a
+  // possession (round 3 on: a two-point play)
+  function cotStart() {
+    const first = rng(hash('toss', `vs${vs.seed}`, 0))() < 0.5 ? 0 : 1;
+    return { cot: { round: 1, idx: 0, order: [first, 1 - first], score0: [0, 0] } };
+  }
+  function possRoot(team, round, score, to) {
+    const base = { t: COT_T, pos: team, score: score.slice(), down: 1, ytg: 10, yl: 25, to: to.slice(), clock_running: false, phase: SNAP, credit: 0, free_kick: false };
+    if (round < 3) return base;
+    const pat = { ...base, phase: PAT };
+    return { ...pat, phase: SNAP, down: 1, ytg: 3, yl: 3, try2: pat };
+  }
+  // after each snap: no clock; a touchdown from round 2 on goes for two; the possession over, the next one or the end
+  function cotAfter() {
+    const c = G.cot, P = c.order[c.idx];
+    let r = G.root;
+    if (r.phase !== DONE) r = G.root = { ...r, t: COT_T, clock_running: false };
+    if (r.phase === PAT && r.pos === P && c.round >= 2) {
+      G.root = { ...r, phase: SNAP, down: 1, ytg: 2, yl: 2, clock_running: false, try2: { ...r } };
+      addLog('Second overtime on: a touchdown has to go for two', r.t, true);
+      return;
+    }
+    const over = r.phase === KICKOFF || r.phase === DONE || (r.phase === SNAP && r.pos !== P) || (r.phase === PAT && r.pos !== P);
+    if (!over) return;
+    const sc = r.score.slice(), D = 1 - P;
+    if (c.idx === 0 && sc[D] > c.score0[D]) return cotEnd(sc);          // the defense scored on the first possession: it's over
+    if (c.idx === 0) {
+      c.idx = 1;
+      G.root = possRoot(c.order[1], c.round, sc, r.to);
+      addLog(`${teamName(code(c.order[1]))} ball${c.round >= 3 ? ': a two-point play' : ' at the 25'}`, COT_T, c.order[1] === G.me);
+      return;
+    }
+    if (sc[0] !== sc[1]) return cotEnd(sc);
+    c.round += 1; c.idx = 0; c.order = [c.order[1], c.order[0]]; c.score0 = sc.slice();
+    G.root = possRoot(c.order[0], c.round, sc, c.round >= 3 ? [0, 0] : [1, 1]);
+    addLog(`${ordinal(c.round)} overtime, tied ${sc[G.me]}–${sc[1 - G.me]}${c.round === 2 ? ': a touchdown has to go for two' : c.round >= 3 ? ': a two-point play each' : ''}`, COT_T, true);
+    addLog(`${teamName(code(c.order[0]))} ball${c.round >= 3 ? '' : ' at the 25'}`, COT_T, c.order[0] === G.me);
+  }
+  function cotEnd(sc) { G.root = { ...G.root, score: sc, phase: DONE }; }
+
   function vsSend(m) { try { if (vs.ws && vs.ws.readyState === 1) vs.ws.send(JSON.stringify(m)); } catch (e) { /* reconnects */ } }
   function vsConnect() {
-    const url = `${BOARD.api.replace(/^http/, 'ws')}/vs/ws?room=${VS_ROOM}&key=${encodeURIComponent(deviceKey())}`;
+    let mode = 'friend';
+    try { mode = sessionStorage.getItem(`tmd:vsmode:${VS_ROOM}`) || 'friend'; } catch (e) { /* none */ }
+    const url = `${BOARD.api.replace(/^http/, 'ws')}/vs/ws?room=${VS_ROOM}&key=${encodeURIComponent(deviceKey())}&mode=${mode}`;
     let ws;
     try { ws = new WebSocket(url); } catch (e) { return vsRetry(); }
     vs.ws = ws;
@@ -4910,22 +4965,30 @@
     setTimeout(vsConnect, Math.min(8000, 500 * 2 ** vs.retry));
   }
   setInterval(() => vsSend({ t: 'ping' }), 25000);
+  function vsSendTeam() {
+    const t = vsMyTeam();
+    if (t && vs.seat >= 0 && !vs.teams[vs.seat]) vsSend({ t: 'team', team: t, name: myName() });
+  }
   function vsOn(m) {
     if (m.t === 'hello') {
       vs.retry = 0;
-      Object.assign(vs, { seat: m.seat, seed: m.seed, spot: m.spot || vs.spot, full: !!m.full, online: m.online || vs.online });
+      Object.assign(vs, { seat: m.seat, seed: m.seed, full: !!m.full, online: m.online || vs.online, mode: m.mode || vs.mode,
+        teams: m.teams || vs.teams, names: m.names || vs.names, rated: m.rated || vs.rated });
       (m.decisions || []).forEach((d) => { if (d) vs.got[d.n] = d; });
       if (vs.last && G && vs.last.n === G.vsN && !vs.got[G.vsN]) vsSend(vs.last);   // a call sent as the line dropped
       vsBanner('');
-      if (vs.seat === 0 && !vs.spot) vsSend({ t: 'setup', spot: vsPickSpot() });
+      vsSendTeam();
       vsMaybeStart();
       vsWake();
     } else if (m.t === 'peer') {
       vs.online = m.online; vs.full = !!m.full;
       vsBanner(vs.started && !vs.online[1 - vs.seat] ? 'Your opponent dropped out. They have 40 seconds a call to come back.' : '');
       vsMaybeStart();
-    } else if (m.t === 'setup') {
-      vs.spot = m.spot;
+    } else if (m.t === 'taken') {
+      vs.taken = m.team;
+      renderVsWaiting();
+    } else if (m.t === 'teams') {
+      vs.teams = m.teams; vs.names = m.names || vs.names;
       vsMaybeStart();
     } else if (m.t === 'locked') {
       if (G && m.n === G.vsN && m.seat !== vs.seat) {
@@ -4936,99 +4999,182 @@
     } else if (m.t === 'step') {
       vs.got[m.n] = m;
       vsWake();
+    } else if (m.t === 'rated') {
+      vs.rated = m.ratings ? { ratings: m.ratings } : { void: true };
+      vsShowRating();
     } else if (m.t === 'rematch-ask') {
       const btn = $('vsAgain');
       if (btn && m.seat !== vs.seat) { btn.textContent = 'Your opponent wants a rematch: play again'; btn.classList.add('ask'); }
     } else if (m.t === 'rematch') {
       vs.closedByUs = true;
+      try { sessionStorage.setItem(`tmd:vsmode:${m.room}`, vs.mode === 'ranked' ? 'casual' : vs.mode); } catch (e) { /* none */ }
       location.hash = `#vs-${m.room}`;
     }
   }
-  // the spot: a random fourth-quarter spot of the pool, by the room's seed (seat 0 picks it, the room keeps it)
-  function vsPickSpot() {
-    const pool = idx.spots.filter((s) => s.start && s.start.qtr === 4 && s.start.clock >= 60);
-    return pool[vs.seed % pool.length].id;
-  }
   async function vsMaybeStart() {
     if (vs.started) return;
-    if (!vs.full || !vs.spot) return renderVsWaiting();
+    if (!vsMyTeam()) return renderVsWaiting();
+    if (!vs.full || !vs.teams[0] || !vs.teams[1]) return renderVsWaiting();
     vs.started = true;
-    const i = idx.spots.findIndex((s) => s.id === vs.spot);
-    if (i < 0) { vsNote('This match was set up on a newer version of the game. Reload the page.'); return; }
-    try {
-      const teams = await loadTeams([i]);
-      const sp = idx.spots[i], other = sp.player === sp.home ? sp.away : sp.home;
-      today = [buildScen({ ...sp, player: vs.seat === 0 ? sp.player : other, story: null }, teams[i])];
-    } catch (e) { vsNote('The match did not load (' + e.message + '). Reload to try again.'); return; }
-    $('dayLabel').textContent = `Versus · ${VS_ROOM}`;
+    let pool;
+    try { pool = await vsLoadPool(); } catch (e) { vsNote('The teams did not load (' + e.message + '). Reload to try again.'); return; }
+    const H = vs.teams[0], A = vs.teams[1], TH = pool.teams[H], TA = pool.teams[A];
+    if (!TH || !TA) { vsNote('A team in this match is not in this version of the game. Reload the page.'); return; }
+    const sp = { id: `vs:${VS_ROOM}`, category: 'ot', home: H, away: A, player: vs.seat === 0 ? H : A, indoor: false, wind: 0, spread: 0,
+      league: pool.league, start: { qtr: 4, clock: COT_T, score: [0, 0], pos: H, down: 1, ytg: 10, yl: 25, to: [1, 1], running: false, receive2h: H },
+      real: { season: pool.season, week: pool.week, type: 'REG', coach: null, call: null, drive: null, final: null } };
+    today = [buildScen(sp, { home: TH, away: TA })];
+    $('dayLabel').textContent = `${VS_MODES[vs.mode] || 'Versus'} · ${VS_ROOM}`;
     state = load(stateKey(), null) || { spots: [], current: 0, done: false };
     startWorkers();
-    track('vs_start', { seat: vs.seat });
-    openSpot(0);
+    track('vs_start', { mode: vs.mode, seat: vs.seat });
+    resumeSpot(0);
+    if (!G.vsN && !G.started) { const c = G.cot; G.root = possRoot(c.order[0], 1, [0, 0], [1, 1]); }
+    lastBall = null;
+    if (G.started || G.over) enterField(); else renderIntro();
   }
-  // waiting for the opponent: the code and the link to send
+  function renderVsIntro() {
+    const box = $('intro'), me = code(G.me), op = code(1 - G.me), first = G.cot.order[0];
+    const oppName = vs.names[1 - vs.seat];
+    box.append(el('div', 'cat', `${VS_MODES[vs.mode] || 'Versus'} · College overtime`),
+      el('div', 'game', `Your ${teamName(me)} vs ${oppName ? `${oppName}’s` : 'their'} ${teamName(op)}`), el('div', 'big', 'Overtime'));
+    box.append(el('p', 'story', `Each team gets the ball at the other’s 25, no clock. From the second overtime, a touchdown has to go for two; from the third, it’s a two-point play each. Ahead after both teams have had it, you win. ${first === G.me ? 'You won the toss: you have the ball first.' : `The ${teamName(op)} have the ball first.`}`));
+    box.append(el('div', 'who', `You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap.`));
+    const go = el('button', 'btn', 'Kick it off');
+    go.type = 'button';
+    go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
+    box.append(go, el('div', 'from legal', 'Fan-made. Not affiliated with or endorsed by the NFL or its teams.'));
+    go.focus({ preventScroll: true });
+  }
+  // the team picker: your team for every versus match until you change it
+  function vsTeamPicker(onPick, skip) {
+    const wrap = el('div', 'vsteams'), cur = vsMyTeam();
+    Object.keys(TEAMS).filter((c) => c !== skip).sort((a, b) => teamName(a).localeCompare(teamName(b))).forEach((c) => {
+      const b = el('button', `vsteam${c === cur ? ' on' : ''}`);
+      b.type = 'button';
+      const sw = el('span', 'sw'); sw.style.background = color(c);
+      b.append(sw, el('span', 'nm', teamName(c)));
+      b.setAttribute('aria-pressed', String(c === cur));
+      b.addEventListener('click', () => { save(VS_TEAM_KEY, c); track('vs_team', { team: c }); onPick(c); });
+      wrap.append(b);
+    });
+    requestAnimationFrame(() => { const on = wrap.querySelector('.on'); if (on) wrap.scrollTop = on.offsetTop - 4; });   // your team in view
+    return wrap;
+  }
+  // waiting for the opponent: the code and the link to send (and your team, if you came in on a link)
   function renderVsWaiting() {
     show('arch');
     const box = $('arch');
     box.textContent = '';
-    const quick = (() => { try { return sessionStorage.getItem('tmd:vsquick') === VS_ROOM; } catch (e) { return false; } })();
-    box.append(el('h2', '', 'Versus'));
-    if (vs.full && !vs.spot) { box.append(el('p', 'lead', 'Setting up the spot…')); return; }
-    box.append(el('p', 'lead', quick ? 'Finding you an opponent…' : 'Send this to a friend. The match starts when they open it.'));
-    const code = el('div', 'vscode', VS_ROOM);
-    box.append(code);
-    const row = el('div', 'row'), copy = el('button', 'btn', 'Copy the link');
-    copy.type = 'button';
-    copy.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(vsLink(VS_ROOM)); copy.textContent = 'Copied'; } catch (e) { copy.textContent = vsLink(VS_ROOM); }
-    });
-    row.append(copy);
-    if (navigator.share) {
-      const sh = el('button', 'btn ghostbtn', 'Share');
-      sh.type = 'button';
-      sh.addEventListener('click', () => { navigator.share({ title: 'Two-Minute Drill: versus', text: 'Call it against me. One of us has the ball, the other calls the defense.', url: vsLink(VS_ROOM) }).catch(() => {}); });
-      row.append(sh);
+    box.append(el('h2', '', VS_MODES[vs.mode] || 'Versus'));
+    if (!vsMyTeam() || (vs.taken && !vs.teams[vs.seat])) {
+      const lead = vs.taken ? `Your opponent already has the ${teamName(vs.taken)}. Pick another team.` : 'Pick your team for this match: its real lineup this week.';
+      box.append(el('p', 'lead', lead), vsTeamPicker(() => { vs.taken = ''; vsSendTeam(); vsMaybeStart(); }, vs.taken));
+      return;
     }
-    box.append(row, el('p', 'note', 'Waiting for the other side… keep this page open.'));
-    if (quick) setTimeout(() => { if (!vs.full && !vs.started) box.append(el('p', 'note', 'Nobody yet. Keep waiting, or send the link to a friend.')); }, 60000);
+    const mine = vsMyTeam();
+    box.append(el('p', 'note', `Your team: ${teamName(mine)}`));
+    if (vs.full) { box.append(el('p', 'lead', 'Opponent found. Waiting for their team…')); return; }
+    const queued = vs.mode === 'ranked' || vs.mode === 'casual';
+    box.append(el('p', 'lead', queued ? 'Finding you an opponent…' : 'Send this to a friend. The match starts when they open it.'));
+    if (!queued) {
+      box.append(el('div', 'vscode', VS_ROOM));
+      const row = el('div', 'row'), copy = el('button', 'btn', 'Copy the link');
+      copy.type = 'button';
+      copy.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(vsLink(VS_ROOM)); copy.textContent = 'Copied'; } catch (e) { copy.textContent = vsLink(VS_ROOM); }
+      });
+      row.append(copy);
+      if (navigator.share) {
+        const sh = el('button', 'btn ghostbtn', 'Share');
+        sh.type = 'button';
+        sh.addEventListener('click', () => { navigator.share({ title: 'Two-Minute Drill: versus', text: 'College overtime, you and me. Pick your team.', url: vsLink(VS_ROOM) }).catch(() => {}); });
+        row.append(sh);
+      }
+      box.append(row);
+    }
+    box.append(el('p', 'note', 'Keep this page open.'));
+    const back = el('a', 'chip', '◀ Back');
+    back.href = '#vs';
+    box.append(back);
+    if (queued) setTimeout(() => { if (!vs.full && !vs.started && $('arch').contains(back)) box.append(el('p', 'note', 'Nobody yet. Keep waiting, or play a friend.')); }, 60000);
   }
-  // the Versus screen (#vs): quick match, a friend's room, or a code
-  function renderVsLobby() {
+  // the Versus screen (#vs): your team, then ranked, casual or a friend; the ladder
+  async function renderVsLobby() {
     show('arch');
     const box = $('arch');
     box.textContent = '';
-    box.append(el('h2', '', 'Versus'), el('p', 'lead', 'Call it live against another player. A real fourth-quarter spot: one of you has the ball, the other calls the defense. Both calls lock in before the snap, and the same play runs on both phones.'));
-    const row = el('div', 'row vsbtns'), quick = el('button', 'btn', 'Quick match'), friend = el('button', 'btn ghostbtn', 'Play a friend');
-    quick.type = 'button'; friend.type = 'button';
-    quick.addEventListener('click', async () => {
-      quick.disabled = true;
+    box.append(el('h2', '', 'Versus'), el('p', 'lead', 'College overtime against another player: each team gets the ball at the other’s 25, no clock. You call your offense and your defense; both calls lock in before the snap, and the same play runs on both phones.'));
+    const pick = el('div', 'vspick');
+    const drawPick = () => {
+      pick.textContent = '';
+      const t = vsMyTeam();
+      pick.append(el('h3', '', t ? `Your team: ${teamName(t)}` : 'Pick your team'), vsTeamPicker(() => { drawPick(); drawModes(); }));
+    };
+    const modes = el('div', 'vsmodes');
+    const go = async (mode, btn) => {
+      if (!vsMyTeam()) { toast('Pick your team first'); return; }
+      if (mode === 'ranked' && !myName()) { toast('Ranked needs a name: set it below'); return; }
+      btn.disabled = true;
       try {
         await BOARD.ready;
-        const r = await fetch(`${BOARD.api}/vs/quick`, POST_JSON({ key: deviceKey() }));
+        if (mode === 'friend') {
+          const a = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', room = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => a[b % a.length]).join('');
+          try { sessionStorage.setItem(`tmd:vsmode:${room}`, 'friend'); } catch (e) { /* none */ }
+          track('vs_friend');
+          location.hash = `#vs-${room}`;
+          return;
+        }
+        const r = await fetch(`${BOARD.api}/vs/quick`, POST_JSON({ key: deviceKey(), mode }));
         const d = await r.json();
         if (!r.ok || !d.room) throw new Error(d.error || `vs ${r.status}`);
-        try { sessionStorage.setItem('tmd:vsquick', d.room); } catch (e) { /* none */ }
-        track('vs_quick');
+        try { sessionStorage.setItem(`tmd:vsmode:${d.room}`, mode); } catch (e) { /* none */ }
+        track('vs_queue', { mode });
         location.hash = `#vs-${d.room}`;
-      } catch (e) { toast('Could not find a match: ' + e.message); quick.disabled = false; }
-    });
-    friend.addEventListener('click', () => {
-      const a = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', room = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => a[b % a.length]).join('');
-      track('vs_friend');
-      location.hash = `#vs-${room}`;
-    });
-    row.append(quick, friend);
-    const join = el('div', 'row'), inp = el('input'), go = el('button', 'btn ghostbtn', 'Join');
-    inp.placeholder = 'Code'; inp.maxLength = 6; inp.autocapitalize = 'characters'; inp.spellcheck = false; inp.setAttribute('aria-label', 'Match code');
-    go.type = 'button';
-    go.addEventListener('click', () => {
+      } catch (e) { toast('Could not find a match: ' + e.message); btn.disabled = false; }
+    };
+    const drawModes = () => {
+      modes.textContent = '';
+      [['ranked', 'Ranked', 'Win to climb the ladder'], ['casual', 'Casual', 'Quick match, no rating'], ['friend', 'Friend', 'Send a link']].forEach(([m, label, sub]) => {
+        const b = el('button', `btn${m === 'friend' ? ' ghostbtn' : ''}`);
+        b.type = 'button';
+        b.append(document.createTextNode(label), el('small', '', sub));
+        b.disabled = !BOARD.api;
+        b.addEventListener('click', () => go(m, b));
+        modes.append(b);
+      });
+    };
+    drawPick(); drawModes();
+    box.append(pick, modes);
+    const nameRow = el('div', 'row'), nameIn = el('input');
+    nameIn.placeholder = 'Your name (for ranked)'; nameIn.maxLength = 24; nameIn.value = myName(); nameIn.setAttribute('aria-label', 'Your name');
+    nameIn.addEventListener('change', () => { save(NAME_KEY, nameIn.value.trim().slice(0, 24)); track('name_set', { mode: 'versus' }); });
+    nameRow.append(nameIn);
+    box.append(nameRow);
+    const join = el('div', 'row'), inp = el('input'), jb = el('button', 'btn ghostbtn', 'Join');
+    inp.placeholder = 'Friend’s code'; inp.maxLength = 6; inp.autocapitalize = 'characters'; inp.spellcheck = false; inp.setAttribute('aria-label', 'Match code');
+    jb.type = 'button';
+    jb.addEventListener('click', () => {
       const c = inp.value.toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/0/g, 'O').replace(/[1IL]/g, 'I');
       if (!/^[A-HJ-KM-NP-Z2-9]{6}$/.test(c)) { toast('A code is 6 letters and numbers'); return; }
+      if (!vsMyTeam()) { toast('Pick your team first'); return; }
       location.hash = `#vs-${c}`;
     });
-    join.append(inp, go);
-    box.append(row, el('p', 'note', 'Got a code from a friend?'), join);
-    if (!BOARD.api) { quick.disabled = true; friend.disabled = true; go.disabled = true; box.append(el('p', 'note', 'Versus needs the website’s backend.')); }
+    join.append(inp, jb);
+    box.append(join);
+    if (!BOARD.api) { box.append(el('p', 'note', 'Versus needs the website’s backend.')); return; }
+    // the ladder, and you on it
+    const lad = el('div', 'vsladder');
+    box.append(el('h3', '', 'Ranked ladder'), lad);
+    try {
+      await BOARD.ready;
+      const [top, me] = await Promise.all([fetch(`${BOARD.api}/vs/ladder`).then((r) => r.json()), fetch(`${BOARD.api}/vs/me`, POST_JSON({ key: deviceKey() })).then((r) => r.json())]);
+      lad.append(el('p', 'note', `You: ${me.rating}${me.w + me.l ? ` · ${me.w}–${me.l}` : ' · no ranked games yet'}`));
+      const ol = el('ol', 'board');
+      (top.top || []).slice(0, 20).forEach((x) => { const li = el('li'); li.append(el('span', 'nm', x.name), el('span', 'n', `${x.rating} · ${x.w}–${x.l}`)); ol.append(li); });
+      if (!(top.top || []).length) lad.append(el('p', 'note', 'Nobody yet. Be the first.'));
+      else lad.append(ol);
+    } catch (e) { lad.append(el('p', 'note', 'The ladder did not load.')); }
   }
   function vsNote(text) {
     show('arch');
@@ -5093,14 +5239,12 @@
     const off = half(r.pos), def = half(1 - r.pos);
     vs.oppLocked = -1;
     G.vsN = d.n + 1;
-    if (r.phase === SNAP && off && off.timeout && r.clock_running && r.to[r.pos] > 0 && !r.try2) {
-      const halfEnd = r.t > 1800 ? 1800 : 0, t = off.rundown ? Math.min(r.t - 1, halfEnd + RUNDOWN_AT) : r.t - 1;
-      G.root = { ...r, to: r.to.slice(), clock_running: false, t: Math.max(halfEnd, t) };
+    if (r.phase === SNAP && off && off.timeout && r.to[r.pos] > 0 && !r.try2) {
+      G.root = { ...r, to: r.to.slice(), clock_running: false };
       G.root.to[r.pos] -= 1;
-      if (off.rundown) addLog(`Ran the clock down to ${clockOf(G.root.t).text}`, G.root.t, r.pos === G.me);
       addLog(`Timeout, ${teamName(code(r.pos))}`, G.root.t, r.pos === G.me);
       persist();
-      return { res: { log: [], action: { to_off: true }, root: G.root }, head: off.rundown ? 'Ran it down, timeout' : 'Timeout', d };
+      return { res: { log: [], action: { to_off: true }, root: G.root }, head: 'Timeout', d };
     }
     if (r.phase === PAT && off && off.two) {
       G.root = { ...r, phase: SNAP, down: 1, ytg: 2, yl: 2, clock_running: false, try2: { ...r } };
@@ -5112,19 +5256,20 @@
     if (r.phase === SNAP) {
       a = off && off.action ? { ...off.action } : (r.try2 ? { pat: 'two' } : { to_off: false });
       if (def && VS_LOOKS[def.def]) { if (a.call !== undefined) a.looks = VS_LOOKS[def.def]; else if (!r.try2) a.def = def.def; }
-      a.to_def = !!(def && def.to_def && r.clock_running && r.to[1 - r.pos] > 0);
+      a.to_def = false;
+      delete a.tempo;
     } else a = off && off.action ? { ...off.action } : {};
     const res = await stepWith(a);
+    cotAfter();
     persist();
     return { res, d };
   }
   // what each side called, shown once the snap is in
   function vsCalls(d, root) {
     const off = d.halves[vsSeatOf(root.pos)], def = d.halves[vsSeatOf(1 - root.pos)];
-    const KICK = { return: 'kick to the returner', touchback: 'through the end zone', onside: 'onside kick', deep: 'kick deep' };
     const a = off && off.action;
     const offTxt = !off ? 'no call in time (the default)' : off.timeout ? 'a timeout' : off.two ? 'going for two' : a && a.call ? (CALL[a.call] || {}).label || 'a play'
-      : a && a.play ? specialLabel(a.play) : a && a.kick ? KICK[a.kick] || 'the kickoff' : a && a.pat ? (a.pat === 'two' ? 'going for two' : 'the extra point') : 'a play';
+      : a && a.play ? specialLabel(a.play) : a && a.pat ? (a.pat === 'two' ? 'going for two' : 'the extra point') : 'a play';
     const defTxt = root.phase !== SNAP ? null : !def ? 'no call in time (the default)' : (DEF[def.def] || {}).label || 'a defense';
     const me = root.pos === G.me;
     return `${me ? 'You' : 'They'}: ${offTxt}${defTxt ? ` · ${me ? 'They' : 'You'}: ${defTxt}` : ''}`;
@@ -5171,28 +5316,33 @@
       if (mine) promptOffense(); else promptDefense();
       return 'stop';
     }
-    if (mine && (r.phase === PAT || r.phase === KICKOFF)) {
+    if (mine && r.phase === PAT) {
       if (vs.waiting === G.vsN) { status('Waiting…'); return 'stop'; }
       vsClockStart();
-      promptChoice(r.phase === PAT ? 'pat' : r.free_kick ? 'freekick' : 'kick');
+      promptChoice('pat');
       return 'stop';
     }
     vs.idle = true;
-    status(r.phase === PAT ? `The ${teamName(code(r.pos))} line up for the try…` : `The ${teamName(code(r.pos))} line up to kick off…`);
+    status(`The ${teamName(code(r.pos))} line up for the try…`);
     return 'stop';
   }
   function vsEndCard() {
-    const r = G.root, mine = r.score[G.me], theirs = r.score[1 - G.me], d = $('dock');
-    if (!G.result) { G.result = { mine, theirs, half: 2, v: 2, vs: true }; G.over = true; persist(); track('vs_finish', { result: mine > theirs ? 'win' : mine < theirs ? 'loss' : 'tie', ot: !!r.ot }); }
+    const r = G.root, mine = r.score[G.me], theirs = r.score[1 - G.me], d = $('dock'), rounds = G.cot ? G.cot.round : 1;
+    if (!G.result) {
+      G.result = { mine, theirs, half: 2, v: 2, vs: true }; G.over = true; persist();
+      track('vs_finish', { mode: vs.mode, result: mine > theirs ? 'win' : mine < theirs ? 'loss' : 'tie', rounds });
+    }
+    if (vs.mode === 'ranked' && !vs.rated) vsSend({ t: 'result', winner: mine > theirs ? vs.seat : mine < theirs ? 1 - vs.seat : -1 });
     vs.closedByUs = false;
     drawAll();
     d.textContent = '';
     takeBanner(d);
     const card = el('div', 'endcard');
-    const ot = r.ot ? ' in overtime' : '';
-    card.append(el('h2', '', mine > theirs ? `You win ${mine}–${theirs}${ot}` : mine < theirs ? `You lose ${mine}–${theirs}${ot}` : `Tie ${mine}–${theirs}${ot}`));
-    card.append(el('p', 'note', `${teamName(code(G.me))} vs ${teamName(code(1 - G.me))} · ${gameTag(G.scen)}`));
-    const row = el('div', 'row'), again = el('button', 'btn', 'Rematch'), next = el('a', 'btn ghostbtn', 'New opponent');
+    const ot = rounds > 1 ? ` in ${ordinal(rounds)} overtime` : ' in overtime';
+    card.append(el('h2', '', mine > theirs ? `You win ${mine}–${theirs}${ot}` : `You lose ${mine}–${theirs}${ot}`));
+    card.append(el('p', 'note', `Your ${teamName(code(G.me))} vs ${vs.names[1 - vs.seat] ? `${vs.names[1 - vs.seat]}’s` : 'their'} ${teamName(code(1 - G.me))} · ${VS_MODES[vs.mode] || 'Versus'}`));
+    card.append(el('p', 'vsrating', ''));
+    const row = el('div', 'row'), again = el('button', 'btn', 'Rematch'), next = el('a', 'btn ghostbtn', 'New match');
     again.type = 'button'; again.id = 'vsAgain';
     again.addEventListener('click', () => { again.disabled = true; again.textContent = 'Waiting for your opponent…'; vsSend({ t: 'rematch' }); });
     next.href = '#vs';
@@ -5200,17 +5350,15 @@
     card.append(row);
     d.append(card);
     drawTiles();
+    vsShowRating();
   }
-  // overtime in versus: no choice to wait on; the toss (seeded: the same on both phones) picks who receives
-  function vsOvertime() {
-    const r = G.root, po = isPlayoff(G.scen);
-    const winner = rng(hash('toss', seedKey(), G.si))() < 0.5 ? 0 : 1, kicker = 1 - winner;
-    G.root = { t: po ? 900 : 600, pos: kicker, score: [r.score[0], r.score[1]], down: 1, ytg: 10, yl: 65, to: po ? [3, 3] : [2, 2],
-      clock_running: false, phase: KICKOFF, credit: 0, free_kick: false, ot: { c: [0, 0], po, n: 1 } };
-    G.over = false; G.result = null;
-    addLog(`Overtime: ${winner === G.me ? 'you won the toss and receive' : `the ${teamName(code(winner))} won the toss and receive`}`, G.root.t, true);
-    persist();
-    advance();
+  function vsShowRating() {
+    const p = document.querySelector('.endcard .vsrating');
+    if (!p || vs.mode !== 'ranked') return;
+    if (!vs.rated) { p.textContent = 'Ranked: updating your rating…'; return; }
+    if (vs.rated.void) { p.textContent = 'Ranked: the two results did not match, so this game was not rated.'; return; }
+    const x = vs.rated.ratings[vs.seat], dlt = x.after - x.before;
+    p.textContent = `Rating ${x.before} → ${x.after} (${dlt >= 0 ? '+' : '−'}${Math.abs(dlt)})`;
   }
 
   // ----------------------------------------------------------------- boot ---

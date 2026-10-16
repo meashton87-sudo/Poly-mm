@@ -297,6 +297,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
                 + "</body></html>\n")
     for f in FILES:
         shutil.copy2(WEB / f, out / f)
+    if (WEB / "teams.json").exists():           # Versus: the 32 teams as they line up now (nflclock.pro.versus_teams)
+        shutil.copy2(WEB / "teams.json", out / "teams.json")
     for f, p in PACKED.items():
         pack(WEB / f, out / p)
     for f in sorted((WEB / "spots").glob("s*.json")):

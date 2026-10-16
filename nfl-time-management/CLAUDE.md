@@ -25,6 +25,7 @@ node web/game_smoke.js                # daily game: every spot's two real teams,
 node web/game_sweep.js                # daily game: every spot x call x tempo, whole games, football invariants, points to the right team, the called play is the play run (~3 min)
 node web/motion_test.js               # daily game animation: player motion stays in the tracking envelope, routes, coverage
 node board/worker_test.mjs            # the website's survivor leaderboard (Cloudflare Worker + Durable Object), storage in memory
+node board/match_test.mjs             # Versus match rooms: sealed calls, college-OT seats, lobby per mode, ranked Elo ladder
 ```
 
 ## Rules
