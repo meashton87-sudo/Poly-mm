@@ -166,7 +166,11 @@ def ads_head(adsense: str | None, ad_slot: str | None) -> str:
 
 GA_TAG = ("<script async src=\"https://www.googletagmanager.com/gtag/js?id={id}\"></script>"
           "<script>window.dataLayer=window.dataLayer||[];function gtag(){{dataLayer.push(arguments);}}"
-          "gtag('js',new Date());gtag('config','{id}');</script>")
+          "gtag('js',new Date());"
+          # the page GA records: the path plus the game's mode from the address (#survivor, #archive, #drive-3 -> /drive),
+          # no query string (Stripe's ?claim=, ad click ids), so the modes are their own rows and nothing lands in (other)
+          "var h=location.hash.replace(/^#/,'').replace(/-\\d+$/,'');"
+          "gtag('config','{id}',{{page_location:location.origin+location.pathname+(h&&/^[a-z]+$/.test(h)?(location.pathname.slice(-1)==='/'?'':'/')+h:'')}});</script>")
 
 
 # Every page: the same footer (the site's pages, the contact, the disclaimer and the data credit), its style, and the
