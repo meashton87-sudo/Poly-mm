@@ -28,6 +28,18 @@ ERA = 3            # seasons pooled for "what the league did then" (the league p
 SHRINK = {"pass": 120, "deep": 60, "go": 25, "two": 6}
 MIN_PLAYS = 150     # late-game snaps; fewer plays sit nearer the league average (SHRINK), so small samples stay modest
 COACH_FIX = {"Klint Kubliak": "Klint Kubiak"}
+# Head coaches the nflverse schedule still has wrong for a season (it carried last year's coach forward), by
+# (season, team): the coach who actually ran the team that year.
+COACH_SEASON = {(2026, "ARI"): "Mike LaFleur", (2026, "ATL"): "Kevin Stefanski", (2026, "BUF"): "Joe Brady"}
+
+
+def coach_name(name, team, season):
+    """The head coach to show: the season override for the team, else the schedule's name with spelling fixed."""
+    try:
+        fixed = COACH_SEASON.get((int(season), str(team)))
+    except (TypeError, ValueError):
+        fixed = None
+    return fixed or COACH_FIX.get(name, name)
 
 
 def _load() -> pd.DataFrame:
@@ -46,6 +58,8 @@ def _load() -> pd.DataFrame:
     d = pd.concat(frames, ignore_index=True)
     d["coach"] = np.where(d["posteam"] == d["home_team"], d["home_coach"], d["away_coach"])
     d["coach"] = d["coach"].replace(COACH_FIX)
+    for (season, team), name in COACH_SEASON.items():
+        d.loc[(d["season"] == season) & (d["posteam"] == team), "coach"] = name
     d["margin"] = d["posteam_score"] - d["defteam_score"]
     return d[d["coach"].notna() & d["posteam"].notna()]
 

@@ -483,7 +483,7 @@ class History:
                 qb_id = Counter(ids).most_common(1)[0][0] if len(ids) else None
             st = self._strength(team, season, week, game_id, qb_id)
             out[side] = {
-                "team": team, "coach": CO.COACH_FIX.get(coaches.get(side), coaches.get(side)), "base": st["base"], "qb": st["qb"],
+                "team": team, "coach": CO.coach_name(coaches.get(side), team, season), "base": st["base"], "qb": st["qb"],
                 "injury_adjustment": st["injury_adjustment"], "kicker": st["kicker"], "punter": st["punter"],
                 "lineup": {"off": self._players(R, rt, season, team, "off", off, week),
                            "def": self._players(R, rt, season, team, "def", dfn, week),

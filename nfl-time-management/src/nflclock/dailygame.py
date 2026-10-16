@@ -115,7 +115,7 @@ def spot_record(r, g, receive2h: dict) -> dict:
                   "running": False, "phase": "snap", "receive2h": receive2h.get(gid, away)},
         "spread": float(np.nan_to_num(g["spread_line"])),
         "real": {"season": int(g["season"]), "week": int(g["week"]), "type": str(g["game_type"]),
-                 "coach": CO.COACH_FIX.get(c := g["home_coach"] if home_off else g["away_coach"], c),
+                 "coach": CO.coach_name(g["home_coach"] if home_off else g["away_coach"], off, g["season"]),
                  "call": call if isinstance(call, str) else None,          # the library's label for the real play (2022 on)
                  "drive": None if res is None or (isinstance(res, float) and np.isnan(res)) else DRIVE_RESULT.get(res, res),
                  "final": {"away": int(r["away_score"]), "home": int(r["home_score"])}},
