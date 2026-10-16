@@ -2897,6 +2897,13 @@
     const kneels = 5 - r.down - r.to[1 - G.me] - (r.clock_running ? 0 : 1);
     return lead > 0 && th <= 40 * Math.max(kneels, 0) + 30;
   }
+  // the other team, ahead with the ball, can kneel out the half whatever you do: a kneel on each down left (about 2
+  // seconds each) and the play clock between them (about 38), less one run-off for each timeout you have
+  function kneelsOut(r) {
+    const opp = 1 - G.me, n = 5 - r.down;
+    if (r.pos !== opp || r.score[opp] <= r.score[G.me] || n <= 0) return false;
+    return halfLeft(r.t) <= 2 * n + 38 * Math.max(n - 1 - r.to[G.me], 0);
+  }
   function clockOptions(r) {      // with the clock running
     const me = G.me, lead = r.score[me] - r.score[1 - me];
     const needTime = r.t > 1800 || lead <= 0;
@@ -3496,6 +3503,9 @@
     const peek = VS ? { log: [] } : (await send({ type: 'step', scen: simScen(), root: r, action: { to_def: false }, seed: hash('step', seedKey(), G.si, G.seq) }, true)).res;
     const kick = peek.log.find((e) => e.ev === 'fg' || e.ev === 'punt');
     if (kick) { G.fast = false; return promptChoice(kick.ev === 'fg' ? 'fgdef' : 'puntdef'); }
+    // they kneel it out and nothing you could call stops it: no call to make and none graded (a player was asked for a
+    // defense with 5 seconds left and the other team kneeling)
+    if (!VS && peek.log.some((e) => e.ev === 'play' && e.kind === KNEEL) && kneelsOut(r)) { G.autoDef = true; return advance(); }
     G.fast = false;
     if (!FULLDEF) { ui = { step: 'defense', to: false }; drawDefDock(); toField(); return; }
     ui = { step: 'vdef', dc: VS ? vdefDefault(r) : nflDefault(r, G.dinfo && G.dinfo.dshare), to: false };
