@@ -4720,7 +4720,8 @@
     bar.setAttribute('aria-hidden', 'true');
     box.append(bar);
     const lines = [];
-    if (!g.pass) lines.push(`${PASS_AT} passes: ${PASS_AT - score} more ${PASS_AT - score === 1 ? 'point' : 'points'}.`);
+    const r0 = state.spots[0] && state.spots[0].result, won = !!(r0 && r0.mine > r0.theirs);
+    if (!g.pass) lines.push(won ? `${PASS_AT} passes: ${PASS_AT - score} more ${PASS_AT - score === 1 ? 'point' : 'points'}.` : `A pass takes winning the game: a loss or a tie tops out at ${PASS_AT - 1}.`);
     if (prev && prev.p * 100 >= score + 0.5) lines.push(`Your best here: ${Math.round(prev.p * 100)} (${gradeOf(Math.round(prev.p * 100)).L}).`);
     else if (prev && score > Math.round(prev.p * 100)) lines.push(`New best: up from ${Math.round(prev.p * 100)}.`);
     if (rec && rec.tries > 1) lines.push(`Try ${rec.tries}.`);
