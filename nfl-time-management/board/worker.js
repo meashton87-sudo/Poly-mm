@@ -500,6 +500,9 @@ async function race(req, env, storage, hits, h, url) {
   if (now < raceFrom(env)) return json({ error: 'the Gauntlet has not started', ...(await raceView(storage, env, id)) }, 409, h);
   if (e.passes[drive]) return json(await raceView(storage, env, id), 200, h);           // passed already: its first pass counts
   if (now - (e.last || 0) < RACE_GAP) return json({ error: 'too fast: one drive at a time' }, 429, h);
+  // the mission: a pass takes winning the game
+  const won = Array.isArray(body.res) && Array.isArray(body.res[0]) && Number(body.res[0][0]) > Number(body.res[0][1]);
+  if (!won) return json({ error: 'a pass takes winning the game' }, 400, h);
   const res = Array.isArray(body.res) ? body.res.slice(0, 4).map((r) => (Array.isArray(r) ? r.slice(0, 2).map(Number) : null)) : null;
   await storage.put(`race:audit:${id}:${drive}`, { at: now, p, tryAt: Number(body.tryAt) || null, decs, res });
   e.passes[drive] = now; e.n = Object.keys(e.passes).length; e.nAt = now; e.last = now;

@@ -4671,6 +4671,8 @@
       });
       if (m < my - 1e-9) better += 1; else if (Math.abs(m - my) <= 1e-9) better += 0.5;
     }
+    // a historic drive is a mission: an A (a pass, the Gauntlet's too) takes winning the game
+    if (DRIVE && groups.some((g) => g.res < 1)) return Math.min(better / N, (PASS_AT - 1) / 100);
     return better / N;
   }
   function percentileVsNFL(decs) {
@@ -4706,7 +4708,7 @@
     const top = el('div', 'gtop');
     const big = el('div', 'gbig', g.L);
     const txt = el('div', 'gtxt');
-    txt.append(el('div', 'gk', d.title), el('div', 'gres', g.pass ? 'Passed' : score >= PASS_AT - 10 ? 'So close' : 'Not yet'),
+    txt.append(el('div', 'gk', d.title), el('div', 'gres', g.pass ? 'Passed' : !(state.spots[0] && state.spots[0].result && state.spots[0].result.mine > state.spots[0].result.theirs) ? 'Win it to pass' : score >= PASS_AT - 10 ? 'So close' : 'Not yet'),
       el('div', 'gsc', `${score} · better than ${score}% of NFL play\u2011callers, the calls and the result`));
     top.append(big, txt);
     box.append(top);
@@ -5369,7 +5371,7 @@
       rules.append(el('summary', '', 'Rules'));
       const ul = el('ul');
       [`Open to Pro players: one entry per Pro code, under a name everyone can see (no slurs or obscenities: names like that are refused).`,
-        `Pass a historic drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play-callers. The score is mostly the calls, partly the result: a win lifts the same calls by about 15-20 points, and an A takes sharp calls. Each drive counts once, the first time you pass it after entering.`,
+        `Pass a historic drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play-callers. You have to win the game: a loss or a tie tops out at 89. The score is mostly the calls, partly the result, so an A takes the win and sharp calls. Each drive counts once, the first time you pass it after entering.`,
         `The board ranks by drives passed, then by who got there first (the server's clock). The first to pass all ${n} wins ${racePrize()}.`,
         'Every pass keeps the calls behind it. A winning run is checked call by call before the prize goes out; a run that doesn’t hold up is taken off the board.',
         'One drive at a time: passes come in at most one every 30 seconds.'].forEach((t) => ul.append(el('li', '', t)));
@@ -5531,7 +5533,7 @@
       ttl.append(el('span', 'k', 'Your rank'), el('b', '', rk.title), el('span', 'sub', rk.next ? `${rk.next.at - passed} more ${rk.next.at - passed === 1 ? 'pass' : 'passes'} to ${rk.next.title}` : 'Every drive passed. The Hall of Fame.'));
       const num = el('div', 'phn');
       num.append(el('b', '', `${passed}/${n}`), el('span', 'k', 'passed'));
-      head.append(ttl, num, driveStrip(ds), el('p', 'note', `Pass a drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play\u2011callers, counting the calls and the result. Replay any drive as often as you like; your best grade counts.${played ? ` Played ${played} of ${n}.` : ''}`));
+      head.append(ttl, num, driveStrip(ds), el('p', 'note', `Pass a drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play\u2011callers, counting the calls and the result, and you have to win the game. Replay any drive as often as you like; your best grade counts.${played ? ` Played ${played} of ${n}.` : ''}`));
       box.append(head, el('h3', '', 'Historic drives'));
       const dl = el('div', 'days');
       pro.drives.forEach((d, k) => {
