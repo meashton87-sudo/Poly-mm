@@ -83,6 +83,7 @@ jobs:
         run: |
           npx --yes eslint@8.57.0 --no-eslintrc -c web/eslint.json web/game.js web/motion.js web/engine.js web/game_worker.js web/vs_core.js
           node web/game_smoke.js
+          node web/defense_calibration.js
           node web/motion_test.js
           node board/worker_test.mjs
           node web/game_sweep.js

@@ -193,7 +193,7 @@
       a = off && off.action ? { ...off.action } : (r.try2 ? { pat: 'two' } : {});
       if (r.try2) a.pat = 'two';
       if (def && def.dc) a.dc = { ...def.dc };
-      // a trick play the defense has seen this match works less well (engine.js dcMatch 'seen_it')
+      // a trick play the defense has seen this match works less well (engine.js dcEffect 'seen_it')
       const trick = typeof a.call === 'string' && a.call.startsWith('trick');
       if (trick) a.seen = (ms.tricks || [0, 0])[r.pos];
       a.to_off = false; a.to_def = false;

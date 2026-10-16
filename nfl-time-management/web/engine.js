@@ -87,12 +87,16 @@
   };
   // the defense's call a look stands for (lookBucket: 0 light box, 1 light + blitz, 2 loaded box, 3 loaded + blitz)
   const LOOK_DEF = ['soft', 'blitz', 'load', 'blitz'];
-  // Versus: the defense's whole call (act.dc): personnel, front, coverage and pass rush. The offense's play is a real
-  // one run against that defense (the charting of each play: dcLevels, loosened one filter at a time until there are
-  // PB_LOOK_MIN plays), and the matchup of the two calls (dcMatch: a sum of football reasons) tilts the draw like
-  // MATCH, capped at DC_CAP
-  const DC_CAP = 1.5;
-  const DC_LEAN = 1.5;                // daily game: the offense's run/pass lean per point of matchup gap (dcLean)
+  // The defense's whole call (act.dc): personnel, front, coverage and pass rush. The offense's play is a real NFL play
+  // run against that defense, as each play was charted (NGS and FTN: pass rushers, coverage shell, men in the box,
+  // defensive backs): the rush first (it decides the pressure, the sacks and the time to throw), widening the
+  // situation before giving up a filter (sampleVsDefense). Its average worth is the offense's own there plus the
+  // defense's effect on that kind of play, estimated from the charted plays (playbook.py dc_effects: small, a few
+  // hundredths of a point a play; what a call changes is how the play goes, which the real plays carry)
+  const DC_MIN = 30;                  // plays charted against the called defense before a draw keeps a filter
+  const DC_ROWS_CAP = 3e6;            // plays kept in the shared sets a draw widens to (12 MB), _rowSet
+  const DC_READ = 4;                  // daily game: an offense that reads your call favors what beats it, by
+                                      // exp(DC_READ x its edge in EPA) (a quantal response; the edges are small)
   const DC = {
     pers: { heavy: [1, 3], base: [4, 4], nickel: [5, 5], dime: [6, 7] },         // defensive backs on the field
     front: { light: [1, 6], even: [7, 7], loaded: [8, 15] },                      // men in the box
@@ -100,111 +104,58 @@
     cover: { c0: [1], c1: [2], '2man': [4], c2: [3], c3: [5, 8], c4: [6], c6: [7], prevent: [9] },   // playbook.py SHELLS
   };
   const DC_MAN = new Set(['c0', 'c1', '2man']);
-  const DC_DEEP = { c0: 0, c1: 1, c3: 1, '2man': 2, c2: 2, c4: 2, c6: 2, prevent: 3 };      // deep safeties
+  const DC_RUNNY = new Set(['run', 'sneak', 'qbrun', 'reverse']);
   const dcValid = (dc) => !!dc && DC.pers[dc.pers] !== undefined && DC.front[dc.front] !== undefined &&
     DC.rush[dc.rush] !== undefined && DC.cover[dc.cover] !== undefined;
   const dcGroup = (id) => (id === 'qb_sneak' ? 'sneak' : id === 'qb_run' ? 'qbrun' : id === 'trick_reverse' ? 'reverse'
     : id.startsWith('rb_') || id === 'trick_direct' ? 'run' : id === 'screen' ? 'screen' : id.startsWith('quick') ? 'quick'
       : id.startsWith('deep') ? 'deep' : id.startsWith('pa_') ? id : id.startsWith('roll') ? 'roll' : id.startsWith('rpo') ? 'rpo'
-        : id === 'hail_mary' ? 'hail' : id.startsWith('trick') ? 'trick' : 'other');
-  // the matchup of the offense's call (id, with its personnel pers when picked) against the defense's call dc: the
-  // reasons [why, value] (+ favors the offense), and their sum s, capped. Every part of a defense gives something up:
-  // big personnel and a loaded box stop the run and lose to the pass, dime and a light box the other way round; man
-  // coverage loses to the quarterback running and to rubs at the line, two deep safeties to the run, one or none to
-  // the deep ball; a blitz to the quick game and screens, a three-man rush to everything that needs no time
-  function dcMatch(id, dc, pers, seen) {
-    const t = [], add = (why, v) => { if (why && v) t.push([why, v]); };
-    const g = dcGroup(id), cv = dc.cover, man = DC_MAN.has(cv), rush = +dc.rush, blitz = rush >= 5;
-    const heavyO = pers === 12 || pers === 21 || pers === 13 || pers === 22, spreadO = pers === 10 || pers === 11;
-    const front = dc.front, dp = dc.pers;
-    const runD = (w) => {                          // a run: the box, the personnel, the safeties, the rush
-      add({ light: 'light_box', loaded: 'loaded_box' }[front], { light: 0.5, loaded: -0.5 }[front] * w);
-      add({ heavy: 'goal_line_run', base: 'base_run', dime: 'dime_run' }[dp], { heavy: -0.75, base: -0.5, dime: 0.5 }[dp] * w);
-      if (heavyO && (dp === 'nickel' || dp === 'dime')) add('small_vs_heavy', 0.25 * w);
-      add({ c2: 'two_high', '2man': 'two_high', c6: 'two_high', c1: 'eighth_man', c3: 'eighth_man', c0: 'zero_box', prevent: 'prevent_run' }[cv],
-        { c2: 0.5, '2man': 0.5, c6: 0.25, c1: -0.25, c3: -0.25, c0: -0.5, prevent: 0.75 }[cv] * w);
-      if (rush === 3) add('drop8_run', 0.25 * w);
-      if (rush >= 5) add('run_blitz', (rush >= 6 ? -0.5 : -0.25) * w);
-    };
-    const passD = (w, box) => {                    // any pass: who is on the field to cover, and how many in the box
-      add({ heavy: 'big_vs_pass', base: 'base_vs_pass', dime: 'dime_vs_pass' }[dp], { heavy: 0.75, base: 0.25, dime: -0.5 }[dp] * w);
-      if (dp === 'base' && spreadO) add('lb_on_slot', 0.25 * w);
-      if (box) add({ light: 'light_vs_pass', loaded: 'loaded_vs_pass' }[front], { light: -0.25, loaded: 0.25 }[front] * w);
-    };
-    const deepD = (w) => {                         // a shot downfield: the safeties, then the rush
-      add({ c0: 'no_safety', c1: 'one_deep', '2man': 'two_deep', c2: 'two_deep', c4: 'quarters_deep', c6: 'two_deep', prevent: 'prevent_deep' }[cv],
-        { c0: 1, c1: 0.25, c3: 0, '2man': -0.5, c2: -0.25, c4: -0.75, c6: -0.5, prevent: -1.25 }[cv] * w);
-      add({ 6: 'sack_risk', 5: 'blitz_deep' }[rush], { 6: -0.75, 5: -0.5, 3: 0, 4: 0 }[rush] * w);
-    };
-    if (g === 'run') runD(1);
-    else if (g === 'sneak') { runD(0.5); if (front === 'loaded' || dp === 'heavy') add('sneak_wall', -0.25); }
-    else if (g === 'qbrun') {
-      runD(0.5);
-      if (man) add('qb_vs_man', 0.75);
-      if (rush === 3) add('spy', -0.25);
-      if (rush >= 6) add('qb_lanes', 0.25);
-    } else if (g === 'reverse') {
-      runD(0.5);
-      if (blitz) add('reverse_blitz', 0.5);
-      if (cv === 'c4' || cv === 'c6' || cv === 'prevent') add('reverse_deep', -0.25);
-    } else if (g === 'quick') {
-      passD(1, true);
-      add({ 6: 'hot_vs_blitz', 5: 'hot_vs_blitz', 3: 'drop8' }[rush], { 6: 0.75, 5: 0.5, 3: -0.25, 4: 0 }[rush]);
-      add({ c0: 'no_help', c3: 'soft_cushion', c4: 'soft_cushion', c6: 'soft_cushion', prevent: 'soft_cushion', c2: 'under_zone', '2man': 'trail_man' }[cv],
-        { c0: 0.25, c3: 0.5, c4: 0.5, c6: 0.5, prevent: 0.5, c2: -0.25, '2man': -0.5 }[cv]);
-      if (man && cv !== '2man') add('rub_vs_man', 0.25);
-    } else if (g === 'screen') {
-      passD(0.5, true);
-      add({ 6: 'screen_blitz', 5: 'screen_blitz', 3: 'screen_drop8' }[rush], { 6: 0.75, 5: 0.5, 3: -0.75, 4: 0 }[rush]);
-      if (man) add('screen_man', 0.25);
-      if (cv === 'c2' || cv === 'c6') add('screen_eyes', -0.25);
-    } else if (g === 'deep') {
-      passD(1, true);
-      deepD(1);
-      if (id === 'deep_middle' && (cv === 'c2' || cv === '2man')) add('middle_open', 0.5);
-      if (id !== 'deep_middle' && cv === 'c3') add('c3_seam', 0.25);
-    } else if (g === 'pa_short' || g === 'pa_deep') {
-      passD(0.75, false);
-      add({ loaded: 'pa_loaded', light: 'pa_light' }[front], { loaded: 0.75, light: -0.5 }[front]);
-      if (heavyO && dp !== 'dime') add('pa_heavy', 0.25);
-      if (rush === 3) add('time_to_throw', 0.25);
-      if (g === 'pa_deep') deepD(0.75);
-      else { if (rush >= 6) add('pa_time', -0.5); if (cv === 'c3' || cv === 'c1') add('pa_flood', 0.25); }
-    } else if (g === 'roll') {
-      passD(0.75, true);
-      if (blitz) add('roll_contain', -0.25);
-      if (rush === 3) add('time_to_throw', 0.25);
-      if (cv === 'c0') add('qb_escapes', 0.5); else if (man) add('roll_man', 0.25);
-      if (cv === 'c2') add('roll_flat', -0.25);
-    } else if (g === 'rpo') {
-      // the read: the box decides it (give into a light one, throw over a loaded one), so a box that looks even is
-      // the answer, and a blitz leaves the throw open
-      add({ loaded: 'rpo_loaded', light: 'rpo_light', even: 'rpo_read' }[front], { loaded: 0.75, light: 0.5, even: -0.25 }[front]);
-      if (dp === 'heavy') add('big_vs_pass', 0.5);
-      if (dp === 'dime') add('dime_run', 0.25);
-      if (blitz) add('rpo_blitz', 0.5);
-      if (rush === 3) add('drop8', -0.25);
-    } else if (g === 'trick') {
-      passD(0.5, false);
-      if (front === 'loaded') add('trick_loaded', 0.75);
-      if (cv === 'c3') add('trick_eyes', 0.25);
-      if (cv === 'c4' || cv === 'c6' || cv === 'prevent') add('trick_deep', -0.75);
-      if (blitz) add('trick_blitz', -0.75);
-    } else if (g === 'hail') {
-      if (cv === 'prevent') add('prevent_deep', -0.5);
-      if (cv === 'c0') add('no_safety', 0.5);
-      if (rush === 3) add('drop8_deep', -0.25);
-    }
-    if (id.startsWith('trick') && seen > 0) add('seen_it', -0.5 * Math.min(seen, 2));   // no surprise the second time
-    const sum = t.reduce((a, x) => a + x[1], 0);
+        : id === 'hail_mary' ? 'hail' : id.startsWith('trick') ? 'trick' : 'trick');
+  // the defense's effect on the offense's call (id, its personnel pers when picked), in EPA: the sum of what each part
+  // of the call does to that kind of play (playbook.py dc_effects, the same features), and the parts, biggest first.
+  // Versus: a trick play the defense has seen this match (seen) loses SEEN_IT a time (a game rule: no surprise left)
+  const SEEN_IT = 0.1;
+  function dcEffect(eff, id, dc, pers, seen) {
+    const t = [], g = dcGroup(id), passish = !DC_RUNNY.has(g) && g !== 'rpo';
+    const names = [];
+    if (passish) names.push(`rush:${dc.rush}`);
+    if (g !== 'run' && g !== 'sneak') names.push(`cover:${dc.cover}`);
+    names.push(`front:${dc.front}`);
+    if (!passish) names.push(`blitz:${+dc.rush >= 5 ? 1 : 0}`);
+    names.push(`pers:${dc.pers}`);
+    if (pers) names.push(`opers:${pers === 10 || pers === 11 ? 'spread' : 'heavy'}|${dc.pers}`);
+    // the call as a whole, apart from the sum of its parts: the coverage with the rush, the front with the blitz
+    if (passish) names.push(`cr:${dc.cover}|${dc.rush}`);
+    else names.push(`fb:${dc.front}|${+dc.rush >= 5 ? 1 : 0}`);
+    const beta = eff && eff.groups && eff.groups[g];
+    if (beta) names.forEach((n) => { const j = eff.index[n]; if (j !== undefined && beta[j]) t.push([n, beta[j]]); });
+    if (id.startsWith('trick') && seen > 0) t.push(['seen_it', -SEEN_IT * Math.min(seen, 2)]);
     t.sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
-    return { s: clip(sum, -DC_CAP, DC_CAP), why: t };
+    return { s: t.reduce((a, x) => a + x[1], 0), why: t };
   }
-  // the filters a draw against the defense's call loosens, in order: a run is drawn against the box (with or without a
-  // blitz) and the defensive personnel; a pass against the coverage, the rush and the personnel; the offense's
-  // personnel first when picked. A filter only drops plays charted for it (a run in an RPO has no coverage)
-  const DC_RUN_LV = [['box', 'blitz', 'db', 'pers'], ['box', 'blitz', 'db'], ['box', 'db'], ['box'], ['db'], []];
-  const DC_PASS_LV = [['cov', 'rush', 'db', 'pers'], ['cov', 'rush', 'db'], ['cov', 'rush'], ['cov'], ['mz', 'rush'], ['rush'], ['db'], []];
+  // the filters a draw against the defense's call keeps, strictest first: a pass keeps its pass rush the longest (it
+  // decides the pressure, the sacks, the time to throw), then the shell, then man or zone; a run its box, then
+  // whether the defense blitzed. Each widens the situation first ('near': down, distance, field), then to the call
+  // on its side of the 20 ('wide': a Cover 0 blitz from another down is more like one than a Cover 1 blitz from
+  // this one), before letting a filter go. A filter applies to the plays the call is about (_dcAbout: on a pass call
+  // its dropbacks); a play it applies to that was not charted is left out
+  const DC_PASS_LV = [
+    [['rush', 'cov', 'db', 'pers'], 'near'], [['rush', 'cov', 'db'], 'near'], [['rush', 'cov'], 'near'], [['rush', 'cov'], 'wide'],
+    [['rush', 'mz'], 'near'], [['rush'], 'near'], [['rush', 'mz'], 'wide'], [['rush'], 'wide'], [['cov'], 'near'], [['mz'], 'near'], [[], 'pool']];
+  const DC_RUN_LV = [
+    [['box', 'blitz', 'db', 'pers'], 'near'], [['box', 'blitz', 'db'], 'near'], [['box', 'blitz'], 'near'], [['box', 'blitz'], 'wide'],
+    [['box'], 'near'], [['box'], 'wide'], [['db'], 'near'], [[], 'pool']];
+  // the situations a draw against the defense's call widens to ('near', _nearRows), nearest first: [zones farther
+  // out, distance buckets away (null: any), any down]: the same down and distance a part of the field farther out,
+  // then a distance bucket away, then the same part of the field at any distance, then two parts out, then anywhere
+  // in this part of the field (dcRegion)
+  // the parts of the field a draw against the defense's call never borrows across: the goal line (3 yards or less
+  // out: the defense has no depth to cover), the rest of the red zone (20 or less), the open field
+  const dcRegion = (zone) => (zone === 0 ? 0 : zone <= 2 ? 1 : 2);
+  // nor across short yardage (2 yards or less to go: a 2-yard gain there is a first down, not a failed play)
+  const dcShort = (f) => Math.floor(f / N_ZONE) % N_YTG === 0;
+  const DC_NEAR = [[1, 0, false], [1, 1, false], [0, null, false], [2, 1, false], [null, 0, false], [1, null, true], [null, 1, false], [null, null, false]];
+  const DROPBACK_EV = new Set(['sack', 'strip_sack', 'sack_fumble', 'scramble', 'throwaway', 'interception', 'pick_six', 'near_pick', 'drop']);
   // daily game: your special-teams defense (act.st) when they kick. 'block' (field goal) or 'rush' (punt) sends
   // everyone: more blocks, but now and then a roughing flag (15 yards and a first down, an untimed down if time ran
   // out), and on a punt no return set up (a fair catch: no return yards, no return touchdown). 'safe' / 'return' is
@@ -411,6 +362,8 @@
         shift: pb.pool_shift ? decode(pb.pool_shift) : null,   // intent correction per pool (playbook.py pool_shifts)
         // daily game: per (call, situation, look) the pool to draw that look from (playbook.py pools)
         lookPool: pb.look_pool ? decode(pb.look_pool) : null,
+        // the defense's effect on each kind of play (playbook.py dc_effects), by feature name
+        dcEff: pb.dc_effects ? { ...pb.dc_effects, index: Object.fromEntries(pb.dc_effects.names.map((n, j) => [n, j])) } : null,
       };
       P.callIndex = {};
       pb.calls.forEach((c, i) => { P.callIndex[c.id] = i; });
@@ -774,7 +727,7 @@
     // your defensive call (def, or the whole call dc) the offense checks into the calls that beat it (MATCH_AUDIBLE)
     pickCall(kind, fk, u, def, dc) {
       const P = this.e.pb, nC = P.calls.length;
-      const tilt = (c) => (def ? Math.exp(MATCH_AUDIBLE * P.match[c][def]) : dc ? Math.exp(MATCH_AUDIBLE * dcMatch(P.calls[c].id, dc).s) : 1);
+      const tilt = (c) => (def ? Math.exp(MATCH_AUDIBLE * P.match[c][def]) : dc ? Math.exp(DC_READ * dcEffect(P.dcEff, P.calls[c].id, dc).s) : 1);
       const w = (c) => P.freq[fk * nC + c] * tilt(c);
       let tot = 0;
       for (let c = 0; c < nC; c++) if (P.calls[c].kind === kind) tot += w(c);
@@ -787,17 +740,17 @@
       }
       return last;
     }
-    // daily game: an offense that reads your whole defensive call leans to the run or the pass by how each beats it
-    // here: DC_LEAN times the gap between its pass calls' and its run calls' matchups (as often as play-callers make
-    // each), on the logit of passing. A light box with dime gets run at; a stacked box with base gets thrown on
+    // daily game: an offense that reads your whole defensive call leans to the run or the pass by how each does
+    // against it here: DC_READ times the gap between its pass calls' and its run calls' edges (EPA, as often as
+    // play-callers make each), on the logit of passing
     dcLean(fk, dc) {
       const P = this.e.pb, nC = P.calls.length, m = { run: [0, 0], pass: [0, 0] };
       for (let c = 0; c < nC; c++) {
         const f = P.freq[fk * nC + c], k = P.calls[c].kind;
-        if (f > 0 && m[k]) { m[k][0] += f * dcMatch(P.calls[c].id, dc).s; m[k][1] += f; }
+        if (f > 0 && m[k]) { m[k][0] += f * dcEffect(P.dcEff, P.calls[c].id, dc).s; m[k][1] += f; }
       }
       const avg = (x) => (x[1] > 0 ? x[0] / x[1] : 0);
-      return DC_LEAN * (avg(m.pass) - avg(m.run));
+      return DC_READ * (avg(m.pass) - avg(m.run));
     }
     // what NFL defenses called in situation fk (the real plays of every call's pool, as often as play-callers make
     // each call): the share of each personnel group, front, coverage and rush, as charted (DC). Null without charting
@@ -873,10 +826,13 @@
       return T;
     }
 
-    // Versus: a real play of call callIdx against the defense's call dc, tilted by the matchup s: from the situation's
-    // pool, then the call's coarser pools, at each filter level (DC_RUN_LV / DC_PASS_LV) before a looser one; with a
-    // picked route (ri) and target (who), only plays of that route, from those pools, then every situation of the call
-    // and of its kind. No level with PB_LOOK_MIN plays: the draw without the defense's filters (samplePlaybook)
+    // a real play of call callIdx against the defense's call dc: at each filter level (DC_PASS_LV / DC_RUN_LV, the
+    // strictest first), from the situation's pool, the call's coarser pools, then its plays from the same down and
+    // distance or part of the field ('near'), then (keeping the pass rush or the box) every situation of the call and
+    // of its kind ('wide'); with a picked route (ri) and target (who), only plays of that route. The plays the
+    // defense's call says nothing about (_dcAbout: the flags; on a pass call what is not a dropback, an RPO's
+    // handoffs) come from the situation's own pool, as often as there. Its mean EPA:
+    // the offense's own here plus the defense's effect s (dcEffect). No pool at all: samplePlaybook
     sampleVsDefense(team, callIdx, fk, u, oob, dc, s, route, who, pers) {
       const P = this.e.pb;
       if (P.ngs && P.ngs.dpers && dcValid(dc)) {
@@ -884,38 +840,109 @@
         if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (!pools.includes(lp)) pools.push(lp); }
         const ri = route ? P.routeNames.indexOf(route) : 0;
         if (!(route && !(ri > 0))) {
-          const levels = [];
-          for (const l of P.calls[callIdx].kind === 'run' ? DC_RUN_LV : DC_PASS_LV) {
+          const pass = P.calls[callIdx].kind !== 'run';
+          const ref = this._dcRef(cdf, pool, pass, ri, who || 0, pers || 0);
+          // the wider sets, built only when a draw gets to them
+          const near = DC_NEAR.map(([dz, dy, dd]) => () => this._nearRows(callIdx, fk, dz, dy, dd));
+          const wide = [() => this._wideRows(callIdx, fk, false), () => this._wideRows(callIdx, fk, true)];
+          const seen = new Set();
+          for (const [l, where] of pass ? DC_PASS_LV : DC_RUN_LV) {
             const L = pers ? l : l.filter((x) => x !== 'pers');
-            if (L.length && !levels.some((x) => x.join() === L.join())) levels.push(L);
-          }
-          for (const L of levels) {
-            for (const pl of pools) {
-              const r = this._pickT(this._dcT(cdf, pl, null, dc, L, s, ri, who || 0, pers || 0), u);
+            const key = `${L.join()}|${where}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            if (where !== 'wide') {
+              for (const pl of where === 'pool' ? [pool] : pools) {
+                const r = this._pickT(this._dcT(cdf, pl, null, dc, L, s, ri, who || 0, pers || 0, pass, ref), u);
+                if (r >= 0) return r;
+              }
+            }
+            if (where === 'pool') continue;
+            for (const set of where === 'near' ? near : wide) {
+              const r = this._pickT(this._dcT(null, -1, set(), dc, L, s, ri, who || 0, pers || 0, pass, ref), u);
               if (r >= 0) return r;
             }
-            // the call's plays from the same part of the field (and the same down first), any distance
-            for (const set of [this._zoneRows(callIdx, fk, true), this._zoneRows(callIdx, fk, false)]) {
-              const r = this._pickT(this._dcT(null, -1, set, dc, L, s, ri, who || 0, pers || 0), u);
-              if (r >= 0) return r;
-            }
-          }
-          if (ri > 0) for (const L of levels) for (const set of [this._callRows(callIdx), this._groupRows(callIdx)]) {
-            const r = this._pickT(this._dcT(null, -1, set, dc, L, s, ri, who || 0, pers || 0), u);
-            if (r >= 0) return r;
           }
         }
       }
-      return this.samplePlaybook(team, callIdx, fk, u, oob, 0, s, route, who, pers);
+      return this.samplePlaybook(team, callIdx, fk, u, oob, 0, 0, route, who, pers);
     }
-    // the plays of a pool (by its weights) or of a set of rows (equal weights) that pass the filters L against dc;
-    // null when fewer than PB_LOOK_MIN of them were charted for a filter and passed it. The defense's filters give the
-    // play its shape (a Cover 0 blitz: more sacks, more big plays) but not its worth: the draw is tilted so its mean
-    // EPA is that of the same plays without them (the offense's own filters kept: its route, target, personnel) plus
-    // the matchup's MATCH_SD * s of their spread. (A few real plays against a rare defense are noise, not football:
-    // left alone, a lucky handful would make one defense the answer to everything)
-    _dcT(cdf, pool, set, dc, L, s, ri, who, pers) {
-      const key = `dc|${set ? set.id : pool}|${dc.pers}|${dc.front}|${dc.cover}|${dc.rush}|${L.join('.')}|${s || 0}|${ri}|${who}|${pers}`;
+    // each real play's EPA (capped) over the mean of its own situation's pool (the smallest pool a situation draws
+    // from that holds it: its call in its situation, or the coarser one its situation was pooled into), as
+    // playbook.py dc_effects measures the defense's effects: a play borrowed from another down or another part of
+    // the field is judged against where it was run, not where it is drawn
+    _dcResid() {
+      const P = this.e.pb;
+      if (P.dcResid) return P.dcResid;
+      const nRows = P.yards.length, best = new Int32Array(nRows).fill(-1), size = new Int32Array(nRows), base = new Set();
+      for (let i = 0; i < P.poolOf.length; i++) base.add(P.poolOf[i]);
+      const mean = new Float64Array(P.nPools);
+      for (const p of base) {
+        const lo = P.offsets[p], hi = P.offsets[p + 1], n = hi - lo;
+        let m = 0;
+        for (let i = lo; i < hi; i++) { const e = P.epa[P.items[i]]; m += Number.isFinite(e) ? clip(e, -MATCH_EPA_CAP, MATCH_EPA_CAP) : 0; }
+        mean[p] = n ? m / n : 0;
+        for (let i = lo; i < hi; i++) { const r = P.items[i]; if (best[r] < 0 || n < size[r]) { best[r] = p; size[r] = n; } }
+      }
+      P.dcPoolMean = mean;
+      P.dcResid = new Float32Array(nRows);
+      for (let r = 0; r < nRows; r++) {
+        const e = P.epa[r];
+        P.dcResid[r] = (Number.isFinite(e) ? clip(e, -MATCH_EPA_CAP, MATCH_EPA_CAP) : 0) - (best[r] >= 0 ? mean[best[r]] : 0);
+      }
+      return P.dcResid;
+    }
+    // a play the defense's call is about: no flag (a flag's rate is the situation's, whatever the call; and the
+    // charting of a play called back is thin), and on a pass call a dropback (thrown, incomplete, or a sack,
+    // scramble, throwaway, pick or drop)
+    _dcAbout(r, pass) {
+      const P = this.e.pb;
+      if (P.flags[r] & 1) return false;
+      return !pass || (P.air && P.air[r] !== -128) || (P.flags[r] & 4) !== 0 || DROPBACK_EV.has(P.eventNames[P.event[r]] || '');
+    }
+    // the situation's own plays, by the pool's weights, with the offense's filters (route, target, personnel): the
+    // edge of those the defense's call is about (their mean capped EPA over the pool's; null with fewer than
+    // PB_LOOK_MIN of them), and the others, drawn as they are, with their share
+    _dcRef(cdf, pool, pass, ri, who, pers) {
+      const key = `${pool}|${pass ? 1 : 0}|${ri}|${who}|${pers}`;
+      this._dcRefs = this._dcRefs || new WeakMap();
+      let cache = this._dcRefs.get(cdf);
+      if (!cache) { cache = new Map(); this._dcRefs.set(cdf, cache); }
+      let R = cache.get(key);
+      if (R) return R;
+      const P = this.e.pb, N = P.ngs, lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
+      let wA = 0, mA = 0, nA = 0, wB = 0;
+      const items = [], cum = [];
+      for (let i = lo; i <= hi; i++) {
+        const r = P.items[i];
+        if (ri && N.route[r] !== ri) continue;
+        if (who && (P.carry[r] & 7) !== who) continue;
+        if (pers && N.pers[r] && N.pers[r] !== pers) continue;
+        const w = cdf[i] - (i > lo ? cdf[i - 1] : pool);
+        if (this._dcAbout(r, pass)) {
+          const e = P.epa[r];
+          wA += w; mA += w * (Number.isFinite(e) ? clip(e, -MATCH_EPA_CAP, MATCH_EPA_CAP) : 0); nA++;
+        } else { wB += w; items.push(r); cum.push(wB); }
+      }
+      this._dcResid();
+      // edge: what the offense's plays the call is about are worth here over the situation's pool (its own weights:
+      // the team, the call's intent), the level a draw's plays are moved to before the defense's effect
+      const pm = P.dcPoolMean[pool];
+      R = { edge: nA >= PB_LOOK_MIN && wA > 0 ? mA / wA - pm : null, shareB: wA + wB > 0 ? wB / (wA + wB) : 0, items, cum, tot: wB };
+      cache.set(key, R);
+      return R;
+    }
+    // the plays of a pool (by its weights) or of a set of rows (equal weights) that the defense's call is about and
+    // that pass the filters L against dc (a filter it was not charted for leaves a play out: the pass rush and the
+    // coverage from the seasons charted in full, playbook.py _charted_in_full); null when fewer than DC_MIN of them
+    // pass (any number, with no filters). Their mean EPA over where each was run (_dcResid) is set to the offense's
+    // own edge here (ref.edge; without one, that of the same plays without the defense's filters) plus the defense's
+    // effect s, by the least tilt that does it:
+    // the real plays against the called defense keep their shape (the sacks, the pressure, the quick throws, the big
+    // plays), and a handful of them against a rare defense never decide what it is worth (their mean is noise; s is
+    // the estimate). The plays it is not about (ref) are added as they are, with their share of the situation's
+    _dcT(cdf, pool, set, dc, L, s, ri, who, pers, pass, ref) {
+      const key = `dc|${set ? set.id : pool}|${dc.pers}|${dc.front}|${dc.cover}|${dc.rush}|${L.join('.')}|${s || 0}|${ri}|${who}|${pers}|${pass ? 1 : 0}|${ref.edge == null ? '' : ref.edge.toFixed(5)}|${ref.shareB.toFixed(5)}|${ref.tot}`;
       let cache;
       if (set) cache = this._dcSet = this._dcSet || new Map();
       else {
@@ -928,31 +955,32 @@
       const P = this.e.pb, N = P.ngs, cov = DC.cover[dc.cover], man = DC_MAN.has(dc.cover) ? 1 : 2;
       const [p0, p1] = DC.pers[dc.pers], [f0, f1] = DC.front[dc.front], [r0, r1] = DC.rush[dc.rush], blitz = +dc.rush >= 5 ? 1 : 0;
       const on = (d) => L.includes(d), byPers = on('pers');
-      // 0: the offense's own filters drop it; 1: the defense's do; 2: it passes, charted for none of the defense's
-      // filters; 3: it passes, charted for one at least
+      // 0: the offense's own filters drop it, or the defense's call is not about it; 1: the defense's filters do (or
+      // it was not charted for one); 2: it passes
       const test = (r) => {
         if (ri && N.route[r] !== ri) return 0;
         if (who && (P.carry[r] & 7) !== who) return 0;
         if (byPers && N.pers[r] && N.pers[r] !== pers) return 0;
-        let hit = false;
-        const box = P.look ? P.look[r] >> 4 : 0;
-        if (on('cov')) { const sh = N.cover[r] & 15; if (sh) { if (!cov.includes(sh)) return 1; hit = true; } }
-        if (on('mz')) { const m = (N.cover[r] >> 4) & 3; if (m) { if (m !== man) return 1; hit = true; } }
-        if (on('rush')) { const n = N.rush[r] & 15; if (n) { if (n < r0 || n > r1) return 1; hit = true; } }
-        if (on('db')) { const n = N.dpers[r]; if (n) { if (n < p0 || n > p1) return 1; hit = true; } }
-        if (on('box') && box) { if (box < f0 || box > f1) return 1; hit = true; }
-        if (on('blitz') && box) { if (((P.look[r] >> 3) & 1) !== blitz) return 1; hit = true; }
-        return hit ? 3 : 2;
+        if (!this._dcAbout(r, pass)) return 0;
+        if (!L.length) return 2;
+        const box = P.look ? P.look[r] >> 4 : 0, full = (N.rush[r] & 64) !== 0;
+        if (on('rush')) { const n = N.rush[r] & 15; if (!full || !n || n < r0 || n > r1) return 1; }
+        if (on('cov')) { const sh = N.cover[r] & 15; if (!full || !sh || !cov.includes(sh)) return 1; }
+        if (on('mz')) { const m = (N.cover[r] >> 4) & 3; if (!full || m !== man) return 1; }
+        if (on('db')) { const n = N.dpers[r]; if (!n || n < p0 || n > p1) return 1; }
+        if (on('box')) { if (!box || box < f0 || box > f1) return 1; }
+        if (on('blitz')) { if (!box || ((P.look[r] >> 3) & 1) !== blitz) return 1; }
+        return 2;
       };
-      const items = [], ws = [], xs = [];
-      let hits = 0, r0w = 0, r1w = 0, r2w = 0;          // the reference (the offense's filters only): weight, sums
+      const items = [], ws = [], xs = [], X = this._dcResid();
+      let hits = 0, r0w = 0, r1w = 0;          // the reference (the offense's own filters only): weight, sum
       const take = (r, w) => {
         const x = test(r);
         if (!x) return;
-        const e = Number.isFinite(P.epa[r]) ? clip(P.epa[r], -MATCH_EPA_CAP, MATCH_EPA_CAP) : 0;
-        r0w += w; r1w += w * e; r2w += w * e * e;
+        const e = X[r];
+        r0w += w; r1w += w * e;
         if (x === 1) return;
-        if (x === 3) hits++;
+        hits++;
         items.push(r); ws.push(w); xs.push(e);
       };
       if (set) for (const r of set.rows) take(r, 1);
@@ -960,12 +988,15 @@
         const lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
         for (let i = lo; i <= hi; i++) take(P.items[i], cdf[i] - (i > lo ? cdf[i - 1] : pool));
       }
-      if (hits < PB_LOOK_MIN || !(r0w > 0)) { cache.set(key, null); return null; }
-      const m = r1w / r0w, sd = Math.sqrt(Math.max(r2w / r0w - m * m, 0.3));
-      const k = this._tiltTo(ws, xs, m + MATCH_SD * (s || 0) * sd);
+      if ((L.length && hits < DC_MIN) || !hits || !(r0w > 0)) { cache.set(key, null); return null; }
+      const k = this._tiltTo(ws, xs, (ref.edge == null ? r1w / r0w : ref.edge) + (s || 0));
       const cum = [];
       let tot = 0;
       for (let i = 0; i < items.length; i++) { tot += ws[i] * Math.exp(k * xs[i]); cum.push(tot); }
+      // the plays the call is not about, as often as in the situation: scaled to their share of the whole
+      const shB = ref.tot > 0 ? Math.min(ref.shareB, 0.95) : 0, scale = tot > 0 && shB > 0 ? (tot * shB / (1 - shB)) / ref.tot : 0;
+      if (scale > 0) for (let j = 0; j < ref.items.length; j++) { items.push(ref.items[j]); cum.push(tot + ref.cum[j] * scale); }
+      if (scale > 0) tot += ref.tot * scale;
       T = tot > 0 ? { items, cum, tot } : null;
       cache.set(key, T);
       return T;
@@ -980,25 +1011,60 @@
       return (lo + hi) / 2;
     }
 
-    // Versus: every play of call c in the situations that share fk's game mode and part of the field (byDown: and its
-    // down), once
-    _zoneRows(c, fk, byDown) {
-      const P = this.e.pb, zone = fk % N_ZONE, dn = Math.floor(fk / (N_YTG * N_ZONE)) % N_DOWN, mode = Math.floor(fk / (N_DOWN * N_YTG * N_ZONE));
-      const id = `z${c}|${mode}|${zone}|${byDown ? dn : 'x'}`;
-      P.zoneRows = P.zoneRows || new Map();
-      let set = P.zoneRows.get(id);
-      if (!set) {
-        const seen = new Set();
+    // every play of call c in the situations near fk (same game mode; the part of the field up to dz zones farther
+    // from the goal, the distance within dy buckets, and the down unless dd: null for any), once. Never nearer the
+    // goal (a play run there was cut short by its end zone: it would bring that short field along; one from farther
+    // out gains at most the goal line here, as the game plays it), and never into another part of the field
+    // (dcRegion: a goal-line play is not a red-zone one, nor that an open-field one; and a defense common at the goal
+    // line would crowd out the rest), nor across short yardage (dcShort)
+    _nearRows(c, fk, dz, dy, dd) {
+      const P = this.e.pb, zone = fk % N_ZONE, ytg = Math.floor(fk / N_ZONE) % N_YTG, dn = Math.floor(fk / (N_YTG * N_ZONE)) % N_DOWN,
+        mode = Math.floor(fk / (N_DOWN * N_YTG * N_ZONE)), region = dcRegion(zone), short = dcShort(fk);
+      const id = `n${c}|${mode}|${dn}|${ytg}|${zone}|${dz}|${dy}|${dd ? 1 : 0}`;
+      return this._rowSet(id, (seen) => {
         for (let f = 0; f < P.nFine; f++) {
-          if (f % N_ZONE !== zone || Math.floor(f / (N_DOWN * N_YTG * N_ZONE)) !== mode) continue;
-          if (byDown && Math.floor(f / (N_YTG * N_ZONE)) % N_DOWN !== dn) continue;
+          if (Math.floor(f / (N_DOWN * N_YTG * N_ZONE)) !== mode || dcRegion(f % N_ZONE) !== region || f % N_ZONE < zone || dcShort(f) !== short) continue;
+          if (dz != null && f % N_ZONE - zone > dz) continue;
+          if (dy != null && Math.abs(Math.floor(f / N_ZONE) % N_YTG - ytg) > dy) continue;
+          if (!dd && Math.floor(f / (N_YTG * N_ZONE)) % N_DOWN !== dn) continue;
           const pool = P.poolOf[c * P.nFine + f];
           for (let i = P.offsets[pool]; i < P.offsets[pool + 1]; i++) seen.add(P.items[i]);
         }
+      });
+    }
+    // a set of plays (built once by fill, kept on the playbook: every match of a server shares them), the kept ones
+    // held under DC_ROWS_CAP plays in all (a long-lived server's memory): past it they are all let go, to be rebuilt
+    _rowSet(id, fill) {
+      const P = this.e.pb;
+      if (!P.rowSets) { P.rowSets = new Map(); P.rowSetsN = 0; }
+      let set = P.rowSets.get(id);
+      if (!set) {
+        const seen = new Set();
+        fill(seen);
         set = { id, rows: Int32Array.from(seen) };
-        P.zoneRows.set(id, set);
+        if (P.rowSetsN + set.rows.length > DC_ROWS_CAP) { P.rowSets.clear(); P.rowSetsN = 0; }
+        P.rowSets.set(id, set);
+        P.rowSetsN += set.rows.length;
       }
       return set;
+    }
+    // every play of call c (grp: of every call of its kind) in fk's part of the field (dcRegion) and no nearer the
+    // goal, in any game mode, down and distance (short yardage or not, as fk: dcShort), once
+    _wideRows(c, fk, grp) {
+      const P = this.e.pb, zone = fk % N_ZONE, region = dcRegion(zone), short = dcShort(fk), kind = (id) => (id.startsWith('pa_') ? 'pa' : id.startsWith('roll') ? 'roll'
+        : id.startsWith('rpo') || id === 'hail_mary' || id.startsWith('trick') ? id : 'drop');
+      const id = `w${grp ? 'g' + kind(P.calls[c].id) : c}|${zone}|${short ? 1 : 0}`;
+      return this._rowSet(id, (seen) => {
+        const calls = grp ? P.calls.map((cc, j) => j).filter((j) => kind(P.calls[j].id) === kind(P.calls[c].id) &&
+          (P.calls[j].kind === 'pass') === (P.calls[c].kind === 'pass')) : [c];
+        for (const j of calls) {
+          for (let f = 0; f < P.nFine; f++) {
+            if (dcRegion(f % N_ZONE) !== region || f % N_ZONE < zone || dcShort(f) !== short) continue;
+            const pool = P.poolOf[j * P.nFine + f];
+            for (let i = P.offsets[pool]; i < P.offsets[pool + 1]; i++) seen.add(P.items[i]);
+          }
+        }
+      });
     }
     // every play of call c, in any situation, once; and of every call of its kind (dropback, play action, rollout)
     _callRows(c) {
@@ -1196,7 +1262,7 @@
         callIdx = P.callIndex[act.call];
         const who = act.route ? (WHO_CODE[act.who] || 0) : undefined;
         if (dcValid(act.dc)) {
-          const m = dcMatch(act.call, act.dc, act.pers, act.seen);
+          const m = dcEffect(this.e.pb.dcEff, act.call, act.dc, act.pers, act.seen);
           why = m.why.slice(0, 3);
           row = this.sampleVsDefense(o, callIdx, fineKey(MODE_NORMAL, 3, 2, 2), u[2], false, act.dc, m.s, act.route, who, act.pers);
         } else {
@@ -1388,7 +1454,7 @@
           callIdx = this.e.pb.callIndex[act.call];
           const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl), who = act.route ? (WHO_CODE[act.who] || 0) : undefined;
           if (dcValid(act.dc)) {
-            const m = dcMatch(act.call, act.dc, act.pers, act.seen);
+            const m = dcEffect(this.e.pb.dcEff, act.call, act.dc, act.pers, act.seen);
             match = m.s; why = m.why.slice(0, 3);
             pbRow = this.sampleVsDefense(o, callIdx, fk, u[2], act.oob ? 1 : oobWant, act.dc, match, act.route, who, act.pers);
           } else {
@@ -1402,7 +1468,7 @@
           const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl);
           callIdx = this.pickCall(kind === PASS ? 'pass' : 'run', fk, u[4], null, act.read ? act.dc : null);
           if (callIdx >= 0) {
-            const m = dcMatch(this.e.pb.calls[callIdx].id, act.dc);
+            const m = dcEffect(this.e.pb.dcEff, this.e.pb.calls[callIdx].id, act.dc);
             match = m.s; why = m.why.slice(0, 3);
             pbRow = this.sampleVsDefense(o, callIdx, fk, u[2], oobWant, act.dc, match);
           }
@@ -1692,7 +1758,7 @@
 
   NFLClockEngine.Simulator = Simulator;
   NFLClockEngine.PHASE = { SNAP, PAT, KICKOFF, DONE };
-  NFLClockEngine.helpers = { fineKey, gameMode, zoneOf, ytgBucket, uni, dcMatch, dcValid, DC };
+  NFLClockEngine.helpers = { fineKey, gameMode, zoneOf, ytgBucket, uni, dcEffect, dcGroup, dcValid, DC, DC_MIN };
   if (typeof module !== 'undefined' && module.exports) module.exports = NFLClockEngine;
   else global.NFLClockEngine = NFLClockEngine;
 })(typeof self !== 'undefined' ? self : this);

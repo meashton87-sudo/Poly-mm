@@ -28,6 +28,7 @@ carries real sack and interception risk and any call can be wrecked by a bad sna
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 import json
 import urllib.error
 import urllib.request
@@ -179,8 +180,9 @@ def _participation(seasons=SEASONS) -> pd.DataFrame:
 
 def _charting(s: pd.DataFrame) -> dict:
     """The NGS charting packed for the browser (0 = not charted): route code; coverage shell (bits 0-3) with man (1)
-    or zone (2) in bits 4-5; pass rushers (bits 0-3), pressure (4) and charted (5); time to throw in tenths; the
-    offense's personnel; the defense's (dpers: defensive backs on the field, defense_db_count)."""
+    or zone (2) in bits 4-5; pass rushers (bits 0-3), pressure (4), charted (5) and charted in full (6: its season
+    charted the coverage and the pressure on sacks and scrambles too, not only on throws); time to throw in tenths;
+    the offense's personnel; the defense's (dpers: defensive backs on the field, defense_db_count)."""
     col = lambda c: s[c] if c in s else pd.Series(np.nan, index=s.index)
     route = col("route").map(ROUTE_CODE).fillna(0).to_numpy().astype(np.uint8)
     shell = col("defense_coverage_type").map(SHELL_CODE).fillna(0).to_numpy().astype(np.uint8)
@@ -189,10 +191,28 @@ def _charting(s: pd.DataFrame) -> dict:
     rushers = np.clip(n.fillna(0).to_numpy(), 0, 15).astype(np.uint8)
     pressure = col("was_pressure").map({True: 1, False: 0, "TRUE": 1, "FALSE": 0}).fillna(0).to_numpy().astype(np.uint8)
     charted = n.notna().to_numpy().astype(np.uint8)
+    full = charted & _charted_in_full(s, shell > 0)
     ttt = pd.to_numeric(col("time_to_throw"), errors="coerce")
     ttt = np.clip(np.round(ttt.fillna(0).to_numpy() * 10), 0, 255).astype(np.uint8)
-    return {"route": route, "cover": shell | (mz << 4), "rush": rushers | (pressure << 4) | (charted << 5), "ttt": ttt,
+    return {"route": route, "cover": shell | (mz << 4), "rush": rushers | (pressure << 4) | (charted << 5) | (full << 6), "ttt": ttt,
             "pers": personnel_code(col("offense_personnel")), "dpers": defense_db_count(col("defense_personnel"))}
+
+
+def _charted_in_full(s: pd.DataFrame, has_cover: np.ndarray) -> np.ndarray:
+    """1 for the plays of seasons whose coverage charting reaches the dropbacks that end without a throw (2022's NGS
+    charted the coverage, the pressure and the time to throw on throws alone: its plays against a coverage are nearly
+    all throws, no sacks, no scrambles, so the defense's draws by coverage and rush leave them out)."""
+    season = s["season"].to_numpy() if "season" in s else np.zeros(len(s), int)
+    sack = (s["sack"].fillna(0).to_numpy() == 1) if "sack" in s else np.zeros(len(s), bool)
+    thrown = lambda c: (s[c].fillna(0).to_numpy() == 1) if c in s else np.zeros(len(s), bool)
+    att = (thrown("complete_pass") | thrown("incomplete_pass")) & ~sack
+    out = np.zeros(len(s), np.uint8)
+    for yr in np.unique(season):
+        m = season == yr
+        a, k = has_cover[m & att], has_cover[m & sack]
+        if a.size and k.size and a.mean() > 0 and k.mean() >= 0.5 * a.mean():
+            out[m] = 1
+    return out
 
 
 DB_POS = {"CB", "S", "FS", "SS", "DB", "SAF"}
@@ -607,6 +627,144 @@ def _b64(arr: np.ndarray) -> dict:
     return {"dtype": arr.dtype.name, "n": int(arr.size), "b64": base64.b64encode(arr.tobytes()).decode("ascii")}
 
 
+# The defense's effect on each kind of offensive play (the defensive call in the browser, engine.js dcEffect): a play's
+# EPA (capped) against the mean of its own pool (its call in its situation), regressed on what the defense showed (the
+# pass rush, the coverage, the box, the defensive backs, offense personnel x defensive backs; charted plays only), one
+# ridge regression per kind of play. The ridge strength of each part (the rush, the coverage, the whole call apart
+# from its parts, ...) is the one that predicts held-out seasons best (each season left out in turn, DC_LAMBDAS): the
+# true effects are small (a few hundredths of a point a play), so a defense's call changes how a play goes (pressure,
+# sacks, time to throw, completions, big plays: the real plays drawn against it) far more than what it is worth on
+# average.
+DC_GROUPS = ("run", "sneak", "qbrun", "reverse", "screen", "quick", "deep", "pa_short", "pa_deep", "roll", "rpo", "hail", "trick")
+DC_SHELL = {1: "c0", 2: "c1", 3: "c2", 4: "2man", 5: "c3", 6: "c4", 7: "c6", 8: "c3", 9: "prevent"}
+DC_RUNNY = ("run", "sneak", "qbrun", "reverse")
+DC_LAMBDAS = (100, 300, 1000, 2000, 4000, 10000, 1e9)
+
+
+def dc_group(cid: str) -> str:
+    """engine.js dcGroup: the kind of offensive play a call is, for the defense's effect on it."""
+    return ("sneak" if cid == "qb_sneak" else "qbrun" if cid == "qb_run" else "reverse" if cid == "trick_reverse"
+            else "run" if cid.startswith("rb_") or cid == "trick_direct" else "screen" if cid == "screen"
+            else "quick" if cid.startswith("quick") else "deep" if cid.startswith("deep") else cid if cid.startswith("pa_")
+            else "roll" if cid.startswith("roll") else "rpo" if cid.startswith("rpo") else "hail" if cid == "hail_mary" else "trick")
+
+
+def _dc_features(group: str, nr: int, charted: bool, shell: int, box: int, blitz: int, db: int, op: int) -> list:
+    """The defense a play met, as engine.js dcEffect names it (the same features the browser adds up)."""
+    f = []
+    passish = group not in DC_RUNNY and group != "rpo"
+    if passish and charted and nr > 0:
+        f.append(f"rush:{min(max(nr, 3), 6)}")
+    if group not in ("run", "sneak") and shell in DC_SHELL:
+        f.append(f"cover:{DC_SHELL[shell]}")
+    if box > 0:
+        f.append("front:" + ("light" if box <= 6 else "even" if box == 7 else "loaded"))
+        if not passish:
+            f.append(f"blitz:{blitz}")
+    if db > 0:
+        dl = "heavy" if db <= 3 else "base" if db == 4 else "nickel" if db == 5 else "dime"
+        f.append(f"pers:{dl}")
+        if op in (10, 11, 12, 13, 21, 22):
+            f.append(f"opers:{'spread' if op in (10, 11) else 'heavy'}|{dl}")
+    # the call as a whole, shrunk toward the sum of its parts (DC_LAMBDAS_CELL): a Cover 0 blitz is not just a
+    # 6-man rush plus a man coverage
+    rush, cover = next((x for x in f if x.startswith("rush:")), None), next((x for x in f if x.startswith("cover:")), None)
+    if rush and cover:
+        f.append(f"cr:{cover[6:]}|{rush[5:]}")
+    front, bl = next((x for x in f if x.startswith("front:")), None), next((x for x in f if x.startswith("blitz:")), None)
+    if front and bl:
+        f.append(f"fb:{front[6:]}|{bl[6:]}")
+    return f
+
+
+def dc_effects(lib: pd.DataFrame, items: np.ndarray, offsets: np.ndarray, pool_of: np.ndarray) -> dict:
+    epa = lib["epa"].clip(-3, 3).to_numpy()
+    pm = np.array([epa[items[offsets[p]:offsets[p + 1]]].mean() if offsets[p + 1] > offsets[p] else 0.0 for p in range(len(offsets) - 1)])
+    call, fine = lib["call"].to_numpy(), lib["fine"].to_numpy()
+    resid = epa - pm[pool_of[call, fine]]
+    group = np.array([dc_group(CALLS[c][0]) for c in call])
+    rush = lib["ngs_rush"].to_numpy().astype(int)
+    cov = lib["ngs_cover"].to_numpy().astype(int) & 15
+    look = lib["look"].to_numpy().astype(int)
+    db, op = lib["ngs_dpers"].to_numpy().astype(int), lib["ngs_pers"].to_numpy().astype(int)
+    season = lib["season"].to_numpy()
+    rows = np.where(~lib["penalty"].to_numpy().astype(bool))[0]
+    # the pass rush and the coverage from the seasons charted in full only (_charted_in_full: 2022's coverage left out
+    # the sacks and scrambles, which would make every coverage look easier to throw on than it is)
+    feats = [_dc_features(group[i], rush[i] & 15, bool(rush[i] & 64), cov[i] if rush[i] & 64 else 0, look[i] >> 4,
+                          (look[i] >> 3) & 1, db[i], op[i]) for i in rows]
+    keep = [k for k, f in enumerate(feats) if f]                  # charted plays only
+    rows, feats = rows[keep], [feats[k] for k in keep]
+    names = sorted({x for f in feats for x in f})
+    col = {n: j for j, n in enumerate(names)}
+    X = np.zeros((len(rows), len(names)))
+    for k, f in enumerate(feats):
+        for x in f:
+            X[k, col[x]] = 1.0
+    y, g, se = resid[rows], group[rows], season[rows]
+    dims = sorted({n.split(":")[0] for n in names})
+    dim_of = np.array([dims.index(n.split(":")[0]) for n in names])
+    # each season's sums per kind of play (X'X, X'y, sum X, sum y, sum y^2, plays): a fit on any set of seasons, and
+    # its squared error on another, from these alone
+    years = sorted(np.unique(se))
+    S = {}
+    for yr in years:
+        for grp in DC_GROUPS:
+            m = (se == yr) & (g == grp)
+            Xm, ym = X[m], y[m]
+            S[yr, grp] = (Xm.T @ Xm, Xm.T @ ym, Xm.sum(0), ym.sum(), ym @ ym, m.sum())
+    add = lambda ks: tuple(sum(S[k][i] for k in ks) for i in range(6))
+    folds = [yr for yr in years if (se == yr).sum() > 1000]
+    train = {(yr, grp): add([(o, grp) for o in years if o != yr]) for yr in folds for grp in DC_GROUPS}
+
+    def solve(st, lam):
+        return np.linalg.solve(st[0] + np.diag(np.array([lam[d] for d in dim_of], float)), st[1])
+
+    # each season held out in turn (a kind of play's own mean from the other seasons, as the pools are): how much less
+    # squared error its plays' EPA has against the effects fit on the other seasons than against no effect at all
+    def gain(lam):
+        e1 = e0 = 0.0
+        for yr in folds:
+            for grp in DC_GROUPS:
+                tr, te = train[yr, grp], S[yr, grp]
+                if not tr[5] or not te[5]:
+                    continue
+                beta = solve(tr, lam)
+                c0, c1 = tr[3] / tr[5], (tr[3] - tr[2] @ beta) / tr[5]
+                xx, xy, sx, sy, syy, n = te
+                e0 += syy - 2 * c0 * sy + n * c0 * c0
+                e1 += syy - 2 * beta @ xy + beta @ xx @ beta - 2 * c1 * (sy - sx @ beta) + n * c1 * c1
+        return (e0 - e1) / max(len(y), 1)
+
+    # a ridge strength for each part of the call (the pass rush, the coverage, the front, ...), each in turn the one
+    # of DC_LAMBDAS that predicts the held-out seasons best, until none moves (1e9: the part has no effect)
+    lam = {i: 2000.0 for i in range(len(dims))}
+    best = gain(lam)
+    for _ in range(4):
+        moved = False
+        for i in range(len(dims)):
+            for v in DC_LAMBDAS:
+                trial = {**lam, i: float(v)}
+                e = gain(trial)
+                if e > best + 1e-10:
+                    best, lam, moved = e, trial, True
+        if not moved:
+            break
+    beta = {grp: solve(add([(o, grp) for o in years]), lam) for grp in DC_GROUPS}
+    # each part's effects measured from the average defense the kind of play met (frequency-weighted mean 0): what a
+    # call adds is its difference from what defenses usually do, not the charted seasons' level
+    for grp in DC_GROUPS:
+        m = (g == grp) if (g == grp).any() else (np.isin(g, DC_RUNNY) if grp in DC_RUNNY else ~np.isin(g, DC_RUNNY))
+        cnt = X[m].sum(0)
+        for dim in {n.split(":")[0] for n in names}:
+            js = [j for j, n in enumerate(names) if n.startswith(dim + ":")]
+            w = cnt[js]
+            if w.sum() > 0:
+                beta[grp][js] -= float((beta[grp][js] * w).sum() / w.sum())
+    return {"names": names, "lambda": {dims[i]: v for i, v in lam.items()}, "cv_gain": round(float(best), 7),
+            "groups": {k: [round(float(v), 5) for v in beta[k]] for k in DC_GROUPS}}
+
+
 def export(lib: pd.DataFrame, path) -> dict:
     items, offsets, pool_of, look_pool = pools(lib)
     assert len(offsets) < 32767, "look pools are exported as int16"
@@ -643,10 +801,17 @@ def export(lib: pd.DataFrame, path) -> dict:
         "pool_of": _b64(pool_of.astype(np.int32).ravel()),
         "look_pool": _b64(look_pool.astype(np.int16).ravel()),
         "pool_shift": _b64(pool_shifts(lib, items, offsets).astype(np.float32)),
+        "dc_effects": dc_effects(lib, items, offsets, pool_of),
         "freq": _b64(call_frequencies(lib).astype(np.float32).ravel()),
         "oob_odds": oob_odds(lib).round(3).tolist(),
         "stay_odds": oob_odds(lib, "stay_in").round(3).tolist(),
         "seasons": list(SEASONS),
     }
     path.write_text(json.dumps(out, separators=(",", ":"), allow_nan=False))
+    # for the checks only (web/defense_calibration.js draws each real play's twin in its own situation: its call, its
+    # situation, its yard line), never shipped
+    Path(path).with_name("playbook_test.json").write_text(json.dumps(
+        {"n": len(lib), "yl": _b64(np.clip(lib["yl"].fillna(50), 1, 99).astype(np.uint8)),
+         "call": _b64(lib["call"].to_numpy().astype(np.uint8)), "fine": _b64(lib["fine"].to_numpy().astype(np.uint16)),
+         "season": _b64(lib["season"].to_numpy().astype(np.uint16))}, separators=(",", ":")))
     return out
