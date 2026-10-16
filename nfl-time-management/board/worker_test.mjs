@@ -215,6 +215,15 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual(fp.get('line_items[0][price_data][unit_amount]'), '499');
   assert.strictEqual(fp.get('line_items[0][price_data][currency]'), 'usd');
   assert.strictEqual(fp.get('line_items[0][price]'), null);
+  // no price or product id at all: the product described in the call, charged $4.99
+  for (const e of [env, board.env]) delete e.STRIPE_PRICE;
+  assert.deepStrictEqual(await (await pro('GET', '/pro')).json(), { on: true, price: '$4.99' }, 'the key alone turns Pro on');
+  await pro('POST', '/pay');
+  const fn = new URLSearchParams(stripeCalls[stripeCalls.length - 1][1].body);
+  assert.strictEqual(fn.get('line_items[0][price_data][product_data][name]'), 'Two-Minute Drill Pro');
+  assert.strictEqual(fn.get('line_items[0][price_data][unit_amount]'), '499');
+  assert.strictEqual(fn.get('line_items[0][price_data][product]'), null);
+  assert.strictEqual(fn.get('line_items[0][price]'), null);
   for (const e of [env, board.env]) e.STRIPE_PRICE = 'price_123';
   // claiming: a paid session gets a code, the same one again; an unpaid or unknown one gets none
   for (const bad of [{}, { s: 'cs_live_' }, { s: 'nope' }]) assert.strictEqual((await pro('POST', '/claim', bad)).status, 400, JSON.stringify(bad));
