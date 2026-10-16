@@ -61,9 +61,9 @@
     NYJ: ['Jets', '#125740'], PHI: ['Eagles', '#004C54'], PIT: ['Steelers', '#FFB612'], SF: ['49ers', '#AA0000'],
     SEA: ['Seahawks', '#69BE28'], TB: ['Buccaneers', '#D50A0A'], TEN: ['Titans', '#4B92DB'], WAS: ['Commanders', '#5A1414'],
     // college teams, for a featured college game (src/nflclock/custom_spots.json); never in Versus
-    OSU: ['Buckeyes', '#BB0000'], IU: ['Hoosiers', '#990000'],
+    OSU: ['Buckeyes', '#BB0000'], IU: ['Hoosiers', '#990000'], ALA: ['Crimson Tide', '#9E1B32'], TENN: ['Volunteers', '#FF8200'],
   };
-  const COLLEGE = new Set(['OSU', 'IU']);
+  const COLLEGE = new Set(['OSU', 'IU', 'ALA', 'TENN']);
   const FAM = { run: 'Run', pass: 'Pass', rpo: 'RPO', trick: 'Trick' };
   // the trick plays (playbook.py): what each one is, on its key
   const TRICK_SUB = { trick_flea: 'Hand off, pitch it back, go deep', trick_reverse: 'Fake one way, a receiver comes back the other',
@@ -79,7 +79,8 @@
   // one (7 or more), with or without a blitz
   const LOOKS = [{ loaded: false, blitz: false }, { loaded: false, blitz: true }, { loaded: true, blitz: false }, { loaded: true, blitz: true }];
   // the defense's whole call (engine.js DC): personnel, front, coverage and pass rush. The offense's play is a real one
-  // run against that defense, and the matchup of the two calls tilts it (engine.js dcMatch)
+  // run against that defense (its rush, its coverage, its box), worth what such plays are worth against it (engine.js
+  // sampleVsDefense, dcEffect)
   const VDEF = [
     ['pers', 'Personnel', [['heavy', 'Goal line', '3 DBs'], ['base', 'Base', '4 DBs'], ['nickel', 'Nickel', '5 DBs'], ['dime', 'Dime', '6 DBs']]],
     ['front', 'Front', [['light', 'Light', '6 in box'], ['even', 'Even', '7 in box'], ['loaded', 'Stacked', '8 in box']]],
@@ -140,30 +141,6 @@
     return { pers: top('pers') || d.pers, front: top('front') || d.front, cover: top('cover') || d.cover, rush: VDEF[3][2].some((o) => o[0] === rush) ? rush : d.rush };
   }
   const vdefText = (dc) => `${vdefName('pers', dc.pers)}, ${vdefName('cover', dc.cover)}, ${dc.rush >= 6 ? '6+' : dc.rush} rushing, ${({ light: 6, even: 7, loaded: 8 })[dc.front]} in the box`;
-  // why a matchup went the way it did (engine.js dcMatch reasons), as a phrase
-  const WHY = {
-    light_box: 'a run at a light box', loaded_box: 'a run into a stacked box', goal_line_run: 'a run into goal-line personnel',
-    base_run: 'a run into base personnel', dime_run: 'a run against dime', small_vs_heavy: 'heavy personnel against a small defense',
-    two_high: 'a run against two deep safeties', eighth_man: 'a run into an eighth man in the box', prevent_run: 'a run against prevent',
-    drop8_run: 'a run against a three-man rush', run_blitz: 'a run into a run blitz', zero_box: 'a run into Cover 0, everyone up', big_vs_pass: 'a pass against goal-line personnel',
-    base_vs_pass: 'a pass against base personnel', dime_vs_pass: 'a pass against dime', lb_on_slot: 'a linebacker stuck on a slot receiver',
-    light_vs_pass: 'a pass against extra men in coverage', loaded_vs_pass: 'a pass over a stacked box', no_safety: 'a shot with no safety deep',
-    one_deep: 'a shot at one deep safety', two_deep: 'a shot into two deep safeties', quarters_deep: 'a shot into quarters',
-    prevent_deep: 'a shot into prevent', sack_risk: 'a long throw against an all-out rush', blitz_deep: 'a long throw against a blitz',
-    sneak_wall: 'a sneak into a stacked line', qb_vs_man: 'the quarterback running on man coverage', spy: 'the quarterback running at a spy',
-    qb_lanes: 'the quarterback running through blitz lanes', reverse_blitz: 'the end-around against a blitz', reverse_deep: 'the end-around against deep help',
-    hot_vs_blitz: 'a quick throw against the blitz', drop8: 'a quick throw into eight in coverage', no_help: 'a quick throw with no help over the top',
-    soft_cushion: 'a quick throw under soft zone', under_zone: 'a quick throw into underneath zone', trail_man: 'a quick throw against trail man',
-    rub_vs_man: 'a rub route against man', screen_blitz: 'a screen against the blitz', screen_drop8: 'a screen against eight in coverage',
-    screen_man: 'a screen against man, backs turned', screen_eyes: 'a screen into zone eyes', middle_open: 'a shot down the open middle',
-    c3_seam: 'a shot up the seam against Cover 3', pa_loaded: 'play action against a stacked box', pa_light: 'play action against a light box',
-    pa_heavy: 'play action out of heavy personnel', time_to_throw: 'all day to throw against three rushers', pa_time: 'play action against an all-out rush',
-    pa_flood: 'a flood against single-high', roll_contain: 'a rollout into a contain blitz', qb_escapes: 'the quarterback rolling away from man, nobody deep',
-    roll_man: 'a rollout against man', roll_flat: 'a rollout into a flat defender', rpo_loaded: 'an RPO against a stacked box',
-    rpo_light: 'an RPO against a light box', rpo_read: 'an RPO against a box that gave no read', rpo_blitz: 'an RPO against a blitz',
-    trick_loaded: 'a trick play against a stacked box', trick_eyes: 'a trick play against zone eyes', trick_deep: 'a trick play against deep help',
-    trick_blitz: 'a trick play into a blitz', seen_it: 'a trick play they had already seen',
-  };
   // with the clock running: the tempo of the next snap (the engine's typical seconds between snaps), or stop it
   const CLOCK = {
     nohuddle: { label: 'No-huddle', short: 'No-huddle' },
@@ -1726,6 +1703,15 @@
         const yac = Math.abs(e.yards - air);
         // the closer the coverage, the shorter the run after the catch: trail by more when he got loose
         const lag = clip(yac * 0.07, 0, 1.2);
+        if (caught && !e.incomplete) {
+          // a catch: the man on him is the one there (at the separation drawn); the others close to a few yards off
+          // as the ball arrives, from where they came, then chase (runDown makes the tackle). Never on top of him with
+          // the ball (players saw catches "in triple coverage")
+          const p = here(d), keep = Math.max(3, (sepd ? sepd.sep : 0) + 2) + i * 1.5 + lag;
+          const [ux, uy] = unit(p[0] - catchPt[0], p[1] - catchPt[1]);
+          leg(d, tThrow + 0.35, 'go', { x: inX(catchPt[0] + ux * keep), y: catchPt[1] + uy * keep, eff: near_ > keep ? (i ? 0.8 : 0.95) : 0.5 });
+          return;
+        }
         leg(d, tThrow + 0.35 + lag * 0.4, 'go', { x: catchPt[0] + jit(1.2), y: catchPt[1] + dir * (1.2 + lag), eff: i ? 0.8 : 0.95 });
         if (near_ > 25) leg(d, tThrow + 0.35, 'go', { x: catchPt[0], y: catchPt[1] + dir * 6, eff: 0.85 });
       });
@@ -1740,7 +1726,8 @@
         late, drawn: sepd && sepd.sep, actual: Math.min(...K.def.map((d) => dist(here(d), here(tgt)))), ballD, kind,
         openDeep: K.recv.filter((a) => a !== tgt && a !== passer && Math.abs(here(a)[1] - L0) > 12 && Math.min(...K.def.map((d) => dist(here(d), here(a)))) > 5).length,
         deep: K.recv.filter((a) => a !== tgt && a !== passer && Math.abs(here(a)[1] - L0) > 12).map((a) => [a.label, +Math.abs(here(a)[1] - L0).toFixed(0), +Math.min(...K.def.map((d) => dist(here(d), here(a)))).toFixed(1)]),
-        man: !!cov.man, shell: cov.shell } : null;
+        man: !!cov.man, shell: cov.shell,
+        crowd: K.def.filter((d) => dist(here(d), here(tgt)) < Math.max(2.5, (sepd ? sepd.sep : 0) + 1.5)).length } : null;
       if (sepRow) window.__sepLog.push(sepRow);
       // what happened at the catch point
       if (intc) {
@@ -2910,6 +2897,13 @@
     const kneels = 5 - r.down - r.to[1 - G.me] - (r.clock_running ? 0 : 1);
     return lead > 0 && th <= 40 * Math.max(kneels, 0) + 30;
   }
+  // the other team, ahead with the ball, can kneel out the half whatever you do: a kneel on each down left (about 2
+  // seconds each) and the play clock between them (about 38), less one run-off for each timeout you have
+  function kneelsOut(r) {
+    const opp = 1 - G.me, n = 5 - r.down;
+    if (r.pos !== opp || r.score[opp] <= r.score[G.me] || n <= 0) return false;
+    return halfLeft(r.t) <= 2 * n + 38 * Math.max(n - 1 - r.to[G.me], 0);
+  }
   function clockOptions(r) {      // with the clock running
     const me = G.me, lead = r.score[me] - r.score[1 - me];
     const needTime = r.t > 1800 || lead <= 0;
@@ -3157,6 +3151,10 @@
   // your calls it has seen. Each look's real share here is weighted by exp(ADAPT * conf * edge), edge being how well
   // that look does against your calls by the matchup chart (engine.js MATCH), -1 to +1.
   const ADAPT = 1.4, ADAPT_N = 12, ADAPT_DECAY = 0.85;
+  // a spot's harder computer opponent (cpu: 'hard'): its offense reads your defensive call by more, its defense
+  // leans on your habits harder and sooner
+  const CPU_HARD = { read: 2, adapt: 2, seen: 2 };
+  const cpuHard = () => !VS && !!(G.scen && G.scen.cpu === 'hard');
   const LOOK_DEFKEY = ['soft', 'blitz', 'load', 'blitz'];
   const HABIT = { run: 'runs', deep: 'deep shots', short: 'short passes' };
   const EXPECT = { load: 'more loaded boxes', blitz: 'more pressure', soft: 'more men in coverage' };
@@ -3174,8 +3172,8 @@
       LOOK_DEFKEY.forEach((d, b) => { edge[b] -= w * (m[d] || 0); });
     });
     if (!wsum) return { p, note: null };
-    const conf = tend.length / (tend.length + 4);
-    const q = p.map((x, b) => x * Math.exp(ADAPT * conf * (edge[b] / wsum)));
+    const hard = cpuHard(), conf = tend.length / (tend.length + (hard ? CPU_HARD.seen : 4));
+    const q = p.map((x, b) => x * Math.exp(ADAPT * (hard ? CPU_HARD.adapt : 1) * conf * (edge[b] / wsum)));
     const z = q.reduce((a, x) => a + x, 0) || 1;
     const out = q.map((x) => x / z);
     // said out loud once it is a real lean on a real habit: what you keep calling, and what they show more of
@@ -3505,6 +3503,9 @@
     const peek = VS ? { log: [] } : (await send({ type: 'step', scen: simScen(), root: r, action: { to_def: false }, seed: hash('step', seedKey(), G.si, G.seq) }, true)).res;
     const kick = peek.log.find((e) => e.ev === 'fg' || e.ev === 'punt');
     if (kick) { G.fast = false; return promptChoice(kick.ev === 'fg' ? 'fgdef' : 'puntdef'); }
+    // they kneel it out and nothing you could call stops it: no call to make and none graded (a player was asked for a
+    // defense with 5 seconds left and the other team kneeling)
+    if (!VS && peek.log.some((e) => e.ev === 'play' && e.kind === KNEEL) && kneelsOut(r)) { G.autoDef = true; return advance(); }
     G.fast = false;
     if (!FULLDEF) { ui = { step: 'defense', to: false }; drawDefDock(); toField(); return; }
     ui = { step: 'vdef', dc: VS ? vdefDefault(r) : nflDefault(r, G.dinfo && G.dinfo.dshare), to: false };
@@ -3669,7 +3670,7 @@
     const r = G.root, me = G.me;
     try {
       const useTo = !!(ui.to && defTimeoutOk(r)), askTo = defTimeoutOk(r), seq = G.seq;
-      const act = (x) => ({ to_def: useTo, dc: { ...x }, read: true });
+      const act = (x) => ({ to_def: useTo, dc: { ...x }, read: cpuHard() ? CPU_HARD.read : true });
       const keys = presetsFor(r), mine = keys.find((k) => sameDc(PRESET[k].dc, dc)) || 'yours';
       const opts = keys.map((k) => ({ key: k, label: PRESET[k].label, action: act(PRESET[k].dc) }));
       if (mine === 'yours') opts.push({ key: 'yours', label: vdefText(dc), action: act(dc) });
@@ -3801,7 +3802,7 @@
   const LOOK_NAME = ['the light box (extra men back in coverage)', 'the blitz', 'the loaded box', 'the blitz'];
   const DEF_NAME = { blitz: 'blitz', load: 'loaded box', soft: 'soft coverage' };
   function matchupLine(e, action) {
-    if (e && Array.isArray(e.why)) return vsMatchupLine(e, e.team === G.me);
+    if (e && e.dc) return defenseLine(e, e.team !== G.me);
     if (!e || e.ev !== 'play' || !e.match || Math.abs(e.match) < 0.5 || e.call < 0 || !idx.calls[e.call]) return null;
     const call = e.team === G.me && action && action.route && action.targetName
       ? `${routeSay(action.targetPos, action.route)} to ${shortName(action.targetName) || action.targetPos}` : idx.calls[e.call].label.toLowerCase();
@@ -6024,19 +6025,23 @@
     persist();
     return out;
   }
-  // the matchup behind a snap against a full defensive call, from the reasons the engine gave (e.why, engine.js dcMatch), the one that
-  // mattered most for the side it favored; nothing when it was close to even
-  function vsMatchupLine(e, mine) {
-    if (!e || e.ev !== 'play' || !Array.isArray(e.why) || !e.why.length || Math.abs(e.match || 0) < 0.5) return null;
-    const off = e.match > 0, w = e.why.find(([, v]) => (v > 0) === off);
-    const why = w && WHY[w[0]];
-    if (!why) return null;
-    const big = !e.turnover && (e.td || e.yards >= 10), none = e.turnover || e.incomplete || e.yards <= 0;
-    const W = why[0].toUpperCase() + why.slice(1);
-    if (mine) return off ? { good: true, text: none ? `Good call: ${why}. It just didn't work this time.` : `Good call: ${why}.` }
-      : { good: false, text: big ? `${W}: their call had you, but you made the play anyway.` : `${W}: their defense had it covered.` };
-    return off ? { good: false, text: none ? `${W}: they had the edge, and you still stopped it.` : `${W}: they had the edge on that one.` }
-      : { good: true, text: big ? `Your call was right (${why}), but they made the play anyway.` : `Your call won it: ${why}.` };
+  // how the defense's call showed up on the snap, from the real play behind it: on a pass, how many came, whether
+  // they got there and how long the quarterback had (more rushers: more pressure, the ball out sooner); on a run, the
+  // box it ran into. good: it went the way of the user's side (onDefense: the user called the defense)
+  function defenseLine(e, onDefense) {
+    if (!e || e.ev !== 'play' || !e.dc || !(e.row >= 0)) return null;
+    const cover = vdefName('cover', e.dc.cover), sack = /sack/.test(e.evt || ''), scr = e.evt === 'scramble';
+    if (e.kind === 1) {
+      if (!e.rushers) return null;
+      const got = sack || e.pressure || scr;
+      const what = sack ? 'they got home' : scr ? 'pressure, the quarterback ran' : e.pressure
+        ? `pressure, the ball out in ${e.ttt ? e.ttt.toFixed(1) : '?'} s` : `a clean pocket, ${e.ttt ? `${e.ttt.toFixed(1)} s to throw` : 'time to throw'}`;
+      return { good: got === onDefense, text: `${e.rushers} rushing against ${cover}: ${what}.` };
+    }
+    const box = e.look && e.look.box;
+    if (!box) return null;
+    const stuffed = e.turnover || e.yards <= 0;
+    return { good: stuffed === onDefense, text: `A run into ${box} in the box: ${stuffed ? 'stopped' : e.td ? 'in for the score' : `${e.yards} yards`}.` };
   }
   // what each side called, shown once the snap is in
   function vsCalls(d, root) {
@@ -6058,7 +6063,7 @@
     txt.append(el('span', 'yd', x.head || headline(main, res.log)), document.createTextNode(lines.length ? lines[0][0] : ''));
     top.append(txt);
     wrap.append(top, el('div', 'vscalls', vsCalls(x.d, before)));
-    const mu = main ? vsMatchupLine(main, before.pos === G.me) : null;
+    const mu = main ? defenseLine(main, before.pos !== G.me) : null;
     if (mu) wrap.append(el('div', `mline ${mu.good ? 'won' : 'lost'}`, mu.text));
     const btn = el('button', 'btn', G.root.phase === DONE || vs.result ? 'Final' : 'Next play');
     btn.type = 'button';

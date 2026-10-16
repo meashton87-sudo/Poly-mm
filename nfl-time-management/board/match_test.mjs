@@ -138,10 +138,15 @@ assert.ok(ROOM_RE.test('ABC234') && !ROOM_RE.test('ABCD10') && !ROOM_RE.test('ab
   assert.ok(s4.at <= t4 + 4000 + DECIDE_MS + 100);
   // a ready late in the watch window: the clock never runs past the decision's last moment
   await w.advance(WATCH_MS + 10000);
-  def.send({ t: 'ready', n: 5 });
+  // (the snaps' gains are random: snap 5 can be a try after a touchdown, or the other side's ball: ask whoever is up)
+  const ms5 = a.last('step').ms, seat5 = VSCore.need(ms5)[0], up5 = seat5 === 0 ? a : b;
+  up5.send({ t: 'ready', n: 5 });
   await w.settle();
-  assert.strictEqual(def.last('clock').deadline, s4.deadline, 'capped at the decision\'s last moment');
-  def.send({ t: 'half', n: 5, half: { dc: DCALL } }); off.send({ t: 'half', n: 5, half: { action: { call: 'inside', play: 'run' } } });
+  assert.strictEqual(up5.last('clock').deadline, s4.deadline, 'capped at the decision\'s last moment');
+  for (const seat of VSCore.need(ms5)) {
+    const half = VSCore.role(ms5, seat) === 'pat' ? { action: { pat: 'xp' } } : seat === ms5.root.pos ? { action: { call: 'inside', play: 'run' } } : { dc: DCALL };
+    (seat === 0 ? a : b).send({ t: 'half', n: 5, half });
+  }
   await w.settle();
   // a phone that drops and comes back: its own deadline in the hello
   const up = VSCore.need(a.last('step').ms)[0], upC = up === 0 ? a : b;

@@ -7,6 +7,7 @@ web/engine_data.json
 web/parity_expected.json
 web/_test_index.html
 web/playbook.json
+web/playbook_test.json
 web/scenarios.json
 web/game.json
 web/teams.json

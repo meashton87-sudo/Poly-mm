@@ -28,7 +28,8 @@ node board/worker_test.mjs            # the website's survivor leaderboard (Clou
 node board/match_test.mjs             # Versus: rooms, lobby, ladder in memory (board/vs_world.mjs), a stand-in engine (a second)
 node board/lazy_sim_test.mjs          # Versus: the room's lazily built simulator equals the engine's, table by table and play by play
 node board/vs_pairs_test.mjs          # Versus: every one of the 992 matchups (32 teams, home and away) played to the end, the rules on every snap
-node board/vs_balance_test.mjs        # Versus: no defense or call is safe against everything; every defensive option has a use
+node board/vs_balance_test.mjs        # Versus: the defense's effects as the game plays them; every defensive option is the answer to something
+node web/defense_calibration.js       # the full defense against real NFL plays: pressure, sacks, time to throw, yards... by rush, coverage, box
 node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real engine, misbehaving phones; every match replayed and checked
 ```
 
@@ -53,13 +54,19 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   page); phones only send calls. Each snap's seed is drawn fresh by the room and never sent to a phone (a phone that
   knew it could see what a call does before making it). lazy_sim_test.mjs and vs_stress.mjs need board/assets/vs (the
   engine packs and teams.json; the site workflow copies them there before deploying the worker).
-- The defense (every mode): the defense calls personnel, front, coverage and rush (engine.js DC, dcMatch); in the daily
-  game the computer's offense reads it (act.read: dcLean for run or pass, pickCall checks into a better call) and the
-  call is graded against the quick calls that fit the spot (game.js PRESET). The real play is drawn
-  against that defense (sampleVsDefense) but its mean EPA is recentered on the offense's own plus the matchup tilt, so
-  balance lives in dcMatch alone: after changing it, run vs_balance_test.mjs (it solves the call-by-defense game per
-  situation: no fixed call or defense may be safe, and every option must be near the best somewhere).
+- The defense (every mode): the defense calls personnel, front, coverage and rush (engine.js DC). The offense's play is a
+  real NFL play run against that defense, as charted (sampleVsDefense: the pass rush, then the shell, then man or zone;
+  a run's box, then the blitz), widening the situation before letting a filter go, never across the goal line, the
+  20 or short yardage and never from nearer the goal (_nearRows, dcRegion, dcShort). Its mean EPA (over where each play
+  was run: _dcResid) is the offense's own there plus the defense's effect (dcEffect: playbook.py dc_effects, ridge per
+  kind of play, each part's strength chosen on held-out seasons). The flags and a pass call's non-dropbacks come from
+  the situation's own pool at its rate. 2022's charting left the coverage and pressure off sacks and scrambles, so the
+  rush and coverage filters use the seasons charted in full (playbook.py _charted_in_full, rush bit 6). In the daily
+  game the computer's offense reads the call (act.read: dcLean, pickCall) and the call is graded against the quick
+  calls that fit the spot (game.js PRESET). After changing any of it, run web/defense_calibration.js (every rush level,
+  coverage, box and defensive-back count against the real plays, within a few standard errors; try a few seeds) and
+  board/vs_balance_test.mjs.
 - The Gauntlet (board/worker.js /race*, game.js racePanel): the contest on the historic drives. A Pro code enters once under
-  a public name (blocked() names refused); a drive counts the first time it is passed (an A, 90+) after entering and after
+  a public name (blocked() names refused); a drive counts the first time it is passed (an A, 90+, and the game won) after entering and after
   RACE_FROM (2 pm Eastern, Oct 16 2026 by default); each pass keeps its calls (race:audit) for the check before a prize.
   The first to pass all RACE_N (24) wins. `DELETE /race?id=` with the admin token takes a run off the board.

@@ -35,7 +35,7 @@ jobs:
       PRO_ON: "on"            # "on" launches Pro (the tab, the archive, the drives, the runs, the purchase)
       PRO_AT: ""   # and not before this time (UTC, e.g. "2026-10-16T18:00:00Z"): the page turns Pro on then; "" for at once
       VS_ON: "off"            # "on" turns on Versus (two players live) on the site; the Pro preview always has it
-      FULLDEF_ON: "off"       # "on" turns on the full defensive call (personnel, front, coverage, rush) in the daily and survivor; the Pro preview always has it
+      FULLDEF_ON: "on"       # "on" turns on the full defensive call (personnel, front, coverage, rush) in the daily and survivor; the Pro preview always has it
     defaults:
       run:
         working-directory: nfl-time-management
@@ -84,6 +84,7 @@ jobs:
         run: |
           npx --yes eslint@8.57.0 --no-eslintrc -c web/eslint.json web/game.js web/motion.js web/engine.js web/game_worker.js web/vs_core.js
           node web/game_smoke.js
+          node web/defense_calibration.js
           node web/motion_test.js
           node board/worker_test.mjs
           node web/game_sweep.js
