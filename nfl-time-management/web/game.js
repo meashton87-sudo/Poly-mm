@@ -4714,6 +4714,7 @@
       save(PRO_KEY, { code: d.code, at: Date.now() });
       PRO_LIVE = true;
       track('pro_unlocked');
+      track('purchase', { currency: 'USD', value: 4.99, transaction_id: d.code, items: [{ item_id: 'pro', item_name: 'Two-Minute Drill Pro', price: 4.99, quantity: 1 }] });
       toast('Pro unlocked');
     } catch (e) { toast('The purchase could not be confirmed: ' + e.message); }
   }
