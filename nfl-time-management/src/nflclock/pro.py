@@ -128,6 +128,25 @@ def live_spot(hist, games: pd.DataFrame, pbp: pd.DataFrame, d: dict) -> tuple:
     return spot, teams
 
 
+def versus_teams(hist, games: pd.DataFrame, pbp: pd.DataFrame, season: int) -> dict:
+    """Versus: every team as it lines up now, its lineup from its last game this season (history.History.teams), for
+    web/teams.json: {season, week, league, teams: {code: team}}. A team with no game yet is left out."""
+    played = games[(games["season"] == season) & games["home_score"].notna()].sort_values("week")
+    week = int(played["week"].max()) + 1 if len(played) else 1
+    out, league = {}, None
+    for team in sorted(set(played["home_team"]) | set(played["away_team"])):
+        last = played[(played["home_team"] == team) | (played["away_team"] == team)].iloc[-1]
+        gid = last["game_id"] if "game_id" in last.index else last.name
+        snaps = pbp[(pbp["game_id"] == gid) & (pbp["posteam"] == team)]
+        if not len(snaps):
+            continue
+        side = "home" if last["home_team"] == team else "away"
+        t = hist.teams(gid, season, week, float(snaps["play_id"].iloc[len(snaps) // 2]), last["home_team"], last["away_team"],
+                       {"home": last["home_coach"], "away": last["away_coach"]})
+        out[team], league = t["teams"][side], t["league"]
+    return {"season": season, "week": week, "league": league, "teams": out}
+
+
 def build(bundle=None, lib=None) -> dict:
     bundle = bundle or Bundle.load()
     lib = lib if lib is not None else P.labeled_plays()
@@ -137,6 +156,8 @@ def build(bundle=None, lib=None) -> dict:
     seasons = sorted({int(d["id"][:4]) for d in drives} | {r["season"] for r in runs})
     live = [d for d in drives if d.get("live")]
     spots: dict = {}            # spot id -> (spot, teams)
+    if DG.SEASON not in seasons:
+        seasons.append(DG.SEASON)
     for season in seasons:
         pbp = data.load(tuple(PL.pbp_seasons(range(season - 2, season + 1))))
         for r in runs:
@@ -163,6 +184,9 @@ def build(bundle=None, lib=None) -> dict:
         for d in live:
             if d["live"]["season"] == season:
                 spots[d["id"]] = live_spot(hist, games, pbp, d)
+        if season == DG.SEASON:          # Versus: the teams as they line up now (public, web/teams.json)
+            vt = versus_teams(hist, games.reset_index(), pbp, season)
+            (DG.WEB / "teams.json").write_text(json.dumps(vt, separators=(",", ":"), default=float, allow_nan=False))
 
     def export(name: str, prefix: str, head: dict, order: list) -> int:
         out = {**head, "spots": [spots[i][0] for i in order], "spot_chunk": DG.SPOT_CHUNK,

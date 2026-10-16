@@ -64,6 +64,34 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .arch .lead { margin: 0; font-size: 15px; }
 .arch h3 { margin: 6px 0 0; font: 800 12px var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
 .arch .days { display: grid; gap: 6px; }
+.arch .vscode { font: 900 44px/1 var(--display); letter-spacing: .12em; text-align: center; padding: 14px; border: 2px dashed var(--line); border-radius: 12px; }
+.arch .row { display: flex; flex-wrap: wrap; gap: 8px; }
+.arch .vsbtns .btn { flex: 1 1 140px; }
+.arch input { flex: 1 1 120px; min-width: 0; font: 700 16px var(--body); padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card, transparent); color: inherit; text-transform: uppercase; letter-spacing: .12em; }
+.btn.ghostbtn { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+.vsbar { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: center; font: 800 12px/1.4 var(--body); letter-spacing: .06em; text-transform: uppercase; padding: 4px 0; }
+.vsbar .clk { padding: 2px 8px; border-radius: 6px; background: var(--ink); color: var(--bg, #fff); font-variant-numeric: tabular-nums; }
+.vsbar .clk.low { background: #e5342b; color: #fff; }
+.vsbar .lock { color: #2c7549; }
+.vsbar .warn { color: #e5342b; text-transform: none; letter-spacing: 0; }
+.arch .vsteams { position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; max-height: 320px; overflow-y: auto; padding: 2px; }
+.arch .vsteam { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font: 700 13px/1.2 var(--body); text-align: left; cursor: pointer; }
+.arch .vsteam .sw { flex: none; width: 14px; height: 14px; border-radius: 50%; box-shadow: 0 0 0 2px var(--card), 0 0 0 3px var(--line); }
+.arch .vsteam .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arch .vsteam.on { border: 2px solid var(--ink); padding: 5px 9px; }
+.arch .vspick { display: grid; gap: 8px; }
+.arch .vsmodes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.arch .vsmodes .btn { padding-inline: 6px; }
+.arch .vsmodes .btn { display: grid; gap: 2px; justify-items: center; }
+.arch .vsmodes .btn small { font: 600 11px/1.3 var(--body); letter-spacing: 0; text-transform: none; opacity: .8; }
+.arch input[aria-label="Your name"] { text-transform: none; letter-spacing: 0; }
+.arch .vsladder .board { margin: 0; padding-left: 28px; }
+.arch .vsladder .board li { display: flex; justify-content: space-between; gap: 10px; }
+.arch .vsladder .board .n { font-variant-numeric: tabular-nums; color: var(--muted); }
+.endcard .vsrating { font: 800 15px var(--body); margin: 4px 0; }
+.endcard .vsrating:empty { display: none; }
+#vsAgain.ask { outline: 3px solid #e0a526; outline-offset: 2px; }
+.result .vscalls { font-size: 13px; color: var(--muted); margin: 6px 0; }
 .arch .day.fresh { border: 2px solid #e0a526; background-image: linear-gradient(100deg, rgba(224,165,38,.16), rgba(224,165,38,0) 60%); }
 .arch .freshtag { display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 4px; color: #1a1305;
   background: linear-gradient(90deg, #f6c544, #e0a526 45%, #fff2c2 50%, #e0a526 55%, #f6c544); background-size: 220% 100%;
@@ -445,7 +473,7 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
 .unit .ps { font: 800 12px var(--body); letter-spacing: .06em; color: var(--muted); }
 .unit .nm { font-weight: 600; min-width: 0; }
 .unit .nm small { display: block; font-weight: 500; font-size: 12px; color: var(--muted); }
-.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 6px; }
+div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 6px; }
 .arch .tag { background: var(--ink); color: var(--paper); border-radius: 999px; padding: 4px 11px; font: 800 12px var(--body); letter-spacing: .08em; text-transform: uppercase; }
 .pinfo { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center; margin-bottom: 12px; }
 .pinfo .chip-big { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; font: 900 28px var(--display); color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,.35); }
@@ -501,7 +529,7 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
 </header>
 
 <main class="wrap">
-  <nav class="modes" aria-label="Game mode"><a id="modeDaily" href="#daily">Daily</a><a id="modeSurv" href="#survivor">Survivor</a><a id="modeArch" href="#archive">Pro</a></nav>
+  <nav class="modes" aria-label="Game mode"><a id="modeDaily" href="#daily">Daily</a><a id="modeSurv" href="#survivor">Survivor</a><a id="modeVs" href="#vs" hidden>Versus</a><a id="modeArch" href="#archive">Pro</a></nav>
   <div id="tiles" class="tiles" aria-label="Today's three spots"></div>
   <section id="arch" class="arch" aria-label="Archive" hidden></section>
   <section id="intro" class="intro" hidden></section>

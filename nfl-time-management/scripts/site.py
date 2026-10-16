@@ -218,7 +218,7 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
 
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
-          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False) -> Path:
+          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False) -> Path:
     adsense, ad_slot = (adsense or "").strip() or None, (ad_slot or "").strip() or None     # "" (an unset variable): off
     if adsense and not re.fullmatch(r"ca-pub-\d{16}", adsense):
         raise SystemExit(f"--adsense wants a publisher id like ca-pub-1234567890123456, not {adsense!r}")
@@ -242,6 +242,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         extra += f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">"
     if pro:                                  # the Pro tab (archive, historic drives, the purchase): off until it is turned on
         extra += "<meta name=\"pro\" content=\"on\">"
+    if vs:                                   # Versus (two players live, board/match.js): off until it is turned on
+        extra += "<meta name=\"vs\" content=\"on\">"
     try:
         commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=WEB, capture_output=True, text=True, timeout=10).stdout.strip()
     except (OSError, subprocess.SubprocessError):
@@ -295,6 +297,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
                 + "</body></html>\n")
     for f in FILES:
         shutil.copy2(WEB / f, out / f)
+    if (WEB / "teams.json").exists():           # Versus: the 32 teams as they line up now (nflclock.pro.versus_teams)
+        shutil.copy2(WEB / "teams.json", out / "teams.json")
     for f, p in PACKED.items():
         pack(WEB / f, out / p)
     for f in sorted((WEB / "spots").glob("s*.json")):
@@ -320,9 +324,10 @@ if __name__ == "__main__":
     ap.add_argument("--site-url", help="the site's address for link previews (default https://<domain>, else nfl2mindrill.com)")
     ap.add_argument("--adsense", help="Google AdSense publisher id (ca-pub-...); empty: no ads")
     ap.add_argument("--ad-slot", help="an AdSense display ad unit's slot id, shown between games; empty: AdSense's own placement only")
+    ap.add_argument("--vs", action="store_true", help="turn on Versus (two players live); off until approved")
     ap.add_argument("--pro", action="store_true", help="turn on the Pro tab (the archive, the historic drives, the purchase); off until approved")
     a = ap.parse_args()
-    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro)
+    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, vs=a.vs)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6
     print(f"site in {o}: {n} files, {size:.1f} MB")

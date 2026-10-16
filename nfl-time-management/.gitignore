@@ -9,6 +9,7 @@ web/_test_index.html
 web/playbook.json
 web/scenarios.json
 web/game.json
+web/teams.json
 web/spots/
 web/pro/
 web/_test_game.html
