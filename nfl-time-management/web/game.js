@@ -5375,6 +5375,7 @@
         `Pass a historic drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play-callers. You have to win the game: a loss or a tie tops out at 89. The score is mostly the calls, partly the result, so an A takes the win and sharp calls. Each drive counts once, the first time you pass it after entering.`,
         `The board ranks by drives passed, then by who got there first (the server's clock). The first to pass all ${n} wins ${racePrize()}.`,
         'Every pass keeps the calls behind it. A winning run is checked call by call before the prize goes out; a run that doesn’t hold up is taken off the board.',
+        '2nd and 3rd to pass all 24: 2nd picks a future daily too, 3rd gets a shout-out on the site and our socials.',
         'One drive at a time: passes come in at most one every 30 seconds.'].forEach((t) => ul.append(el('li', '', t)));
       rules.append(ul);
       box.append(rules);
