@@ -31,7 +31,7 @@ jobs:
           node-version: "22"
 
       - name: Test
-        run: node worker_test.mjs
+        run: node worker_test.mjs && node match_test.mjs
 
       # The regular deploy lives in site.yml (the worker ships with the Pro data as its assets). Run this workflow by
       # hand (workflow_dispatch) to deploy the worker's code right away, on its own. A deploy replaces the worker's

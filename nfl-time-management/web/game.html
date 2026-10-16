@@ -64,6 +64,17 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .arch .lead { margin: 0; font-size: 15px; }
 .arch h3 { margin: 6px 0 0; font: 800 12px var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
 .arch .days { display: grid; gap: 6px; }
+.arch .vscode { font: 900 44px/1 var(--display); letter-spacing: .12em; text-align: center; padding: 14px; border: 2px dashed var(--line); border-radius: 12px; }
+.arch .row { display: flex; flex-wrap: wrap; gap: 8px; }
+.arch .vsbtns .btn { flex: 1 1 140px; }
+.arch input { flex: 1 1 120px; min-width: 0; font: 700 16px var(--body); padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card, transparent); color: inherit; text-transform: uppercase; letter-spacing: .12em; }
+.btn.ghostbtn { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+.vsbar { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: center; font: 800 12px/1.4 var(--body); letter-spacing: .06em; text-transform: uppercase; padding: 4px 0; }
+.vsbar .clk { padding: 2px 8px; border-radius: 6px; background: var(--ink); color: var(--bg, #fff); font-variant-numeric: tabular-nums; }
+.vsbar .clk.low { background: #e5342b; color: #fff; }
+.vsbar .lock { color: #2c7549; }
+.vsbar .warn { color: #e5342b; text-transform: none; letter-spacing: 0; }
+.result .vscalls { font-size: 13px; color: var(--muted); margin: 6px 0; }
 .arch .day.fresh { border: 2px solid #e0a526; background-image: linear-gradient(100deg, rgba(224,165,38,.16), rgba(224,165,38,0) 60%); }
 .arch .freshtag { display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 4px; color: #1a1305;
   background: linear-gradient(90deg, #f6c544, #e0a526 45%, #fff2c2 50%, #e0a526 55%, #f6c544); background-size: 220% 100%;
@@ -501,7 +512,7 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
 </header>
 
 <main class="wrap">
-  <nav class="modes" aria-label="Game mode"><a id="modeDaily" href="#daily">Daily</a><a id="modeSurv" href="#survivor">Survivor</a><a id="modeArch" href="#archive">Pro</a></nav>
+  <nav class="modes" aria-label="Game mode"><a id="modeDaily" href="#daily">Daily</a><a id="modeSurv" href="#survivor">Survivor</a><a id="modeVs" href="#vs" hidden>Versus</a><a id="modeArch" href="#archive">Pro</a></nav>
   <div id="tiles" class="tiles" aria-label="Today's three spots"></div>
   <section id="arch" class="arch" aria-label="Archive" hidden></section>
   <section id="intro" class="intro" hidden></section>

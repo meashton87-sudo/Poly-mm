@@ -27,6 +27,14 @@ run_worker_first = true
 name = "BOARD"
 class_name = "Board"
 
+[[durable_objects.bindings]]
+name = "MATCH"
+class_name = "Match"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Board"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Match"]
