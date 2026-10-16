@@ -132,7 +132,8 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .race .ryou .note { margin: 0; font-size: 12.5px; color: var(--muted); }
 .race a.btn { display: flex; align-items: center; justify-content: center; text-decoration: none; }
 .race .rjoin { display: flex; gap: 8px; }
-.race .rjoin input { text-transform: none; letter-spacing: 0; }
+.race .rjoin input { flex: 1 1 auto; min-width: 0; text-transform: none; letter-spacing: 0; }
+.race .rjoin .btn { flex: 0 0 auto; width: auto; }
 .race .rbar, .race .rb { position: relative; height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
 .race .rbar i, .race .rb i { position: absolute; inset: 0 auto 0 0; background: var(--sq-g); border-radius: 999px; transition: width .6s ease; }
 .race .rboard { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
@@ -188,6 +189,12 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .btn.ghostbtn { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
 @media (prefers-reduced-motion: reduce) { .gradecard .gbig { animation: none; } }
 .pro { border: 2px solid var(--ink); border-radius: 12px; padding: 14px; display: grid; gap: 8px; }
+.procode { display: grid; gap: 8px; padding: 14px; border-radius: 12px; border: 2px solid var(--sq-g); background: color-mix(in srgb, var(--sq-g) 10%, var(--card)); }
+.procode .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.procode .pcrow { display: flex; gap: 8px; align-items: center; }
+.procode .pcc { flex: 1 1 auto; min-width: 0; font: 800 clamp(14px, 4.3vw, 22px)/1.2 ui-monospace, Menlo, Consolas, monospace; letter-spacing: .02em; user-select: all; white-space: nowrap; }
+.procode .btn { flex: 0 0 auto; width: auto; min-height: 44px; }
+.procode .note { margin: 0; font-size: 12.5px; color: var(--muted); }
 .pro .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
 .pro .price { font: 900 34px/1 var(--display); }
 .pro ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 14px; }

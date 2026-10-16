@@ -5280,7 +5280,7 @@
     if (!BOARD.api) { PRO_LIVE = null; return; }
     try {
       const r = await fetch(`${BOARD.api}/restore`, POST_JSON({ code, key: deviceKey() }));
-      if (r.ok) { PRO_LIVE = true; return; }
+      if (r.ok) { PRO_LIVE = true; if (RACE.refresh) RACE.refresh(); return; }
       if (r.status === 409) { const d = await r.json().catch(() => ({})); proOff(d.error || 'This code is in use on too many devices'); return; }
       if (r.status === 404 || r.status === 400) { proOff('That Pro code is not valid any more'); return; }
       PRO_LIVE = null;                                                   // the board is down: neither on nor off
@@ -5306,6 +5306,7 @@
       track('pro_unlocked');
       track('purchase', { currency: 'USD', value: 4.99, transaction_id: d.code, items: [{ item_id: 'pro', item_name: 'Two-Minute Drill Pro', price: 4.99, quantity: 1 }] });
       toast('Pro unlocked');
+      openModal('Pro unlocked', [proCodeCard(true)]);
     } catch (e) { toast('The purchase could not be confirmed: ' + e.message); }
   }
   // ---- The Gauntlet: the contest across the historic drives (board/worker.js /race). Pass all of them (an A each)
@@ -5338,6 +5339,7 @@
       const head = el('div', 'rhead');
       const live = v && raceNow() >= Date.parse(v.from);
       const chip = el('span', `rchip${v && v.winner ? ' won' : live ? ' live' : ''}`, v && v.winner ? 'Won' : live ? 'Live' : v ? `Starts in ${hms(Date.parse(v.from) - raceNow())}` : '…');
+      chipEl = chip;
       head.append(el('span', 'rk', 'The contest'), chip);
       box.append(head, el('h3', 'rtitle', RACE_NAME),
         el('p', 'rlead', `${n} historic drives. Pass every one, an A (${PASS_AT} or better) on each. The first to do it wins ${racePrize()}.`));
@@ -5355,6 +5357,32 @@
         bar.append(fill);
         you.append(el('div', 'rme', `${me.name}`), el('div', 'rme2', `${me.n}/${n} passed${me.rank ? ` · ${ordinal(me.rank)} place` : ''}`), bar,
           el('p', 'note', me.done ? `All ${n} passed. Hall of Fame.` : me.n ? `Next: any drive you haven't passed since you entered. ${n - me.n} to go.` : 'Pass a historic drive with an A to get on the board. Drives passed before you entered don’t count, so play them again.'));
+        if (!live) {                       // before the start: a new name for the same entry
+          const ch = el('button', 'btn ghostbtn', 'Change name');
+          ch.type = 'button';
+          ch.addEventListener('click', () => {
+            const form = el('form', 'rjoin'), inp = el('input'), go = el('button', 'btn', 'Save');
+            inp.maxLength = 24; inp.value = me.name; inp.setAttribute('aria-label', 'Your new name for the Gauntlet'); inp.autocomplete = 'nickname';
+            go.type = 'submit';
+            form.append(inp, go);
+            form.addEventListener('submit', async (ev) => {
+              ev.preventDefault();
+              const name = inp.value.trim();
+              if (!name) { inp.focus(); return; }
+              go.disabled = true;
+              try {
+                const d = await raceCall('/race/join', { code: proCode(), key: deviceKey(), name, rename: true });
+                if (!d.ok) { toast(d.error || 'Could not change it'); go.disabled = false; return; }
+                RACE.view = d;
+                toast(`You're on the board as ${d.me.name}.`);
+                draw();
+              } catch (e) { toast('No connection to the board. Try again.'); go.disabled = false; }
+            });
+            ch.replaceWith(form);
+            inp.focus();
+          });
+          you.append(ch);
+        }
       } else if (isPro()) {
         const form = el('form', 'rjoin'), inp = el('input'), go = el('button', 'btn', 'Enter');
         inp.placeholder = 'Your name on the board'; inp.maxLength = 24; inp.setAttribute('aria-label', 'Your name for the Gauntlet');
@@ -5376,6 +5404,8 @@
           } catch (e) { toast('No connection to the board. Try again.'); go.disabled = false; }
         });
         you.append(el('div', 'rme', 'Enter the race'), form, el('p', 'note', 'Your name shows on the board for everyone. Only drives you pass after entering count, so enter before you play.'));
+      } else if (proCode() && PRO_LIVE !== false) {      // a Pro code on this device, not confirmed yet: the entry comes once it is
+        you.append(el('div', 'rme', 'Checking your Pro…'), el('p', 'note', 'One moment: your entry shows here once your Pro code is confirmed.'));
       } else {
         const a = el('a', 'btn', 'Get Pro to enter');
         a.href = '#proBuy';
@@ -5415,16 +5445,25 @@
       rules.append(ul);
       box.append(rules);
     };
-    let shown = false;                     // the panel is built before it is on the page: the first fetch goes anyway
+    let shown = false, chipEl = null;                     // the panel is built before it is on the page: the first fetch goes anyway
+    // someone typing a name: the panel is not redrawn under them (a redraw rebuilds the form and loses what was typed)
+    const typing = () => { const i = box.querySelector('.rjoin input'); return !!i && (document.activeElement === i || i.value.trim() !== ''); };
     const tick = async () => {
       if (box.isConnected) shown = true;
       else if (shown) { clearInterval(RACE.timer); return; }
       if (shown && (document.visibilityState !== 'visible' || $('arch').hidden)) return;
-      try { const d = await raceFetch(); if (d.rows) { RACE.view = d; raceSkew(d); draw(); } } catch (e) { /* the next tick */ }
+      try { const d = await raceFetch(); if (d.rows) { RACE.view = d; raceSkew(d); if (!typing()) draw(); } } catch (e) { /* the next tick */ }
     };
+    RACE.refresh = () => { if (!shown || box.isConnected) tick(); };      // Pro confirmed after the panel was drawn: ask again at once
     draw();
     clearInterval(RACE.timer);
-    RACE.timer = setInterval(() => { if (RACE.view && raceNow() < Date.parse(RACE.view.from) + 1500) draw(); }, 1000);
+    // the countdown: only the chip's text each second; the whole panel once, when it goes live
+    RACE.timer = setInterval(() => {
+      const v = RACE.view;
+      if (!v || v.winner) return;
+      const left = Date.parse(v.from) - raceNow();
+      if (left > 0) { if (chipEl) chipEl.textContent = `Starts in ${hms(left)}`; } else if (left > -1500 && !typing()) draw();
+    }, 1000);
     const poll = setInterval(() => { if (shown && !box.isConnected) clearInterval(poll); else tick(); }, RACE_POLL);
     tick();
     return box;
@@ -5483,6 +5522,20 @@
     a.append(el('b', '', `🏁 ${RACE_NAME}`), el('span', '', 'First to pass all 24 historic drives wins. Leaderboard →'));
     a.addEventListener('click', () => track('race_bar'));
     $('modeArch').closest('nav').after(a);
+  }
+  // your Pro code, where you can't miss it: the code, Copy, and how to use it on your other devices
+  function proCodeCard(fresh) {
+    const box = el('div', 'procode'), code = proCode();
+    const row = el('div', 'pcrow'), c = el('code', 'pcc', code), copy = el('button', 'btn', 'Copy');
+    copy.type = 'button';
+    copy.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(code); copy.textContent = 'Copied'; track('pro_code_copy'); }
+      catch (e) { const r = document.createRange(); r.selectNodeContents(c); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); copy.textContent = 'Selected: copy it'; }
+    });
+    row.append(c, copy);
+    box.append(el('div', 'k', fresh ? 'Pro unlocked: save your code' : 'Your Pro code'), row,
+      el('p', 'note', 'On your phone, computer or another browser: open the Pro tab, tap "Already have Pro?", paste this code and tap Restore. It works on up to 3 devices. Screenshot it or save it somewhere: it is not in the Stripe receipt.'));
+    return box;
   }
   function proNodes() {
     const box = el('div', 'pro'), days = Math.max(0, dayOf(new Date()) - 1);
@@ -5583,6 +5636,8 @@
       } else box.append(...proNodes());
       return;
     }
+    box.append(proCodeCard(false));
+    gauntletFresh();
     const pro = await loadPro(), ds = load(`${STORE}:drives`, {});
     if (pro && pro.drives.length) {
       // your record across them: passed (an A), the rank it earns, the next rank, every drive's best grade
@@ -6260,7 +6315,27 @@
   }
 
   // ----------------------------------------------------------------- boot ---
+  // The Gauntlet's start: every player's historic-drive record starts over then, like the board (the grades from before
+  // move to drives_before_gauntlet, kept, not shown), and a try begun before it is dropped (it could never count)
+  const GAUNTLET_FROM = Date.parse('2026-10-16T20:00:00Z');
+  function gauntletFresh() {
+    if (Date.now() < GAUNTLET_FROM || load(`${STORE}:gauntlet_fresh`, false)) return;
+    try {
+      const ds = load(`${STORE}:drives`, {}), keep = {}, old = load(`${STORE}:drives_before_gauntlet`, {});
+      for (const [k, r] of Object.entries(ds)) { if (r && r.at && r.at >= GAUNTLET_FROM && !(r.prev)) keep[k] = r; else old[k] = r; }
+      save(`${STORE}:drives_before_gauntlet`, old);
+      save(`${STORE}:drives`, keep);
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith(`${STORE}:drive:`)) continue;
+        const st = load(k, null);
+        if (!st || !st.tryAt || st.tryAt < GAUNTLET_FROM) localStorage.removeItem(k);
+      }
+    } catch (e) { /* storage off: nothing to start over */ }
+    save(`${STORE}:gauntlet_fresh`, true);
+  }
   async function boot() {
+    gauntletFresh();
     const topH = () => document.documentElement.style.setProperty('--top-h', `${document.querySelector('.top').offsetHeight}px`);
     topH(); addEventListener('resize', topH);
     $('helpBtn').addEventListener('click', openHelp);

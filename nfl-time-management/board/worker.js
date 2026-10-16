@@ -40,7 +40,7 @@
 // Nothing about the buyer is kept here (Stripe has the receipt); only the session id behind each code.
 const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
 const RACE_PATHS = ['/race', '/race/me', '/race/join', '/race/start', '/race/pass'];
-const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook', '/pro/data', '/pro/reset'];
+const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook', '/pro/data', '/pro/reset', '/pro/gift'];
 const PRO_FILE_RE = /^(drives|runs|d\d{1,3}|r\d{1,3})\.json$/;
 const STRIPE_VERSION = '2026-08-26.dahlia', WEBHOOK_TOLERANCE = 300;   // the API version pinned; a signature older than this is refused
 const PRO_PRICE = '$4.99', PRO_CENTS = 499, PRO_TAX_CODE = 'txcd_10201001',    // video games, downloaded, non-subscription: the product's category; Managed Payments refuses a line without one
@@ -309,7 +309,7 @@ async function pro(req, env, storage, hits, h, url) {
           ...(price.startsWith('prod_') ? { 'line_items[0][price_data][product]': price }
             : { 'line_items[0][price_data][product_data][name]': 'Two-Minute Drill Pro', 'line_items[0][price_data][product_data][tax_code]': PRO_TAX_CODE,
               'line_items[0][price_data][product_data][description]': 'Every past daily, the historic drives and the playoff runs. One code, any device.' }) };
-      r = await stripe(env, 'checkout/sessions', { mode: 'payment', ...item, 'line_items[0][quantity]': '1',
+      r = await stripe(env, 'checkout/sessions', { mode: 'payment', ...item, 'line_items[0][quantity]': '1', allow_promotion_codes: 'true',
         success_url: `${site}/?claim={CHECKOUT_SESSION_ID}`, cancel_url: `${site}/?pro=cancel`, integration_identifier: tag() });
     } catch (e) { return json({ error: 'stripe unreachable' }, 502, h); }
     const sess = await r.json().catch(() => ({}));
@@ -342,6 +342,14 @@ async function pro(req, env, storage, hits, h, url) {
     if (st === 'key') return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
     if (st === 'unknown') return json({ error: 'unknown code' }, 404, h);
     if (st === 'full') return json({ error: DEV_FULL }, 409, h);
+    return json({ ok: true, code }, 200, h);
+  }
+  if (url.pathname === '/pro/gift') {                     // a free code (a prize, a thank-you): Authorization: Bearer <ADMIN_TOKEN>
+    const auth = req.headers.get('Authorization') || '', want = env.ADMIN_TOKEN ? `Bearer ${env.ADMIN_TOKEN}` : '';
+    if (!want || !same(auth, want)) return json({ error: 'forbidden' }, 403, h);
+    let code = proCode();
+    while (await storage.get(`pro:code:${code}`)) code = proCode();
+    await storage.put(`pro:code:${code}`, { s: 'gift', at: new Date().toISOString().slice(0, 10), note: String(body.note || '').slice(0, 80) });
     return json({ ok: true, code }, 200, h);
   }
   if (url.pathname === '/pro/reset') {                    // support: a code's devices start over (Authorization: Bearer <ADMIN_TOKEN>)
@@ -433,7 +441,7 @@ export async function handle(req, env, storage, hits) {
 //   DELETE /race?name=X (Authorization: Bearer <ADMIN_TOKEN>) -> an entrant off the board, for good (a run that fails
 //                                                                the check)
 const RACE_N = 24, RACE_TOP = 100, RACE_GAP = 30e3, RACE_DECS_MAX = 80, RACE_BYTES_MAX = 60000, RACE_MIN_TRY = 20e3;
-const raceFrom = (env) => Date.parse(env.RACE_FROM || '2026-10-16T18:00:00Z');
+const raceFrom = (env) => Date.parse(env.RACE_FROM || '2026-10-16T20:00:00Z');
 // the leaderboard: most drives passed, then whoever got there first
 const raceRows = (list) => Object.values(list).filter((x) => !x.out && !blocked(x.name))
   .sort((a, b) => b.n - a.n || a.nAt - b.nAt || a.joined - b.joined);
@@ -483,6 +491,19 @@ async function race(req, env, storage, hits, h, url) {
   let e = await storage.get(`race:e:${id}`);
   if (url.pathname === '/race/join') {
     if (e && e.out) return json({ error: 'this code is out of the Gauntlet' }, 403, h);
+    if (e && body.rename && now < raceFrom(env)) {                                // before the start: a new name for the same entry
+      const name = clean(body.name);
+      if (!name) return json({ error: 'a name (1-24 characters) is needed' }, 400, h);
+      if (blocked(name)) return json({ error: 'That name is not allowed. Pick another.', refused: true }, 409, h);
+      const lower = name.toLowerCase(), old = e.name.toLowerCase();
+      if (lower !== old && await storage.get(`race:name:${lower}`)) return json({ error: 'That name is taken. Pick another.' }, 409, h);
+      if (lower !== old) { await storage.put(`race:name:${lower}`, id); await storage.delete(`race:name:${old}`); }
+      e.name = name;
+      await storage.put(`race:e:${id}`, e);
+      const list = (await storage.get('race:list')) || {};
+      if (list[id]) { list[id].name = name; await storage.put('race:list', list); }
+      return json(await raceView(storage, env, id), 200, h);
+    }
     if (e) return json(await raceView(storage, env, id), 200, h);              // entered already: the same entry
     const name = clean(body.name);
     if (!name) return json({ error: 'a name (1-24 characters) is needed' }, 400, h);
@@ -514,7 +535,7 @@ async function race(req, env, storage, hits, h, url) {
   if (now < raceFrom(env)) return json({ error: 'the Gauntlet has not started', ...(await raceView(storage, env, id)) }, 409, h);
   // the try was started in the Gauntlet (after the start, after entering, this drive) and took a real drive's time
   const tr = await storage.get(`race:try:${id}:${drive}`);
-  if (!tr || typeof body.tok !== 'string' || !same(body.tok, tr.tok)) return json({ error: 'this try started before you were in the Gauntlet (or before 2 PM ET): play the drive again to count it', notry: true }, 409, h);
+  if (!tr || typeof body.tok !== 'string' || !same(body.tok, tr.tok)) return json({ error: 'this try started before you were in the Gauntlet (or before the Gauntlet started): play the drive again to count it', notry: true }, 409, h);
   if (now - tr.at < RACE_MIN_TRY) return json({ error: 'too fast for a real drive' }, 429, h);
   if (e.passes[drive]) return json(await raceView(storage, env, id), 200, h);           // passed already: its first pass counts
   if (now - (e.last || 0) < RACE_GAP) return json({ error: 'too fast: one drive at a time' }, 429, h);

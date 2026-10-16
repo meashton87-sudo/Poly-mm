@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 const sha256hex = async (x) => createHash('sha256').update(x).digest('hex');
 
 const store = new Map();
-const storage = { get: async (k) => structuredClone(store.get(k)), put: async (k, v) => { store.set(k, structuredClone(v)); },
+const storage = { get: async (k) => structuredClone(store.get(k)), put: async (k, v) => { store.set(k, structuredClone(v)); }, delete: async (k) => store.delete(k),
   list: async ({ prefix }) => new Map([...store].filter(([k]) => k.startsWith(prefix)).map(([k, v]) => [k, structuredClone(v)])) };
 const env = { ALLOWED_ORIGINS: 'https://nfl2mindrill.com', ADMIN_TOKEN: 'commish-secret-123' };
 let board = new Board({ storage }, env);
@@ -203,6 +203,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   const form = new URLSearchParams(init0.body);
   assert.strictEqual(form.get('mode'), 'payment');
   assert.strictEqual(form.get('line_items[0][price]'), 'price_123');
+  assert.strictEqual(form.get('allow_promotion_codes'), 'true', 'checkout takes promotion codes');
   assert.strictEqual(form.get('success_url'), 'https://nfl2mindrill.com/?claim={CHECKOUT_SESSION_ID}', 'the site without its trailing slash');
   // from the Pro preview (an allowed origin), the buyer is sent back there; from anywhere else, to the site
   for (const e of [env, board.env]) e.ALLOWED_ORIGINS = 'https://nfl2mindrill.com,https://nfl2mindrill-pro-preview.pages.dev';
@@ -347,6 +348,16 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   globalThis.fetch = realFetch;
   for (const e of [env, board.env]) { delete e.STRIPE_SECRET; delete e.STRIPE_PRICE; delete e.SITE; }
 }
+// a gift code (admin only): a working Pro code
+{
+  for (const e of [env, board.env]) e.STRIPE_SECRET = 'sk_live_x';
+  assert.strictEqual((await call('POST', { note: 'x' }, { path: '/pro/gift' })).status, 403, 'a gift code is admin only');
+  const g = await (await call('POST', { note: 'found Madden' }, { path: '/pro/gift', auth: 'Bearer commish-secret-123' })).json();
+  assert.ok(/^TMD-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(g.code), 'a code');
+  const r = await call('POST', { code: g.code, key: 'gift-device-key-000000001' }, { path: '/restore' });
+  assert.strictEqual(r.status, 200, 'the gift code unlocks Pro');
+  for (const e of [env, board.env]) delete e.STRIPE_SECRET;
+}
 // The Gauntlet: Pro codes enter under a name; passes after the start count, each drive once; the first to all 24 wins
 {
   const codes = ['TMD-AAAA-BBBB-CCCC', 'TMD-DDDD-EEEE-FFFF', 'TMD-GGGG-HHHH-JJJJ'];
@@ -374,6 +385,12 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual((await rc('/race/join', { code: cb, key: kb, name: 'eli manning' })).status, 409, 'a name has one owner');
   v = await (await rc('/race/join', { code: ca, key: ka, name: 'Someone Else' })).json();
   assert.strictEqual(v.me.name, 'Eli Manning', 'one entry a code: entering again is the same entry');
+  // before the start, a new name for the same entry (the old one free again)
+  v = await (await rc('/race/join', { code: ca, key: ka, name: 'E', rename: true })).json();
+  assert.deepStrictEqual([v.me.name, v.entrants], ['E', 1], 'renamed, still one entry');
+  assert.strictEqual((await rc('/race/join', { code: ca, key: ka, name: 'fuck off', rename: true })).status, 409, 'a new name is checked too');
+  v = await (await rc('/race/join', { code: ca, key: ka, name: 'Eli Manning', rename: true })).json();
+  assert.strictEqual(v.me.name, 'Eli Manning', 'and back');
   assert.strictEqual((await rc('/race/pass', { code: ca, key: ka, drive: 3, p: 0.93, decs, res: WON })).status, 409, 'nothing counts before the start');
   assert.strictEqual((await rc('/race/start', { code: ca, key: ka, drive: 3 })).status, 409, 'no try starts before the start');
   env.RACE_FROM = board.env.RACE_FROM = new Date(Date.now() - 1000).toISOString();          // started
@@ -400,6 +417,8 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual((await rc('/race/pass', { code: ca, key: ka, drive: 4, p: 0.95, decs, res: WON, tok: tok4 })).status, 429, 'one drive at a time');
   v = await (await rc('/race/pass', { code: ca, key: ka, drive: 3, p: 0.99, decs, res: WON, tok })).json();
   assert.strictEqual(v.me.n, 1, 'a drive counts once');
+  v = await (await rc('/race/join', { code: ca, key: ka, name: 'Late Change', rename: true })).json();
+  assert.strictEqual(v.me.name, 'Eli Manning', 'no new name once it has started');
   // the race: B enters and finishes all 24 (the gap between passes stepped over by hand), A has one
   await rc('/race/join', { code: cb, key: kb, name: 'Tom' });
   const idb = (await sha256hex('race:' + cb)).slice(0, 24);
