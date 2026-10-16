@@ -5279,7 +5279,7 @@
   // first and win. A Pro code enters under a public name; only passes made after entering count, each drive once; the
   // board is live (polled while it is on screen) and open to everyone, Pro or not
   const RACE_NAME = 'The Gauntlet';
-  const RACE_PRIZE = '';                    // what the winner gets, in a few words ('' says "the prize")
+  const RACE_PRIZE = '$50, the Gauntlet Champion title on the site and the pick of a future daily';                  // what the winner gets, in a few words ('' says "the prize")
   const RACE_POLL = 15000;
   const RACE = { view: null, full: false, timer: 0 };
   const racePrize = () => RACE_PRIZE || 'the prize';
