@@ -347,6 +347,16 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   globalThis.fetch = realFetch;
   for (const e of [env, board.env]) { delete e.STRIPE_SECRET; delete e.STRIPE_PRICE; delete e.SITE; }
 }
+// a gift code (admin only): a working Pro code
+{
+  for (const e of [env, board.env]) e.STRIPE_SECRET = 'sk_live_x';
+  assert.strictEqual((await call('POST', { note: 'x' }, { path: '/pro/gift' })).status, 403, 'a gift code is admin only');
+  const g = await (await call('POST', { note: 'found Madden' }, { path: '/pro/gift', auth: 'Bearer commish-secret-123' })).json();
+  assert.ok(/^TMD-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(g.code), 'a code');
+  const r = await call('POST', { code: g.code, key: 'gift-device-key-000000001' }, { path: '/restore' });
+  assert.strictEqual(r.status, 200, 'the gift code unlocks Pro');
+  for (const e of [env, board.env]) delete e.STRIPE_SECRET;
+}
 // The Gauntlet: Pro codes enter under a name; passes after the start count, each drive once; the first to all 24 wins
 {
   const codes = ['TMD-AAAA-BBBB-CCCC', 'TMD-DDDD-EEEE-FFFF', 'TMD-GGGG-HHHH-JJJJ'];

@@ -40,7 +40,7 @@
 // Nothing about the buyer is kept here (Stripe has the receipt); only the session id behind each code.
 const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
 const RACE_PATHS = ['/race', '/race/me', '/race/join', '/race/start', '/race/pass'];
-const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook', '/pro/data', '/pro/reset'];
+const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook', '/pro/data', '/pro/reset', '/pro/gift'];
 const PRO_FILE_RE = /^(drives|runs|d\d{1,3}|r\d{1,3})\.json$/;
 const STRIPE_VERSION = '2026-08-26.dahlia', WEBHOOK_TOLERANCE = 300;   // the API version pinned; a signature older than this is refused
 const PRO_PRICE = '$4.99', PRO_CENTS = 499, PRO_TAX_CODE = 'txcd_10201001',    // video games, downloaded, non-subscription: the product's category; Managed Payments refuses a line without one
@@ -342,6 +342,14 @@ async function pro(req, env, storage, hits, h, url) {
     if (st === 'key') return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
     if (st === 'unknown') return json({ error: 'unknown code' }, 404, h);
     if (st === 'full') return json({ error: DEV_FULL }, 409, h);
+    return json({ ok: true, code }, 200, h);
+  }
+  if (url.pathname === '/pro/gift') {                     // a free code (a prize, a thank-you): Authorization: Bearer <ADMIN_TOKEN>
+    const auth = req.headers.get('Authorization') || '', want = env.ADMIN_TOKEN ? `Bearer ${env.ADMIN_TOKEN}` : '';
+    if (!want || !same(auth, want)) return json({ error: 'forbidden' }, 403, h);
+    let code = proCode();
+    while (await storage.get(`pro:code:${code}`)) code = proCode();
+    await storage.put(`pro:code:${code}`, { s: 'gift', at: new Date().toISOString().slice(0, 10), note: String(body.note || '').slice(0, 80) });
     return json({ ok: true, code }, 200, h);
   }
   if (url.pathname === '/pro/reset') {                    // support: a code's devices start over (Authorization: Bearer <ADMIN_TOKEN>)
