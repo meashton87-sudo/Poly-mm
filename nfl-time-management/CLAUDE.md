@@ -78,3 +78,11 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   the code); the code path and its 3-device limit are unchanged. Never return another account's data. The top bar's
   account button (game.js acctBar) is Log in, then the account's username (/auth/name: 3-20 characters, one account each,
   never blocked()).
+- Signed in, more follows the account (worker.js, the tests in worker_test.mjs): the page's record (stats days, historic
+  drives from the Gauntlet's start, playoff runs) merges both ways with /auth/stats (the best of each kept; game.js
+  statsSync on sign-in, on load at most every 10 minutes, after each finish); the account's username is its name on the
+  survivor board and the day's list from any phone (a { session } with the post: acctNameKey; a name set on the device
+  still wins on the page, myName); friend leagues (/league/*, #league-<code> join links: 50 members, 10 leagues an
+  account; a board shows usernames and daily numbers only, to members only); the daily email (/auth/remind, the cron in
+  wrangler.toml [triggers], `scheduled` -> the Board's reminders: one a day an account, 1000 a run, an HMAC unsubscribe
+  link; only with RESEND_KEY + MAIL_FROM). Never put an address or account id in anything another account can read.

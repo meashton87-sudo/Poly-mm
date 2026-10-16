@@ -4469,7 +4469,10 @@
     }
     return BOARD.key || (BOARD.key = k);                    // storage off: one key for this visit
   }
-  const myName = () => String(load(NAME_KEY, '') || '').slice(0, 24);
+  // the name this device plays under: the one set here, else (signed in) the account's username (kept here as
+  // UNAME_KEY, so it is there before the account is asked again); the board takes it as the account's from any phone
+  const myName = () => String(load(NAME_KEY, '') || (authSession() && load(UNAME_KEY, '')) || '').slice(0, 24);
+  const withSession = () => (signedIn() ? { session: authSession() } : {});
   const slugOf = (name) => `p-${String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'player'}`;
   const redrawBoards = () => document.querySelectorAll('.board').forEach(fillBoard);
   // posts go as text/plain, a "simple" cross-origin request: no OPTIONS preflight, half the backend requests (the
@@ -4514,7 +4517,7 @@
     if (!BOARD.mode || !BOARD.canWrite || !name || !(best >= 0 && best < 1000)) return false;
     if (BOARD.mode === 'api') {
       try {
-        const res = await apiBoard('POST', { name, best, key: deviceKey(), ...(life ? { life: true } : {}) });
+        const res = await apiBoard('POST', { name, best, key: deviceKey(), ...(life ? { life: true } : {}), ...withSession() });
         BOARD.rows = res.rows || BOARD.rows;
         BOARD.taken = res.taken ? name : '';
         BOARD.refused = res.refused ? name : '';
@@ -4914,6 +4917,7 @@
     const firstFinish = !state.done;
     state.done = true;
     saveState();
+    if (firstFinish) statsSync(true);              // signed in: the record goes to the account (another phone sees it)
     drawTiles();
     const box = $('done');
     box.textContent = '';
@@ -4993,10 +4997,11 @@
       share.text = cc ? share.text.replace(`Coached like ${cc.name}`, line) : share.text.replace(/\n/, `\n${line}\n`);
       pre.textContent = share.text;
       const stt = load(`${STORE}:stats`, { days: {} });
-      if (stt.days[dayN]) { stt.days[dayN].coach = 'John Madden'; stt.days[dayN].madden = code; save(`${STORE}:stats`, stt); }
+      if (stt.days[dayN] && stt.days[dayN].madden !== code) { stt.days[dayN].coach = 'John Madden'; stt.days[dayN].madden = code; save(`${STORE}:stats`, stt); statsSync(true); }
       if (!state.madden) { state.madden = code; saveState(); track('madden', { day: dayN }); }
     };
     box.insertBefore(btn, dbox);
+    if (!DRIVE && !RUN_N && !ARCH_DAY) { const lg = el('p', 'lglink'); lg.hidden = true; box.insertBefore(lg, dbox); leagueNudge(); }
     box.append(countdown(streak >= 1 ? 'Keep the streak: next drive in ' : null));
     const ad = adBox();
     if (ad) box.append(ad);
@@ -5078,7 +5083,7 @@
     box.hidden = true;
     if (ARCH_DAY || DRIVE || RUN_N) return box;        // the archive, a historic drive, a run: nothing to post
     const post = async () => {
-      const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: driveDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)), ...(myName() ? { name: myName() } : {}) }));
+      const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: driveDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)), ...(myName() ? { name: myName(), ...withSession() } : {}) }));
       if (!res.ok) throw new Error(`daily ${res.status}`);
       return res.json();
     };
@@ -5351,12 +5356,12 @@
   // ---- Accounts (board/worker.js /auth*): Pro on an account, Sign in with Google or an emailed link. The session the
   // board gives is kept here (SESS_KEY); signed in, Pro comes from the account (on any device, no device limit) and the
   // board is asked with { session } in place of { code, key }. A code on the device works as before, signed in or not.
-  const SESS_KEY = `${STORE}:session`;
+  const SESS_KEY = `${STORE}:session`, UNAME_KEY = `${STORE}:username`;
   const GOOGLE_ID = ((document.querySelector('meta[name="google-client-id"]') || {}).content || '').trim();
   const ACCT = { cfg: null, me: null };           // cfg: { google, email } (GET /auth); me: { email, pro, code? } (signed in)
   const authSession = () => { const s = String(load(SESS_KEY, '') || ''); return /^[0-9a-f]{64}$/.test(s) ? s : ''; };
   const acctPro = () => !!(ACCT.me && ACCT.me.pro && authSession());
-  function authClear() { ACCT.me = null; try { localStorage.removeItem(SESS_KEY); } catch (e) { /* no storage */ } }
+  function authClear() { ACCT.me = null; try { localStorage.removeItem(SESS_KEY); localStorage.removeItem(UNAME_KEY); } catch (e) { /* no storage */ } }
   // what proves Pro to the board: the session when the account has Pro, else this device's code and key
   const proCred = () => (acctPro() ? { session: authSession() } : { code: proCode(), key: deviceKey() });
   const proHave = () => acctPro() || !!proCode();
@@ -5412,14 +5417,18 @@
   // signed in (Google, or an emailed link): keep the session; on to the Pro tab, where it shows
   // signed in (Google, or an emailed link): keep the session and show who in the top bar. An account without a username
   // picks one first. On the Pro tab the page reloads after, so the tab shows the account's Pro.
-  const acctOf = (d) => ({ email: d.email, name: d.name || '', pro: !!d.pro, ...(d.code ? { code: d.code } : {}) });
+  const acctOf = (d) => {
+    save(UNAME_KEY, d.name || '');
+    return { email: d.email, name: d.name || '', pro: !!d.pro, ...(d.code ? { code: d.code } : {}), leagues: Array.isArray(d.leagues) ? d.leagues : [], remind: !!d.remind };
+  };
   function authSignedIn(d) {
     save(SESS_KEY, d.session);
     ACCT.me = acctOf(d);
     if (d.pro) PRO_LIVE = true;
     track('login');
     acctBar();
-    const then = () => { if (ARCH) location.reload(); };
+    statsSync(true);
+    const then = () => { if (ARCH) location.reload(); else leaguePending(); };
     if (!ACCT.me.name) { nameSheet(true, then); return; }
     closeModal();
     toast(`Signed in as ${ACCT.me.name}`);
@@ -5583,11 +5592,11 @@
     if (!ACCT.me.name) nameSheet(false);
     else acctSheet();
   }
-  function signInSheet() {
+  function signInSheet(lead) {
     const box = el('div', 'acctsheet'), perks = el('ul', 'perks');
-    ['Your username at the top of every page', 'Pro on any phone or computer you sign in on, no code to keep',
-      'New here? The same button makes your account'].forEach((t) => perks.append(el('li', '', t)));
-    box.append(perks, ...signInWays(), el('p', 'note', 'We only keep your email address to know it is you. No posts, no spam.'));
+    ['Your username, streak and stats on any phone or computer', 'Friend leagues: a board of the daily for your group',
+      'Pro on any device you sign in on, no code to keep', 'New here? The same button makes your account'].forEach((t) => perks.append(el('li', '', t)));
+    box.append(...(lead ? [lead] : []), perks, ...signInWays(), el('p', 'note', 'We only keep your email address to know it is you. No posts, no spam.'));
     openModal('Log in or sign up', [box]);
   }
   // pick (first: just signed up) or change the username: 3-20 characters, one account each, shown at the top
@@ -5637,6 +5646,8 @@
       p.append(a, ' and it stays with the account.');
       box.append(p);
     }
+    box.append(leaguesEl());
+    if (ACCT.cfg && ACCT.cfg.email) box.append(remindToggle());
     const acts = el('div', 'acts'), ch = el('button', 'btn ghostbtn', 'Change username'), out = el('button', 'btn ghostbtn', 'Sign out');
     ch.type = 'button'; out.type = 'button';
     ch.addEventListener('click', () => nameSheet(false));
@@ -5644,6 +5655,258 @@
     acts.append(ch, out);
     box.append(acts);
     openModal('Your account', [box]);
+  }
+  // the daily email (board /auth/remind; only where the board can send email): one a day when the new daily is up
+  function remindToggle() {
+    const tg = el('div', 'toggle'), lab = el('div', 'lab', 'Email me when the new daily is up'), sw = el('button', 'sw2');
+    lab.append(el('small', '', 'One short email a day. Every one has an unsubscribe link.'));
+    sw.type = 'button';
+    sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(!!ACCT.me.remind)); sw.setAttribute('aria-label', 'Email me when the new daily is up');
+    sw.addEventListener('click', async () => {
+      const on = sw.getAttribute('aria-checked') !== 'true';
+      sw.disabled = true;
+      sw.setAttribute('aria-checked', String(on));
+      try {
+        ACCT.me = acctOf(await proApi('/auth/remind', { session: authSession(), on }));
+        track(on ? 'remind_on' : 'remind_off');
+        toast(ACCT.me.remind ? 'You’ll get an email when each new daily is up' : 'No more daily emails');
+      } catch (e) {
+        if (/signed out/i.test(e.message)) { authLost(); acctBar(); closeModal(); return; }
+        toast(e.message);
+      }
+      sw.setAttribute('aria-checked', String(!!(ACCT.me && ACCT.me.remind)));
+      sw.disabled = false;
+    });
+    tg.append(lab, sw);
+    return tg;
+  }
+  // the daily email's unsubscribe link: ?unsub=<ref>.<token> (no sign-in needed; the address is tidied either way)
+  async function unsubFromUrl() {
+    const q = new URLSearchParams(location.search), u = q.get('unsub');
+    if (!u) return;
+    q.delete('unsub');
+    history.replaceState(null, '', location.pathname + (q.toString() ? `?${q}` : '') + location.hash);
+    const [r, t] = u.split('.');
+    try {
+      await proApi('/auth/unsub', { r, t });
+      if (ACCT.me) ACCT.me.remind = false;
+      track('remind_unsub');
+      toast('Unsubscribed: no more daily emails');
+    } catch (e) { toast(`That unsubscribe link did not work (${e.message}). Turn the email off in your account instead.`); }
+  }
+
+  // ---- Stats that follow the account (board /auth/stats): signed in, this browser's record (the stats days, the
+  // historic drives, the playoff runs) and the account's are merged, the best of each kept on both sides, so a streak
+  // and the drives passed come along to a new phone. On sign-in, on a page load (at most every SYNC_MS: switching
+  // modes reloads the page) and after each finished daily, drive or run. Drives only from the Gauntlet's start on
+  // (gauntletFresh moved the ones before aside).
+  const SYNC_KEY = `${STORE}:synced`, SYNC_MS = 10 * 60e3, SYNC_CAP = { days: 2000, drives: 500, runs: 500 };
+  // the better of this browser's record of a day, drive or run and the account's (the board's rules, worker.js
+  // statBetter); a drive keeps this browser's own try stamp and last result (renderSummary's: the try counted once)
+  function statBest(kind, mine, theirs) {
+    if (!mine || !theirs) return mine || theirs;
+    const w = theirs.p > mine.p ? theirs : mine;
+    if (kind === 'drives') return { ...w, tries: Math.max(mine.tries || 0, theirs.tries || 0), won: !!(mine.won || theirs.won), ...(mine.at ? { at: mine.at } : {}), ...(mine.prev ? { prev: mine.prev } : {}) };
+    if (kind === 'days' && !w.madden && (mine.madden || theirs.madden)) return { ...w, coach: 'John Madden', madden: mine.madden || theirs.madden };
+    return w;
+  }
+  const newest = (o, n) => Object.fromEntries(Object.keys(o || {}).map(Number).filter((k) => k > 0).sort((a, b) => a - b).slice(-n).map((k) => [k, o[k]]));
+  const gauntletDrives = (o) => Object.fromEntries(Object.entries(o || {}).filter(([, r]) => r && r.at >= GAUNTLET_FROM));
+  // the account's record into this browser's, read fresh (a drive may have finished while the board answered); true
+  // when anything here changed
+  function statsTake(acc) {
+    if (!acc) return false;
+    const st = load(`${STORE}:stats`, { days: {} }), here = { days: st.days || (st.days = {}), drives: load(`${STORE}:drives`, {}), runs: load(`${STORE}:runs`, {}) };
+    let changed = false;
+    for (const kind of ['days', 'drives', 'runs']) {
+      for (const [k, v] of Object.entries(kind === 'drives' ? gauntletDrives(acc.drives) : acc[kind] || {})) {
+        const b = statBest(kind, here[kind][k], v);
+        if (JSON.stringify(b) !== JSON.stringify(here[kind][k])) { here[kind][k] = b; changed = true; }
+      }
+    }
+    if (changed) { save(`${STORE}:stats`, st); save(`${STORE}:drives`, here.drives); save(`${STORE}:runs`, here.runs); }
+    return changed;
+  }
+  let syncQ = Promise.resolve(false);        // one sync at a time, in order (a finish while one is out goes after it)
+  function statsSync(force) {
+    syncQ = syncQ.catch(() => false).then(async () => {
+      if (!signedIn() || !BOARD.api) return false;
+      if (!force && Date.now() - Number(load(SYNC_KEY, 0) || 0) < SYNC_MS) return false;
+      const st = load(`${STORE}:stats`, { days: {} });
+      const stats = { days: newest(st.days, SYNC_CAP.days), drives: newest(gauntletDrives(load(`${STORE}:drives`, {})), SYNC_CAP.drives), runs: newest(load(`${STORE}:runs`, {}), SYNC_CAP.runs) };
+      let d;
+      try { d = await proApi('/auth/stats', { session: authSession(), stats }); } catch (e) {
+        if (/signed out/i.test(e.message)) { authLost(); acctBar(); }
+        return false;
+      }
+      save(SYNC_KEY, Date.now());
+      const changed = statsTake(d.stats);
+      if (changed) streakRedraw();
+      return changed;
+    });
+    return syncQ;
+  }
+  // a day finished on another phone: the end card's streak line, if it is up, counts it
+  function streakRedraw() {
+    const line = document.querySelector('#done .streak');
+    if (!line || !state || !state.done || SURV || DRIVE || RUN_N || ARCH_DAY) return;
+    const st = load(`${STORE}:stats`, { days: {} });
+    let streak = 0; for (let k = dayN; st.days[k]; k--) streak++;
+    line.textContent = streak >= 2 ? `🔥 ${streak}-day streak` : 'Day 1 of your streak · come back tomorrow';
+  }
+
+  // ---- Friend leagues (board /league/*): a private board of the daily for a group of friends: each member's
+  // username, the day's score, the streak and the last 7 days' average, best score first. Made in the account sheet;
+  // joined by the link a member shares (#league-<code>; opened signed out, the join waits for the sign-in: LEAGUE_KEY).
+  const LEAGUE_HASH = ((location.hash.match(/^#league-([A-Za-z0-9]{8})$/) || [])[1] || '').toUpperCase();
+  const LEAGUE_KEY = `${STORE}:leaguejoin`, LEAGUES_MAX = 10;
+  const leagueLink = (code) => `${location.origin}${location.pathname}#league-${code}`;
+  const myLeagues = () => (signedIn() && ACCT.me.leagues) || [];
+  const leagueApi = (path, body) => proApi(`/league/${path}`, { session: authSession(), ...body });
+  const lgFail = (e) => { if (/signed out/i.test(e.message)) { authLost(); acctBar(); closeModal(); toast('You are signed out. Log in again.'); return true; } return false; };
+  // the account sheet's section: your leagues (each opens its board) and a new one
+  function leaguesEl() {
+    const sec = el('div', 'sec'), ls = myLeagues();
+    sec.append(el('div', 'k', 'Leagues'));
+    if (ls.length) {
+      const list = el('div', 'llist');
+      ls.forEach((l) => {
+        const b = el('button', 'lrow');
+        b.type = 'button';
+        b.append(el('span', 'nm', l.name), el('span', 'n', `${l.n} player${l.n === 1 ? '' : 's'}`), el('span', 'go', '›'));
+        b.addEventListener('click', () => leagueBoard(l.code));
+        list.append(b);
+      });
+      sec.append(list);
+    } else sec.append(el('p', 'note', 'Play the daily against your friends: make a league and send them the link. Everyone’s score, streak and week, on one board.'));
+    if (ls.length < LEAGUES_MAX) {
+      const form = el('form'), inp = el('input'), go = el('button', 'btn', 'Create');
+      inp.maxLength = 30; inp.minLength = 3; inp.required = true; inp.placeholder = ls.length ? 'Start another league' : 'League name, e.g. Sunday Crew'; inp.setAttribute('aria-label', 'League name');
+      go.type = 'submit';
+      form.append(inp, go);
+      form.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const name = inp.value.replace(/\s+/g, ' ').trim();
+        if (name.length < 3) { toast('A league name is at least 3 characters'); inp.focus(); return; }
+        go.disabled = true;
+        try {
+          const d = await leagueApi('create', { name });
+          ACCT.me.leagues = d.leagues;
+          track('league_create');
+          leagueNudge();
+          leagueBoard(d.league.code, true);
+        } catch (e) { if (!lgFail(e)) toast(e.message); go.disabled = false; }
+      });
+      sec.append(form);
+    }
+    return sec;
+  }
+  // a league's board (a modal): the day's standings, the invite link, the other leagues, leaving. fresh: just made
+  async function leagueBoard(code, fresh) {
+    const box = el('div', 'acctsheet lboard'), body = el('div', 'lbody');
+    body.append(el('p', 'note', 'Loading the league…'));
+    box.append(body);
+    openModal('League', [box]);
+    await syncQ.catch(() => {});                    // (today's finish goes up first)
+    let d;
+    try { d = await leagueApi('board', { code, day: dayOf(new Date()) }); } catch (e) {
+      if (lgFail(e)) return;
+      body.textContent = '';
+      body.append(el('p', 'err', /no such league/i.test(e.message) ? 'You are not in that league any more.' : `The league did not load: ${e.message}`));
+      return;
+    }
+    if (!box.isConnected) return;                    // (closed while it loaded)
+    $('mTitle').textContent = d.name;
+    body.textContent = '';
+    const played = d.rows.filter((x) => x.today != null).length;
+    body.append(el('p', 'note', `No. ${d.day} · ${played} of ${d.n} played today`));
+    const ol = el('ol', 'lrows');
+    d.rows.forEach((x, i) => {
+      const li = el('li', x.you ? 'me' : ''), who = el('div', 'lwho'), meta = [];
+      if (x.streak >= 2) meta.push(`🔥 ${x.streak}`);
+      if (x.avg7 != null) meta.push(`7-day avg ${Math.round(x.avg7 * 100)}`);
+      who.append(el('span', 'nm', x.you ? `${x.name} (you)` : x.name), el('small', '', meta.join(' · ') || 'No days this week'));
+      li.append(el('span', 'n', x.today != null ? String(i + 1) : '–'), who, x.today != null ? el('b', '', String(Math.round(x.today * 100))) : el('span', 'not', 'not yet'));
+      ol.append(li);
+    });
+    body.append(ol, el('p', 'note', 'Today’s score: better than that % of NFL play-callers. 🔥 days in a row.'));
+    // the invite: the join link, to share (a group chat) or copy
+    const inv = el('div', 'invite'), link = leagueLink(d.code), share = el('button', 'btn alt', fresh ? 'Invite your friends' : 'Invite friends'), pre = el('div', 'lnk', link);
+    share.type = 'button';
+    share.addEventListener('click', () => shareText(`Join my Two-Minute Drill league, ${d.name}: one real NFL drive a day, who calls it best?\n${link}`, pre, 'league'));
+    inv.append(share, pre);
+    body.append(inv);
+    const others = myLeagues().filter((l) => l.code !== d.code);
+    if (others.length) {
+      const row = el('div', 'chips');
+      others.forEach((l) => { const c = el('button', 'chip', l.name); c.type = 'button'; c.addEventListener('click', () => leagueBoard(l.code)); row.append(c); });
+      body.append(el('div', 'k', 'Your other leagues'), row);
+    }
+    const leave = el('button', 'btn ghostbtn', 'Leave this league');
+    leave.type = 'button';
+    leave.addEventListener('click', async () => {
+      if (leave.dataset.sure !== '1') { leave.dataset.sure = '1'; leave.textContent = d.n > 1 ? 'Tap again to leave' : 'Tap again: you are the last one, the league ends'; return; }
+      leave.disabled = true;
+      try {
+        const r = await leagueApi('leave', { code: d.code });
+        ACCT.me.leagues = r.leagues;
+        track('league_leave');
+        leagueNudge();
+        closeModal();
+        toast(`You left ${d.name}`);
+      } catch (e) { if (!lgFail(e)) toast(e.message); leave.disabled = false; }
+    });
+    body.append(leave);
+    track('league_board', { n: d.n });
+  }
+  // a join link: signed out, sign in first (the join waits); without a username, pick one; then join, and the board
+  async function leagueJoin(code) {
+    let peek = null;
+    try { peek = await proApi('/league/peek', { code }); } catch (e) { toast(/no such league/i.test(e.message) ? 'That league link is not valid (any more).' : e.message); return; }
+    if (!signedIn()) {
+      save(LEAGUE_KEY, code);
+      signInSheet(el('p', 'lead', `Log in to join ${peek.name} (${peek.n} player${peek.n === 1 ? '' : 's'}).`));
+      return;
+    }
+    if (!ACCT.me.name) { save(LEAGUE_KEY, code); nameSheet(true, leaguePending); return; }
+    if (myLeagues().some((l) => l.code === peek.code)) { leagueBoard(peek.code); return; }
+    const box = el('div', 'acctsheet'), acts = el('div', 'acts'), yes = el('button', 'btn alt', 'Join'), no = el('button', 'btn ghostbtn', 'Not now');
+    yes.type = 'button'; no.type = 'button';
+    no.addEventListener('click', closeModal);
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      try {
+        const d = await leagueApi('join', { code: peek.code });
+        ACCT.me.leagues = d.leagues;
+        track('league_join', { n: d.league.n });
+        leagueNudge();
+        toast(`You’re in ${d.league.name}`);
+        leagueBoard(peek.code);
+      } catch (e) { if (!lgFail(e)) toast(e.message); yes.disabled = false; }
+    });
+    acts.append(yes, no);
+    box.append(el('p', 'lead', `${peek.n} player${peek.n === 1 ? ' plays' : 's play'} the daily in this league. Join, and your score, streak and week show on its board, under your username ${ACCT.me.name}.`), acts);
+    openModal(`Join ${peek.name}?`, [box]);
+  }
+  function leaguePending() {
+    const code = load(LEAGUE_KEY, '');
+    if (!code || !signedIn() || !ACCT.me.name) return;
+    try { localStorage.removeItem(LEAGUE_KEY); } catch (e) { /* no storage */ }
+    leagueJoin(code);
+  }
+  // the end card's "See how your league did" (when the account is in a league; the account may be asked after the
+  // card is drawn, so it is filled in then too)
+  function leagueNudge() {
+    document.querySelectorAll('.lglink').forEach((p) => {
+      const ls = myLeagues();
+      p.textContent = '';
+      p.hidden = !ls.length;
+      if (!ls.length) return;
+      const b = el('button', 'linkbtn', ls.length === 1 ? `See how ${ls[0].name} did` : 'See how your league did');
+      b.type = 'button';
+      b.addEventListener('click', () => { track('league_nudge'); leagueBoard(ls[0].code); });
+      p.append(b);
+    });
   }
   // the top bar, once the page is up: the ways in (for Log in), who is signed in (asked when Pro did not ask already)
   async function acctInit() {
@@ -5657,8 +5920,14 @@
       } catch (e) { /* offline: Log in shows; the session is kept */ }
     }
     acctBar();
-    if (ACCT.fresh && signedIn() && !ACCT.me.name && $('modal').hidden) nameSheet(true);
+    const fresh = ACCT.fresh;
     ACCT.fresh = false;
+    if (fresh && signedIn() && !ACCT.me.name && $('modal').hidden) nameSheet(true, leaguePending);
+    if (signedIn()) { statsSync(fresh); leagueNudge(); }
+    if (LEAGUE_HASH) {                          // a join link: the address tidied (no reload: replaceState fires no hashchange)
+      history.replaceState(null, '', location.pathname + location.search);
+      leagueJoin(LEAGUE_HASH);
+    } else leaguePending();
   }
   // ---- The Gauntlet: the contest across the historic drives (board/worker.js /race). Pass all of them (an A each)
   // first and win. A Pro code enters under a public name; only passes made after entering count, each drive once; the
@@ -6731,6 +7000,7 @@
       const now = new Date();
       dayN = ARCH_DAY || dayOf(now);
       await authLoginFromUrl();
+      await unsubFromUrl();
       await proClaimFromUrl();
       await proVerify();
       acctInit();
