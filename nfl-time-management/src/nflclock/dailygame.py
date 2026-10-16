@@ -102,6 +102,16 @@ def candidates(pbp: pd.DataFrame, lib: pd.DataFrame, keep: dict | None = None) -
     return first
 
 
+def _score_before(r, home_off: bool) -> list:
+    """[away, home] as the snap is taken: posteam_score / defteam_score are the score before the play; the total_*
+    columns are after it (a spot whose first play scores, the Miami Miracle, would start with the points on the board)."""
+    pos, dfn = r.get("posteam_score"), r.get("defteam_score")
+    if pd.isna(pos) or pd.isna(dfn):
+        return [int(r["total_away_score"]), int(r["total_home_score"])]
+    pos, dfn = int(pos), int(dfn)
+    return [dfn, pos] if home_off else [pos, dfn]
+
+
 def spot_record(r, g, receive2h: dict) -> dict:
     """A spot in the game's format: the candidate row r (dailygame.candidates) and its game's row g (games.csv)."""
     gid = r["game_id"]
@@ -115,7 +125,7 @@ def spot_record(r, g, receive2h: dict) -> dict:
         "indoor": g["roof"] in ("dome", "closed"), "wind": float(np.nan_to_num(g["wind"])),
         "temp": None if pd.isna(g["temp"]) else float(g["temp"]),
         "start": {"qtr": int(r["qtr"]), "clock": float(r["quarter_seconds_remaining"]),
-                  "score": [int(r["total_away_score"]), int(r["total_home_score"])],
+                  "score": _score_before(r, home_off),
                   "pos": off, "down": 1, "ytg": float(r["ydstogo"]), "yl": float(r["yardline_100"]),
                   "to": [int(r["posteam_timeouts_remaining"] if not home_off else r["defteam_timeouts_remaining"]),
                          int(r["posteam_timeouts_remaining"] if home_off else r["defteam_timeouts_remaining"])],
