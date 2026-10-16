@@ -433,12 +433,80 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.ok(!JSON.stringify(v.rows).includes(idb) && !('id' in v.winner), 'no ids on the board');
   v = await (await rc('/race/me', { code: cc, key: kc })).json();
   assert.strictEqual(v.me, null, 'a code not entered');
+  // the check before a prize (web/admin.html): admin only, every entrant with its passes, one entry's whole audit
+  const AD = { auth: 'Bearer commish-secret-123' }, ida = (await sha256hex('race:' + ca)).slice(0, 24);
+  for (const [path, method, body] of [['/race/admin', 'GET'], [`/race/admin?id=${idb}`, 'GET'], ['/race/admin/void', 'POST', { id: idb, drive: 5, note: 'x' }]]) {
+    assert.strictEqual((await call(method, body, { path })).status, 403, `${path}: no token, no audit`);
+    assert.strictEqual((await call(method, body, { path, auth: 'Bearer commish-secret-12X' })).status, 403, `${path}: a wrong token`);
+    assert.strictEqual((await call(method, body, { path, auth: 'commish-secret-123' })).status, 403, `${path}: not a bearer`);
+  }
+  const offAdmin = { ...env, ADMIN_TOKEN: undefined };
+  assert.strictEqual((await worker.fetch(new Request('https://w.example/race/admin', { headers: { Authorization: 'Bearer ' } }), { ...offAdmin, BOARD: { idFromName: (n) => n, get: () => ({ fetch: (req) => new Board({ storage }, offAdmin).fetch(req) }) } })).status, 403, 'off without a token');
+  // the drives' titles come from the Pro data the worker serves
+  const titles = Array.from({ length: 24 }, (_, i) => (i === 15 ? 'The Miami Miracle' : `Drive ${i + 1}`));
+  env.ASSETS = board.env.ASSETS = { fetch: async (req) => (new URL(req.url).pathname === '/pro/drives.json' ? new Response(JSON.stringify({ drives: titles.map((title) => ({ title })) })) : new Response('', { status: 404 })) };
+  let ad = await (await call('GET', undefined, { path: '/race/admin', ...AD })).json();
+  delete env.ASSETS; delete board.env.ASSETS;
+  assert.deepStrictEqual([ad.n, ad.drives[15], ad.entries.map((x) => [x.name, x.n, x.passes.length, x.out])], [24, 'The Miami Miracle', [['Eli Manning', 1, 1, false], ['Tom', 24, 24, false]]], 'every entrant, joined first first');
+  const p3 = ad.entries[0].passes[0];
+  assert.deepStrictEqual([p3.drive, p3.p, p3.calls, Object.keys(p3).sort().join()], [3, 0.935, 1, 'at,calls,drive,ms,p,sig'], 'a pass: its drive, grade, calls (counted)');
+  assert.ok(p3.ms >= 60e3 && p3.ms < 70e3, 'the try\'s length by the server\'s clock');
+  assert.strictEqual(ad.entries[1].passes.find((x) => x.drive === 3).sig, p3.sig, 'the same calls: the same signature');
+  assert.ok(ad.entries.every((x) => /^[0-9a-f]{24}$/.test(x.id) && x.joined && !('kh' in x)), 'ids for the admin, joined');
+  let one = await (await call('GET', undefined, { path: `/race/admin?id=${ida}`, ...AD })).json();
+  assert.deepStrictEqual([one.entry.name, one.passes.length, one.passes[0].decs, one.passes[0].res, one.passes[0].tryAt, one.voids], ['Eli Manning', 1, decs, WON, new Date(5).toISOString(), []], 'one entry: every call kept');
+  assert.strictEqual((await call('GET', undefined, { path: '/race/admin?id=' + 'f'.repeat(24), ...AD })).status, 404, 'no such entry');
+  // a pass voided: the count and the time it got there worked out again, the winner with it; the audit kept aside
+  const vd = (body) => call('POST', body, { path: '/race/admin/void', ...AD });
+  assert.strictEqual((await vd({ id: idb, drive: 5 })).status, 400, 'a note (why) is needed');
+  assert.strictEqual((await vd({ id: ida, drive: 5, note: 'x' })).status, 404, 'Eli never passed 5');
+  assert.strictEqual((await vd({ id: 'nope', drive: 5, note: 'x' })).status, 404, 'no such entry');
+  const tomAt = store.get(`race:e:${idb}`).passes;
+  r = await vd({ id: idb, drive: 24, note: 'the last pass: checked, not a real drive' });
+  let vo = await r.json();
+  assert.deepStrictEqual([r.status, vo.entry.n, vo.entry.done, vo.entry.voids.map((x) => [x.drive, x.p, x.note])], [200, 23, null, [[24, 0.91, 'the last pass: checked, not a real drive']]], 'voided');
+  assert.strictEqual(vo.entry.nAt, new Date(tomAt[23]).toISOString(), 'nAt: the last pass left');
+  v = await (await rc('/race')).json();
+  assert.deepStrictEqual([v.winner, v.rows.map((x) => [x.name, x.n, !!x.done])], [null, [['Tom', 23, false], ['Eli Manning', 1, false]]], 'no winner now, 23');
+  assert.ok(!store.has(`race:audit:${idb}:24`) && store.get(`race:void:${idb}:24:${tomAt[24]}`).decs, 'the audit kept aside');
+  assert.strictEqual((await vd({ id: idb, drive: 24, note: 'again' })).status, 404, 'voided once');
+  one = await (await call('GET', undefined, { path: `/race/admin?id=${idb}`, ...AD })).json();
+  assert.deepStrictEqual([one.passes.length, one.voids.length, one.voids[0].drive, one.voids[0].decs], [23, 1, 24, decs], 'the void in the audit, its calls too');
+  // the old try's token no longer counts; a new try does, and Tom wins again
+  { const e = store.get(`race:e:${idb}`); e.last = 0; store.set(`race:e:${idb}`, e); }
+  assert.strictEqual((await rc('/race/pass', { code: cb, key: kb, drive: 24, p: 0.92, decs, res: WON, tok: 'f'.repeat(24) })).status, 409, 'a new try is needed');
+  r = await rc('/race/pass', { code: cb, key: kb, drive: 24, p: 0.92, decs, res: WON, tok: await tryOf(cb, kb, 24) });
+  v = await r.json();
+  assert.deepStrictEqual([v.me.n, !!v.me.done, v.winner && v.winner.name], [24, true, 'Tom'], 'passed again, the winner again');
+  // the end time and the next contest: shown with the view; nothing counts after the end
+  assert.deepStrictEqual([v.to, v.over, 'next' in v], [null, false, false], 'no end time, no next contest');
+  env.NEXT_CONTEST = board.env.NEXT_CONTEST = '  The Playoff Gauntlet: starts in January.  ';
+  env.RACE_TO = board.env.RACE_TO = new Date(Date.now() - 1000).toISOString();
+  v = await (await rc('/race')).json();
+  assert.deepStrictEqual([v.over, v.to, v.next], [true, env.RACE_TO, 'The Playoff Gauntlet: starts in January.'], 'over, and the next one');
+  assert.deepStrictEqual(Object.keys(v.rows[0]).sort(), ['at', 'done', 'n', 'name'], 'the standings: name, count, when');
+  { const e = store.get(`race:e:${ida}`); e.last = 0; store.set(`race:e:${ida}`, e); }
+  const late = await tryOf(ca, ka, 9);
+  assert.strictEqual(late, undefined, 'no try starts after the end');
+  r = await rc('/race/pass', { code: ca, key: ka, drive: 3, p: 0.95, decs, res: WON, tok });
+  assert.deepStrictEqual([r.status, (await r.json()).error], [409, 'the Gauntlet is over'], 'no pass counts after the end');
+  env.NEXT_CONTEST = board.env.NEXT_CONTEST = '   ';
+  delete env.RACE_TO; delete board.env.RACE_TO;
+  v = await (await rc('/race')).json();
+  assert.deepStrictEqual([v.over, 'next' in v], [false, false], 'a blank next contest is left out');
+  delete env.NEXT_CONTEST; delete board.env.NEXT_CONTEST;
   // the check finds Tom's run wrong: off the board for good, and the winner goes to the next finisher (none)
   assert.strictEqual((await call('DELETE', undefined, { path: '/race?name=tom' })).status, 403, 'admin only');
   assert.strictEqual((await call('DELETE', undefined, { path: '/race?name=tom', auth: 'Bearer commish-secret-123' })).status, 200);
   v = await (await rc('/race')).json();
   assert.deepStrictEqual([v.rows.map((x) => x.name), v.winner, v.entrants], [['Eli Manning'], null, 1], 'out, the winner with him');
   assert.strictEqual((await rc('/race/join', { code: cb, key: kb, name: 'Tom Again' })).status, 403, 'and out for good');
+  ad = await (await call('GET', undefined, { path: '/race/admin', auth: 'Bearer commish-secret-123' })).json();
+  assert.deepStrictEqual(ad.entries.map((x) => [x.name, x.out]), [['Eli Manning', false], ['Tom', true]], 'the admin still sees a run taken off');
+  // by id too (the admin page's button); an id never entered is 404
+  assert.strictEqual((await call('DELETE', undefined, { path: '/race?id=' + 'e'.repeat(24), auth: 'Bearer commish-secret-123' })).status, 404);
+  assert.strictEqual((await call('DELETE', undefined, { path: `/race?id=${ida}`, auth: 'Bearer commish-secret-123' })).status, 200);
+  assert.deepStrictEqual((await (await rc('/race')).json()).rows, [], 'off by id');
 }
 // Accounts: Sign in with Google (an ID token checked against Google's keys), or a one-use emailed link; Pro on the
 // account (a linked code, or a purchase made signed in), used by session on any device; codes work as before

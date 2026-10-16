@@ -41,7 +41,7 @@
 // Nothing about the buyer is kept here (Stripe has the receipt); only the session id behind each code (and, for a
 // purchase made signed in, the account it belongs to: see Accounts below).
 const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
-const RACE_PATHS = ['/race', '/race/me', '/race/join', '/race/start', '/race/pass'];
+const RACE_PATHS = ['/race', '/race/me', '/race/join', '/race/start', '/race/pass', '/race/admin', '/race/admin/void'];
 const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook', '/pro/data', '/pro/reset', '/pro/gift'];
 const PRO_FILE_RE = /^(drives|runs|d\d{1,3}|r\d{1,3})\.json$/;
 const STRIPE_VERSION = '2026-08-26.dahlia', WEBHOOK_TOLERANCE = 300;   // the API version pinned; a signature older than this is refused
@@ -681,16 +681,42 @@ export async function handle(req, env, storage, hits) {
 //                                         started before the start (or before entering) never counts
 //   POST   /race/pass { code, key, drive, p, decs, tryAt, tok, res } -> the same, the drive counted (p: the score, 0.895
 //                                         and up; res: the final score, the game won)
-//   DELETE /race?name=X (Authorization: Bearer <ADMIN_TOKEN>) -> an entrant off the board, for good (a run that fails
-//                                                                the check)
-const RACE_N = 24, RACE_TOP = 100, RACE_GAP = 30e3, RACE_DECS_MAX = 80, RACE_BYTES_MAX = 60000, RACE_MIN_TRY = 20e3;
+//   DELETE /race?name=X or ?id=X (Authorization: Bearer <ADMIN_TOKEN>) -> an entrant off the board, for good (a run that
+//                                         fails the check)
+// The view also carries to (RACE_TO, an end time, optional: null without one), over (that time has passed: no try
+// starts and no pass counts after it) and next (NEXT_CONTEST, a line about the next contest; only when it is set). The
+// page shows the final results once there is a winner or it is over.
+// The check before a prize (web/admin.html; every call with Authorization: Bearer <ADMIN_TOKEN>, off without it):
+//   GET    /race/admin                    -> { n, from, to, now, drives, entries: [{ id, name, joined, n, nAt, done, out,
+//                                         passes: [{ drive, at, p, ms, calls, sig }], voids }] }   every entrant, out ones too
+//                                         (ms: the try's length by the server's clock; sig: a hash of its calls, so the
+//                                         same calls sent by two entries show; drives: the drives' titles, from the Pro data)
+//   GET    /race/admin?id=X               -> { entry, passes: [{ drive, at, p, ms, tryAt, started, decs, res }], voids }
+//                                         one entry's full audit (a voided pass's audit too, kept under race:void:)
+//   POST   /race/admin/void { id, drive, note } -> { ok, entry }: one drive's pass off an entry (n, nAt and the winner
+//                                         worked out again; the drive can be passed again, from a new try), with a note
+//                                         kept on the entry (voids) and its audit kept aside
+const RACE_N = 24, RACE_TOP = 100, RACE_GAP = 30e3, RACE_DECS_MAX = 80, RACE_BYTES_MAX = 60000, RACE_MIN_TRY = 20e3, RACE_NOTE_MAX = 200;
 const raceFrom = (env) => Date.parse(env.RACE_FROM || '2026-10-16T20:00:00Z');
+const raceTo = (env) => (env.RACE_TO ? Date.parse(env.RACE_TO) : NaN);        // no end time (NaN): it runs until it is called
+const raceOver = (env, now = Date.now()) => now >= raceTo(env);
+const isAdmin = (req, env) => { const auth = req.headers.get('Authorization') || '', want = env.ADMIN_TOKEN ? `Bearer ${env.ADMIN_TOKEN}` : '';
+  return !!want && same(auth, want); };
+// the winner after a run (or a pass) is taken off: the next to finish, if any
+async function raceRewin(storage, list, id) {
+  const w = await storage.get('race:winner');
+  if (!w || w.id !== id || (list[id] && !list[id].out && list[id].done)) return;
+  const next = raceRows(list).find((x) => x.done);
+  await storage.put('race:winner', next ? { name: next.name, at: new Date(next.done).toISOString(), id: next.id } : null);
+}
 // the leaderboard: most drives passed, then whoever got there first
 const raceRows = (list) => Object.values(list).filter((x) => !x.out && !blocked(x.name))
   .sort((a, b) => b.n - a.n || a.nAt - b.nAt || a.joined - b.joined);
 async function raceView(storage, env, id) {
   const list = (await storage.get('race:list')) || {}, rows = raceRows(list);
-  const view = { n: RACE_N, from: new Date(raceFrom(env)).toISOString(), now: new Date().toISOString(), entrants: rows.length,
+  const to = raceTo(env), next = String(env.NEXT_CONTEST || '').trim().slice(0, 400);
+  const view = { n: RACE_N, from: new Date(raceFrom(env)).toISOString(), to: Number.isFinite(to) ? new Date(to).toISOString() : null, over: raceOver(env),
+    ...(next ? { next } : {}), now: new Date().toISOString(), entrants: rows.length,
     passes: rows.reduce((a, x) => a + x.n, 0), winner: ((w) => (w ? { name: w.name, at: w.at } : null))(await storage.get('race:winner')),
     rows: rows.slice(0, RACE_TOP).map((x) => ({ name: x.name, n: x.n, at: x.n ? new Date(x.nAt).toISOString() : null, ...(x.done ? { done: new Date(x.done).toISOString() } : {}) })) };
   if (id !== undefined) {
@@ -703,20 +729,17 @@ async function raceView(storage, env, id) {
 async function race(req, env, storage, hits, h, url) {
   if (url.pathname === '/race' && req.method === 'GET') return json(await raceView(storage, env), 200, { ...h, 'Cache-Control': 'no-store' });
   if (url.pathname === '/race' && req.method === 'DELETE') {
-    const auth = req.headers.get('Authorization') || '', want = env.ADMIN_TOKEN ? `Bearer ${env.ADMIN_TOKEN}` : '';
-    if (!want || !same(auth, want)) return json({ error: 'forbidden' }, 403, h);
-    const lower = clean(url.searchParams.get('name')).toLowerCase(), id = await storage.get(`race:name:${lower}`);
-    if (!id) return json({ error: 'no such entrant' }, 404, h);
-    const list = (await storage.get('race:list')) || {}, e = await storage.get(`race:e:${id}`);
+    if (!isAdmin(req, env)) return json({ error: 'forbidden' }, 403, h);
+    const byId = String(url.searchParams.get('id') || ''), lower = clean(url.searchParams.get('name')).toLowerCase();
+    const id = /^[0-9a-f]{24}$/.test(byId) ? byId : lower ? await storage.get(`race:name:${lower}`) : null;
+    const list = (await storage.get('race:list')) || {}, e = id && await storage.get(`race:e:${id}`);
+    if (!id || (!e && !list[id])) return json({ error: 'no such entrant' }, 404, h);
     if (list[id]) { list[id].out = true; await storage.put('race:list', list); }
     if (e) await storage.put(`race:e:${id}`, { ...e, out: true });
-    const w = await storage.get('race:winner');
-    if (w && w.id === id) {                                  // the winner taken off: the next to finish, if any
-      const next = raceRows(list).find((x) => x.done);
-      await storage.put('race:winner', next ? { name: next.name, at: new Date(next.done).toISOString(), id: next.id } : null);
-    }
+    await raceRewin(storage, list, id);
     return json({ ok: true }, 200, h);
   }
+  if (url.pathname === '/race/admin' || url.pathname === '/race/admin/void') return raceAdmin(req, env, storage, h, url);
   if (req.method !== 'POST' || !['/race/me', '/race/join', '/race/start', '/race/pass'].includes(url.pathname)) return json({ error: 'not found' }, 404, h);
   // the board's own poll (/race/me, every 15 s a page) is a read: it never uses up the per-address budget, which phones
   // behind one carrier address share, so a pass is never refused for someone else's polling
@@ -764,6 +787,7 @@ async function race(req, env, storage, hits, h, url) {
   // a try starts: its token (a new try replaces the last one's)
   if (url.pathname === '/race/start') {
     if (now < raceFrom(env)) return json({ error: 'the Gauntlet has not started' }, 409, h);
+    if (raceOver(env, now)) return json({ error: 'the Gauntlet is over' }, 409, h);
     const tok = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('');
     await storage.put(`race:try:${id}:${drive}`, { tok, at: now });
     return json({ ok: true, tok }, 200, h);
@@ -773,6 +797,7 @@ async function race(req, env, storage, hits, h, url) {
   if (!(p >= 0.895 && p <= 1)) return json({ error: 'not a pass (90 or better)' }, 400, h);
   if (!Array.isArray(decs) || !decs.length || decs.length > RACE_DECS_MAX || JSON.stringify(decs).length > RACE_BYTES_MAX) return json({ error: 'the calls behind the grade are needed' }, 400, h);
   if (now < raceFrom(env)) return json({ error: 'the Gauntlet has not started', ...(await raceView(storage, env, id)) }, 409, h);
+  if (raceOver(env, now)) return json({ error: 'the Gauntlet is over', ...(await raceView(storage, env, id)) }, 409, h);
   // the try was started in the Gauntlet (after the start, after entering, this drive) and took a real drive's time
   const tr = await storage.get(`race:try:${id}:${drive}`);
   if (!tr || typeof body.tok !== 'string' || !same(body.tok, tr.tok)) return json({ error: 'this try started before you were in the Gauntlet (or before the Gauntlet started): play the drive again to count it', notry: true }, 409, h);
@@ -793,6 +818,72 @@ async function race(req, env, storage, hits, h, url) {
   await storage.put('race:list', list);
   if (e.done && !(await storage.get('race:winner'))) await storage.put('race:winner', { name: e.name, at: new Date(e.done).toISOString(), id });
   return json(await raceView(storage, env, id), 200, h);
+}
+
+// the check before a prize (web/admin.html): every entrant with each pass, one entry's full audit, a pass voided
+async function raceAdmin(req, env, storage, h, url) {
+  if (!isAdmin(req, env)) return json({ error: 'forbidden' }, 403, h);
+  const iso = (t) => (t ? new Date(t).toISOString() : null);
+  const sig = async (decs) => (await sha256(JSON.stringify(decs || []))).slice(0, 16);
+  if (url.pathname === '/race/admin/void') {
+    if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
+    let body;
+    try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
+    const id = String((body && body.id) || ''), drive = Number(body && body.drive), note = String((body && body.note) || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, RACE_NOTE_MAX);
+    const e = /^[0-9a-f]{24}$/.test(id) && await storage.get(`race:e:${id}`);
+    if (!e) return json({ error: 'no such entrant' }, 404, h);
+    if (!Number.isInteger(drive) || !e.passes[drive]) return json({ error: 'no such pass' }, 404, h);
+    if (!note) return json({ error: 'a note (why) is needed' }, 400, h);
+    const at = e.passes[drive], now = Date.now(), a = await storage.get(`race:audit:${id}:${drive}`);
+    // the audit kept aside (a new pass of the drive writes its own), the try's token gone (a pass again takes a new try)
+    if (a) await storage.put(`race:void:${id}:${drive}:${at}`, a);
+    await storage.delete(`race:audit:${id}:${drive}`);
+    await storage.delete(`race:try:${id}:${drive}`);
+    delete e.passes[drive];
+    const left = Object.values(e.passes);
+    // the time it reached its count: the last pass left (on the board, ties go to whoever got there first)
+    e.n = left.length; e.nAt = left.length ? Math.max(...left) : e.joined;
+    if (e.n < RACE_N) delete e.done;
+    e.voids = [...(e.voids || []), { drive, at, p: a ? a.p : null, voided: now, note }];
+    await storage.put(`race:e:${id}`, e);
+    const list = (await storage.get('race:list')) || {};
+    if (list[id]) { list[id] = { ...list[id], n: e.n, nAt: e.nAt }; if (!e.done) delete list[id].done; await storage.put('race:list', list); }
+    await raceRewin(storage, list, id);
+    return json({ ok: true, entry: { id, name: e.name, n: e.n, nAt: iso(e.nAt), done: iso(e.done), voids: e.voids.map((v) => ({ ...v, at: iso(v.at), voided: iso(v.voided) })) } }, 200, h);
+  }
+  if (req.method !== 'GET') return json({ error: 'method' }, 405, h);
+  const list = (await storage.get('race:list')) || {}, id = String(url.searchParams.get('id') || '');
+  const voidsOf = (e) => (e.voids || []).map((v) => ({ ...v, at: iso(v.at), voided: iso(v.voided) }));
+  const entryOf = (e) => ({ id: e.id, name: e.name, joined: iso(e.joined), n: e.n, nAt: iso(e.nAt), last: iso(e.last), done: iso(e.done), out: !!e.out, blocked: blocked(e.name) });
+  if (id) {
+    const e = /^[0-9a-f]{24}$/.test(id) && await storage.get(`race:e:${id}`);
+    if (!e) return json({ error: 'no such entrant' }, 404, h);
+    const passes = [];
+    for (const d of Object.keys(e.passes).map(Number).sort((a, b) => a - b)) {
+      const a = (await storage.get(`race:audit:${id}:${d}`)) || {};
+      passes.push({ drive: d, at: iso(e.passes[d]), p: a.p ?? null, ms: a.started ? a.at - a.started : null, tryAt: iso(a.tryAt), started: iso(a.started), decs: a.decs || [], res: a.res || null });
+    }
+    const voids = [];
+    for (const v of e.voids || []) { const a = (await storage.get(`race:void:${id}:${v.drive}:${v.at}`)) || {}; voids.push({ ...v, at: iso(v.at), voided: iso(v.voided), ms: a.started ? a.at - a.started : null, decs: a.decs || [], res: a.res || null }); }
+    return json({ entry: entryOf(e), passes, voids }, 200, h);
+  }
+  // every audit in one read (one entry at a time would be a read a pass)
+  const audits = await storage.list({ prefix: 'race:audit:' }), entries = [];
+  for (const x of Object.values(list).sort((a, b) => a.joined - b.joined)) {
+    const e = (await storage.get(`race:e:${x.id}`)) || { ...x, passes: {} }, passes = [];
+    for (const d of Object.keys(e.passes || {}).map(Number).sort((a, b) => a - b)) {
+      const a = audits.get(`race:audit:${x.id}:${d}`) || {};
+      passes.push({ drive: d, at: iso(e.passes[d]), p: a.p ?? null, ms: a.started ? a.at - a.started : null, calls: (a.decs || []).length, sig: a.decs ? await sig(a.decs) : null });
+    }
+    entries.push({ ...entryOf({ ...e, out: e.out || x.out }), passes, voids: voidsOf(e) });
+  }
+  // the drives' titles (the Pro data the worker serves): the page names each drive and spots the ones to check
+  let drives = null;
+  if (env.ASSETS) {
+    try { const r = await env.ASSETS.fetch(new Request(new URL('/pro/drives.json', req.url), { method: 'GET' })); if (r.ok) drives = ((await r.json()).drives || []).map((d) => d.title); } catch (e) { /* titles left out */ }
+  }
+  const to = raceTo(env);
+  return json({ n: RACE_N, from: iso(raceFrom(env)), to: Number.isFinite(to) ? iso(to) : null, now: iso(Date.now()), drives, entries }, 200, h);
 }
 
 // Versus (match.js): the room for a code, or the lobby for a quick match; only from the site's own pages

@@ -237,7 +237,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         raise SystemExit(f"--google-client-id wants an OAuth client id like 1234-abc.apps.googleusercontent.com, not {google_client_id!r}")
     if ad_slot and not re.fullmatch(r"\d{6,12}", ad_slot):
         raise SystemExit(f"--ad-slot wants an ad unit's slot number, not {ad_slot!r}")
-    missing = [f for f in FILES + ["stats.html", "privacy.html", "about.html", "how-it-works.html"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
+    missing = [f for f in FILES + ["stats.html", "privacy.html", "about.html", "how-it-works.html", "admin.html"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
     if missing:
         raise SystemExit(f"build the game data first; missing in web/: {', '.join(missing)}")
     if out.exists():
@@ -292,6 +292,10 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         fill(name, (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, title, d, path), path)
     # the privacy page (AdSense wants one): the analytics tag only, no ads on it
     fill("privacy.html", (GA_TAG.format(id=ga) if ga else "") + ICONS, "privacy", ads=False)
+    # the Gauntlet's audit (admin.html, the check before a prize): not linked anywhere, not in the sitemap, noindex; no
+    # analytics, no ads, no site chrome; only the backend's address (the admin token is pasted on the page)
+    (out / "admin.html").write_text((WEB / "admin.html").read_text().replace("<!--SITE-HEAD-->",
+        f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else ""))
     (out / "site.webmanifest").write_text(json.dumps({"name": "Two-Minute Drill", "short_name": "2MD", "start_url": "/",
         "display": "standalone", "background_color": "#0c1d42", "theme_color": "#0c1d42", "icons": [
             {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},

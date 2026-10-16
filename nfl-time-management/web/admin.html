@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<!--SITE-HEAD-->
+<title>Gauntlet Audit</title>
+<style>
+/* The Gauntlet's check before a prize (board/worker.js /race/admin): every entrant, each pass with the calls behind it,
+   the passes worth a second look flagged, and the two admin actions (void one pass, take a run off). Not linked from
+   the site, no analytics, no ads; the admin token stays in this tab only (sessionStorage). Same tokens as the game. */
+:root {
+  --paper: #f3f5f2; --card: #ffffff; --ink: #121a15; --muted: #5a675e; --line: #d3dbd5;
+  --turf: #2c7549; --chain: #f4c400; --chain-ink: #1d1700; --sq-g: #3d9a56; --sq-y: #d2ad2e; --sq-r: #d0463f; --sq-ink: #ffffff;
+  --flag: #fdf1d3; --flag-ink: #6b4b00; --bad: #fbe3e1; --bad-ink: #8a201a;
+  --display: "Arial Narrow", "Roboto Condensed", system-ui, sans-serif;
+  --body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d;
+  --turf: #3f9a63; --chain: #f2c200; --chain-ink: #1d1700; --sq-g: #3a8f51; --sq-y: #b9992a; --sq-r: #c0403a; --sq-ink: #ffffff;
+  --flag: #3a2f12; --flag-ink: #f3d68a; --bad: #3d1715; --bad-ink: #f4aaa4;
+  color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d;
+  --turf: #3f9a63; --chain: #f2c200; --chain-ink: #1d1700; --sq-g: #3a8f51; --sq-y: #b9992a; --sq-r: #c0403a; --sq-ink: #ffffff;
+  --flag: #3a2f12; --flag-ink: #f3d68a; --bad: #3d1715; --bad-ink: #f4aaa4;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 14px/1.45 var(--body); padding-top: env(safe-area-inset-top, 0px); }
+.wrap { max-width: 960px; margin: 0 auto; padding: 14px 16px 48px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 10px; flex-wrap: wrap; }
+h1 { margin: 0; font: 800 26px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
+h1 small { display: block; font: 700 11px var(--body); letter-spacing: .16em; color: var(--muted); margin-top: 4px; }
+.k { font: 700 11px var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
+label { display: grid; gap: 4px; font: 700 12px var(--body); color: var(--muted); min-width: 0; }
+input, select, textarea { font: 14px var(--body); color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; width: 100%; min-width: 0; }
+.cfg { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.cfg .wide { grid-column: 1 / -1; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button { font: 700 13px var(--body); border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 8px 12px; cursor: pointer; }
+button.pri { background: var(--turf); border-color: var(--turf); color: #fff; }
+button.danger { background: var(--sq-r); border-color: var(--sq-r); color: #fff; }
+button.ghost { background: transparent; }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+.msg { margin: 0; font-weight: 700; }
+.msg.err { color: var(--bad-ink); }
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+.tile b { display: block; font: 800 26px/1 var(--display); font-variant-numeric: tabular-nums; }
+.tile span { font-size: 12px; color: var(--muted); }
+.tile.hot b { color: var(--flag-ink); }
+.filters { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.filters input[type=search] { flex: 1 1 200px; width: auto; }
+.filters label.chk { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); }
+.filters label.chk input { width: auto; }
+.entries { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.entry { background: var(--card); border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.entry.flagged { border-color: var(--sq-y); }
+.entry.out { opacity: .72; }
+.entry > summary { list-style: none; cursor: pointer; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; }
+.entry > summary::-webkit-details-marker { display: none; }
+.entry .nm { font-weight: 800; font-size: 15px; overflow-wrap: anywhere; }
+.entry .cnt { font: 800 18px var(--display); font-variant-numeric: tabular-nums; text-align: right; }
+.entry .meta { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.entry .body { padding: 0 12px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
+.badge { display: inline-block; font: 800 10.5px var(--body); letter-spacing: .08em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; margin-left: 6px; vertical-align: 2px; background: var(--line); color: var(--ink); }
+.badge.flag { background: var(--flag); color: var(--flag-ink); }
+.badge.bad { background: var(--bad); color: var(--bad-ink); }
+.badge.done { background: var(--sq-y); color: var(--chain-ink); }
+.passes { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.pass { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; }
+.pass.flagged { background: var(--flag); border-color: var(--sq-y); }
+.pass .ph { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
+.pass .dn { font: 800 16px var(--display); color: var(--muted); font-variant-numeric: tabular-nums; }
+.pass .dt { font-weight: 700; overflow-wrap: anywhere; }
+.pass .sc { font: 800 16px var(--display); font-variant-numeric: tabular-nums; }
+.pass .pm { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pass .fl { display: flex; flex-wrap: wrap; gap: 4px; }
+.pass .fl .badge { margin: 0; }
+.pass.void { border-style: dashed; opacity: .8; }
+.calls { overflow-x: auto; max-width: 100%; }
+.calls table { border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; min-width: 100%; }
+.calls th, .calls td { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.calls th { font: 700 11px var(--body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.calls td.miss { color: var(--bad-ink); font-weight: 700; }
+details.cl { min-width: 0; }
+details.cl > summary { cursor: pointer; font: 700 12px var(--body); color: var(--muted); }
+.confirm { display: grid; gap: 8px; padding: 10px; border-radius: 8px; background: var(--bad); color: var(--bad-ink); }
+.confirm p { margin: 0; font-weight: 700; }
+.acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.note { margin: 0; font-size: 12.5px; color: var(--muted); }
+.empty { color: var(--muted); margin: 0; }
+@media (max-width: 560px) {
+  .cfg { grid-template-columns: minmax(0, 1fr); }
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pass .ph { grid-template-columns: 34px minmax(0, 1fr) auto; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Gauntlet audit<small>The check before a prize · admin only</small></h1>
+  <span class="k" id="clock"></span>
+</header>
+<form class="card" id="cfg" autocomplete="off">
+  <div class="cfg">
+    <label class="wide">Board API<input id="api" type="url" inputmode="url" spellcheck="false" placeholder="https://…workers.dev"></label>
+    <label class="wide">Admin token (kept in this tab only)<input id="tok" type="password" spellcheck="false" autocomplete="off" placeholder="ADMIN_TOKEN"></label>
+    <label>Short try under (seconds)<input id="short" type="number" min="0" step="5"></label>
+    <label>Miami Miracle fix (UTC)<input id="fix" type="text" spellcheck="false"></label>
+  </div>
+  <div class="row">
+    <button class="pri" id="load" type="submit">Load entries</button>
+    <button class="ghost" id="forget" type="button">Forget token</button>
+  </div>
+  <p class="msg" id="msg" role="status" aria-live="polite"></p>
+</form>
+<div class="tiles" id="tiles" hidden></div>
+<div class="filters" id="filters" hidden>
+  <input id="q" type="search" placeholder="Find a name" aria-label="Find a name">
+  <label class="chk"><input id="onlyFlag" type="checkbox"> Flagged only</label>
+  <label class="chk"><input id="showOut" type="checkbox" checked> Show runs taken off</label>
+</div>
+<div class="entries" id="entries"></div>
+<p class="note">Flags: a try shorter than the threshold (the server's clock, start to pass); The Miami Miracle passed before the
+  fix (the spot started with Miami ahead, so any call won); the same calls on the same drive from two entries (the whole
+  decision list, win chances included, so only a copied or shared run matches; lists of fewer than three calls are skipped,
+  since the first call of a drive is the same for everyone).</p>
+</div>
+<script>
+(() => {
+  // what gets flagged (a pass worth a second look); the two in the form can be changed for this tab
+  const SHORT_TRY_S = 90;                                  // a two-minute drive played call by call, with its plays shown, takes longer
+  const MIAMI_TITLE = 'The Miami Miracle', MIAMI_DRIVE = 16;   // the drive (its number, when the board can't give titles)
+  const MIAMI_FIX = '2026-10-16T23:00:00Z';                // the fix went live: a pass of that drive before it was trivial
+  const DUP_MIN = 3;                                       // same calls flagged only for lists this long or longer
+  const N_DEFAULT = 24;
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const ss = { get: (k) => { try { return sessionStorage.getItem(k) || ''; } catch (e) { return ''; } },
+    set: (k, v) => { try { if (v) sessionStorage.setItem(k, v); else sessionStorage.removeItem(k); } catch (e) { /* this tab only anyway */ } } };
+  const meta = document.querySelector('meta[name="board-api"]');
+  const S = { data: null, open: new Set(), detail: new Map(), confirm: null };
+  $('api').value = ss.get('gadm:api') || (meta ? meta.content : '');
+  $('tok').value = ss.get('gadm:tok');
+  $('short').value = ss.get('gadm:short') || SHORT_TRY_S;
+  $('fix').value = ss.get('gadm:fix') || MIAMI_FIX;
+  const api = () => $('api').value.trim().replace(/\/+$/, '');
+  const say = (t, err) => { $('msg').textContent = t; $('msg').className = `msg${err ? ' err' : ''}`; };
+  const when = (t) => (t ? new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }) : '–');
+  const dur = (ms) => (ms == null ? '–' : ms >= 60e3 ? `${Math.floor(ms / 60e3)}m ${String(Math.round((ms % 60e3) / 1e3)).padStart(2, '0')}s` : `${Math.round(ms / 1e3)}s`);
+  const score = (p) => (p == null ? '–' : (p * 100).toFixed(1));
+  const title = (d) => (S.data && S.data.drives && S.data.drives[d - 1]) || (d === MIAMI_DRIVE ? `${MIAMI_TITLE}?` : `Drive ${d}`);
+  async function call(path, opt = {}) {
+    const r = await fetch(api() + path, { cache: 'no-store', ...opt, headers: { Authorization: `Bearer ${$('tok').value.trim()}`, ...(opt.body ? { 'Content-Type': 'application/json' } : {}) } });
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 403) throw new Error('Forbidden: wrong token (or no ADMIN_TOKEN on the worker).');
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  }
+  // the flags of one pass (the summary row: drive, at, ms, calls, sig) given every entry's passes
+  function flagsOf(p, dups) {
+    const f = [], shortMs = Number($('short').value) * 1e3, fix = Date.parse($('fix').value);
+    if (p.ms != null && p.ms < shortMs) f.push(['flag', `short try ${dur(p.ms)}`]);
+    const isMiami = S.data.drives ? S.data.drives[p.drive - 1] === MIAMI_TITLE : p.drive === MIAMI_DRIVE;
+    if (isMiami && Number.isFinite(fix) && Date.parse(p.at) < fix) f.push(['bad', 'Miami before the fix']);
+    const twins = p.sig && p.calls >= DUP_MIN ? (dups.get(`${p.drive}:${p.sig}`) || []) : [];
+    if (twins.length > 1) f.push(['bad', `same calls as ${twins.filter((n) => n !== p._name).join(', ')}`]);
+    return f;
+  }
+  function dupIndex() {
+    const m = new Map();
+    for (const e of S.data.entries) for (const p of e.passes) {
+      if (!p.sig) continue;
+      const k = `${p.drive}:${p.sig}`, l = m.get(k) || [];
+      if (!l.includes(e.name)) l.push(e.name);
+      m.set(k, l);
+    }
+    return m;
+  }
+  async function loadAll(done) {          // done: what an action just did, said with the reload
+    if (!api() || !$('tok').value.trim()) { say('The board API and the admin token are both needed.', true); return; }
+    ss.set('gadm:api', api()); ss.set('gadm:tok', $('tok').value.trim()); ss.set('gadm:short', $('short').value); ss.set('gadm:fix', $('fix').value);
+    say('Loading…');
+    $('load').disabled = true;
+    try {
+      S.data = await call('/race/admin');
+      S.detail.clear();
+      say(`${done ? `${done} ` : ''}Loaded ${S.data.entries.length} entr${S.data.entries.length === 1 ? 'y' : 'ies'} at ${when(S.data.now)}.${S.data.drives ? '' : ' (No drive titles from the board: drive numbers only.)'}`);
+      draw();
+      await Promise.all([...S.open].map((id) => openEntry(id, true)));
+    } catch (e) { say(e.message, true); }
+    $('load').disabled = false;
+  }
+  function draw() {
+    const d = S.data;
+    if (!d) return;
+    const n = d.n || N_DEFAULT, dups = dupIndex(), q = $('q').value.trim().toLowerCase();
+    d.entries.forEach((e) => e.passes.forEach((p) => { p._name = e.name; p._f = flagsOf(p, dups); }));
+    const flagged = d.entries.reduce((a, e) => a + e.passes.filter((p) => p._f.length).length, 0);
+    const t = $('tiles');
+    t.hidden = false; $('filters').hidden = false; t.textContent = '';
+    [[d.entries.filter((e) => !e.out).length, 'entrants on the board'], [d.entries.reduce((a, e) => a + e.passes.length, 0), 'passes counted'],
+      [d.entries.filter((e) => e.done && !e.out).length, `passed all ${n}`], [flagged, 'passes flagged', flagged ? 'hot' : '']].forEach(([v, l, c]) => {
+      const x = el('div', `tile ${c || ''}`); x.append(el('b', '', String(v)), el('span', '', l)); t.append(x);
+    });
+    const box = $('entries');
+    box.textContent = '';
+    // the board's order: most passed, then who got there first; runs taken off at the end
+    const list = d.entries.slice().sort((a, b) => (a.out - b.out) || (b.n - a.n) || (Date.parse(a.nAt) - Date.parse(b.nAt)));
+    let shown = 0;
+    for (const e of list) {
+      const nf = e.passes.filter((p) => p._f.length).length;
+      if (q && !e.name.toLowerCase().includes(q)) continue;
+      if ($('onlyFlag').checked && !nf) continue;
+      if (e.out && !$('showOut').checked) continue;
+      shown++;
+      const det = el('details', `entry${nf ? ' flagged' : ''}${e.out ? ' out' : ''}`), sum = el('summary');
+      det.dataset.id = e.id;
+      det.open = S.open.has(e.id);
+      const nm = el('span', 'nm', e.name);
+      if (e.done) nm.append(el('span', 'badge done', `all ${n}`));
+      if (e.out) nm.append(el('span', 'badge bad', 'off the board'));
+      if (e.blocked) nm.append(el('span', 'badge bad', 'name blocked'));
+      if (nf) nm.append(el('span', 'badge flag', `${nf} flagged`));
+      if (e.voids.length) nm.append(el('span', 'badge', `${e.voids.length} voided`));
+      const meta = el('span', 'meta');
+      const last = e.passes.reduce((a, p) => Math.max(a, Date.parse(p.at)), 0);
+      meta.append(el('span', '', `joined ${when(e.joined)}`), el('span', '', `last pass ${last ? when(last) : '–'}`), ...(e.done ? [el('span', '', `finished ${when(e.done)}`)] : []), el('span', '', `id ${e.id}`));
+      sum.append(nm, el('span', 'cnt', `${e.n}/${n}`), meta);
+      det.append(sum);
+      const body = el('div', 'body');
+      det.append(body);
+      det.addEventListener('toggle', () => { if (det.open) { S.open.add(e.id); openEntry(e.id); } else S.open.delete(e.id); });
+      box.append(det);
+      if (det.open) fillEntry(e.id);
+    }
+    if (!shown) box.append(el('p', 'empty', d.entries.length ? 'No entry matches.' : 'Nobody has entered yet.'));
+  }
+  async function openEntry(id, quiet) {
+    if (!S.detail.has(id) || quiet) {
+      try { S.detail.set(id, await call(`/race/admin?id=${encodeURIComponent(id)}`)); } catch (e) { if (!quiet) say(e.message, true); return; }
+    }
+    fillEntry(id);
+  }
+  // one entry, opened: each pass with its flags, its calls, and Void; the voids; Remove the run
+  function fillEntry(id) {
+    const det = document.querySelector(`.entry[data-id="${id}"]`), d = S.detail.get(id), sumE = S.data.entries.find((x) => x.id === id);
+    if (!det || !sumE) return;
+    const body = det.querySelector('.body');
+    body.textContent = '';
+    if (!d) { body.append(el('p', 'empty', 'Loading the audit…')); return; }
+    const flags = new Map(sumE.passes.map((p) => [p.drive, p._f]));
+    const passes = el('div', 'passes');
+    if (!d.passes.length) passes.append(el('p', 'empty', 'No passes.'));
+    for (const p of d.passes) passes.append(passBox(id, sumE, p, flags.get(p.drive) || [], false));
+    body.append(el('div', 'k', `Passes (${d.passes.length})`), passes);
+    if (d.voids.length) {
+      const vs = el('div', 'passes');
+      for (const v of d.voids) vs.append(passBox(id, sumE, v, [], true));
+      body.append(el('div', 'k', `Voided (${d.voids.length})`), vs);
+    }
+    const acts = el('div', 'acts');
+    if (!sumE.out) {
+      const rm = el('button', 'danger', 'Remove this run…');
+      rm.type = 'button';
+      rm.addEventListener('click', () => { S.confirm = `rm:${id}`; fillEntry(id); });
+      acts.append(rm);
+    }
+    const re = el('button', 'ghost', 'Reload this entry');
+    re.type = 'button';
+    re.addEventListener('click', () => openEntry(id, true));
+    acts.append(re);
+    body.append(acts);
+    if (S.confirm === `rm:${id}`) {
+      const c = el('div', 'confirm'), yes = el('button', 'danger', `Yes, take ${sumE.name} off the board for good`), no = el('button', '', 'Cancel');
+      yes.type = no.type = 'button';
+      c.append(el('p', '', `${sumE.name} goes off the board and out of the Gauntlet for good (the code can't enter again). If this is the winner, the next to finish becomes the winner.`));
+      const a = el('div', 'acts'); a.append(yes, no); c.append(a);
+      no.addEventListener('click', () => { S.confirm = null; fillEntry(id); });
+      yes.addEventListener('click', async () => {
+        yes.disabled = no.disabled = true;
+        try { await call(`/race?id=${encodeURIComponent(id)}`, { method: 'DELETE' }); S.confirm = null; await loadAll(`${sumE.name}: taken off the board.`); }
+        catch (e) { say(e.message, true); yes.disabled = no.disabled = false; }
+      });
+      body.append(c);
+    }
+  }
+  function passBox(id, e, p, flags, voided) {
+    const box = el('div', `pass${flags.length ? ' flagged' : ''}${voided ? ' void' : ''}`), ph = el('div', 'ph');
+    ph.append(el('span', 'dn', `#${p.drive}`), el('span', 'dt', title(p.drive)), el('span', 'sc', score(p.p)));
+    const pm = el('div', 'pm');
+    pm.append(el('span', '', `passed ${when(p.at)}`), el('span', '', `try ${dur(p.ms)}`), el('span', '', `${(p.decs || []).length} call${(p.decs || []).length === 1 ? '' : 's'}`));
+    if (p.res && p.res[0]) pm.append(el('span', '', `final ${p.res[0][0]}-${p.res[0][1]}`));
+    if (p.tryAt) pm.append(el('span', '', `page try began ${when(p.tryAt)}`));
+    if (voided) pm.append(el('span', '', `voided ${when(p.voided)}: ${p.note}`));
+    box.append(ph, pm);
+    if (flags.length) { const f = el('div', 'fl'); flags.forEach(([c, t]) => f.append(el('span', `badge ${c}`, t))); box.append(f); }
+    box.append(callsOf(p.decs || []));
+    if (!voided && !e.out) {
+      const key = `void:${id}:${p.drive}`;
+      if (S.confirm === key) {
+        const c = el('div', 'confirm'), note = el('input'), yes = el('button', 'danger', `Void drive ${p.drive} for ${e.name}`), no = el('button', '', 'Cancel');
+        note.placeholder = 'Why (kept with the entry)'; note.maxLength = 200; note.setAttribute('aria-label', 'Why this pass is voided');
+        if (flags.length) note.value = flags.map(([, t]) => t).join('; ');
+        yes.type = no.type = 'button';
+        c.append(el('p', '', `The pass comes off: ${e.name} drops to ${e.n - 1}/${S.data.n || N_DEFAULT} and can pass the drive again from a new try. The calls are kept with the note.`), note);
+        const a = el('div', 'acts'); a.append(yes, no); c.append(a);
+        no.addEventListener('click', () => { S.confirm = null; fillEntry(id); });
+        yes.addEventListener('click', async () => {
+          if (!note.value.trim()) { note.focus(); say('A note (why) is needed to void a pass.', true); return; }
+          yes.disabled = no.disabled = true;
+          try {
+            await call('/race/admin/void', { method: 'POST', body: JSON.stringify({ id, drive: p.drive, note: note.value.trim() }) });
+            S.confirm = null; await loadAll(`${e.name}: drive ${p.drive} voided.`);
+          } catch (err) { say(err.message, true); yes.disabled = no.disabled = false; }
+        });
+        box.append(c);
+        setTimeout(() => note.focus(), 0);
+      } else {
+        const v = el('button', 'ghost', 'Void this pass…');
+        v.type = 'button';
+        v.addEventListener('click', () => { S.confirm = key; fillEntry(id); });
+        const a = el('div', 'acts'); a.append(v); box.append(a);
+      }
+    }
+    return box;
+  }
+  // the calls behind a grade: kind, snap, the call made and its win chance, the best of the options and its win chance
+  function callsOf(decs) {
+    const det = el('details', 'cl');
+    det.append(el('summary', '', `The calls (${decs.length})`));
+    const wrap = el('div', 'calls'), t = el('table'), hr = el('tr');
+    ['#', 'kind', 'snap', 'called', 'win', 'best', 'best win', 'cost'].forEach((h) => hr.append(el('th', '', h)));
+    t.append(hr);
+    decs.forEach((x, i) => {
+      const w = Array.isArray(x.w) ? x.w : [], mine = w.find((o) => o[0] === x.c), best = w.reduce((a, o) => (a && a[1] >= o[1] ? a : o), null);
+      const cost = mine && best ? best[1] - mine[1] : null, tr = el('tr');
+      [String(i + 1), x.k || '', x.s == null ? '' : String(x.s), x.c || '', mine ? (mine[1] * 100).toFixed(1) : '–', best ? best[0] : '–', best ? (best[1] * 100).toFixed(1) : '–',
+        cost == null ? '–' : (cost * 100).toFixed(1)].forEach((v, j) => tr.append(el('td', j === 7 && cost > 0.02 ? 'miss' : '', v)));
+      t.append(tr);
+    });
+    wrap.append(t);
+    det.append(wrap);
+    return det;
+  }
+  $('cfg').addEventListener('submit', (ev) => { ev.preventDefault(); loadAll(); });
+  $('forget').addEventListener('click', () => { ss.set('gadm:tok', ''); $('tok').value = ''; S.data = null; $('entries').textContent = ''; $('tiles').hidden = $('filters').hidden = true; say('Token forgotten.'); });
+  ['q', 'onlyFlag', 'showOut', 'short', 'fix'].forEach((k) => $(k).addEventListener('input', () => { if (S.data) draw(); }));
+  setInterval(() => { $('clock').textContent = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC'; }, 1000);
+  if ($('tok').value && api()) loadAll();
+})();
+</script>
+</body>
+</html>
