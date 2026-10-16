@@ -21,6 +21,7 @@ from itertools import permutations
 import numpy as np
 import pandas as pd
 
+from . import coaches as CO
 from . import archetypes as AR
 from . import config, live
 from . import overall as O
@@ -148,8 +149,8 @@ def head_coaches(season: int) -> dict:
     g = games[(games["season"] == season) & games["home_score"].notna()].sort_values(["week"])
     out = {}
     for _, r in g.iterrows():
-        out[r["home_team"]] = COACH_FIX.get(r["home_coach"], r["home_coach"])
-        out[r["away_team"]] = COACH_FIX.get(r["away_coach"], r["away_coach"])
+        out[r["home_team"]] = CO.coach_name(r["home_coach"], r["home_team"], season)
+        out[r["away_team"]] = CO.coach_name(r["away_coach"], r["away_team"], season)
     return out
 
 
