@@ -4812,7 +4812,10 @@
       pro.drives.forEach((d, k) => {
         const sp = pro.spots[d.spot], opp = sp.player === sp.home ? sp.away : sp.home, a = el('a', 'day drive');
         a.href = `#drive-${k + 1}`;
-        a.append(el('b', '', d.title), el('span', 'd', String(sp.real.season)), el('span', 'm', `${teamName(sp.player)} vs ${teamName(opp)}`),
+        if (sp.real && sp.real.live) a.classList.add('live');
+        const tb = el('b', '', sp.real && sp.real.live ? null : d.title);
+        if (sp.real && sp.real.live) tb.append(el('span', 'livetag', 'LIVE'), d.title);
+        a.append(tb, el('span', 'd', String(sp.real.season)), el('span', 'm', `${teamName(sp.player)} vs ${teamName(opp)}`),
           el('span', 'sc', ds[k + 1] ? String(Math.round(ds[k + 1].p * 100)) : 'Play'));
         dl.append(a);
       });
