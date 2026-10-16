@@ -287,7 +287,7 @@
   }
 
   const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, hash, rng, buildGame, possRoot, start, chooser, need, role,
-    cleanAction, cleanDef, cleanHalf, apply, after, describe, stepper, unpack };
+    cleanAction, cleanDef, cleanHalf, apply, after, describe, called, stepper, unpack };
   if (typeof module !== 'undefined' && module.exports) module.exports = VSCore;
   else global.VSCore = VSCore;
 })(typeof self !== 'undefined' ? self : this);

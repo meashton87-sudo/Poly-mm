@@ -78,8 +78,8 @@
   // the defense's pre-snap look, as the engine buckets real plays: a light box (6 or fewer near the line) or a loaded
   // one (7 or more), with or without a blitz
   const LOOKS = [{ loaded: false, blitz: false }, { loaded: false, blitz: true }, { loaded: true, blitz: false }, { loaded: true, blitz: true }];
-  // Versus: the defense's whole call (engine.js DC): personnel, front, coverage and pass rush. The offense's play is a
-  // real one run against that defense, and the matchup of the two calls tilts it (engine.js dcMatch)
+  // the defense's whole call (engine.js DC): personnel, front, coverage and pass rush. The offense's play is a real one
+  // run against that defense, and the matchup of the two calls tilts it (engine.js dcMatch)
   const VDEF = [
     ['pers', 'Personnel', [['heavy', 'Goal line', '3 DBs'], ['base', 'Base', '4 DBs'], ['nickel', 'Nickel', '5 DBs'], ['dime', 'Dime', '6 DBs']]],
     ['front', 'Front', [['light', 'Light', '6 in box'], ['even', 'Even', '7 in box'], ['loaded', 'Stacked', '8 in box']]],
@@ -105,6 +105,39 @@
     if (r.ytg <= 2) return { pers: 'base', front: 'loaded', cover: 'c1', rush: 4 };
     if (r.down >= 2 && r.ytg >= 7) return { pers: 'dime', front: 'light', cover: 'c4', rush: 4 };
     return { pers: 'nickel', front: 'even', cover: 'c3', rush: 4 };
+  }
+  // the quick calls: a whole defense in one tap, the ones a defensive coordinator reaches for (the goal-line and
+  // prevent calls only where they make sense)
+  const PRESET = {
+    run_stop: { label: 'Run stop', sub: 'Base, 8 in the box, Cover 1', dc: { pers: 'base', front: 'loaded', cover: 'c1', rush: 4 } },
+    base3: { label: 'Base Cover 3', sub: 'Base personnel, three deep', dc: { pers: 'base', front: 'even', cover: 'c3', rush: 4 } },
+    nickel3: { label: 'Nickel Cover 3', sub: 'Five DBs, three deep', dc: { pers: 'nickel', front: 'even', cover: 'c3', rush: 4 } },
+    quarters: { label: 'Nickel Quarters', sub: 'Five DBs, four deep', dc: { pers: 'nickel', front: 'light', cover: 'c4', rush: 4 } },
+    two_deep: { label: 'Dime Cover 2', sub: 'Six DBs, two deep, five under', dc: { pers: 'dime', front: 'light', cover: 'c2', rush: 4 } },
+    man: { label: '2-Man', sub: 'Man under, two safeties deep', dc: { pers: 'nickel', front: 'light', cover: '2man', rush: 4 } },
+    fire: { label: 'Cover 1 blitz', sub: 'Man, one deep, five rush', dc: { pers: 'nickel', front: 'even', cover: 'c1', rush: 5 } },
+    zero: { label: 'Zero blitz', sub: 'Everyone comes, nobody deep', dc: { pers: 'nickel', front: 'loaded', cover: 'c0', rush: 6 } },
+    drop8: { label: 'Drop 8', sub: 'Three rush, eight in coverage', dc: { pers: 'dime', front: 'light', cover: 'c3', rush: 3 } },
+    goal: { label: 'Goal line', sub: 'Big bodies, everyone up', dc: { pers: 'heavy', front: 'loaded', cover: 'c0', rush: 6 } },
+    prevent: { label: 'Prevent', sub: 'Everyone deep, give up the short stuff', dc: { pers: 'dime', front: 'light', cover: 'prevent', rush: 3 } },
+  };
+  const sameDc = (a, b) => !!a && !!b && a.pers === b.pers && a.front === b.front && a.cover === b.cover && +a.rush === +b.rush;
+  function presetsFor(r) {
+    const late = !VS && halfLeft(r.t) <= 120 && r.score[G.me] > r.score[1 - G.me];
+    return Object.keys(PRESET).filter((k) => (k === 'goal' ? r.try2 || r.yl <= 5 : k === 'prevent' ? late && r.yl >= 20 : k === 'run_stop' ? r.ytg <= 6 || r.yl <= 10 : true));
+  }
+  // how often NFL defenses line up this way here: the product of each part's share (dshare), floored so nothing is zero
+  function dcShare(share, dc) {
+    if (!share) return 0.1;
+    return ['pers', 'front', 'cover', 'rush'].reduce((a, p) => a * Math.max((share[p] || {})[p === 'rush' ? dc.rush : dc[p]] || 0, 0.01), 1);
+  }
+  // the daily's starting call: what NFL defenses most often line up in here, part by part (dshare); else vdefDefault
+  function nflDefault(r, share) {
+    const d = vdefDefault(r);
+    if (!share) return d;
+    const top = (part) => { const e = Object.entries(share[part] || {}).sort((a, b) => b[1] - a[1])[0]; return e ? e[0] : null; };
+    const rush = +top('rush');
+    return { pers: top('pers') || d.pers, front: top('front') || d.front, cover: top('cover') || d.cover, rush: VDEF[3][2].some((o) => o[0] === rush) ? rush : d.rush };
   }
   const vdefText = (dc) => `${vdefName('pers', dc.pers)}, ${vdefName('cover', dc.cover)}, ${dc.rush >= 6 ? '6+' : dc.rush} rushing, ${({ light: 6, even: 7, loaded: 8 })[dc.front]} in the box`;
   // why a matchup went the way it did (engine.js dcMatch reasons), as a phrase
@@ -496,7 +529,7 @@
     return out;
   }
   function decisionFrom(kind, family, options, vals, chosen, q, situation, snap = G.snapN) {
-    const wps = options.map((o) => ({ key: o.key, label: o.label, wp: vals[o.key], call: (o.action && o.action.call) || null }));
+    const wps = options.map((o) => ({ key: o.key, label: o.label, wp: vals[o.key], call: (o.action && o.action.call) || null, ...(o.action && o.action.dc ? { dc: o.action.dc } : {}) }));
     const best = wps.reduce((a, b) => (b.wp > a.wp ? b : a));
     const mine = wps.find((w) => w.key === chosen);
     const qq = normalize(q, wps.map((w) => w.key));
@@ -2774,7 +2807,7 @@
     if (res.done) G.root.phase = DONE;
     persist();
     const pe = res.log.find((x) => x.ev === 'play');
-    const look = before.pos === G.me ? G.look : action && action.def && pe && pe.look && pe.look.box ? (pe.look.box >= 7 ? 2 : 0) + (pe.look.blitz ? 1 : 0) : null;
+    const look = before.pos === G.me ? G.look : action && (action.def || action.dc) && pe && pe.look && pe.look.box ? (pe.look.box >= 7 ? 2 : 0) + (pe.look.blitz ? 1 : 0) : null;
     G.lastPlay = { before, res, side, look };
     res.animated = await animatePlay(before, res, side, false, look);
     G.look = null;
@@ -3296,7 +3329,7 @@
     const out = [];
     for (const sp of pend.specs) {
       const vals = await evaluateGraded(sp.r, sp.opts, sp.seed, sp.chosen);
-      out.push(decisionFrom(sp.kind, sp.family, sp.opts, vals, sp.chosen, sp.q, sp.situation, pend.snap));
+      out.push({ ...decisionFrom(sp.kind, sp.family, sp.opts, vals, sp.chosen, sp.q, sp.situation, pend.snap), ...(sp.extra || {}) });
     }
     return out;
   }
@@ -3432,26 +3465,38 @@
     const kick = peek.log.find((e) => e.ev === 'fg' || e.ev === 'punt');
     if (kick) { G.fast = false; return promptChoice(kick.ev === 'fg' ? 'fgdef' : 'puntdef'); }
     G.fast = false;
-    if (VS) { ui = { step: 'vdef', dc: vdefDefault(r) }; drawVsDefDock(); return; }
-    ui = { step: 'defense', to: false };
-    drawDefDock();
+    ui = { step: 'vdef', dc: VS ? vdefDefault(r) : nflDefault(r, G.dinfo && G.dinfo.dshare), to: false };
+    drawFullDefDock();
   }
-  // Versus: your defense in full. Every part preset to what a defense would call here; one tap on Call it sends it
-  function drawVsDefDock() {
+  // your defense in full (every mode): a quick call (a preset for the spot) or any personnel, front, coverage and rush;
+  // every part starts on what a defense would call here, so one tap on Call it is enough
+  function drawFullDefDock() {
     const r = G.root, d = $('dock');
     d.textContent = '';
     takeBanner(d);
     const head = el('div', 'ask');
     head.append(el('h2', '', r.try2 ? 'Stop the two-point try' : 'Your defense'), el('span', 'sub', `${teamName(code(r.pos))} ball · ${ddText(r)} · ${spotText(r)}`));
     d.append(head);
+    const presets = el('div', 'vpresets');
+    presets.setAttribute('aria-label', 'Quick calls');
     const box = el('div', 'vdef');
     const tip = el('p', 'vdeftip');
     const sum = el('div', 'vdefsum');
+    const share = G.dinfo && G.dinfo.dshare;
     const mark = () => {
       box.querySelectorAll('.segb').forEach((b) => { const on = ui.dc[b.dataset.part] === (b.dataset.part === 'rush' ? +b.dataset.k : b.dataset.k); b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
+      presets.querySelectorAll('.chip').forEach((b) => b.setAttribute('aria-pressed', String(sameDc(PRESET[b.dataset.k].dc, ui.dc))));
       sum.textContent = vdefText(ui.dc);
       tip.textContent = COVER_TIP[ui.dc.cover];
     };
+    presetsFor(r).forEach((k) => {
+      const b = el('button', 'chip opt', PRESET[k].label);
+      b.type = 'button';
+      b.dataset.k = k;
+      b.title = PRESET[k].sub;
+      b.addEventListener('click', () => { if (busy || ui.step !== 'vdef') return; ui.dc = { ...PRESET[k].dc }; mark(); });
+      presets.append(b);
+    });
     VDEF.forEach(([part, label, opts]) => {
       const row = el('div', 'tempo vrow');
       row.append(el('span', 'lab', label));
@@ -3464,14 +3509,30 @@
         b.type = 'button';
         b.setAttribute('role', 'radio');
         b.dataset.part = part; b.dataset.k = String(k);
+        // what NFL defenses do here, from the charting of the real plays in this spot (not in Versus: no clock, no
+        // NFL overtime like it)
+        const nfl = !VS && share && share[part] ? share[part][k] : null;
         b.append(el('b', '', t), el('small', '', sub));
+        if (nfl != null) b.append(el('small', 'pct', `NFL ${Math.round(nfl * 100)}%`));
         b.addEventListener('click', () => { if (busy || ui.step !== 'vdef') return; ui.dc = { ...ui.dc, [part]: k }; mark(); });
         seg.append(b);
       });
       row.append(seg);
       box.append(row);
     });
-    d.append(box, sum, tip);
+    d.append(presets, box, sum, tip);
+    if (!VS && share) d.append(el('p', 'vdeftip', 'NFL %: how often NFL defenses lined up each way in this spot. It starts on the most common.'));
+    if (!VS && defTimeoutOk(r)) {
+      const tg = el('div', 'toggle');
+      const lab = el('div', 'lab', 'Timeout first');
+      lab.append(el('small', '', `Stop the clock before their snap · ${r.to[G.me]} left`));
+      const sw = el('button', 'sw2');
+      sw.type = 'button'; sw.id = 'toSwitch';
+      sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(!!ui.to)); sw.setAttribute('aria-label', 'Timeout first');
+      sw.addEventListener('click', () => { ui.to = !ui.to; sw.setAttribute('aria-checked', String(ui.to)); });
+      tg.append(lab, sw);
+      d.append(tg);
+    }
     const keys = el('div', 'keys');
     keys.style.setProperty('--cols', 1);
     const go = key('Call it', null, 'big', 0);
@@ -3479,63 +3540,48 @@
       if (busy || ui.step !== 'vdef') return;
       track('defense_call', { mode: modeName(), call: `${ui.dc.pers}/${ui.dc.front}/${ui.dc.cover}/${ui.dc.rush}` });
       ui.step = 'sent';
-      vsSubmit({ dc: { ...ui.dc } });
+      if (VS) vsSubmit({ dc: { ...ui.dc } });
+      else decideDefense({ ...ui.dc });
     });
     keys.append(go);
     d.append(keys);
+    if (!VS) {
+      const auto = el('button', 'chip', 'Let the coordinator call this drive');
+      auto.type = 'button';
+      auto.addEventListener('click', () => { if (busy) return; G.autoDef = true; advance(); });
+      d.append(auto);
+    }
     mark();
   }
-  function drawDefDock() {
-    const r = G.root, d = $('dock');
-    d.textContent = '';
-    takeBanner(d);
-    const head = el('div', 'ask');
-    head.append(el('h2', '', 'Your defense'), el('span', 'sub', `${teamName(code(r.pos))} ball · ${ddText(r)} · ${spotText(r)}`));
-    d.append(head);
-    const keys = el('div', 'keys');
-    keys.style.setProperty('--cols', 3);
-    DEFS.forEach((k, i) => {
-      const b = key(DEF[k].label, DEF[k].sub, 'big def', i);
-      b.addEventListener('click', () => { if (!busy) decideDefense(k); });
-      keys.append(b);
-    });
-    d.append(keys);
-    if (defTimeoutOk(r)) {
-      const tg = el('div', 'toggle');
-      const lab = el('div', 'lab', 'Timeout first');
-      lab.append(el('small', '', `Stop the clock before their snap · ${r.to[G.me]} left`));
-      const sw = el('button', 'sw2');
-      sw.type = 'button'; sw.id = 'toSwitch';
-      sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(ui.to)); sw.setAttribute('aria-label', 'Timeout first');
-      sw.addEventListener('click', () => { ui.to = !ui.to; sw.setAttribute('aria-checked', String(ui.to)); });
-      tg.append(lab, sw);
-      d.append(tg);
-    }
-    if (VS) return;
-    const auto = el('button', 'chip', 'Let the coordinator call this drive');
-    auto.type = 'button';
-    auto.addEventListener('click', () => { if (busy) return; G.autoDef = true; advance(); });
-    d.append(auto);
-  }
-  async function decideDefense(k) {
+  // your defense, graded: against the quick calls that fit the spot (and yours, when it is none of them), every one
+  // played out from this snap (the offense reads your call and checks into what beats it); how often NFL defenses
+  // line up like each, from the charting of the real plays here
+  async function decideDefense(dc) {
     if (busy) return;
     busy = true;
     liveDrive.calls++;
-    track('defense_call', { mode: modeName(), call: k });
     const r = G.root, me = G.me;
     try {
       const useTo = !!(ui.to && defTimeoutOk(r)), askTo = defTimeoutOk(r), seq = G.seq;
-      const opts = DEFS.map((x) => ({ key: x, label: DEF[x].label, action: { to_def: useTo, def: x } }));
-      const L = (G.dinfo && G.dinfo.looks) || [0.25, 0.25, 0.25, 0.25];
+      const act = (x) => ({ to_def: useTo, dc: { ...x }, read: true });
+      const keys = presetsFor(r), mine = keys.find((k) => sameDc(PRESET[k].dc, dc)) || 'yours';
+      const opts = keys.map((k) => ({ key: k, label: PRESET[k].label, action: act(PRESET[k].dc) }));
+      if (mine === 'yours') opts.push({ key: 'yours', label: vdefText(dc), action: act(dc) });
+      const share = G.dinfo && G.dinfo.dshare;
+      const q = {};
+      opts.forEach((o) => { q[o.key] = dcShare(share, o.action.dc); });
+      // your leanings, against NFL defenses here (the tendencies sheet): blitzing, a stacked box, deep zone
+      const nfl = share ? { blitz: (share.rush[5] || 0) + (share.rush[6] || 0), load: share.front.loaded || 0,
+        soft: ['c2', 'c3', 'c4', 'c6', 'prevent'].reduce((a, k) => a + (share.cover[k] || 0), 0) } : null;
       const specs = [];
       if (askTo) {
-        const to = [{ key: 'timeout', label: 'Timeout', action: { to_def: true, def: k } }, { key: 'no_timeout', label: 'Let it run', action: { to_def: false, def: k } }];
+        const to = [{ key: 'timeout', label: 'Timeout', action: { ...act(dc), to_def: true } }, { key: 'no_timeout', label: 'Let it run', action: { ...act(dc), to_def: false } }];
         specs.push({ kind: 'deftime', family: 'def_timeout', r, opts: to, chosen: useTo ? 'timeout' : 'no_timeout',
           q: coachProbs('def_timeout', r, me) || { timeout: 0.15, no_timeout: 0.85 }, situation: situation(r), seed: hash('deftime', seedKey(), G.si, seq) });
       }
-      specs.push({ kind: 'defcall', family: 'def_call', r, opts, chosen: k, q: { blitz: L[1] + L[3], load: L[2], soft: L[0] }, situation: situation(r),
-        seed: hash('def', seedKey(), G.si, seq) });
-      await snapThenGrade(specs, opts.find((o) => o.key === k).action);
+      specs.push({ kind: 'defcall', family: 'def_call', r, opts, chosen: mine, q, situation: situation(r), seed: hash('def', seedKey(), G.si, seq),
+        extra: { dc: { ...dc }, nfl } });
+      await snapThenGrade(specs, act(dc));
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
     busy = false;
   }
@@ -3649,6 +3695,7 @@
   const LOOK_NAME = ['the light box (extra men back in coverage)', 'the blitz', 'the loaded box', 'the blitz'];
   const DEF_NAME = { blitz: 'blitz', load: 'loaded box', soft: 'soft coverage' };
   function matchupLine(e, action) {
+    if (e && Array.isArray(e.why)) return vsMatchupLine(e, e.team === G.me);
     if (!e || e.ev !== 'play' || !e.match || Math.abs(e.match) < 0.5 || e.call < 0 || !idx.calls[e.call]) return null;
     const call = e.team === G.me && action && action.route && action.targetName
       ? `${routeSay(action.targetPos, action.route)} to ${shortName(action.targetName) || action.targetPos}` : idx.calls[e.call].label.toLowerCase();
@@ -3771,7 +3818,10 @@
       if (x.family === 'fourth_down' && qAll > 0) out.push(['go', c ? 1 : 0, qPlay / qAll]);
     } else if (x.kind === 'pat') out.push(['two', x.chosen === 'two' ? 1 : 0, x.q.two || 0]);
     else if (x.kind === 'clock' && x.wps.some((w) => w.key === 'nohuddle')) out.push(['nohuddle', x.chosen === 'nohuddle' ? 1 : 0, x.q.nohuddle || 0]);
-    else if (x.kind === 'defcall') DEFS.forEach((k) => out.push([k, x.chosen === k ? 1 : 0, x.q[k] || 0]));
+    else if (x.kind === 'defcall' && x.dc && x.nfl) {          // the full defense: blitz, stacked box, deep zone
+      out.push(['blitz', +x.dc.rush >= 5 ? 1 : 0, x.nfl.blitz], ['load', x.dc.front === 'loaded' ? 1 : 0, x.nfl.load],
+        ['soft', ['c2', 'c3', 'c4', 'c6', 'prevent'].includes(x.dc.cover) ? 1 : 0, x.nfl.soft]);
+    } else if (x.kind === 'defcall') DEFS.forEach((k) => out.push([k, x.chosen === k ? 1 : 0, x.q[k] || 0]));
     return out;
   }
   function coachMatch(decs) {
@@ -5555,7 +5605,7 @@
     persist();
     return out;
   }
-  // Versus: the matchup behind a snap, from the reasons the engine gave (e.why, engine.js dcMatch), the one that
+  // the matchup behind a snap against a full defensive call, from the reasons the engine gave (e.why, engine.js dcMatch), the one that
   // mattered most for the side it favored; nothing when it was close to even
   function vsMatchupLine(e, mine) {
     if (!e || e.ev !== 'play' || !Array.isArray(e.why) || !e.why.length || Math.abs(e.match || 0) < 0.5) return null;

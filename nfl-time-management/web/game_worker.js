@@ -5,6 +5,7 @@
  *   eval  -> win probability of a list of options (same seed for all: common random numbers)
  *   step  -> plays one real snap / try / kickoff and returns the new state and a play-by-play log */
 importScripts('engine.js' + self.location.search);     // the page's build stamp (?v=...), if any
+importScripts('vs_core.js' + self.location.search);    // a full defensive call, shown as called (VSCore.called)
 
 let eng = null;
 const sims = new Map();
@@ -71,7 +72,7 @@ function info(sim, root) {
   const match = {};
   P.calls.forEach((c, i) => { match[c.id] = P.match[i]; });
   return { calls, match, fgDist: fi.fgDist, pFg: fi.pFg, pConv: fi.pConv, tempo: sim.defaultTempo(root), tempoSecs: sim.tempoSeconds(),
-    looks: lookByCall ? looks.map((x) => x / lt) : null, lookByCall };
+    looks: lookByCall ? looks.map((x) => x / lt) : null, lookByCall, dshare: sim.dcShares(fk) };
 }
 
 // what happened on the real play behind an outcome: event, penalty called, the pre-snap look, and for the
@@ -148,7 +149,10 @@ self.onmessage = async (ev) => {
       self.postMessage({ type: 'odds', id: m.id, out });
     } else if (m.type === 'step') {
       const r = simFor(m.scen).step(m.root, { action: m.action, seed: m.seed });
-      r.log.forEach((e) => { if (e.ev === 'play' && e.row >= 0) Object.assign(e, describe(e.row)); });
+      r.log.forEach((e) => {
+        if (e.ev === 'play' && e.row >= 0) Object.assign(e, describe(e.row));
+        if (e.ev === 'play' && m.action && m.action.dc) VSCore.called(e, m.action.dc);
+      });
       self.postMessage({ type: 'step', id: m.id, res: r });
     }
   } catch (e) {
