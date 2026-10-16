@@ -6,12 +6,14 @@ name = "two-minute-drill-board"
 main = "worker.js"
 compatibility_date = "2025-06-01"
 
-# Pro purchases: `npx wrangler secret put STRIPE_SECRET` (the Stripe secret key, sk_live_...), then STRIPE_PRICE below
-# (the one-time price id, price_...) and SITE (where Stripe sends the buyer back). Without them /pay answers 503.
+# Pro purchases: the secret STRIPE_SECRET (a restricted Stripe key, Checkout Sessions write; set in the Cloudflare
+# dashboard) turns them on. STRIPE_PRICE is optional: a price id (price_...) or a product id (prod_...) from the
+# catalog; left empty, the worker describes the product itself and charges $4.99. SITE is where Stripe sends the
+# buyer back when the request came from nowhere known. Without the key /pay answers 503.
 [vars]
 ALLOWED_ORIGINS = "https://nfl2mindrill.com,https://www.nfl2mindrill.com,https://nfl2mindrill.pages.dev,https://nfl2mindrill-pro-preview.pages.dev"
 SITE = "https://nfl2mindrill.com"
-STRIPE_PRICE = "prod_VRryrvDrQxpAC7"      # test mode: Two-Minute Drill Pro, $4.99 (the live product's id replaces it at launch)
+STRIPE_PRICE = "prod_VRryrvDrQxpAC7"      # the sandbox product (Two-Minute Drill Pro, $4.99); at launch set it to "" (or a live id)
 
 # The Pro data (board/assets/pro, put there by the site workflow): never served as plain files (run_worker_first), only
 # by the worker to a valid Pro code (POST /pro/data)

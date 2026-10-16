@@ -210,7 +210,7 @@ async function daily(req, env, storage, hits, h, url) {
 }
 
 // ---- Pro
-const proOn = (env) => !!(env.STRIPE_SECRET && env.STRIPE_PRICE);
+const proOn = (env) => !!env.STRIPE_SECRET;
 function proCode() {
   const b = crypto.getRandomValues(new Uint8Array(12));
   const s = Array.from(b, (x) => PRO_ALPHABET[x % PRO_ALPHABET.length]).join('');     // 256 % 31 = 8: a slight lean, fine for a code
@@ -276,9 +276,14 @@ async function pro(req, env, storage, hits, h, url) {
     const site = String(allowed.includes(origin) ? origin : env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, '');
     let r;
     try {
-      const item = String(env.STRIPE_PRICE).startsWith('prod_')
-        ? { 'line_items[0][price_data][currency]': 'usd', 'line_items[0][price_data][product]': env.STRIPE_PRICE, 'line_items[0][price_data][unit_amount]': String(PRO_CENTS) }
-        : { 'line_items[0][price]': env.STRIPE_PRICE };
+      // the line: a price id as is; a product id, or nothing, charged PRO_CENTS (with nothing set, the product is
+      // described here, so a live launch needs no product in the catalog)
+      const price = String(env.STRIPE_PRICE || '').trim();
+      const item = price.startsWith('price_') ? { 'line_items[0][price]': price }
+        : { 'line_items[0][price_data][currency]': 'usd', 'line_items[0][price_data][unit_amount]': String(PRO_CENTS),
+          ...(price.startsWith('prod_') ? { 'line_items[0][price_data][product]': price }
+            : { 'line_items[0][price_data][product_data][name]': 'Two-Minute Drill Pro',
+              'line_items[0][price_data][product_data][description]': 'Every past daily, the historic drives and the playoff runs. One code, any device.' }) };
       r = await stripe(env, 'checkout/sessions', { mode: 'payment', ...item, 'line_items[0][quantity]': '1',
         success_url: `${site}/?claim={CHECKOUT_SESSION_ID}`, cancel_url: `${site}/?pro=cancel`, integration_identifier: tag() });
     } catch (e) { return json({ error: 'stripe unreachable' }, 502, h); }
