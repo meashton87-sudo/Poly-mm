@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 150
     env:
       PRO_ON: "on"            # "on" launches Pro (the tab, the archive, the drives, the runs, the purchase)
-      PRO_AT: "2026-10-16T18:00:00Z"   # and not before this time (UTC; 2 pm Eastern): the page turns Pro on then; "" for at once
+      PRO_AT: ""   # and not before this time (UTC, e.g. "2026-10-16T18:00:00Z"): the page turns Pro on then; "" for at once
       VS_ON: "off"            # "on" turns on Versus (two players live) on the site; the Pro preview always has it
       FULLDEF_ON: "on"       # "on" turns on the full defensive call (personnel, front, coverage, rush) in the daily and survivor; the Pro preview always has it
     defaults:
