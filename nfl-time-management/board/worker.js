@@ -467,7 +467,9 @@ async function race(req, env, storage, hits, h, url) {
     return json({ ok: true }, 200, h);
   }
   if (req.method !== 'POST' || !['/race/me', '/race/join', '/race/start', '/race/pass'].includes(url.pathname)) return json({ error: 'not found' }, 404, h);
-  if (limited(req, hits)) return json({ error: 'slow down' }, 429, h);
+  // the board's own poll (/race/me, every 15 s a page) is a read: it never uses up the per-address budget, which phones
+  // behind one carrier address share, so a pass is never refused for someone else's polling
+  if (url.pathname !== '/race/me' && limited(req, hits)) return json({ error: 'slow down' }, 429, h);
   let body;
   try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
   const code = normCode(body && body.code);
