@@ -4624,6 +4624,58 @@
   // scores 0 and a little better 100 (half of the players scored 0); against the whole range they spread from 0 to
   // 100 and a typical player lands near the middle. Days 1-3 compared with frequency-only callers (nearly all 90+).
   const PCT_FROM = 4, PCT_TAU_LO = 0.003, PCT_TAU_HI = 0.3, PCT_FREQ = 0.15;
+  // The score from day RESULT_FROM on (and every historic drive and playoff run): the calls AND the result. Each
+  // simulated play-caller makes his calls as above and then plays his games out: he wins each with the win chance his
+  // calls leave (the spot's best start less what they gave up). You and he are scored alike: RESULT_W for each game
+  // won (half for a tie), less the win chance the calls gave up. Mostly the calls: a win is worth about as much as
+  // three middling calls, so the league's calls score about 50 lost and 65-75 won; a 90 takes sharp calls (a loss
+  // with near-perfect ones still gets there in a long shot) and poor calls stay poor, won or lost.
+  const RESULT_W = 0.03, RESULT_FROM = 6;
+  const resultScored = () => !!(DRIVE || RUN_N || dayN >= RESULT_FROM);
+  function spotGroups() {
+    const out = [];
+    for (let i = 0; i < today.length; i++) {
+      const s = state.spots[i];
+      if (!s || !s.decisions || !s.decisions.length) continue;
+      const r = s.result, res = !r ? 0 : r.mine > r.theirs ? 1 : r.mine === r.theirs ? 0.5 : 0;
+      out.push({ decs: s.decisions, res, start: s.decisions[0].bestWp });
+    }
+    return out;
+  }
+  function scoreVsNFL(decs) {
+    if (!resultScored()) return percentileVsNFL(decs);
+    const groups = spotGroups();
+    if (!groups.length) return percentileVsNFL(decs);
+    const my = groups.reduce((a, g) => a + RESULT_W * g.res - g.decs.reduce((b, x) => b + x.cost, 0), 0);
+    const R = rng(hash('pct2', dayN, DRIVE, RUN_N)), N = 6000;
+    const lnLo = Math.log(PCT_TAU_LO), lnSpan = Math.log(PCT_TAU_HI) - lnLo;
+    const weights = (x, tau) => {
+      const w = x.wps.map((o) => (x.q[o.key] || 0) * (tau ? Math.exp((o.wp - x.bestWp) / tau) : 1));
+      const t = w.reduce((a, b) => a + b, 0);
+      return t > 0 ? w.map((v) => v / t) : w.map(() => 1 / w.length);
+    };
+    const freqW = groups.map((g) => g.decs.map((x) => weights(x, 0)));
+    let better = 0;
+    for (let s = 0; s < N; s++) {
+      const tau = R() < PCT_FREQ ? 0 : Math.exp(lnLo + R() * lnSpan);
+      let m = 0;
+      groups.forEach((g, gi) => {
+        let tot = 0;
+        for (let i = 0; i < g.decs.length; i++) {
+          const x = g.decs[i], w = tau ? weights(x, tau) : freqW[gi][i], u = R();
+          let acc = 0, pick = x.wps[x.wps.length - 1];
+          for (let j = 0; j < x.wps.length; j++) { acc += w[j]; if (u <= acc) { pick = x.wps[j]; break; } }
+          tot += Math.max(0, x.bestWp - pick.wp);
+        }
+        const win = R() < clip(g.start - tot, 0.002, 0.998) ? 1 : 0;
+        m += RESULT_W * win - tot;
+      });
+      if (m < my - 1e-9) better += 1; else if (Math.abs(m - my) <= 1e-9) better += 0.5;
+    }
+    // a historic drive is a mission: an A (a pass, the Gauntlet's too) takes winning the game
+    if (DRIVE && groups.some((g) => g.res < 1)) return Math.min(better / N, (PASS_AT - 1) / 100);
+    return better / N;
+  }
   function percentileVsNFL(decs) {
     const my = decs.reduce((a, x) => a + x.cost, 0);
     const R = rng(hash('pct', dayN)), N = 4000;
@@ -4657,8 +4709,8 @@
     const top = el('div', 'gtop');
     const big = el('div', 'gbig', g.L);
     const txt = el('div', 'gtxt');
-    txt.append(el('div', 'gk', d.title), el('div', 'gres', g.pass ? 'Passed' : score >= PASS_AT - 10 ? 'So close' : 'Not yet'),
-      el('div', 'gsc', `${score} · better than ${score}% of NFL play\u2011callers`));
+    txt.append(el('div', 'gk', d.title), el('div', 'gres', g.pass ? 'Passed' : !(state.spots[0] && state.spots[0].result && state.spots[0].result.mine > state.spots[0].result.theirs) ? 'Win it to pass' : score >= PASS_AT - 10 ? 'So close' : 'Not yet'),
+      el('div', 'gsc', `${score} · better than ${score}% of NFL play\u2011callers, the calls and the result`));
     top.append(big, txt);
     box.append(top);
     const bar = el('div', 'gbar');
@@ -4729,7 +4781,7 @@
     if (!G) resumeSpot(today.length - 1);
     show('done');
     const decs = allDecisions();
-    const p = decs.length ? percentileVsNFL(decs) : 0;
+    const p = decs.length ? scoreVsNFL(decs) : 0;
     const wpa = decs.reduce((a, x) => a + x.wpa, 0);
     const st = load(`${STORE}:stats`, { days: {} });
     const cc = coachCard(decs, DRIVE || RUN_N ? 'You coached like' : 'Today you coached like');
@@ -4763,10 +4815,16 @@
     box.textContent = '';
     // the daily streak: days in a row finished, today included (what brings players back tomorrow)
     let streak = 0; for (let k = dayN; st.days[k]; k--) streak++;
-    if (DRIVE) box.append(driveCard(p, driveRec, drivePrev), driveActions(driveRec));
+    if (DRIVE) {
+      const card = driveCard(p, driveRec, drivePrev), note = el('p', 'racenote');
+      note.hidden = true;
+      card.append(note);
+      box.append(card, driveActions(driveRec));
+      if (firstFinish) racePass(p, decs, note);
+    }
     else {
       box.append(el('div', 'note', RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · your run` : `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
-        el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers`),
+        el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers${resultScored() ? ', the calls and the result' : ''}`),
         el('div', 'streak', RUN_N ? 'Playoff run' : ARCH_DAY ? 'From the archive' : streak >= 2 ? `🔥 ${streak}-day streak` : 'Day 1 of your streak · come back tomorrow'));
     }
     if (RUN_N) {                      // the run's record against the real one
@@ -5181,6 +5239,7 @@
   function proLaunch() {
     PRO_ON = true;
     $('modeArch').hidden = false;
+    raceBar();
     proVerify();
   }
   async function proVerify() {
@@ -5216,6 +5275,154 @@
       track('purchase', { currency: 'USD', value: 4.99, transaction_id: d.code, items: [{ item_id: 'pro', item_name: 'Two-Minute Drill Pro', price: 4.99, quantity: 1 }] });
       toast('Pro unlocked');
     } catch (e) { toast('The purchase could not be confirmed: ' + e.message); }
+  }
+  // ---- The Gauntlet: the contest across the historic drives (board/worker.js /race). Pass all of them (an A each)
+  // first and win. A Pro code enters under a public name; only passes made after entering count, each drive once; the
+  // board is live (polled while it is on screen) and open to everyone, Pro or not
+  const RACE_NAME = 'The Gauntlet';
+  const RACE_PRIZE = '$50, the Gauntlet Champion title on the site and the pick of a future daily';                  // what the winner gets, in a few words ('' says "the prize")
+  const RACE_POLL = 15000;
+  const RACE = { view: null, full: false, timer: 0 };
+  const racePrize = () => RACE_PRIZE || 'the prize';
+  async function raceCall(path, body) {
+    if (!BOARD.api) throw new Error('the leaderboard is not on this site');
+    const r = await fetch(`${BOARD.api}${path}`, body ? POST_JSON(body) : { cache: 'no-store' });
+    const d = await r.json().catch(() => ({}));
+    return { ok: r.ok, status: r.status, ...d };
+  }
+  const raceFetch = () => (isPro() ? raceCall('/race/me', { code: proCode(), key: deviceKey() }) : raceCall('/race'));
+  const hms = (ms) => { const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60;
+    return `${h ? `${h}:` : ''}${String(m).padStart(h ? 2 : 1, '0')}:${String(x).padStart(2, '0')}`; };
+  // the contest's panel: what it is, live status, your entry (or how to enter), the board, the rules
+  function racePanel() {
+    const box = el('div', 'race');
+    box.setAttribute('aria-live', 'polite');
+    const draw = () => {
+      const v = RACE.view, me = v && v.me, n = (v && v.n) || (PRO ? PRO.drives.length : 24);
+      box.textContent = '';
+      const head = el('div', 'rhead');
+      const live = v && Date.now() >= Date.parse(v.from);
+      const chip = el('span', `rchip${v && v.winner ? ' won' : live ? ' live' : ''}`, v && v.winner ? 'Won' : live ? 'Live' : v ? `Starts in ${hms(Date.parse(v.from) - Date.now())}` : '…');
+      head.append(el('span', 'rk', 'The contest'), chip);
+      box.append(head, el('h3', 'rtitle', RACE_NAME),
+        el('p', 'rlead', `${n} historic drives. Pass every one, an A (${PASS_AT} or better) on each. The first to do it wins ${racePrize()}.`));
+      if (!v) { box.append(el('p', 'note', BOARD.api ? 'Loading the leaderboard…' : 'The leaderboard is on nfl2mindrill.com.')); return; }
+      if (v.winner) box.append(el('p', 'rwin', `🏆 ${v.winner.name} passed all ${n} first, ${new Date(v.winner.at).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}. The board is still open: climb it.`));
+      const stats = el('div', 'rstats');
+      stats.append(el('span', '', `${v.entrants} in the race`), el('span', '', `${v.passes} drive${v.passes === 1 ? '' : 's'} passed`));
+      if (v.rows[0] && v.rows[0].n) stats.append(el('span', '', `Leader: ${v.rows[0].name}, ${v.rows[0].n}/${n}`));
+      box.append(stats);
+      // you
+      const you = el('div', 'ryou');
+      if (me) {
+        const bar = el('div', 'rbar'), fill = el('i');
+        fill.style.width = `${(100 * me.n) / n}%`;
+        bar.append(fill);
+        you.append(el('div', 'rme', `${me.name}`), el('div', 'rme2', `${me.n}/${n} passed${me.rank ? ` · ${ordinal(me.rank)} place` : ''}`), bar,
+          el('p', 'note', me.done ? `All ${n} passed. Hall of Fame.` : me.n ? `Next: any drive you haven't passed since you entered. ${n - me.n} to go.` : 'Pass a historic drive with an A to get on the board. Drives passed before you entered don’t count, so play them again.'));
+      } else if (isPro()) {
+        const form = el('form', 'rjoin'), inp = el('input'), go = el('button', 'btn', 'Enter');
+        inp.placeholder = 'Your name on the board'; inp.maxLength = 24; inp.setAttribute('aria-label', 'Your name for the Gauntlet');
+        inp.value = myName() || ''; inp.autocomplete = 'nickname';
+        go.type = 'submit';
+        form.append(inp, go);
+        form.addEventListener('submit', async (ev) => {
+          ev.preventDefault();
+          const name = inp.value.trim();
+          if (!name) { inp.focus(); return; }
+          go.disabled = true;
+          try {
+            const d = await raceCall('/race/join', { code: proCode(), key: deviceKey(), name });
+            if (!d.ok) { toast(d.error || 'Could not enter'); go.disabled = false; return; }
+            RACE.view = d;
+            track('race_join');
+            toast(`You're in. Good luck, ${d.me.name}.`);
+            draw();
+          } catch (e) { toast('No connection to the board. Try again.'); go.disabled = false; }
+        });
+        you.append(el('div', 'rme', 'Enter the race'), form, el('p', 'note', 'Your name shows on the board for everyone. Only drives you pass after entering count, so enter before you play.'));
+      } else {
+        const a = el('a', 'btn', 'Get Pro to enter');
+        a.href = '#proBuy';
+        a.addEventListener('click', (ev) => { ev.preventDefault(); const t = document.querySelector('.arch .pro'); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+        you.append(el('div', 'rme', 'Want in?'), el('p', 'note', `Pro opens the ${n} historic drives and your entry. One code, one entry.`), a);
+      }
+      box.append(you);
+      // the board
+      const rows = v.rows.slice(0, RACE.full ? v.rows.length : 10);
+      if (rows.length) {
+        const ol = el('ol', 'rboard');
+        rows.forEach((x, i) => {
+          const li = el('li', `${me && x.name === me.name ? 'mine' : ''}${x.done ? ' done' : ''}`.trim());
+          const bar = el('span', 'rb'), fill = el('i');
+          fill.style.width = `${(100 * x.n) / n}%`;
+          bar.append(fill);
+          li.append(el('span', 'rr', String(i + 1)), el('span', 'rn', x.done ? `🏆 ${x.name}` : x.name), bar, el('span', 'rc', `${x.n}/${n}`));
+          ol.append(li);
+        });
+        box.append(ol);
+        if (v.rows.length > 10) {
+          const more = el('button', 'btn ghostbtn', RACE.full ? 'Top 10' : `Full board (${v.rows.length})`);
+          more.type = 'button';
+          more.addEventListener('click', () => { RACE.full = !RACE.full; draw(); });
+          box.append(more);
+        }
+      } else box.append(el('p', 'note', 'Nobody on the board yet. The first pass takes the lead.'));
+      const rules = el('details', 'rrules');
+      rules.append(el('summary', '', 'Rules'));
+      const ul = el('ul');
+      [`Open to Pro players: one entry per Pro code, under a name everyone can see (no slurs or obscenities: names like that are refused).`,
+        `Pass a historic drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play-callers. You have to win the game: a loss or a tie tops out at 89. The score is mostly the calls, partly the result, so an A takes the win and sharp calls. Each drive counts once, the first time you pass it after entering.`,
+        `The board ranks by drives passed, then by who got there first (the server's clock). The first to pass all ${n} wins ${racePrize()}.`,
+        'Every pass keeps the calls behind it. A winning run is checked call by call before the prize goes out; a run that doesn’t hold up is taken off the board.',
+        'One drive at a time: passes come in at most one every 30 seconds.'].forEach((t) => ul.append(el('li', '', t)));
+      rules.append(ul);
+      box.append(rules);
+    };
+    let shown = false;                     // the panel is built before it is on the page: the first fetch goes anyway
+    const tick = async () => {
+      if (box.isConnected) shown = true;
+      else if (shown) { clearInterval(RACE.timer); return; }
+      if (shown && (document.visibilityState !== 'visible' || $('arch').hidden)) return;
+      try { const d = await raceFetch(); if (d.rows) { RACE.view = d; draw(); } } catch (e) { /* the next tick */ }
+    };
+    draw();
+    clearInterval(RACE.timer);
+    RACE.timer = setInterval(() => { if (RACE.view && Date.now() < Date.parse(RACE.view.from)) draw(); }, 1000);
+    const poll = setInterval(() => { if (shown && !box.isConnected) clearInterval(poll); else tick(); }, RACE_POLL);
+    tick();
+    return box;
+  }
+  // a passed historic drive, for the Gauntlet (once you have entered): its calls go with it, for the check
+  async function racePass(p, decs, note) {
+    if (!isPro() || !BOARD.api || p * 100 < PASS_AT - 0.5) return;
+    const calls = decs.map((x) => ({ k: x.kind, f: x.family, c: x.chosen, s: x.snap, w: x.wps.map((o) => [o.key, Math.round(o.wp * 1e4) / 1e4]) }));
+    try {
+      const d = await raceCall('/race/pass', { code: proCode(), key: deviceKey(), drive: DRIVE, p: clip(p, 0, 1), decs: calls, tryAt: state.tryAt || null,
+        res: state.spots.map((x) => (x && x.result ? [x.result.mine, x.result.theirs] : null)) });
+      if (d.rows) RACE.view = d;
+      const n = d.n || 24;
+      if (d.ok && d.me) {
+        note.textContent = `${RACE_NAME}: ${d.me.n}/${n} passed${d.me.rank ? ` · ${ordinal(d.me.rank)} place` : ''}${d.me.done ? ' · all of them!' : ''}`;
+        note.hidden = false;
+        if (d.me.done) track('race_done');
+      } else if (d.status === 403 && /enter/.test(d.error || '')) {
+        note.textContent = '';
+        const a = el('a', '', `Enter ${RACE_NAME}`);
+        a.href = '#archive';
+        note.append(`This pass would count in the race. `, a, ' (then pass it again).');
+        note.hidden = false;
+      } else if (d.error) { note.textContent = `${RACE_NAME}: ${d.error}`; note.hidden = false; }
+    } catch (e) { note.textContent = `${RACE_NAME}: no connection, so this pass didn't reach the board. Pass it again to count it.`; note.hidden = false; }
+  }
+  // on the Daily and Survivor tabs, once it is on: a bar to the race
+  function raceBar() {
+    if (!PRO_ON || !BOARD.api || ARCH || ARCH_DAY || DRIVE || RUN_N || VS || document.querySelector('.racebar')) return;
+    const a = el('a', 'racebar');
+    a.href = '#archive';
+    a.append(el('b', '', `🏁 ${RACE_NAME}`), el('span', '', 'First to pass all 24 historic drives wins. Leaderboard →'));
+    a.addEventListener('click', () => track('race_bar'));
+    $('modeArch').closest('nav').after(a);
   }
   function proNodes() {
     const box = el('div', 'pro'), days = Math.max(0, dayOf(new Date()) - 1);
@@ -5306,6 +5513,7 @@
     const box = $('arch'), todayN = dayOf(now);
     box.textContent = '';
     box.append(el('h2', '', 'Pro'));
+    if (BOARD.api) box.append(racePanel());
     if (!isPro()) {
       box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''}, the historic drives and the playoff runs: play any of them, graded like the day it ran.`));
       if (PRO_LIVE === null && proCode()) {              // a code is kept here but the board could not confirm it
@@ -5326,7 +5534,7 @@
       ttl.append(el('span', 'k', 'Your rank'), el('b', '', rk.title), el('span', 'sub', rk.next ? `${rk.next.at - passed} more ${rk.next.at - passed === 1 ? 'pass' : 'passes'} to ${rk.next.title}` : 'Every drive passed. The Hall of Fame.'));
       const num = el('div', 'phn');
       num.append(el('b', '', `${passed}/${n}`), el('span', 'k', 'passed'));
-      head.append(ttl, num, driveStrip(ds), el('p', 'note', `Pass a drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play\u2011callers. Replay any drive as often as you like; your best grade counts.${played ? ` Played ${played} of ${n}.` : ''}`));
+      head.append(ttl, num, driveStrip(ds), el('p', 'note', `Pass a drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play\u2011callers, counting the calls and the result, and you have to win the game. Replay any drive as often as you like; your best grade counts.${played ? ` Played ${played} of ${n}.` : ''}`));
       box.append(head, el('h3', '', 'Historic drives'));
       const dl = el('div', 'days');
       pro.drives.forEach((d, k) => {
@@ -6001,6 +6209,7 @@
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
     $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
     $('modeArch').hidden = !PRO_ON;
+    raceBar();
     if (PRO_BUILT && !PRO_ON) {
       const at = () => { if (!PRO_ON && Date.now() >= PRO_AT) proLaunch(); };
       if (PRO_AT - Date.now() < 864e5) setTimeout(at, PRO_AT - Date.now() + 50);

@@ -39,6 +39,7 @@
 // A code is 12 letters and digits (no 0/O, 1/I/L) drawn at random: about 60 bits, posted at RATE_PER_MIN an IP.
 // Nothing about the buyer is kept here (Stripe has the receipt); only the session id behind each code.
 const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
+const RACE_PATHS = ['/race', '/race/me', '/race/join', '/race/pass'];
 const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook', '/pro/data', '/pro/reset'];
 const PRO_FILE_RE = /^(drives|runs|d\d{1,3}|r\d{1,3})\.json$/;
 const STRIPE_VERSION = '2026-08-26.dahlia', WEBHOOK_TOLERANCE = 300;   // the API version pinned; a signature older than this is refused
@@ -372,6 +373,7 @@ export async function handle(req, env, storage, hits) {
   const h = cors(req, env), url = new URL(req.url);
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: h });
   if (PRO_PATHS.includes(url.pathname)) return pro(req, env, storage, hits, h, url);
+  if (url.pathname === '/race' || url.pathname.startsWith('/race/')) return race(req, env, storage, hits, h, url);
   if (url.pathname === '/daily') return daily(req, env, storage, hits, h, url);
   if (url.pathname === '/days') return req.method === 'GET' ? days(storage, h) : json({ error: 'method' }, 405, h);
   if (url.pathname === '/madden') return req.method === 'GET' ? json({ odds: MADDEN_ODDS, finds: (await storage.get('madden:list')) || [] }, 200, h)
@@ -415,6 +417,104 @@ export async function handle(req, env, storage, hits) {
   return json({ rows: ranked(kept) }, 200, h);
 }
 
+// The Gauntlet (a contest for Pro players): pass every historic drive (an A: 90 or better) first. An entrant is a Pro
+// code (one entry a code, on a device the code is bound to) under a public name (the same rules as the boards: 1-24
+// characters, no slurs, one owner). Only passes made after entering and after the start (RACE_FROM) count; a drive
+// counts once, at its first pass. Each pass keeps its calls (the decisions behind the grade) so a winner's run can be
+// checked before a prize is given. The first entrant to RACE_N passes is the winner; the board goes on for the places.
+//   GET    /race                          -> { n, from, now, entrants, winner, rows: [{ name, n, at, done? }] }   the top RACE_TOP
+//   POST   /race/me   { code, key }       -> the board, and { me: { name, n, passes, rank } } (me null: not entered)
+//   POST   /race/join { code, key, name } -> the same, entered (409 a name taken or not allowed; one entry a code)
+//   POST   /race/pass { code, key, drive, p, decs, tryAt } -> the same, the drive counted (p: the score, 0.895 and up)
+//   DELETE /race?name=X (Authorization: Bearer <ADMIN_TOKEN>) -> an entrant off the board, for good (a run that fails
+//                                                                the check)
+const RACE_N = 24, RACE_TOP = 100, RACE_GAP = 30e3, RACE_DECS_MAX = 80, RACE_BYTES_MAX = 60000;
+const raceFrom = (env) => Date.parse(env.RACE_FROM || '2026-10-16T18:00:00Z');
+// the leaderboard: most drives passed, then whoever got there first
+const raceRows = (list) => Object.values(list).filter((x) => !x.out && !blocked(x.name))
+  .sort((a, b) => b.n - a.n || a.nAt - b.nAt || a.joined - b.joined);
+async function raceView(storage, env, id) {
+  const list = (await storage.get('race:list')) || {}, rows = raceRows(list);
+  const view = { n: RACE_N, from: new Date(raceFrom(env)).toISOString(), now: new Date().toISOString(), entrants: rows.length,
+    passes: rows.reduce((a, x) => a + x.n, 0), winner: ((w) => (w ? { name: w.name, at: w.at } : null))(await storage.get('race:winner')),
+    rows: rows.slice(0, RACE_TOP).map((x) => ({ name: x.name, n: x.n, at: x.n ? new Date(x.nAt).toISOString() : null, ...(x.done ? { done: new Date(x.done).toISOString() } : {}) })) };
+  if (id !== undefined) {
+    const e = id && await storage.get(`race:e:${id}`);
+    view.me = e && !e.out ? { name: e.name, n: e.n, passes: Object.keys(e.passes).map(Number).sort((a, b) => a - b),
+      rank: rows.findIndex((x) => x.id === id) + 1, done: e.done ? new Date(e.done).toISOString() : null } : null;
+  }
+  return view;
+}
+async function race(req, env, storage, hits, h, url) {
+  if (url.pathname === '/race' && req.method === 'GET') return json(await raceView(storage, env), 200, { ...h, 'Cache-Control': 'no-store' });
+  if (url.pathname === '/race' && req.method === 'DELETE') {
+    const auth = req.headers.get('Authorization') || '', want = env.ADMIN_TOKEN ? `Bearer ${env.ADMIN_TOKEN}` : '';
+    if (!want || !same(auth, want)) return json({ error: 'forbidden' }, 403, h);
+    const lower = clean(url.searchParams.get('name')).toLowerCase(), id = await storage.get(`race:name:${lower}`);
+    if (!id) return json({ error: 'no such entrant' }, 404, h);
+    const list = (await storage.get('race:list')) || {}, e = await storage.get(`race:e:${id}`);
+    if (list[id]) { list[id].out = true; await storage.put('race:list', list); }
+    if (e) await storage.put(`race:e:${id}`, { ...e, out: true });
+    const w = await storage.get('race:winner');
+    if (w && w.id === id) {                                  // the winner taken off: the next to finish, if any
+      const next = raceRows(list).find((x) => x.done);
+      await storage.put('race:winner', next ? { name: next.name, at: new Date(next.done).toISOString(), id: next.id } : null);
+    }
+    return json({ ok: true }, 200, h);
+  }
+  if (req.method !== 'POST' || !['/race/me', '/race/join', '/race/pass'].includes(url.pathname)) return json({ error: 'not found' }, 404, h);
+  if (limited(req, hits)) return json({ error: 'slow down' }, 429, h);
+  let body;
+  try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
+  const code = normCode(body && body.code);
+  if (!code) return json({ error: 'a Pro code is needed to enter' }, 403, h);
+  const st = await bindDevice(storage, code, String(body.key || ''));
+  if (st === 'key') return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
+  if (st === 'unknown') return json({ error: 'a valid Pro code is needed to enter' }, 403, h);
+  if (st === 'full') return json({ error: DEV_FULL }, 409, h);
+  const id = (await sha256(`race:${code}`)).slice(0, 24), now = Date.now();
+  if (url.pathname === '/race/me') return json(await raceView(storage, env, id), 200, h);
+  let e = await storage.get(`race:e:${id}`);
+  if (url.pathname === '/race/join') {
+    if (e && e.out) return json({ error: 'this code is out of the Gauntlet' }, 403, h);
+    if (e) return json(await raceView(storage, env, id), 200, h);              // entered already: the same entry
+    const name = clean(body.name);
+    if (!name) return json({ error: 'a name (1-24 characters) is needed' }, 400, h);
+    if (blocked(name)) return json({ error: 'That name is not allowed. Pick another.', refused: true }, 409, h);
+    const lower = name.toLowerCase();
+    if (await storage.get(`race:name:${lower}`)) return json({ error: 'That name is taken. Pick another.' }, 409, h);
+    e = { id, name, joined: now, passes: {}, n: 0, nAt: now };
+    await storage.put(`race:name:${lower}`, id);
+    await storage.put(`race:e:${id}`, e);
+    const list = (await storage.get('race:list')) || {};
+    list[id] = { id, name, n: 0, nAt: now, joined: now };
+    await storage.put('race:list', list);
+    return json(await raceView(storage, env, id), 200, h);
+  }
+  // a pass
+  if (!e || e.out) return json({ error: 'enter the Gauntlet first' }, 403, h);
+  const drive = Number(body.drive), p = Number(body.p), decs = body.decs;
+  if (!Number.isInteger(drive) || drive < 1 || drive > RACE_N) return json({ error: 'no such drive' }, 400, h);
+  if (!(p >= 0.895 && p <= 1)) return json({ error: 'not a pass (90 or better)' }, 400, h);
+  if (!Array.isArray(decs) || !decs.length || decs.length > RACE_DECS_MAX || JSON.stringify(decs).length > RACE_BYTES_MAX) return json({ error: 'the calls behind the grade are needed' }, 400, h);
+  if (now < raceFrom(env)) return json({ error: 'the Gauntlet has not started', ...(await raceView(storage, env, id)) }, 409, h);
+  if (e.passes[drive]) return json(await raceView(storage, env, id), 200, h);           // passed already: its first pass counts
+  if (now - (e.last || 0) < RACE_GAP) return json({ error: 'too fast: one drive at a time' }, 429, h);
+  // the mission: a pass takes winning the game
+  const won = Array.isArray(body.res) && Array.isArray(body.res[0]) && Number(body.res[0][0]) > Number(body.res[0][1]);
+  if (!won) return json({ error: 'a pass takes winning the game' }, 400, h);
+  const res = Array.isArray(body.res) ? body.res.slice(0, 4).map((r) => (Array.isArray(r) ? r.slice(0, 2).map(Number) : null)) : null;
+  await storage.put(`race:audit:${id}:${drive}`, { at: now, p, tryAt: Number(body.tryAt) || null, decs, res });
+  e.passes[drive] = now; e.n = Object.keys(e.passes).length; e.nAt = now; e.last = now;
+  if (e.n >= RACE_N && !e.done) e.done = now;
+  await storage.put(`race:e:${id}`, e);
+  const list = (await storage.get('race:list')) || {};
+  list[id] = { ...(list[id] || { id, name: e.name, joined: e.joined }), n: e.n, nAt: e.nAt, ...(e.done ? { done: e.done } : {}) };
+  await storage.put('race:list', list);
+  if (e.done && !(await storage.get('race:winner'))) await storage.put('race:winner', { name: e.name, at: new Date(e.done).toISOString(), id });
+  return json(await raceView(storage, env, id), 200, h);
+}
+
 // Versus (match.js): the room for a code, or the lobby for a quick match; only from the site's own pages
 async function versus(req, env, url) {
   const h = cors(req, env);
@@ -445,7 +545,7 @@ export default {
   fetch(req, env) {
     const url = new URL(req.url);
     if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me'].includes(url.pathname)) return versus(req, env, url);
-    if (req.method === 'OPTIONS' || ![...PRO_PATHS, '/board', '/daily', '/days', '/madden'].includes(url.pathname)) return handle(req, env, null, null);
+    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, '/board', '/daily', '/days', '/madden'].includes(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },
 };

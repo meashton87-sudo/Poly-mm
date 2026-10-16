@@ -1,6 +1,8 @@
 // Tests for the leaderboard Worker, its Durable Object run in memory:   node board/worker_test.mjs
 import assert from 'node:assert';
 import worker, { Board } from './worker.js';
+import { createHash } from 'node:crypto';
+const sha256hex = async (x) => createHash('sha256').update(x).digest('hex');
 
 const store = new Map();
 const storage = { get: async (k) => structuredClone(store.get(k)), put: async (k, v) => { store.set(k, structuredClone(v)); },
@@ -344,5 +346,59 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual((await data({ code, name: 'd0.json', key: KEY.eli })).status, 503, 'no assets deployed');
   globalThis.fetch = realFetch;
   for (const e of [env, board.env]) { delete e.STRIPE_SECRET; delete e.STRIPE_PRICE; delete e.SITE; }
+}
+// The Gauntlet: Pro codes enter under a name; passes after the start count, each drive once; the first to all 24 wins
+{
+  const codes = ['TMD-AAAA-BBBB-CCCC', 'TMD-DDDD-EEEE-FFFF', 'TMD-GGGG-HHHH-JJJJ'];
+  for (const c of codes) store.set(`pro:code:${c}`, { s: 'cs_test_x', at: '2026-10-16' });
+  const [ca, cb, cc] = codes, ka = 'race-device-key-00000000a', kb = 'race-device-key-00000000b', kc = 'race-device-key-00000000c';
+  const rc = (path, body, o = {}) => call(body ? 'POST' : 'GET', body, { path, ...o });
+  const decs = [{ kind: 'call', chosen: 'pass', wps: [{ key: 'run', wp: 0.4 }, { key: 'pass', wp: 0.5 }] }];
+  const WON = [[24, 21]];
+  env.RACE_FROM = board.env.RACE_FROM = new Date(Date.now() + 3600e3).toISOString();        // not started yet
+  let v = await (await rc('/race')).json();
+  assert.deepStrictEqual([v.n, v.entrants, v.rows, v.winner], [24, 0, [], null], 'an empty race');
+  assert.strictEqual((await rc('/race/join', { code: 'TMD-ZZZZ-ZZZZ-ZZZZ', key: ka, name: 'Eli' })).status, 403, 'no entry without a real Pro code');
+  assert.strictEqual((await rc('/race/join', { code: ca, key: ka, name: '' })).status, 400, 'a name is needed');
+  assert.strictEqual((await rc('/race/join', { code: ca, key: ka, name: 'fuck this' })).status, 409, 'no slurs or obscenities');
+  r = await rc('/race/join', { code: ca, key: ka, name: 'Eli Manning' });
+  v = await r.json();
+  assert.deepStrictEqual([r.status, v.me.name, v.me.n, v.entrants], [200, 'Eli Manning', 0, 1], 'entered');
+  assert.strictEqual((await rc('/race/join', { code: cb, key: kb, name: 'eli manning' })).status, 409, 'a name has one owner');
+  v = await (await rc('/race/join', { code: ca, key: ka, name: 'Someone Else' })).json();
+  assert.strictEqual(v.me.name, 'Eli Manning', 'one entry a code: entering again is the same entry');
+  assert.strictEqual((await rc('/race/pass', { code: ca, key: ka, drive: 3, p: 0.93, decs, res: WON })).status, 409, 'nothing counts before the start');
+  env.RACE_FROM = board.env.RACE_FROM = new Date(Date.now() - 1000).toISOString();          // started
+  assert.strictEqual((await rc('/race/pass', { code: ca, key: ka, drive: 3, p: 0.89, decs, res: WON })).status, 400, 'an 89 is not a pass');
+  assert.strictEqual((await rc('/race/pass', { code: ca, key: ka, drive: 3, p: 0.95, decs, res: [[17, 21]] })).status, 400, 'a pass takes winning the game');
+  assert.strictEqual((await rc('/race/pass', { code: ca, key: ka, drive: 25, p: 0.95, decs, res: WON })).status, 400, 'no drive 25');
+  assert.strictEqual((await rc('/race/pass', { code: ca, key: ka, drive: 3, p: 0.95, decs: [] })).status, 400, 'the calls behind it are kept');
+  assert.strictEqual((await rc('/race/pass', { code: cc, key: kc, drive: 3, p: 0.95, decs, res: WON })).status, 403, 'enter first');
+  v = await (await rc('/race/pass', { code: ca, key: ka, drive: 3, p: 0.935, decs, tryAt: 5, res: WON })).json();
+  assert.deepStrictEqual([v.me.n, v.me.passes, v.me.rank], [1, [3], 1], 'a pass counted');
+  assert.deepStrictEqual(store.get(`race:audit:${(await sha256hex('race:' + ca)).slice(0, 24)}:3`).decs, decs, 'its calls kept for the check');
+  assert.strictEqual((await rc('/race/pass', { code: ca, key: ka, drive: 4, p: 0.95, decs, res: WON })).status, 429, 'one drive at a time');
+  v = await (await rc('/race/pass', { code: ca, key: ka, drive: 3, p: 0.99, decs, res: WON })).json();
+  assert.strictEqual(v.me.n, 1, 'a drive counts once');
+  // the race: B enters and finishes all 24 (the gap between passes stepped over by hand), A has one
+  await rc('/race/join', { code: cb, key: kb, name: 'Tom' });
+  const idb = (await sha256hex('race:' + cb)).slice(0, 24);
+  for (let d = 1; d <= 24; d++) {
+    const e = store.get(`race:e:${idb}`); e.last = 0; store.set(`race:e:${idb}`, e);
+    r = await rc('/race/pass', { code: cb, key: kb, drive: d, p: 0.91, decs, res: WON });
+    assert.strictEqual(r.status, 200, `Tom passes drive ${d}`);
+  }
+  v = await r.json();
+  assert.deepStrictEqual([v.me.n, v.me.rank, !!v.me.done, v.winner.name], [24, 1, true, 'Tom'], 'the first to 24 wins');
+  assert.deepStrictEqual(v.rows.map((x) => [x.name, x.n]), [['Tom', 24], ['Eli Manning', 1]], 'the board: passes, then who got there first');
+  assert.ok(!JSON.stringify(v.rows).includes(idb) && !('id' in v.winner), 'no ids on the board');
+  v = await (await rc('/race/me', { code: cc, key: kc })).json();
+  assert.strictEqual(v.me, null, 'a code not entered');
+  // the check finds Tom's run wrong: off the board for good, and the winner goes to the next finisher (none)
+  assert.strictEqual((await call('DELETE', undefined, { path: '/race?name=tom' })).status, 403, 'admin only');
+  assert.strictEqual((await call('DELETE', undefined, { path: '/race?name=tom', auth: 'Bearer commish-secret-123' })).status, 200);
+  v = await (await rc('/race')).json();
+  assert.deepStrictEqual([v.rows.map((x) => x.name), v.winner, v.entrants], [['Eli Manning'], null, 1], 'out, the winner with him');
+  assert.strictEqual((await rc('/race/join', { code: cb, key: kb, name: 'Tom Again' })).status, 403, 'and out for good');
 }
 console.log('board worker ok');

@@ -66,3 +66,7 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   calls that fit the spot (game.js PRESET). After changing any of it, run web/defense_calibration.js (every rush level,
   coverage, box and defensive-back count against the real plays, within a few standard errors; try a few seeds) and
   board/vs_balance_test.mjs.
+- The Gauntlet (board/worker.js /race*, game.js racePanel): the contest on the historic drives. A Pro code enters once under
+  a public name (blocked() names refused); a drive counts the first time it is passed (an A, 90+, and the game won) after entering and after
+  RACE_FROM (2 pm Eastern, Oct 16 2026 by default); each pass keeps its calls (race:audit) for the check before a prize.
+  The first to pass all RACE_N (24) wins. `DELETE /race?id=` with the admin token takes a run off the board.
