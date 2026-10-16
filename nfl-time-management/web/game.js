@@ -5295,7 +5295,7 @@
       try {
         const r = await fetch(`${BOARD.api}/auth/me`, POST_JSON({ session: authSession() }));
         if (r.ok) {
-          ACCT.me = await r.json();
+          ACCT.me = acctOf(await r.json());
           if (ACCT.me.pro) { PRO_LIVE = true; if (RACE.refresh) RACE.refresh(); return; }
         } else if (r.status === 401 || r.status === 503) authLost();
         else if (!proCode()) { PRO_LIVE = null; return; }
@@ -5336,14 +5336,20 @@
     } catch (e) { toast('The purchase could not be confirmed: ' + e.message); }
   }
   // signed in (Google, or an emailed link): keep the session; on to the Pro tab, where it shows
+  // signed in (Google, or an emailed link): keep the session and show who in the top bar. An account without a username
+  // picks one first. On the Pro tab the page reloads after, so the tab shows the account's Pro.
+  const acctOf = (d) => ({ email: d.email, name: d.name || '', pro: !!d.pro, ...(d.code ? { code: d.code } : {}) });
   function authSignedIn(d) {
     save(SESS_KEY, d.session);
-    ACCT.me = { email: d.email, pro: !!d.pro, ...(d.code ? { code: d.code } : {}) };
+    ACCT.me = acctOf(d);
     if (d.pro) PRO_LIVE = true;
     track('login');
-    toast(`Signed in as ${d.email}`);
-    if (!PRO_ON) return;
-    if (location.hash === '#archive') location.reload(); else location.hash = '#archive';     // (a new hash reloads the page)
+    acctBar();
+    const then = () => { if (ARCH) location.reload(); };
+    if (!ACCT.me.name) { nameSheet(true, then); return; }
+    closeModal();
+    toast(`Signed in as ${ACCT.me.name}`);
+    then();
   }
   async function authGoogle(credential) {
     try { authSignedIn(await proApi('/auth/google', { credential })); } catch (e) { toast('Google sign-in did not work: ' + e.message); }
@@ -5359,10 +5365,10 @@
     try {
       const d = await proApi('/auth/email/verify', { token: tok });
       save(SESS_KEY, d.session);
-      ACCT.me = { email: d.email, pro: !!d.pro, ...(d.code ? { code: d.code } : {}) };
+      ACCT.me = acctOf(d);
+      ACCT.fresh = true;                        // (acctInit asks for a username once the page is up)
       track('login');
-      if (PRO_ON && !ARCH) { tidy('#archive'); location.reload(); return; }     // on to the Pro tab, where it shows
-      toast(`Signed in as ${d.email}`);
+      if (ACCT.me.name) toast(`Signed in as ${ACCT.me.name}`);
     } catch (e) { toast(e.message || 'That sign-in link did not work'); }
   }
   async function authSignOut() {
@@ -5387,22 +5393,66 @@
     }
     return gisLoad;
   }
+  // which ways to sign in the board has set up (GET /auth, once a page load); null: no board, or it could not be asked
+  let cfgAsk = null;
+  function authCfg() {
+    if (ACCT.cfg) return Promise.resolve(ACCT.cfg);
+    if (!cfgAsk) {
+      cfgAsk = (async () => {
+        await BOARD.ready;
+        if (!BOARD.api) return null;
+        try { const r = await fetch(`${BOARD.api}/auth`, { cache: 'no-store' }); ACCT.cfg = r.ok ? await r.json() : { google: false, email: false }; } catch (e) { cfgAsk = null; return null; }
+        return ACCT.cfg;
+      })();
+    }
+    return cfgAsk;
+  }
+  const authWays = () => ({ google: !!(ACCT.cfg && ACCT.cfg.google && GOOGLE_ID), email: !!(ACCT.cfg && ACCT.cfg.email) });
+  // the ways in, as nodes: Google's own button (it signs you up the first time, in after), and an emailed link
+  function signInWays() {
+    const { google, email } = authWays(), nodes = [];
+    if (google) {
+      const g = el('div', 'gbtn');
+      nodes.push(g);
+      loadGis().then(() => {
+        window.google.accounts.id.initialize({ client_id: GOOGLE_ID, callback: (resp) => authGoogle(resp && resp.credential), ux_mode: 'popup', auto_select: false, cancel_on_tap_outside: true });
+        window.google.accounts.id.renderButton(g, { type: 'standard', theme: 'outline', size: 'large', text: 'continue_with', shape: 'pill', logo_alignment: 'left', width: Math.min(320, Math.max(220, g.clientWidth || 300)) });
+      }).catch(() => { g.replaceWith(el('p', 'note', email ? 'Google sign-in did not load. Reload to try again, or use email.' : 'Google sign-in did not load. Reload to try again.')); });
+    }
+    if (google && email) nodes.push(el('div', 'or', 'or'));
+    if (email) {
+      const form = el('form', 'row'), inp = el('input'), go = el('button', 'btn', 'Email me a link');
+      inp.type = 'email'; inp.placeholder = 'you@example.com'; inp.autocomplete = 'email'; inp.required = true; inp.setAttribute('aria-label', 'Your email');
+      go.type = 'submit';
+      form.append(inp, go);
+      form.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const addr = inp.value.trim();
+        if (!addr) { inp.focus(); return; }
+        go.disabled = true;
+        try {
+          await proApi('/auth/email', { email: addr });
+          track('login_email');
+          form.replaceWith(el('p', 'sent', `Check your inbox: a sign-in link is on its way to ${addr}. It works once, for 15 minutes.`));
+        } catch (e) { toast(e.message); go.disabled = false; }
+      });
+      nodes.push(form);
+    }
+    return nodes;
+  }
   // the Sign in card on the Pro tab: signed in (who, Sign out, and Pro on this device's code to add to the account),
   // or the ways to sign in the board has set up (none: no card)
   function authNodes() {
     const box = el('div', 'acct');
     box.hidden = true;
     (async () => {
-      if (!BOARD.api) return;
-      if (!ACCT.cfg) {
-        try { const r = await fetch(`${BOARD.api}/auth`, { cache: 'no-store' }); ACCT.cfg = r.ok ? await r.json() : { google: false, email: false }; } catch (e) { return; }
-      }
-      const google = !!(ACCT.cfg.google && GOOGLE_ID), email = !!ACCT.cfg.email;
+      if (!(await authCfg())) return;
+      const { google, email } = authWays();
       if (ACCT.me && authSession()) {
         const row = el('div', 'arow'), out = el('button', 'btn ghostbtn', 'Sign out');
         out.type = 'button';
         out.addEventListener('click', authSignOut);
-        row.append(el('span', 'who', `Signed in as ${ACCT.me.email}`), out);
+        row.append(el('span', 'who', `Signed in as ${ACCT.me.name || ACCT.me.email}`), out);
         box.append(el('div', 'k', 'Your account'), row);
         if (ACCT.me.pro) box.append(el('p', 'note', 'Pro is on your account: sign in on any device to play it there.'));
         else if (proCode() && isPro()) {
@@ -5412,7 +5462,7 @@
             add.disabled = true;
             try {
               const d = await proApi('/auth/link', { session: authSession(), code: proCode(), key: deviceKey() });
-              ACCT.me = d;
+              ACCT.me = acctOf(d);
               track('pro_linked');
               toast('Pro is on your account now');
               location.reload();
@@ -5425,36 +5475,116 @@
       }
       if (!google && !email) return;
       box.append(el('div', 'k', 'Sign in'), el('p', 'note', isPro() ? 'Keep your Pro on an account: sign in and add it, and it works on any device you sign in on, no code needed.'
-        : 'Signed in, a purchase stays with your account: it works on any device you sign in on, no code to keep.'));
-      if (google) {
-        const g = el('div', 'gbtn');
-        box.append(g);
-        loadGis().then(() => {
-          window.google.accounts.id.initialize({ client_id: GOOGLE_ID, callback: (resp) => authGoogle(resp && resp.credential), ux_mode: 'popup', auto_select: false, cancel_on_tap_outside: true });
-          window.google.accounts.id.renderButton(g, { type: 'standard', theme: 'outline', size: 'large', text: 'continue_with', shape: 'pill', logo_alignment: 'left' });
-        }).catch(() => { g.replaceWith(el('p', 'note', 'Google sign-in did not load. Reload to try again, or use email.')); });
-      }
-      if (email) {
-        const form = el('form', 'row'), inp = el('input'), go = el('button', 'btn', 'Email me a sign-in link');
-        inp.type = 'email'; inp.placeholder = 'you@example.com'; inp.autocomplete = 'email'; inp.required = true; inp.setAttribute('aria-label', 'Your email');
-        go.type = 'submit';
-        form.append(inp, go);
-        form.addEventListener('submit', async (ev) => {
-          ev.preventDefault();
-          const addr = inp.value.trim();
-          if (!addr) { inp.focus(); return; }
-          go.disabled = true;
-          try {
-            await proApi('/auth/email', { email: addr });
-            track('login_email');
-            form.replaceWith(el('p', 'sent', `Check your inbox: a sign-in link is on its way to ${addr}. It works once, for 15 minutes.`));
-          } catch (e) { toast(e.message); go.disabled = false; }
-        });
-        box.append(form);
-      }
+        : 'Signed in, a purchase stays with your account: it works on any device you sign in on, no code to keep.'), ...signInWays());
       box.hidden = false;
     })();
     return box;
+  }
+  // ---- the account button, top right: Log in (a sheet with the ways in), then your username. Hidden when the board
+  // has no way to sign in set up.
+  const PERSON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c1.2-3.8 4.1-5.6 7.5-5.6s6.3 1.8 7.5 5.6"/></svg>';
+  const signedIn = () => !!(ACCT.me && authSession());
+  function acctBar() {
+    const b = $('acctBtn');
+    if (!b) return;
+    b.textContent = '';
+    b.classList.remove('on', 'noname');
+    if (signedIn()) {
+      const nm = ACCT.me.name;
+      b.classList.add('on');
+      if (!nm) b.classList.add('noname');
+      b.append(el('span', 'av', (nm || ACCT.me.email || '?').slice(0, 1)), el('span', 'nm', nm || 'Pick a username'));
+      b.setAttribute('aria-label', nm ? `Your account: ${nm}` : 'Your account: pick a username');
+      b.hidden = false;
+      return;
+    }
+    const { google, email } = authWays();
+    b.hidden = !(google || email);
+    b.innerHTML = PERSON;
+    b.append(el('span', 'nm', 'Log in'));
+    b.setAttribute('aria-label', 'Log in or sign up');
+  }
+  function openAccount() {
+    if (!signedIn()) { signInSheet(); return; }
+    if (!ACCT.me.name) nameSheet(false);
+    else acctSheet();
+  }
+  function signInSheet() {
+    const box = el('div', 'acctsheet'), perks = el('ul', 'perks');
+    ['Your username at the top of every page', 'Pro on any phone or computer you sign in on, no code to keep',
+      'New here? The same button makes your account'].forEach((t) => perks.append(el('li', '', t)));
+    box.append(perks, ...signInWays(), el('p', 'note', 'We only keep your email address to know it is you. No posts, no spam.'));
+    openModal('Log in or sign up', [box]);
+  }
+  // pick (first: just signed up) or change the username: 3-20 characters, one account each, shown at the top
+  function nameSheet(first, then) {
+    const box = el('div', 'acctsheet'), form = el('form'), inp = el('input'), go = el('button', 'btn', 'Save'), err = el('p', 'err');
+    err.hidden = true;
+    inp.maxLength = 20; inp.minLength = 3; inp.autocomplete = 'nickname'; inp.spellcheck = false; inp.required = true;
+    inp.placeholder = 'Your username'; inp.setAttribute('aria-label', 'Your username');
+    inp.value = (ACCT.me && ACCT.me.name) || (first ? String(myName() || '').slice(0, 20) : '');
+    go.type = 'submit';
+    form.append(inp, go);
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const name = inp.value.replace(/\s+/g, ' ').trim();
+      if (name.length < 3) { err.textContent = 'At least 3 characters.'; err.hidden = false; inp.focus(); return; }
+      go.disabled = true; err.hidden = true;
+      try {
+        const d = await proApi('/auth/name', { session: authSession(), name });
+        ACCT.me = acctOf(d);
+        track(first ? 'username_set' : 'username_changed');
+        acctBar();
+        onModalClose = null;
+        closeModal();
+        toast(first ? `Welcome, ${ACCT.me.name}` : `You're ${ACCT.me.name} now`);
+        if (then) then();
+      } catch (e) {
+        if (/signed out/i.test(e.message)) { authLost(); acctBar(); closeModal(); return; }
+        err.textContent = e.message; err.hidden = false; go.disabled = false; inp.focus();
+      }
+    });
+    box.append(el('p', '', first ? 'You’re signed in. Pick the name people see:' : 'Your new username:'), form, err,
+      el('p', 'note', '3 to 20 letters or digits; spaces, _ - . and ’ are fine inside. One account each.'));
+    openModal(first ? 'Pick a username' : 'Change username', [box]);
+    onModalClose = then || null;
+    setTimeout(() => { inp.focus(); inp.select(); }, 30);
+  }
+  function acctSheet() {
+    const m = ACCT.me, box = el('div', 'acctsheet'), who = el('div', 'who'), txt = el('div');
+    txt.append(el('b', '', m.name), el('span', 'em', m.email));
+    who.append(el('span', 'av', m.name.slice(0, 1)), txt);
+    box.append(who);
+    if (m.pro) box.append(el('p', 'note', 'Pro is on your account: sign in on any device to play it there.'));
+    else if (PRO_ON) {
+      const a = el('a', '', 'Get Pro');
+      a.href = '#archive';
+      const p = el('p', 'note', 'No Pro on this account yet. ');
+      p.append(a, ' and it stays with the account.');
+      box.append(p);
+    }
+    const acts = el('div', 'acts'), ch = el('button', 'btn ghostbtn', 'Change username'), out = el('button', 'btn ghostbtn', 'Sign out');
+    ch.type = 'button'; out.type = 'button';
+    ch.addEventListener('click', () => nameSheet(false));
+    out.addEventListener('click', authSignOut);
+    acts.append(ch, out);
+    box.append(acts);
+    openModal('Your account', [box]);
+  }
+  // the top bar, once the page is up: the ways in (for Log in), who is signed in (asked when Pro did not ask already)
+  async function acctInit() {
+    $('acctBtn').addEventListener('click', openAccount);
+    if (!(await authCfg())) return;
+    if (authSession() && !ACCT.me) {
+      try {
+        const r = await fetch(`${BOARD.api}/auth/me`, POST_JSON({ session: authSession() }));
+        if (r.ok) ACCT.me = acctOf(await r.json());
+        else if (r.status === 401 || r.status === 503) authLost();
+      } catch (e) { /* offline: Log in shows; the session is kept */ }
+    }
+    acctBar();
+    if (ACCT.fresh && signedIn() && !ACCT.me.name && $('modal').hidden) nameSheet(true);
+    ACCT.fresh = false;
   }
   // ---- The Gauntlet: the contest across the historic drives (board/worker.js /race). Pass all of them (an A each)
   // first and win. A Pro code enters under a public name; only passes made after entering count, each drive once; the
@@ -5533,7 +5663,7 @@
       } else if (isPro()) {
         const form = el('form', 'rjoin'), inp = el('input'), go = el('button', 'btn', 'Enter');
         inp.placeholder = 'Your name on the board'; inp.maxLength = 24; inp.setAttribute('aria-label', 'Your name for the Gauntlet');
-        inp.value = myName() || ''; inp.autocomplete = 'nickname';
+        inp.value = (signedIn() && ACCT.me.name) || myName() || ''; inp.autocomplete = 'nickname';
         go.type = 'submit';
         form.append(inp, go);
         form.addEventListener('submit', async (ev) => {
@@ -6529,6 +6659,7 @@
       await authLoginFromUrl();
       await proClaimFromUrl();
       await proVerify();
+      acctInit();
       if (VS_LOBBY) { renderVsLobby(); return; }
       if (VS) {
         await BOARD.ready;

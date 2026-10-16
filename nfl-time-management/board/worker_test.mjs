@@ -493,7 +493,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual(certFetches, 1, 'Google\'s keys are cached (an unknown kid asks again at most once a minute)');
   assert.strictEqual((await au('/auth/google', { credential: await idToken({ iss: 'accounts.google.com' }) })).status, 200, 'the bare issuer too');
   // me, never another's; a bad session is signed out
-  assert.deepStrictEqual(await (await au('/auth/me', { session: g.session })).json(), { email: 'eli@example.com', pro: false });
+  assert.deepStrictEqual(await (await au('/auth/me', { session: g.session })).json(), { email: 'eli@example.com', name: '', pro: false });
   assert.strictEqual((await au('/auth/me', { session: 'f'.repeat(64) })).status, 401);
   assert.strictEqual((await au('/auth/me', { session: 'short' })).status, 401);
   // email links: off without Resend, then one use, 15 minutes, the same answer for anyone
@@ -538,12 +538,26 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual((await au('/auth/link', { session: g.session, code: 'TMD-AAAA-AAAA-AAAA', key: dk })).status, 404, 'a code never issued');
   assert.strictEqual((await au('/auth/link', { session: 'f'.repeat(64), code, key: dk })).status, 401, 'signed out');
   r = await au('/auth/link', { session: g.session, code: code.toLowerCase(), key: dk });
-  assert.deepStrictEqual([r.status, await r.json()], [200, { email: 'eli@example.com', pro: true, code }], 'linked');
+  assert.deepStrictEqual([r.status, await r.json()], [200, { email: 'eli@example.com', name: '', pro: true, code }], 'linked');
   assert.strictEqual(store.get(`pro:code:${code}`).acct, 'g:1100220033');
   r = await au('/auth/link', { session: e1.session, code, key: 'acct-device-key-00000002' });
   assert.deepStrictEqual([r.status, (await r.json()).error], [409, 'This Pro code belongs to another account.'], 'one account a code');
   assert.strictEqual((await au('/auth/link', { session: g.session, code, key: dk })).status, 200, 'linking again: the same');
-  assert.deepStrictEqual(await (await au('/auth/me', { session: e1.session })).json(), { email: 'pat@example.com', pro: false }, 'never another account\'s Pro');
+  assert.deepStrictEqual(await (await au('/auth/me', { session: e1.session })).json(), { email: 'pat@example.com', name: '', pro: false }, 'never another account\'s Pro');
+  // a username: shown in the top bar; checked, one account each (any case), changed freely, the old one let go
+  for (const bad of ['', 'ab', 'x'.repeat(21), ' -lead', 'trail-', 'no<tags>', 'emoji\u{1F3C8}', 'FuckFace']) {
+    assert.ok([400, 409].includes((await au('/auth/name', { session: g.session, name: bad })).status), `username ${JSON.stringify(bad)}`);
+  }
+  assert.strictEqual((await au('/auth/name', { session: 'f'.repeat(64), name: 'Gridiron Eli' })).status, 401, 'signed out');
+  r = await au('/auth/name', { session: g.session, name: '  Gridiron   Eli ' });
+  assert.deepStrictEqual([r.status, await r.json()], [200, { email: 'eli@example.com', name: 'Gridiron Eli', pro: true, code }], 'set, spaces tidied');
+  assert.strictEqual((await (await au('/auth/me', { session: g.session })).json()).name, 'Gridiron Eli', 'kept');
+  r = await au('/auth/name', { session: e1.session, name: 'gridiron eli' });
+  assert.deepStrictEqual([r.status, (await r.json()).taken], [409, true], 'one account a username, any case');
+  assert.strictEqual((await au('/auth/name', { session: g.session, name: 'GRIDIRON ELI' })).status, 200, 'his own, in new case');
+  assert.strictEqual((await au('/auth/name', { session: g.session, name: "O'Neil_2.0" })).status, 200, 'changed');
+  assert.ok(!store.has('auth:name:gridiron eli') && store.get("auth:name:o'neil_2.0") === 'g:1100220033', 'the old one let go');
+  assert.strictEqual((await au('/auth/name', { session: e1.session, name: 'Gridiron Eli' })).status, 200, 'and free for another');
   // Pro by session: /restore and /pro/data, no device limit; the code itself keeps its limit
   for (const k of ['acct-device-key-00000003', 'acct-device-key-00000004']) assert.strictEqual((await au('/restore', { code, key: k })).status, 200);
   assert.strictEqual((await au('/restore', { code, key: 'acct-device-key-00000005' })).status, 409, 'the code: 3 devices, as ever');
@@ -577,7 +591,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual((await au('/pay', { session: 'f'.repeat(64) })).status, 401, 'a session gone: not bought blind');
   const bought = (await (await au('/claim', { s: 'cs_test_buyemail000001', key: 'acct-device-key-00000009' })).json()).code;
   assert.match(bought, /^TMD-/);
-  assert.deepStrictEqual(await (await au('/auth/me', { session: e1.session })).json(), { email: 'pat@example.com', pro: true, code: bought }, 'the purchase is the account\'s');
+  assert.deepStrictEqual(await (await au('/auth/me', { session: e1.session })).json(), { email: 'pat@example.com', name: 'Gridiron Eli', pro: true, code: bought }, 'the purchase is the account\'s');
   assert.strictEqual(store.get(`pro:code:${bought}`).acct, 'e:pat@example.com');
   const plainBuy = (await (await au('/claim', { s: 'cs_test_buyplain00001' })).json()).code;
   assert.ok(!store.get(`pro:code:${plainBuy}`).acct, 'a purchase not signed in: a plain code');
@@ -591,7 +605,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   const mac = Buffer.from(await crypto.subtle.sign('HMAC', hk, new TextEncoder().encode(`${t}.${body}`))).toString('hex');
   r = await worker.fetch(new Request('https://w.example/stripe-webhook', { method: 'POST', body, headers: { 'Stripe-Signature': `t=${t},v1=${mac}` } }), env);
   assert.strictEqual(r.status, 200);
-  assert.deepStrictEqual(await (await au('/auth/me', { session: gs.session })).json(), { email: 'new@example.com', pro: true, code: store.get('pro:sess:cs_test_hookacct000001') }, 'the webhook attaches it too');
+  assert.deepStrictEqual(await (await au('/auth/me', { session: gs.session })).json(), { email: 'new@example.com', name: '', pro: true, code: store.get('pro:sess:cs_test_hookacct000001') }, 'the webhook attaches it too');
   // sign out; an old session expires
   assert.strictEqual((await au('/auth/logout', { session: gs.session })).status, 200);
   assert.strictEqual((await au('/auth/me', { session: gs.session })).status, 401, 'signed out');

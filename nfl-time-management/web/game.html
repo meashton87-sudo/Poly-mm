@@ -45,9 +45,53 @@ button { font: inherit; color: inherit; }
 button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline: 3px solid var(--los); outline-offset: 2px; }
 
 .top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--paper); border-bottom: 1px solid var(--line); }
-.top .in { max-width: 520px; margin: 0 auto; padding: 6px 16px; display: grid; grid-template-columns: 40px 1fr 40px; align-items: center; }
-.top h1 { margin: 0; text-align: center; font: 900 28px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
+.top .in { max-width: 520px; margin: 0 auto; padding: 6px 16px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.top .tl { display: flex; }
+.top .tr { display: flex; justify-content: flex-end; min-width: 0; }
+/* the account: Log in, then your username (the initial in a badge) */
+.acctbtn { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 180px; height: 36px; padding: 0 13px 0 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font: 700 13.5px/1 var(--body); white-space: nowrap; cursor: pointer; }
+.acctbtn:hover { border-color: var(--muted); }
+.acctbtn:focus-visible { outline: 2px solid var(--sq-g); outline-offset: 2px; }
+.acctbtn svg { flex: none; width: 17px; height: 17px; }
+.acctbtn.on { padding: 0 12px 0 4px; }
+.acctbtn .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.acctbtn.noname .nm { color: var(--muted); font-weight: 600; }
+.av { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--sq-g); color: var(--sq-ink); font: 900 15px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
+.acctsheet { display: grid; gap: 12px; }
+.acctsheet p { margin: 0; }
+.acctsheet .note { font-size: 13px; color: var(--muted); }
+.acctsheet .perks { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 14px; }
+.acctsheet .perks li { display: flex; gap: 8px; align-items: baseline; }
+.acctsheet .perks li::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--sq-g); transform: translateY(-1px); }
+.acctsheet .gbtn { min-height: 44px; display: flex; justify-content: center; }
+.acctsheet .or, .acct .or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; }
+.acctsheet .or::before, .acctsheet .or::after, .acct .or::before, .acct .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.acctsheet form { display: flex; gap: 8px; flex-wrap: wrap; }
+.acctsheet input { flex: 1 1 180px; min-width: 0; font: 600 16px var(--body); padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); }
+.acctsheet form .btn { width: auto; flex: 0 0 auto; }
+.acctsheet .err { font-size: 13px; }
+.acctsheet .who { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.acctsheet .who .av { width: 48px; height: 48px; font-size: 24px; }
+.acctsheet .who b { display: block; font: 900 24px/1.1 var(--display); letter-spacing: .02em; overflow-wrap: anywhere; }
+.acctsheet .who .em { display: block; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.acctsheet .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.acctsheet .acts .btn { width: auto; flex: 1 1 auto; }
+.top h1 { margin: 0; min-width: 0; text-align: center; white-space: nowrap; font: 900 28px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
 .top h1 small { display: block; font: 600 10.5px/1.3 var(--body); letter-spacing: .14em; color: var(--muted); margin-top: 2px; }
+/* phones: the title shrinks with the screen so Log in (or your username) fits beside it; the narrowest show only the badge */
+@media (max-width: 440px) {
+  .top .in { padding: 6px 10px; gap: 4px; }
+  .top .icon { width: 32px; }
+  .top h1 { font-size: clamp(18px, calc((100vw - 220px) / 7.6), 26px); }
+  .top h1 small { font-size: 9.5px; letter-spacing: .1em; }
+  .acctbtn { max-width: 124px; height: 34px; font-size: 13px; padding: 0 11px 0 9px; }
+  .acctbtn.on { padding: 0 10px 0 3px; }
+  .acctbtn .av { width: 27px; height: 27px; }
+}
+@media (max-width: 359px) {
+  .acctbtn .nm { display: none; }
+  .acctbtn, .acctbtn.on { width: 34px; padding: 0; justify-content: center; }
+}
 .icon { width: 40px; height: 40px; border: 0; background: none; border-radius: 8px; display: grid; place-items: center; cursor: pointer; color: var(--ink); }
 .icon:hover { background: var(--key); }
 .icon svg { width: 24px; height: 24px; }
@@ -394,7 +438,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .ghost:hover { border-color: var(--muted); }
 /* playing on a phone: a slimmer header and mode switch, so the field and the calls fill the screen */
 @media (max-width: 999px) { @supports selector(:has(*)) {
-  body:has(#play:not([hidden])) .top h1 { font-size: 21px; }
+  body:has(#play:not([hidden])) .top h1 { font-size: min(21px, max(18px, calc((100vw - 220px) / 7.6))); }
   body:has(#play:not([hidden])) .top h1 small { font-size: 9.5px; margin-top: 1px; }
   body:has(#play:not([hidden])) .top .in { padding-block: 3px; }
   .wrap:has(> #play:not([hidden])) { padding-top: 6px; gap: 6px 10px; flex-flow: row wrap; justify-content: center; align-items: center; }
@@ -663,13 +707,16 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
 
 <header class="top">
   <div class="in">
+    <div class="tl">
     <button id="helpBtn" class="icon" type="button" aria-label="How to play">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M9.3 9.2a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4.1"/><circle cx="12" cy="17.6" r=".6" fill="currentColor"/></svg>
     </button>
-    <h1>Two-Minute Drill<small id="dayLabel">Daily play-calling</small></h1>
     <button id="statsBtn" class="icon" type="button" aria-label="Your stats">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 20V12M10 20V5M15 20v-9M20 20v-5"/></svg>
     </button>
+    </div>
+    <h1>Two-Minute Drill<small id="dayLabel">Daily play-calling</small></h1>
+    <div class="tr"><button id="acctBtn" class="acctbtn" type="button" hidden></button></div>
   </div>
 </header>
 
