@@ -19,7 +19,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: nfl-time-management/board
@@ -35,8 +35,8 @@ jobs:
 
       # The regular deploy lives in site.yml (the worker ships with the Pro data as its assets). Run this workflow by
       # hand (workflow_dispatch) to deploy the worker's code right away, on its own. A deploy replaces the worker's
-      # whole asset set, so the manual run builds the Pro data first (about five minutes) and refuses to deploy
-      # without it: the drives and runs never vanish from the worker.
+      # whole asset set, so the manual run builds the Pro data and the Versus engine data first (about ten minutes) and
+      # refuses to deploy without them: the drives, the runs and Versus never vanish from the worker.
       - uses: actions/setup-python@v5
         if: github.event_name == 'workflow_dispatch'
         with:
@@ -62,6 +62,9 @@ jobs:
         run: |
           python -m nflclock.cli build
           python -c "from nflclock import pro; print(pro.build())"
+          python -c "from nflclock import webexport as w; w.export_engine()"
+          python -c "from nflclock import dailygame as G; print(G.build())"
+          python scripts/site.py _site_test
       - name: Deploy now (manual run only)
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -72,5 +75,7 @@ jobs:
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "no Cloudflare token: skipped"; exit 0; fi
           rm -rf assets/pro && mkdir -p assets/pro && cp ../web/pro/*.json assets/pro/
           ls assets/pro/drives.json assets/pro/runs.json assets/pro/d0.json assets/pro/r0.json      # no Pro data, no deploy
+          rm -rf assets/vs && mkdir -p assets/vs && cp ../_site_test/engine_data.pack ../_site_test/playbook.pack ../web/teams.json assets/vs/
+          node lazy_sim_test.mjs && node vs_pairs_test.mjs && node vs_stress.mjs 400 "$GITHUB_RUN_NUMBER" 24      # Versus: no engine data, no deploy
           if [ -n "$SITE_DOMAIN" ]; then sed -i "s#^ALLOWED_ORIGINS = .*#ALLOWED_ORIGINS = \"https://$SITE_DOMAIN,https://www.$SITE_DOMAIN,https://nfl2mindrill.pages.dev,https://nfl2mindrill-pro-preview.pages.dev\"#" wrangler.toml; fi
           npx --yes wrangler@4.144.0 deploy

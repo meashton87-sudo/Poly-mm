@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 
 WEB = Path(__file__).resolve().parents[1] / "web"
-FILES = ["game.js", "motion.js", "engine.js", "game_worker.js", "game.json", "playbook.json", "engine_data.json",
+FILES = ["game.js", "motion.js", "engine.js", "game_worker.js", "vs_core.js", "game.json", "playbook.json", "engine_data.json",
          "og.png", "icon.svg", "icon-180.png", "icon-48.png", "icon-192.png", "icon-512.png", "midlogo.png", "favicon.ico"]      # the link preview card (og_card.html, drawn at 1200x630) and the icons
 # the same skeleton the claude.ai artifact host wraps the page in: charset, a viewport that reaches the phone's
 # edges, the safe-area padding and a small reset
@@ -254,7 +254,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     extra += ('<script type="application/ld+json">' + json.dumps({"@context": "https://schema.org", "@type": "WebSite",
               "name": "Two-Minute Drill", "url": site_url.rstrip("/") + "/", "description": desc}) + "</script>")
     page = (WEB / "game.html").read_text()
-    for js in ("motion.js", "game.js"):
+    for js in ("motion.js", "vs_core.js", "game.js"):     # vs_core.js: college overtime's rules (Versus, a college game)
         page = page.replace(f'<script src="{js}"></script>', f'<script src="{js}?v={stamp}"></script>')
     (out / "index.html").write_text(HEAD.format(extra=extra + AD_CSS) + page.replace("<!--SITE-FOOT-->", foot_ads() + FOOT) + "</body></html>\n")
     # the stats page (/stats): its own document; the same analytics tag and backend address

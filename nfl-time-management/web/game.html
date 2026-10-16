@@ -90,6 +90,8 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .arch .vsladder .board .n { font-variant-numeric: tabular-nums; color: var(--muted); }
 .endcard .vsrating { font: 800 15px var(--body); margin: 4px 0; }
 .endcard .vsrating:empty { display: none; }
+.endcard > .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.endcard > .row .btn { flex: 1 1 140px; text-align: center; }
 #vsAgain.ask { outline: 3px solid #e0a526; outline-offset: 2px; }
 .result .vscalls { font-size: 13px; color: var(--muted); margin: 6px 0; }
 .arch .day.fresh { border: 2px solid #e0a526; background-image: linear-gradient(100deg, rgba(224,165,38,.16), rgba(224,165,38,0) 60%); }
@@ -607,4 +609,5 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
 <div id="toast" class="toast" hidden></div>
 
 <script src="motion.js"></script>
+<script src="vs_core.js"></script>
 <script src="game.js"></script>

@@ -2,7 +2,7 @@
   "root": true,
   "env": { "browser": true, "worker": true, "es2022": true, "node": true },
   "parserOptions": { "ecmaVersion": 2022, "sourceType": "script" },
-  "globals": { "NFLClockEngine": "readonly", "Motion": "readonly", "gtag": "readonly" },
+  "globals": { "NFLClockEngine": "readonly", "Motion": "readonly", "gtag": "readonly", "VSCore": "readonly" },
   "rules": {
     "no-undef": "error",
     "no-use-before-define": ["error", { "functions": false, "classes": false, "variables": false }],
