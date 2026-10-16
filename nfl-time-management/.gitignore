@@ -19,6 +19,7 @@ _site/
 board/node_modules/
 board/.wrangler/
 _site_test/
+_site_*/
 browser_test_out/
 board/assets/pro/*.json
 board/assets/vs/
