@@ -4626,10 +4626,10 @@
   // The score from day RESULT_FROM on (and every historic drive and playoff run): the calls AND the result. Each
   // simulated play-caller makes his calls as above and then plays his games out: he wins each with the win chance his
   // calls leave (the spot's best start less what they gave up). You and he are scored alike: RESULT_W for each game
-  // won (half for a tie), less the win chance the calls gave up. A win with the league's calls is about 75-80; a 90
-  // takes the win and calls better than most of the play-callers who also won; a loss with the right calls still
-  // beats the play-callers who lost with worse ones, and in a long shot (a Hail Mary spot) that is most of them.
-  const RESULT_W = 0.1, RESULT_FROM = 6;
+  // won (half for a tie), less the win chance the calls gave up. Mostly the calls: a win is worth about as much as
+  // three middling calls, so the league's calls score about 50 lost and 65-75 won; a 90 takes sharp calls (a loss
+  // with near-perfect ones still gets there in a long shot) and poor calls stay poor, won or lost.
+  const RESULT_W = 0.03, RESULT_FROM = 6;
   const resultScored = () => !!(DRIVE || RUN_N || dayN >= RESULT_FROM);
   function spotGroups() {
     const out = [];
@@ -5369,7 +5369,7 @@
       rules.append(el('summary', '', 'Rules'));
       const ul = el('ul');
       [`Open to Pro players: one entry per Pro code, under a name everyone can see (no slurs or obscenities: names like that are refused).`,
-        `Pass a historic drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play-callers. The score counts the calls and the result: a win with so-so calls is a B, an A takes the win and sharp calls (or a long shot lost with near-perfect ones). Each drive counts once, the first time you pass it after entering.`,
+        `Pass a historic drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play-callers. The score is mostly the calls, partly the result: a win lifts the same calls by about 15-20 points, and an A takes sharp calls. Each drive counts once, the first time you pass it after entering.`,
         `The board ranks by drives passed, then by who got there first (the server's clock). The first to pass all ${n} wins ${racePrize()}.`,
         'Every pass keeps the calls behind it. A winning run is checked call by call before the prize goes out; a run that doesn’t hold up is taken off the board.',
         'One drive at a time: passes come in at most one every 30 seconds.'].forEach((t) => ul.append(el('li', '', t)));
@@ -5417,7 +5417,7 @@
     if (!PRO_ON || !BOARD.api || ARCH || ARCH_DAY || DRIVE || RUN_N || VS || document.querySelector('.racebar')) return;
     const a = el('a', 'racebar');
     a.href = '#archive';
-    a.append(el('b', '', `🏁 ${RACE_NAME} is live`), el('span', '', 'Pass all 24 historic drives first and win. Leaderboard →'));
+    a.append(el('b', '', `🏁 ${RACE_NAME}`), el('span', '', 'First to pass all 24 historic drives wins. Leaderboard →'));
     a.addEventListener('click', () => track('race_bar'));
     $('modeArch').closest('nav').after(a);
   }
