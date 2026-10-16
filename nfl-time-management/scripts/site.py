@@ -111,7 +111,12 @@ STORAGE_SHIM = ("<script>(function(){function M(){var d={};return{getItem:functi
                 "c=c?c+'; '+p:p},configurable:true})}catch(e2){}}})();</script>")
 
 
+NO_ADS = False          # --no-ads: no ad anywhere (no unit, no AdSense, no ads.txt), whatever web/ads holds
+
+
 def slot_code(slot: str) -> str:
+    if NO_ADS:
+        return ""
     f = ADS / f"{slot}.html"
     return f.read_text() if f.exists() and f.read_text().strip() else ""
 
@@ -218,9 +223,13 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
 
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
-          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, pro_at: str | None = None,
+          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, pro_at: str | None = None, no_ads: bool = False,
           fulldef: bool = False) -> Path:
+    global NO_ADS
+    NO_ADS = no_ads
     adsense, ad_slot = (adsense or "").strip() or None, (ad_slot or "").strip() or None     # "" (an unset variable): off
+    if no_ads:
+        adsense = ad_slot = None
     if adsense and not re.fullmatch(r"ca-pub-\d{16}", adsense):
         raise SystemExit(f"--adsense wants a publisher id like ca-pub-1234567890123456, not {adsense!r}")
     if ad_slot and not re.fullmatch(r"\d{6,12}", ad_slot):
@@ -290,7 +299,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         + "".join(f"  <url><loc>{base}/{p}</loc><lastmod>{day}</lastmod><changefreq>{'daily' if p in ('', 'stats') else 'monthly'}</changefreq>"
                   f"<priority>{pr}</priority></url>\n" for p, _, pr in PAGES) + "</urlset>\n")
     # ads.txt: who may sell this site's ad space (Google's line, with our id, then any other network's lines)
-    extra = (WEB / "ads" / "ads.txt").read_text().strip() if (WEB / "ads" / "ads.txt").exists() else ""
+    extra = (WEB / "ads" / "ads.txt").read_text().strip() if (WEB / "ads" / "ads.txt").exists() and not no_ads else ""
     lines = ([f"google.com, {adsense.replace('ca-', '', 1)}, DIRECT, f08c47fec0942fa0"] if adsense else []) + ([extra] if extra else [])
     if lines:
         (out / "ads.txt").write_text("\n".join(lines) + "\n")
@@ -329,12 +338,13 @@ if __name__ == "__main__":
     ap.add_argument("--site-url", help="the site's address for link previews (default https://<domain>, else nfl2mindrill.com)")
     ap.add_argument("--adsense", help="Google AdSense publisher id (ca-pub-...); empty: no ads")
     ap.add_argument("--ad-slot", help="an AdSense display ad unit's slot id, shown between games; empty: AdSense's own placement only")
+    ap.add_argument("--no-ads", action="store_true", help="no ads anywhere on the site (overrides --adsense and web/ads)")
     ap.add_argument("--pro-at", help="with --pro: the Pro tab stays hidden until this time (ISO 8601, e.g. 2026-10-16T18:00:00Z)")
     ap.add_argument("--vs", action="store_true", help="turn on Versus (two players live); off until approved")
     ap.add_argument("--fulldef", action="store_true", help="the full defensive call (personnel, front, coverage, rush) in every mode; off until approved")
     ap.add_argument("--pro", action="store_true", help="turn on the Pro tab (the archive, the historic drives, the purchase); off until approved")
     a = ap.parse_args()
-    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, vs=a.vs, fulldef=a.fulldef)
+    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, vs=a.vs, fulldef=a.fulldef, no_ads=a.no_ads)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6
     print(f"site in {o}: {n} files, {size:.1f} MB")

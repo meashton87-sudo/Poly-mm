@@ -4899,9 +4899,10 @@
   }
   // An ad unit (Google AdSense, the website only: site.py --adsense --ad-slot), only on screens between games, never
   // while a drive is on, labeled as an ad. Nothing without both metas (claude.ai, local copies, the test builds).
-  // survivor: one extra life a run, for a short ad break (only where the site has ads to show)
+  // survivor: one extra life a run, for a short ad break (only where the site has ads to show). Off for now: no ads
+  const LIFE_ON = false;
   function lifeOffer() {
-    if (!state.out || state.life || !adCodes().length) return [];
+    if (!LIFE_ON || !state.out || state.life || !adCodes().length) return [];
     const life = el('button', 'btn gold', '❤️ Extra life: watch a 15-second ad');
     life.type = 'button';
     life.addEventListener('click', () => adBreak(() => {
@@ -5293,6 +5294,9 @@
   const raceFetch = () => (isPro() ? raceCall('/race/me', { code: proCode(), key: deviceKey() }) : raceCall('/race'));
   const hms = (ms) => { const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60;
     return `${h ? `${h}:` : ''}${String(m).padStart(h ? 2 : 1, '0')}:${String(x).padStart(2, '0')}`; };
+  // the board's clock (a phone's own can be minutes off): the countdown and the Live chip go by it
+  const raceSkew = (d) => { const t = Date.parse(d && d.now); if (Number.isFinite(t)) RACE.skew = t - Date.now(); };
+  const raceNow = () => Date.now() + (RACE.skew || 0);
   // the contest's panel: what it is, live status, your entry (or how to enter), the board, the rules
   function racePanel() {
     const box = el('div', 'race');
@@ -5301,8 +5305,8 @@
       const v = RACE.view, me = v && v.me, n = (v && v.n) || (PRO ? PRO.drives.length : 24);
       box.textContent = '';
       const head = el('div', 'rhead');
-      const live = v && Date.now() >= Date.parse(v.from);
-      const chip = el('span', `rchip${v && v.winner ? ' won' : live ? ' live' : ''}`, v && v.winner ? 'Won' : live ? 'Live' : v ? `Starts in ${hms(Date.parse(v.from) - Date.now())}` : '…');
+      const live = v && raceNow() >= Date.parse(v.from);
+      const chip = el('span', `rchip${v && v.winner ? ' won' : live ? ' live' : ''}`, v && v.winner ? 'Won' : live ? 'Live' : v ? `Starts in ${hms(Date.parse(v.from) - raceNow())}` : '…');
       head.append(el('span', 'rk', 'The contest'), chip);
       box.append(head, el('h3', 'rtitle', RACE_NAME),
         el('p', 'rlead', `${n} historic drives. Pass every one, an A (${PASS_AT} or better) on each. The first to do it wins ${racePrize()}.`));
@@ -5385,21 +5389,30 @@
       if (box.isConnected) shown = true;
       else if (shown) { clearInterval(RACE.timer); return; }
       if (shown && (document.visibilityState !== 'visible' || $('arch').hidden)) return;
-      try { const d = await raceFetch(); if (d.rows) { RACE.view = d; draw(); } } catch (e) { /* the next tick */ }
+      try { const d = await raceFetch(); if (d.rows) { RACE.view = d; raceSkew(d); draw(); } } catch (e) { /* the next tick */ }
     };
     draw();
     clearInterval(RACE.timer);
-    RACE.timer = setInterval(() => { if (RACE.view && Date.now() < Date.parse(RACE.view.from)) draw(); }, 1000);
+    RACE.timer = setInterval(() => { if (RACE.view && raceNow() < Date.parse(RACE.view.from) + 1500) draw(); }, 1000);
     const poll = setInterval(() => { if (shown && !box.isConnected) clearInterval(poll); else tick(); }, RACE_POLL);
     tick();
     return box;
+  }
+  // a new try of a historic drive: the board's token for it (only an entrant gets one, and only once the Gauntlet has
+  // started), so only a try started in the Gauntlet can count; a reloaded try keeps its own
+  async function raceStart() {
+    if (!PRO_ON || !BOARD.api || !proCode()) return;
+    try {
+      const d = await raceCall('/race/start', { code: proCode(), key: deviceKey(), drive: DRIVE });
+      if (d.ok && d.tok && state && !state.done) { state.raceTok = d.tok; saveState(); }
+    } catch (e) { /* no connection: this try cannot count */ }
   }
   // a passed historic drive, for the Gauntlet (once you have entered): its calls go with it, for the check
   async function racePass(p, decs, note) {
     if (!isPro() || !BOARD.api || p * 100 < PASS_AT - 0.5) return;
     const calls = decs.map((x) => ({ k: x.kind, f: x.family, c: x.chosen, s: x.snap, w: x.wps.map((o) => [o.key, Math.round(o.wp * 1e4) / 1e4]) }));
     try {
-      const d = await raceCall('/race/pass', { code: proCode(), key: deviceKey(), drive: DRIVE, p: clip(p, 0, 1), decs: calls, tryAt: state.tryAt || null,
+      const d = await raceCall('/race/pass', { code: proCode(), key: deviceKey(), drive: DRIVE, p: clip(p, 0, 1), decs: calls, tryAt: state.tryAt || null, tok: state.raceTok || null,
         res: state.spots.map((x) => (x && x.result ? [x.result.mine, x.result.theirs] : null)) });
       if (d.rows) RACE.view = d;
       const n = d.n || 24;
@@ -6284,7 +6297,9 @@
         $('dayLabel').textContent = `No. ${dayN} · ${dayDate(dayN).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${ARCH_DAY ? ' · archive' : ''}`;
       }
     } catch (e) { $('boot').textContent = 'Today\'s spots did not load (' + e.message + '). Check your connection and reload.'; return; }
+    const fresh = !load(stateKey(), null);
     state = load(stateKey(), null) || { spots: [], current: 0, done: false, tryAt: Date.now() };     // tryAt: this try (a drive's record)
+    if (fresh && DRIVE) raceStart();      // a new try of a historic drive: the Gauntlet's token for it
     if (!load(`${STORE}:seen`, false)) { openHelp(true); save(`${STORE}:seen`, true); }
     drawTiles();
     startWorkers();
