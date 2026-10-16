@@ -7,7 +7,7 @@ Pro is on (`PRO_ON: "on"` in `.github/workflows/site.yml`; `"off"` turns the tab
 1. Finish activating the account at stripe.com (identity, address, bank account for payouts): the dashboard's **Activate payments** button. Stripe can take a day to verify, so do this first.
 2. In **live mode** (not the sandbox): Developers → API keys → **Create restricted key**: name it `two-minute-drill-board`, give it **Checkout Sessions: Write** only. Copy it (`rk_live_…`). A restricted key is all the worker needs; never use the full secret key, and never put any key in chat, email or code.
 3. Live mode: Developers → Webhooks (event destinations) → Add endpoint: `https://two-minute-drill-board.meashton87.workers.dev/stripe-webhook`. Events: `checkout.session.completed` and `checkout.session.async_payment_succeeded`. Copy the signing secret (`whsec_…`).
-4. No product is needed in the catalog: the worker describes "Two-Minute Drill Pro, $4.99" in each Checkout call. (A live price or product id in `STRIPE_PRICE` is used instead when set.)
+4. The product: **Two-Minute Drill Pro** in the live catalog, with a **product category** (its tax code: Video Games, downloaded, `txcd_10201001`). Stripe's Managed Payments, on by default, refuses a Checkout line without a tax code. Its id goes in `STRIPE_PRICE` (wrangler.toml); the worker charges $4.99 against it. With `STRIPE_PRICE` empty the worker describes the product itself, with the same tax code.
 5. Settings → Payment methods: leave the defaults. Cards, Apple Pay, Google Pay and Link are on for Checkout; nothing to register for Apple Pay on a Stripe-hosted page.
 
 ## 2. Cloudflare (the same person)

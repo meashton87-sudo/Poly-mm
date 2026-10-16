@@ -176,8 +176,10 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
 {
   const realFetch = globalThis.fetch;
   const stripeCalls = [];
+  let refuse = null;              // set to a message: Stripe refuses to create a session with it
   globalThis.fetch = async (u, init) => {
     stripeCalls.push([u, init]);
+    if (u === 'https://api.stripe.com/v1/checkout/sessions' && refuse) return new Response(JSON.stringify({ error: { type: 'invalid_request_error', message: refuse } }), { status: 400 });
     if (u === 'https://api.stripe.com/v1/checkout/sessions') return new Response(JSON.stringify({ id: 'cs_test_new1234567890', url: 'https://checkout.stripe.com/c/pay/cs_test_new1234567890' }), { status: 200 });
     if (u.endsWith('/checkout/sessions/cs_test_paid1234567890')) return new Response(JSON.stringify({ id: 'cs_test_paid1234567890', payment_status: 'paid' }), { status: 200 });
     if (u.endsWith('/checkout/sessions/cs_test_open1234567890')) return new Response(JSON.stringify({ id: 'cs_test_open1234567890', payment_status: 'unpaid' }), { status: 200 });
@@ -217,6 +219,12 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual((await pro('POST', '/pay')).status, 200, 'a live key pays from the site');
   assert.strictEqual((await pro('POST', '/pay', undefined, { origin: 'https://nfl2mindrill-pro-preview.pages.dev' })).status, 200, 'and from the preview');
   for (const e of [env, board.env]) { e.STRIPE_SECRET = 'rk_live_x'; e.ALLOWED_ORIGINS = 'https://nfl2mindrill.com'; }
+  // Stripe's refusal reaches the buyer's screen with its reason
+  refuse = 'Your account cannot currently make live charges.';
+  r = await pro('POST', '/pay');
+  assert.strictEqual(r.status, 502);
+  assert.strictEqual((await r.json()).error, 'stripe refused the session: Your account cannot currently make live charges.');
+  refuse = null;
   // a product id instead of a price id: the product, charged $4.99
   for (const e of [env, board.env]) e.STRIPE_PRICE = 'prod_abc123';
   await pro('POST', '/pay');
@@ -231,6 +239,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   await pro('POST', '/pay');
   const fn = new URLSearchParams(stripeCalls[stripeCalls.length - 1][1].body);
   assert.strictEqual(fn.get('line_items[0][price_data][product_data][name]'), 'Two-Minute Drill Pro');
+  assert.strictEqual(fn.get('line_items[0][price_data][product_data][tax_code]'), 'txcd_10201001', 'a tax code: Managed Payments needs one');
   assert.strictEqual(fn.get('line_items[0][price_data][unit_amount]'), '499');
   assert.strictEqual(fn.get('line_items[0][price_data][product]'), null);
   assert.strictEqual(fn.get('line_items[0][price]'), null);
