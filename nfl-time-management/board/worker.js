@@ -433,7 +433,7 @@ export async function handle(req, env, storage, hits) {
 //   DELETE /race?name=X (Authorization: Bearer <ADMIN_TOKEN>) -> an entrant off the board, for good (a run that fails
 //                                                                the check)
 const RACE_N = 24, RACE_TOP = 100, RACE_GAP = 30e3, RACE_DECS_MAX = 80, RACE_BYTES_MAX = 60000, RACE_MIN_TRY = 20e3;
-const raceFrom = (env) => Date.parse(env.RACE_FROM || '2026-10-16T18:00:00Z');
+const raceFrom = (env) => Date.parse(env.RACE_FROM || '2026-10-16T20:00:00Z');
 // the leaderboard: most drives passed, then whoever got there first
 const raceRows = (list) => Object.values(list).filter((x) => !x.out && !blocked(x.name))
   .sort((a, b) => b.n - a.n || a.nAt - b.nAt || a.joined - b.joined);
@@ -514,7 +514,7 @@ async function race(req, env, storage, hits, h, url) {
   if (now < raceFrom(env)) return json({ error: 'the Gauntlet has not started', ...(await raceView(storage, env, id)) }, 409, h);
   // the try was started in the Gauntlet (after the start, after entering, this drive) and took a real drive's time
   const tr = await storage.get(`race:try:${id}:${drive}`);
-  if (!tr || typeof body.tok !== 'string' || !same(body.tok, tr.tok)) return json({ error: 'this try started before you were in the Gauntlet (or before 2 PM ET): play the drive again to count it', notry: true }, 409, h);
+  if (!tr || typeof body.tok !== 'string' || !same(body.tok, tr.tok)) return json({ error: 'this try started before you were in the Gauntlet (or before the Gauntlet started): play the drive again to count it', notry: true }, 409, h);
   if (now - tr.at < RACE_MIN_TRY) return json({ error: 'too fast for a real drive' }, 429, h);
   if (e.passes[drive]) return json(await raceView(storage, env, id), 200, h);           // passed already: its first pass counts
   if (now - (e.last || 0) < RACE_GAP) return json({ error: 'too fast: one drive at a time' }, 429, h);
