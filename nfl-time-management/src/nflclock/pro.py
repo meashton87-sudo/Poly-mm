@@ -62,7 +62,8 @@ def _live_team(hist, games: pd.DataFrame, pbp: pd.DataFrame, team: str, season: 
         raise RuntimeError(f"no {season} game for {team} yet")
     seen: dict = {}                       # (unit, pos) -> {name: games}
     last = None
-    for gid, g in played.iterrows():
+    for _, g in played.iterrows():
+        gid = g["game_id"]
         snaps = pbp[(pbp["game_id"] == gid) & (pbp["posteam"] == team)]
         if not len(snaps):
             continue
@@ -87,8 +88,15 @@ def _live_team(hist, games: pd.DataFrame, pbp: pd.DataFrame, team: str, season: 
                     T["lineup"][unit][i] = pool[want][1]
                     continue
             if x["name"] in gone:
-                pool = sorted(((n, v) for n, v in seen.get((unit, x["pos"]), {}).items() if n not in gone and n not in names),
-                              key=lambda kv: -kv[1][0])
+                near = {"S": ["CB"], "CB": ["S"], "LB": ["EDGE", "S"], "EDGE": ["DL", "LB"], "DL": ["EDGE"], "RB": ["FB"],
+                        "WR": ["TE"], "TE": ["WR", "FB"]}.get(x["pos"], [])
+                pool = []
+                for pos in [x["pos"]] + near:              # the same position first, then the nearest one
+                    pool = sorted(((n, v) for n, v in seen.get((unit, pos), {}).items() if n not in gone and n not in names),
+                                  key=lambda kv: -kv[1][0])
+                    if pool:
+                        pool = [(n, (c, {**v, "pos": x["pos"]})) for n, (c, v) in pool]
+                        break
                 if not pool:
                     raise RuntimeError(f"no stand-in for {x['name']} ({team} {x['pos']})")
                 T["lineup"][unit][i] = pool[0][1][1]
@@ -149,7 +157,7 @@ def build(bundle=None, lib=None) -> dict:
         hist = HI.History(bundle, lib, seasons=(season,), pbp=pbp)
         ids = sorted(want)
         season_spots = [DG.spot_record(cand.loc[i], games.loc[i.split("#")[0]], receive2h) for i in ids]
-        teams = DG.team_chunks(hist, season_spots, games, chunk=10 ** 6)[0]
+        teams = DG.team_chunks(hist, season_spots, games, chunk=10 ** 6)[0] if season_spots else {}
         for k, i in enumerate(ids):
             spots[i] = (season_spots[k], teams[str(k)])
         for d in live:
