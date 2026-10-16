@@ -17,8 +17,9 @@
 // one within a day of the server's.
 // Players are identified by name (a game among friends): trimmed, control characters dropped, 1-24 characters,
 // matched case-insensitively. The first post under a name claims it for that device's key (a random string the page
-// keeps; only its SHA-256 is stored), so nobody else can overwrite your score. Scores are not checked against the
-// runs that made them. Posts are limited per IP (RATE_PER_MIN a minute). The page may be served from another host,
+// keeps; only its SHA-256 is stored), so nobody else can overwrite your score. Signed in ({ session } with the post:
+// Accounts below), the account's own username is the account's: claimed for it whatever device posts (a username is
+// one account's), so a new phone plays under it. Scores are not checked against the runs that made them. Posts are limited per IP (RATE_PER_MIN a minute). The page may be served from another host,
 // so responses carry CORS headers for ALLOWED_ORIGINS (comma-separated; "*" = any).
 // Pro (a one-time purchase on Stripe Checkout: Apple Pay, Google Pay, Link and cards on Stripe's own page; needs the
 // secret STRIPE_SECRET (a restricted key: Checkout Sessions read and write) and the vars STRIPE_PRICE (a one-time
@@ -49,7 +50,7 @@ const PRO_PRICE = '$4.99', PRO_CENTS = 499, PRO_TAX_CODE = 'txcd_10201001',    /
   PRO_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', SESSION_RE = /^cs_(test|live)_[A-Za-z0-9]{10,200}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-const clean = (name) => String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
+const clean = (name, n = 24) => String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, n);
 const KEY_RE = /^[A-Za-z0-9_-]{16,128}$/;
 const DEV_MAX = 3, DEV_DAYS = 30;        // a Pro code works on this many devices at once; a device unseen this long frees its place
 // Names are shown publicly (the stats page, the survivor board): slurs and obscenities are refused, spelled any way
@@ -170,24 +171,26 @@ async function daily(req, env, storage, hits, h, url) {
   if (!spots || spots.length < 1 || spots.length > 3 || !spots.every((w) => typeof w === 'number' && w >= -1 && w <= 1)) return json({ error: 'spots (1-3, each -1 to 1) wanted' }, 400, h);
   if (!KEY_RE.test(devKey)) return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
   const kh = await sha256(devKey);                 // before the reads: from here to the writes is storage only
+  const ak = name ? await acctNameKey(storage, env, body.session, name.toLowerCase()) : null, nk = ak || kh;    // who owns the name: the account (its username), else this device
   const mine = `dk:${date}:${kh}`;
   const day = (await storage.get(`day:${date}`)) || emptyDay();
   const prev = await storage.get(mine);
   let taken = false, unclaimed = false;
   if (name && !(prev && prev.name)) {
-    const owner = await ownerOf(storage, name.toLowerCase());
-    taken = !!(owner && owner !== kh);
+    let owner = await ownerOf(storage, name.toLowerCase());
+    if (ak && owner !== ak) { await claim(storage, name.toLowerCase(), ak); owner = ak; }
+    taken = !!(owner && owner !== nk);
     unclaimed = !owner;
   }
   if (prev) {           // the day's first result stands; a name given afterwards puts that result on the list
     if (name && !prev.name && !taken) {
       prev.name = name;
-      day.top.push({ name, p: prev.p, kh });
+      day.top.push({ name, p: prev.p, kh: nk });
       day.top.sort((a, b) => b.p - a.p);
       day.top = day.top.slice(0, DAY_TOP);
       await storage.put(mine, prev);
       await storage.put(`day:${date}`, day);
-      if (unclaimed) await claim(storage, name.toLowerCase(), kh);
+      if (unclaimed) await claim(storage, name.toLowerCase(), nk);
     }
     return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots }, ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}),
       ...(prev.madden ? { madden: prev.madden } : {}) }, 200, h);
@@ -197,7 +200,7 @@ async function daily(req, env, storage, hits, h, url) {
   day.hist[pt] += 1;
   spots.forEach((w, i) => { const x = day.spots[i]; x.n += 1; x.sum += w; x.hist[Math.max(0, Math.min(100, Math.round(w * 100) + 50))] += 1; });
   if (name && !taken) {
-    day.top.push({ name, p, kh });
+    day.top.push({ name, p, kh: nk });
     day.top.sort((a, b) => b.p - a.p);
     day.top = day.top.slice(0, DAY_TOP);
   }
@@ -210,7 +213,7 @@ async function daily(req, env, storage, hits, h, url) {
   }
   await storage.put(mine, { ...you, ...(name && !taken ? { name } : {}), ...(madden ? { madden } : {}) });
   await storage.put(`day:${date}`, day);
-  if (unclaimed && name) await claim(storage, name.toLowerCase(), kh);
+  if (unclaimed && name) await claim(storage, name.toLowerCase(), nk);
   return json({ ...dayView(day), counted: true, you, ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}), ...(madden ? { madden } : {}) }, 200, h);
 }
 
@@ -310,13 +313,22 @@ async function signedByStripe(req, body, secret) {
 //   POST /auth/logout  { session }      -> { ok }
 //   POST /auth/link    { session, code, key } -> { email, pro, code }   a valid Pro code (on this device: the device
 //                                          limit applies) joins the account; a code belongs to one account only
+//   POST /auth/stats   { session, stats? } -> { stats: { days, drives, runs } }   the page's record (its stats days, the
+//                                          historic drives, the playoff runs) merged into the account's, the best of
+//                                          each kept (statsMerge), and the merged record back; without stats, a read
+//   POST /auth/remind  { session, on }  -> the account, { remind }   the daily email (Resend; off: 503 without it)
+//   POST /auth/unsub?r=&t=  (or { r, t }) -> { ok }               the email's unsubscribe link (one click, no sign-in):
+//                                          r the account's opaque reference, t its HMAC (mailSecret); a mail app's
+//                                          one-click (RFC 8058, List-Unsubscribe-Post) lands here too
+// The account (acctView) also carries its leagues ([{ code, name, n }], when in any) and remind (when on).
 // Sessions are 32 random bytes (hex) the page keeps; only their SHA-256 is stored (auth:sess:<hash> -> { acct, at }),
 // for SESS_DAYS. An account is acct:<id> -> { email, code?, at }; its code's row carries acct. /pay with a session
 // sends an opaque reference to the account to Stripe (client_reference_id, acctRef: never the address), and the code
 // minted for that purchase joins the account. /restore,
 // /pro/data and /race/* take { session } in place of { code, key }: the account's code, without the device limit (the
 // account is its own protection; the code is the same, so the Gauntlet entry is the same).
-const AUTH_PATHS = ['/auth', '/auth/google', '/auth/email', '/auth/email/verify', '/auth/me', '/auth/logout', '/auth/link', '/auth/name'];
+const AUTH_PATHS = ['/auth', '/auth/google', '/auth/email', '/auth/email/verify', '/auth/me', '/auth/logout', '/auth/link', '/auth/name',
+  '/auth/stats', '/auth/remind', '/auth/unsub'];
 const UNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9 _.'-]{1,18})[A-Za-z0-9.]$/;
 // a session lasts SESS_DAYS; a link LOGIN_MS; an address is at most 198 characters (e:<address> fits Stripe's
 // 200-character client_reference_id)
@@ -375,6 +387,13 @@ async function sessionAcct(storage, env, session) {
   if (Date.now() - s.at > SESS_DAYS * 864e5) { await storage.delete(k); return null; }
   return s.acct;
 }
+// the claim key of a name that is the signed-in account's own username, else null: one key an account (never a
+// device's), so the account's posts own the name on any phone
+async function acctNameKey(storage, env, session, lower) {
+  if (!session) return null;
+  const acct = await sessionAcct(storage, env, session), a = acct && await storage.get(`acct:${acct}`);
+  return a && a.name && a.name.toLowerCase() === lower ? sha256(`acct:${acct}`) : null;
+}
 async function newSession(storage, acct, email) {
   const a = (await storage.get(`acct:${acct}`)) || { at: new Date().toISOString() };
   if (a.email !== email) { a.email = email; await storage.put(`acct:${acct}`, a); }
@@ -385,8 +404,8 @@ async function newSession(storage, acct, email) {
 // what the page is told about its own account (never anyone else's)
 async function acctView(storage, acct) {
   const a = (await storage.get(`acct:${acct}`)) || {};
-  const pro = !!(a.code && await storage.get(`pro:code:${a.code}`));
-  return { email: a.email || '', name: a.name || '', pro, ...(pro ? { code: a.code } : {}) };
+  const pro = !!(a.code && await storage.get(`pro:code:${a.code}`)), leagues = await leaguesOf(storage, a), rm = await storage.get(`rmd:${acct}`);
+  return { email: a.email || '', name: a.name || '', pro, ...(pro ? { code: a.code } : {}), ...(leagues.length ? { leagues } : {}), ...(rm && rm.on ? { remind: true } : {}) };
 }
 // a code joins an account: refused when it belongs to another account, or the account has another code
 async function attachCode(storage, acct, code) {
@@ -414,11 +433,12 @@ async function auth(req, env, storage, hits, h, url) {
   if (url.pathname === '/auth') return req.method === 'GET' ? json({ google: googleOn(env), email: emailOn(env) }, 200, h) : json({ error: 'method' }, 405, h);
   if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
   const p = url.pathname;
-  if (p === '/auth/google' ? !googleOn(env) : p.startsWith('/auth/email') ? !emailOn(env) : !authOn(env)) return json({ error: 'sign-in is not set up' }, 503, h);
+  if (p === '/auth/unsub') return unsub(req, env, storage, h, url);       // from an email: no session, no rate limit (an HMAC)
+  if (p === '/auth/google' ? !googleOn(env) : p.startsWith('/auth/email') || p === '/auth/remind' ? !emailOn(env) : !authOn(env)) return json({ error: 'sign-in is not set up' }, 503, h);
   if (p !== '/auth/me' && limited(req, hits)) return json({ error: 'slow down' }, 429, h);
-  let body;
-  try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
-  body = body && typeof body === 'object' ? body : {};
+  const body = await readBody(req);
+  if (body === null) return json({ error: 'bad json' }, 400, h);
+  if (body === false) return json({ error: 'too big' }, 413, h);
   if (p === '/auth/google') {
     const c = await verifyGoogle(body.credential, env);
     if (!c) return json({ error: 'that Google sign-in could not be checked' }, 401, h);
@@ -472,6 +492,21 @@ async function auth(req, env, storage, hits, h, url) {
     await storage.put(`acct:${acct}`, { ...a, name });
     return json(await acctView(storage, acct), 200, h);
   }
+  if (p === '/auth/stats') {
+    const have = await statsOf(storage, acct);
+    if (body.stats === undefined) return json({ stats: have }, 200, h);
+    const inc = cleanStats(body.stats);
+    if (typeof inc === 'string') return json({ error: inc }, 400, h);
+    const merged = statsMerge(have, inc);
+    if (JSON.stringify(merged.days) !== JSON.stringify(have.days)) await storage.put(`stats:d:${acct}`, merged.days);
+    if (JSON.stringify([merged.drives, merged.runs]) !== JSON.stringify([have.drives, have.runs])) await storage.put(`stats:x:${acct}`, { drives: merged.drives, runs: merged.runs });
+    return json({ stats: merged }, 200, h);
+  }
+  if (p === '/auth/remind') {
+    const k = `rmd:${acct}`, was = (await storage.get(k)) || {};
+    await storage.put(k, { ...was, on: body.on === true, at: Date.now() });     // (off keeps the day last sent: on again that day sends nothing more)
+    return json(await acctView(storage, acct), 200, h);
+  }
   if (p === '/auth/link') {
     const code = normCode(body.code);
     if (!code) return json({ error: 'a code looks like TMD-XXXX-XXXX-XXXX' }, 400, h);
@@ -508,6 +543,237 @@ async function proAccess(storage, env, body, needCode = 'a valid Pro code is nee
   return { code };
 }
 const refusal = (x, h) => json({ error: x.error, ...(x.signedOut ? { signedOut: true } : {}), ...(x.noPro ? { noPro: true } : {}) }, x.status, h);
+
+// a request's JSON body: the object ({} for anything else), null when it is not JSON, false when over BODY_MAX
+const BODY_MAX = 512 * 1024;
+async function readBody(req) {
+  const raw = await req.text().catch(() => '');
+  if (raw.length > BODY_MAX) return false;
+  let b;
+  try { b = JSON.parse(raw); } catch (e) { return null; }
+  return b && typeof b === 'object' && !Array.isArray(b) ? b : {};
+}
+
+// ---- Stats that follow the account (/auth/stats): the page keeps its record in the browser (game.js: the stats days,
+// the historic drives, the playoff runs); signed in, it is merged into the account's and back, so a streak and the
+// drives passed survive a new phone. Kept as stats:d:<acct> (the days: what a league board reads) and stats:x:<acct>
+// (drives and runs). Each entry is checked and rebuilt from its numbers (nothing else of a post is kept); a kind with
+// more entries than its cap, or not an object, refuses the post. Merged, the higher score of each day, drive or run
+// stands (a drive: the most tries, won if either was; a day: a Madden find kept from either); over a cap, the newest.
+const STATS_CAP = { days: [99999, 2000], drives: [999, 500], runs: [999, 500] };      // [highest key, most entries]
+const num = (x, lo, hi) => (typeof x === 'number' && Number.isFinite(x) && x >= lo && x <= hi ? x : null);
+function statEntry(kind, v) {
+  if (!v || typeof v !== 'object') return null;
+  const p = num(v.p, 0, 1), wpa = num(v.wpa, -10, 10) ?? 0;
+  if (p === null) return null;
+  if (kind === 'days') {
+    const coach = typeof v.coach === 'string' ? clean(v.coach, 40) : '', madden = typeof v.madden === 'string' && /^[0-9A-F]{8}$/.test(v.madden) ? v.madden : null;
+    return { p, wpa, coach: coach || null, ...(madden ? { madden } : {}) };
+  }
+  if (kind === 'drives') {
+    const last = num(v.last, 0, 1), at = num(v.at, 0, 1e14);
+    return { p, wpa, tries: Math.round(num(v.tries, 0, 1e5) ?? 1), won: v.won === true, ...(last !== null ? { last } : {}), ...(at !== null ? { at } : {}) };
+  }
+  const n = (x) => Math.round(num(x, 0, 99) ?? 0);
+  return { p, wpa, w: n(v.w), l: n(v.l), n: n(v.n) };
+}
+// a posted record, cleaned: { days, drives, runs }, or the reason it is refused
+function cleanStats(s) {
+  if (!s || typeof s !== 'object' || Array.isArray(s)) return 'stats: { days, drives, runs } wanted';
+  const out = {};
+  for (const [kind, [hi, max]] of Object.entries(STATS_CAP)) {
+    const o = s[kind] ?? {};
+    if (typeof o !== 'object' || Array.isArray(o)) return `stats.${kind}: an object wanted`;
+    const ks = Object.keys(o);
+    if (ks.length > max) return `stats.${kind}: at most ${max}`;
+    out[kind] = {};
+    for (const k of ks) {
+      if (!/^[1-9]\d{0,4}$/.test(k) || +k > hi) continue;
+      const e = statEntry(kind, o[k]);
+      if (e) out[kind][k] = e;
+    }
+  }
+  return out;
+}
+function statBetter(kind, a, b) {
+  if (!a || !b) return a || b;
+  const w = b.p > a.p ? b : a;
+  if (kind === 'drives') return { ...w, tries: Math.max(a.tries || 0, b.tries || 0), won: !!(a.won || b.won) };
+  if (kind === 'days' && !w.madden && (a.madden || b.madden)) return { ...w, coach: 'John Madden', madden: a.madden || b.madden };
+  return w;
+}
+function statsMerge(a, b) {
+  const out = {};
+  for (const [kind, [, max]] of Object.entries(STATS_CAP)) {
+    const m = { ...a[kind] };
+    for (const [k, v] of Object.entries(b[kind] || {})) m[k] = statBetter(kind, m[k], v);
+    const ks = Object.keys(m).map(Number).sort((x, y) => x - y).slice(-max);
+    out[kind] = Object.fromEntries(ks.map((k) => [k, m[k]]));
+  }
+  return out;
+}
+async function statsOf(storage, acct) {
+  const x = (await storage.get(`stats:x:${acct}`)) || {};
+  return { days: (await storage.get(`stats:d:${acct}`)) || {}, drives: x.drives || {}, runs: x.runs || {} };
+}
+
+// ---- Friend leagues: a private group of accounts (a name and a join link) with its own board of the daily: each
+// member's username, the day's score, the streak and the last 7 days' average (from the stats above). Only usernames
+// and those numbers are shown, to members only; never an address or an account id.
+//   POST /league/create { session, name }      -> { league, leagues }   3-30 characters, never a blocked() name
+//   POST /league/peek   { code }               -> { code, name, n }     what a join link shows before joining
+//   POST /league/join   { session, code }      -> { league, leagues }   at most LEAGUE_MAX members
+//   POST /league/leave  { session, code }      -> { leagues }           the last one out ends the league
+//   POST /league/board  { session, code, day } -> { code, name, n, day, owner, rows: [{ name, today, streak, avg7, n7, you? }] }
+// A league is league:<code> { name, owner, members: [acct], at }; an account's leagues are on its row (acct.leagues,
+// at most LEAGUES_PER). Joining (or making one) takes a username: the board shows it. day is the page's day number
+// (game.js dayOf): the board is that day's.
+const LEAGUE_PATHS = ['/league/create', '/league/peek', '/league/join', '/league/leave', '/league/board'];
+const LEAGUE_MAX = 50, LEAGUES_PER = 10, LEAGUE_LEN = 8;     // 31^8 codes (no 0/O, 1/I/L), guessed at RATE_PER_MIN an address
+const leagueCode = () => Array.from(crypto.getRandomValues(new Uint8Array(LEAGUE_LEN)), (x) => PRO_ALPHABET[x % PRO_ALPHABET.length]).join('');
+const normLeague = (c) => { const s = String(c ?? '').toUpperCase().replace(/[^A-Z0-9]/g, ''); return s.length === LEAGUE_LEN && [...s].every((ch) => PRO_ALPHABET.includes(ch)) ? s : null; };
+async function leaguesOf(storage, a) {
+  const out = [];
+  for (const code of (a && Array.isArray(a.leagues) ? a.leagues : [])) {
+    const lg = await storage.get(`league:${code}`);
+    if (lg) out.push({ code, name: lg.name, n: lg.members.length });
+  }
+  return out;
+}
+// one member's line: the day's score (null: not played yet), the streak (days in a row to the day, or to the day
+// before while the day is not played yet: a streak still alive) and the average of the days played in the last 7
+function leagueLine(days, day) {
+  const p = (k) => (days[k] && typeof days[k].p === 'number' ? days[k].p : null);
+  let streak = 0;
+  for (let k = p(day) !== null ? day : day - 1; k > 0 && p(k) !== null; k--) streak++;
+  const week = [0, 1, 2, 3, 4, 5, 6].map((i) => p(day - i)).filter((x) => x !== null);
+  return { today: p(day), streak, avg7: week.length ? week.reduce((a, x) => a + x, 0) / week.length : null, n7: week.length };
+}
+async function league(req, env, storage, hits, h, url) {
+  if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
+  if (!authOn(env)) return json({ error: 'sign-in is not set up' }, 503, h);
+  const p = url.pathname;
+  if (p !== '/league/board' && limited(req, hits)) return json({ error: 'slow down' }, 429, h);
+  const body = await readBody(req);
+  if (!body) return json({ error: 'bad json' }, 400, h);
+  const code = p === '/league/create' ? null : normLeague(body.code);
+  if (p !== '/league/create' && !code) return json({ error: 'a league code is 8 letters and digits' }, 400, h);
+  const lg = code && await storage.get(`league:${code}`);
+  if (p === '/league/peek') return lg ? json({ code, name: lg.name, n: lg.members.length }, 200, h) : json({ error: 'no such league' }, 404, h);
+  const acct = await sessionAcct(storage, env, body.session), a = acct && await storage.get(`acct:${acct}`);
+  if (!a) return json({ error: 'signed out', signedOut: true }, 401, h);
+  const mine = Array.isArray(a.leagues) ? a.leagues : [];
+  const done = async (lgCode) => json({ ...(lgCode ? { league: { code: lgCode, ...(({ name, members, owner }) => ({ name, n: members.length, owner: owner === acct }))(await storage.get(`league:${lgCode}`)) } } : {}),
+    leagues: await leaguesOf(storage, await storage.get(`acct:${acct}`)) }, 200, h);
+  if (p === '/league/create' || p === '/league/join') {
+    if (p === '/league/join' && !lg) return json({ error: 'That league does not exist (any more).' }, 404, h);
+    if (lg && lg.members.includes(acct)) return done(code);                       // in it already
+    if (!a.name) return json({ error: 'Pick a username first: the league board shows it.', noName: true }, 409, h);
+    if (mine.length >= LEAGUES_PER) return json({ error: `You are in ${LEAGUES_PER} leagues already: leave one first.` }, 409, h);
+    let c = code;
+    if (p === '/league/create') {
+      const name = clean(body.name, 31);
+      if (name.length < 3 || name.length > 30) return json({ error: 'A league name is 3 to 30 characters.' }, 400, h);
+      if (blocked(name)) return json({ error: 'That league name is not allowed. Pick another.', refused: true }, 409, h);
+      do c = leagueCode(); while (await storage.get(`league:${c}`));
+      await storage.put(`league:${c}`, { name, owner: acct, members: [acct], at: Date.now() });
+    } else {
+      if (lg.members.length >= LEAGUE_MAX) return json({ error: `That league is full (${LEAGUE_MAX} players).`, full: true }, 409, h);
+      await storage.put(`league:${c}`, { ...lg, members: [...lg.members, acct] });
+    }
+    await storage.put(`acct:${acct}`, { ...a, leagues: [...mine.filter((x) => x !== c), c] });
+    return done(c);
+  }
+  if (p === '/league/leave') {
+    if (lg && lg.members.includes(acct)) {
+      const members = lg.members.filter((x) => x !== acct);
+      if (members.length) await storage.put(`league:${code}`, { ...lg, members, owner: lg.owner === acct ? members[0] : lg.owner });
+      else await storage.delete(`league:${code}`);
+    }
+    if (mine.includes(code)) await storage.put(`acct:${acct}`, { ...a, leagues: mine.filter((x) => x !== code) });
+    return done(null);
+  }
+  if (p === '/league/board') {
+    if (!lg || !lg.members.includes(acct)) return json({ error: 'no such league' }, 404, h);     // (a member's only: the same answer as none)
+    const day = Number(body.day);
+    if (!Number.isInteger(day) || day < 1 || day > STATS_CAP.days[0]) return json({ error: 'day (the day number) wanted' }, 400, h);
+    const rows = [];
+    for (const m of lg.members) {
+      const ma = (await storage.get(`acct:${m}`)) || {};
+      rows.push({ name: ma.name || 'Player', ...leagueLine((await storage.get(`stats:d:${m}`)) || {}, day), ...(m === acct ? { you: true } : {}) });
+    }
+    // the day's scores first, best first; then who has not played yet, longest streak first
+    rows.sort((x, y) => (y.today ?? -1) - (x.today ?? -1) || y.streak - x.streak || x.name.localeCompare(y.name));
+    return json({ code, name: lg.name, n: lg.members.length, day, owner: lg.owner === acct, rows }, 200, h);
+  }
+  return json({ error: 'not found' }, 404, h);
+}
+
+// ---- The daily email (opt-in, /auth/remind): once a day, when the new daily is up, a short note to every account
+// that asked, by Resend (only with RESEND_KEY and MAIL_FROM). The cron trigger (wrangler.toml [triggers]) wakes the
+// worker; `scheduled` hands the run to the Board (its storage), at most REMIND_CAP emails a run in batches of
+// REMIND_BATCH (Resend's batch call; its Idempotency-Key means a retried batch is not sent twice). Each account's last
+// day sent (rmd:<acct>.last, the UTC date) keeps it to one a day: the cron runs three times a morning, so a batch Resend
+// refused (logged) goes again in the next. Every email carries its unsubscribe link: the site's ?unsub=<ref>.<hmac>
+// (the page posts it to /auth/unsub), and, with API_URL (this worker's own address) set, the one-click header too.
+const REMIND_CAP = 1000, REMIND_BATCH = 100, CRON_PATH = '/_cron/remind';     // (no outside request reaches CRON_PATH: the default fetch never routes it here)
+// the key behind the unsubscribe links: env.MAIL_SECRET, else one made at random on first use and kept in storage
+async function mailSecret(env, storage) {
+  if (env.MAIL_SECRET) return String(env.MAIL_SECRET);
+  let s = await storage.get('mail:secret');
+  if (!s) { s = randHex(32); await storage.put('mail:secret', s); }
+  return s;
+}
+async function hmacHex(secret, msg) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(msg))), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+const unsubTok = async (env, storage, ref) => (await hmacHex(await mailSecret(env, storage), `unsub:${ref}`)).slice(0, 32);
+async function unsub(req, env, storage, h, url) {
+  if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
+  let r = url.searchParams.get('r') || '', t = url.searchParams.get('t') || '';
+  if (!r) { const b = (await readBody(req)) || {}; r = String(b.r || ''); t = String(b.t || ''); }       // (one-click posts a form, the page JSON)
+  if (!/^a_[0-9a-f]{40}$/.test(r) || !/^[0-9a-f]{32}$/.test(t)) return json({ error: 'that unsubscribe link is not valid' }, 400, h);
+  const acct = await refAcct(storage, r);
+  if (!acct || !same(t, await unsubTok(env, storage, r))) return json({ error: 'that unsubscribe link is not valid' }, 403, h);
+  const k = `rmd:${acct}`, was = await storage.get(k);
+  if (was && was.on) await storage.put(k, { ...was, on: false, at: Date.now() });
+  return json({ ok: true }, 200, h);
+}
+async function reminders(env, storage, date) {
+  if (!emailOn(env)) return { off: true, sent: 0 };
+  if (!DATE_RE.test(date)) return { error: 'date', sent: 0 };
+  const due = [];
+  for (const [k, r] of await storage.list({ prefix: 'rmd:' })) {
+    if (r && r.on && r.last !== date) due.push(k.slice(4));
+    if (due.length >= REMIND_CAP) break;
+  }
+  const site = String(env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, ''), api = String(env.API_URL || '').replace(/\/+$/, '');
+  let sent = 0, failed = 0;
+  for (let i = 0; i < due.length; i += REMIND_BATCH) {
+    const batch = [];
+    for (const acct of due.slice(i, i + REMIND_BATCH)) {
+      const a = await storage.get(`acct:${acct}`);
+      if (!a || !EMAIL_RE.test(String(a.email || ''))) continue;
+      const ref = await acctRef(storage, acct), t = await unsubTok(env, storage, ref), stop = `${site}/?unsub=${ref}.${t}`;
+      batch.push({ acct, mail: { from: env.MAIL_FROM, to: [a.email], subject: 'The new Two-Minute Drill is up',
+        text: `Today's drive is up: a real NFL late-game spot, your calls against the clock.\n\nPlay: ${site}/\n\nYou asked for this email on your Two-Minute Drill account. Stop it: ${stop}`,
+        html: `<p>Today's drive is up: a real NFL late-game spot, your calls against the clock.</p><p><a href="${site}/">Play today's drive</a></p><p style="color:#5a675e;font-size:13px">You asked for this email on your Two-Minute Drill account. <a href="${stop}">Unsubscribe</a></p>`,
+        ...(api ? { headers: { 'List-Unsubscribe': `<${api}/auth/unsub?r=${ref}&t=${t}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } } : {}) } });
+    }
+    if (!batch.length) continue;
+    let r;
+    try {
+      r = await fetch('https://api.resend.com/emails/batch', { method: 'POST', body: JSON.stringify(batch.map((x) => x.mail)),
+        headers: { Authorization: `Bearer ${env.RESEND_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': `remind-${date}-${(await sha256(batch.map((x) => x.acct).join('\n'))).slice(0, 24)}` } });
+    } catch (e) { r = null; }
+    if (!r || !r.ok) { failed += batch.length; console.error('resend refused the daily reminders', r ? r.status : 'unreachable', batch.length); continue; }
+    for (const { acct } of batch) { const k = `rmd:${acct}`, cur = await storage.get(k); if (cur) await storage.put(k, { ...cur, last: date }); }   // (read again: a toggle made while sending stands)
+    sent += batch.length;
+  }
+  return { sent, failed, due: due.length };
+}
+
 
 async function pro(req, env, storage, hits, h, url) {
   if (url.pathname === '/pro') return req.method === 'GET' ? json({ on: proOn(env), price: PRO_PRICE }, 200, h) : json({ error: 'method' }, 405, h);
@@ -624,6 +890,7 @@ export async function handle(req, env, storage, hits) {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: h });
   if (PRO_PATHS.includes(url.pathname)) return pro(req, env, storage, hits, h, url);
   if (AUTH_PATHS.includes(url.pathname)) return auth(req, env, storage, hits, h, url);
+  if (LEAGUE_PATHS.includes(url.pathname)) return league(req, env, storage, hits, h, url);
   if (url.pathname === '/race' || url.pathname.startsWith('/race/')) return race(req, env, storage, hits, h, url);
   if (url.pathname === '/daily') return daily(req, env, storage, hits, h, url);
   if (url.pathname === '/days') return req.method === 'GET' ? days(storage, h) : json({ error: 'method' }, 405, h);
@@ -651,9 +918,11 @@ export async function handle(req, env, storage, hits) {
   if (!name || !Number.isInteger(best) || best < 0 || best > 999) return json({ error: 'name (1-24 characters) and best (0-999) wanted' }, 400, h);
   if (blocked(name)) return json({ error: 'name not allowed', refused: true, rows: ranked(await readAll()) }, 409, h);
   if (!KEY_RE.test(devKey)) return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
-  const kh = await sha256(devKey);                 // before the read: from here to the write is storage only
-  const all = await readAll(), lower = name.toLowerCase(), i = all.findIndex((r) => String(r.name).toLowerCase() === lower);
-  const owner = await ownerOf(storage, lower);
+  const lower = name.toLowerCase(), dk = await sha256(devKey);     // before the read: from here to the write is storage only
+  const ak = await acctNameKey(storage, env, body.session, lower), kh = ak || dk;   // a signed-in account's own username: its name on any device
+  const all = await readAll(), i = all.findIndex((r) => String(r.name).toLowerCase() === lower);
+  let owner = await ownerOf(storage, lower);
+  if (ak && owner !== ak) { await claim(storage, lower, ak); owner = ak; }
   if (owner && owner !== kh) return json({ error: 'name taken', rows: ranked(all) }, 409, h);
   if (!owner) await claim(storage, lower, kh);
   if (i >= 0 && all[i].best >= best) {
@@ -906,7 +1175,10 @@ async function versus(req, env, url) {
 
 export class Board {
   constructor(ctx, env) { this.ctx = ctx; this.env = env; this.hits = new Map(); }
-  fetch(req) { return handle(req, this.env, this.ctx.storage, this.hits); }
+  async fetch(req) {
+    if (new URL(req.url).pathname === CRON_PATH) return json(await reminders(this.env, this.ctx.storage, String(((await readBody(req)) || {}).date || '')), 200, {});
+    return handle(req, this.env, this.ctx.storage, this.hits);
+  }
 }
 
 export { Match } from './match.js';
@@ -916,7 +1188,16 @@ export default {
   fetch(req, env) {
     const url = new URL(req.url);
     if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me'].includes(url.pathname)) return versus(req, env, url);
-    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, '/board', '/daily', '/days', '/madden'].includes(url.pathname)) return handle(req, env, null, null);
+    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, '/board', '/daily', '/days', '/madden'].includes(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
+  },
+  // the cron trigger (wrangler.toml): the day's reminder emails, sent by the Board (its storage); the day is the run's
+  // UTC date (each account gets one a day, however many runs)
+  scheduled(ev, env, ctx) {
+    const date = new Date(ev && ev.scheduledTime ? ev.scheduledTime : Date.now()).toISOString().slice(0, 10);
+    const run = env.BOARD.get(env.BOARD.idFromName('board')).fetch(new Request(`https://board${CRON_PATH}`, { method: 'POST', body: JSON.stringify({ date }) }))
+      .then((r) => r.json()).then((d) => console.log('daily reminders', date, JSON.stringify(d))).catch((e) => console.error('daily reminders failed', e && e.message));
+    if (ctx && ctx.waitUntil) ctx.waitUntil(run);
+    return run;
   },
 };

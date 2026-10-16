@@ -76,6 +76,32 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .acctsheet .who .em { display: block; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .acctsheet .acts { display: flex; gap: 8px; flex-wrap: wrap; }
 .acctsheet .acts .btn { width: auto; flex: 1 1 auto; }
+/* the account sheet's sections (leagues), and a league's board: rank, username (the streak and week under it), today */
+.acctsheet .sec { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.acctsheet .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.llist { display: grid; gap: 6px; }
+.lrow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; width: 100%; min-height: 46px; padding: 8px 12px; text-align: left; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); cursor: pointer; }
+.lrow:hover { border-color: var(--muted); }
+.lrow .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.lrow .n { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.lrow .go { color: var(--muted); font-size: 20px; line-height: 1; }
+.lboard .lbody { display: grid; gap: 12px; }
+.lrows { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.lrows li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); }
+.lrows li:first-child { border-top: 0; }
+.lrows li.me { background: color-mix(in srgb, var(--sq-g) 12%, transparent); }
+.lrows .n { color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 700; text-align: center; }
+.lrows .lwho { min-width: 0; display: grid; gap: 1px; }
+.lrows .lwho .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.lrows li.me .nm { color: var(--sq-g); }
+.lrows .lwho small { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.lrows b { font: 900 24px/1 var(--display); font-variant-numeric: tabular-nums; }
+.lrows .not { color: var(--muted); font-size: 12px; font-weight: 600; }
+.lboard .invite { display: grid; gap: 6px; }
+.lboard .lnk { font-size: 12.5px; color: var(--muted); text-align: center; overflow-wrap: anywhere; user-select: all; }
+.lboard .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.linkbtn { border: 0; background: none; padding: 4px 0; color: var(--sq-g); font: 700 14px var(--body); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.lglink { margin: 2px 0 0; text-align: center; }
 .top h1 { margin: 0; min-width: 0; text-align: center; white-space: nowrap; font: 900 28px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
 .top h1 small { display: block; font: 600 10.5px/1.3 var(--body); letter-spacing: .14em; color: var(--muted); margin-top: 2px; }
 /* phones: the title shrinks with the screen so Log in (or your username) fits beside it; the narrowest show only the badge */
