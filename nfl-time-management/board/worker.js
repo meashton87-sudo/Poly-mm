@@ -309,7 +309,7 @@ async function pro(req, env, storage, hits, h, url) {
           ...(price.startsWith('prod_') ? { 'line_items[0][price_data][product]': price }
             : { 'line_items[0][price_data][product_data][name]': 'Two-Minute Drill Pro', 'line_items[0][price_data][product_data][tax_code]': PRO_TAX_CODE,
               'line_items[0][price_data][product_data][description]': 'Every past daily, the historic drives and the playoff runs. One code, any device.' }) };
-      r = await stripe(env, 'checkout/sessions', { mode: 'payment', ...item, 'line_items[0][quantity]': '1',
+      r = await stripe(env, 'checkout/sessions', { mode: 'payment', ...item, 'line_items[0][quantity]': '1', allow_promotion_codes: 'true',
         success_url: `${site}/?claim={CHECKOUT_SESSION_ID}`, cancel_url: `${site}/?pro=cancel`, integration_identifier: tag() });
     } catch (e) { return json({ error: 'stripe unreachable' }, 502, h); }
     const sess = await r.json().catch(() => ({}));

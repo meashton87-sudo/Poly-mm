@@ -203,6 +203,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   const form = new URLSearchParams(init0.body);
   assert.strictEqual(form.get('mode'), 'payment');
   assert.strictEqual(form.get('line_items[0][price]'), 'price_123');
+  assert.strictEqual(form.get('allow_promotion_codes'), 'true', 'checkout takes promotion codes');
   assert.strictEqual(form.get('success_url'), 'https://nfl2mindrill.com/?claim={CHECKOUT_SESSION_ID}', 'the site without its trailing slash');
   // from the Pro preview (an allowed origin), the buyer is sent back there; from anywhere else, to the site
   for (const e of [env, board.env]) e.ALLOWED_ORIGINS = 'https://nfl2mindrill.com,https://nfl2mindrill-pro-preview.pages.dev';
