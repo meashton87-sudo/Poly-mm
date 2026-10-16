@@ -439,4 +439,165 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.deepStrictEqual([v.rows.map((x) => x.name), v.winner, v.entrants], [['Eli Manning'], null, 1], 'out, the winner with him');
   assert.strictEqual((await rc('/race/join', { code: cb, key: kb, name: 'Tom Again' })).status, 403, 'and out for good');
 }
+// Accounts: Sign in with Google (an ID token checked against Google's keys), or a one-use emailed link; Pro on the
+// account (a linked code, or a purchase made signed in), used by session on any device; codes work as before
+{
+  const realFetch = globalThis.fetch;
+  const envs = [env, board.env];
+  const set = (o) => { for (const e of envs) Object.assign(e, o); };
+  const unset = (...ks) => { for (const e of envs) for (const k of ks) delete e[k]; };
+  const au = (path, body, o = {}) => call(body === undefined ? 'GET' : 'POST', body, { path, ...o });
+  // off until configured: GET /auth says so, the rest answer 503
+  assert.deepStrictEqual(await (await au('/auth')).json(), { google: false, email: false });
+  for (const p of ['/auth/google', '/auth/email', '/auth/email/verify', '/auth/me', '/auth/link', '/auth/logout']) assert.strictEqual((await au(p, {})).status, 503, `${p} off`);
+  // Google's keys (ours, for the test) and Resend, stubbed
+  const alg = { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' };
+  const kp = await crypto.subtle.generateKey(alg, true, ['sign', 'verify']), other = await crypto.subtle.generateKey(alg, true, ['sign', 'verify']);
+  const jwk = await crypto.subtle.exportKey('jwk', kp.publicKey);
+  const mails = [], stripeForms = [];
+  let certFetches = 0;
+  globalThis.fetch = async (u, init) => {
+    if (u === 'https://www.googleapis.com/oauth2/v3/certs') { certFetches++; return new Response(JSON.stringify({ keys: [{ kty: 'RSA', n: jwk.n, e: jwk.e, kid: 'test-kid-1', alg: 'RS256', use: 'sig' }] }), { status: 200, headers: { 'Cache-Control': 'public, max-age=20000' } }); }
+    if (u === 'https://api.resend.com/emails') { mails.push([init.headers, JSON.parse(init.body)]); return new Response(JSON.stringify({ id: 'mail_1' }), { status: 200 }); }
+    if (u === 'https://api.stripe.com/v1/checkout/sessions') { stripeForms.push(new URLSearchParams(init.body)); return new Response(JSON.stringify({ id: 'cs_test_acct1234567890', url: 'https://checkout.stripe.com/c/pay/cs_test_acct1234567890' }), { status: 200 }); }
+    const m = String(u).match(/checkout\/sessions\/(cs_test_[A-Za-z0-9]+)$/);
+    if (m && m[1].startsWith('cs_test_buy')) return new Response(JSON.stringify({ id: m[1], payment_status: 'paid', client_reference_id: m[1] === 'cs_test_buyemail000001' ? 'e:pat@example.com' : null }), { status: 200 });
+    return new Response('{}', { status: 404 });
+  };
+  const CLIENT = '1234-test.apps.googleusercontent.com';
+  set({ GOOGLE_CLIENT_ID: CLIENT });
+  assert.deepStrictEqual(await (await au('/auth')).json(), { google: true, email: false });
+  const b64u = (x) => Buffer.from(x).toString('base64url');
+  const idToken = async (claims = {}, key = kp.privateKey, kid = 'test-kid-1') => {
+    const head = b64u(JSON.stringify({ alg: 'RS256', kid, typ: 'JWT' }));
+    const body = b64u(JSON.stringify({ iss: 'https://accounts.google.com', aud: CLIENT, sub: '1100220033', email: 'Eli@Example.com', email_verified: true,
+      iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600, ...claims }));
+    const sig = new Uint8Array(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(`${head}.${body}`)));
+    return `${head}.${body}.${b64u(sig)}`;
+  };
+  r = await au('/auth/google', { credential: await idToken() });
+  assert.strictEqual(r.status, 200, 'a valid Google token');
+  const g = await r.json();
+  assert.match(g.session, /^[0-9a-f]{64}$/);
+  assert.deepStrictEqual([g.email, g.pro, g.code], ['eli@example.com', false, undefined]);
+  assert.ok(store.has(`auth:sess:${await sha256hex(g.session)}`) && !JSON.stringify([...store.keys()]).includes(g.session), 'only the session\'s hash is stored');
+  assert.deepStrictEqual(store.get('acct:g:1100220033').email, 'eli@example.com', 'the account is g:<sub>');
+  for (const [why, cred] of [['wrong aud', await idToken({ aud: 'someone-else.apps.googleusercontent.com' })], ['expired', await idToken({ exp: Math.floor(Date.now() / 1000) - 10 })],
+    ['bad signature', await idToken({}, other.privateKey)], ['wrong iss', await idToken({ iss: 'https://evil.example' })], ['address not verified', await idToken({ email_verified: false })],
+    ['unknown kid', await idToken({}, kp.privateKey, 'nope')], ['tampered', (await idToken()).replace(/\.([^.]+)\./, (_, b) => `.${b64u(JSON.stringify({ ...JSON.parse(Buffer.from(b, 'base64url')), sub: '999' }))}.`)],
+    ['garbage', 'a.b.c'], ['none', undefined]]) {
+    assert.strictEqual((await au('/auth/google', { credential: cred })).status, 401, why);
+  }
+  assert.strictEqual(certFetches, 1, 'Google\'s keys are cached (an unknown kid asks again at most once a minute)');
+  assert.strictEqual((await au('/auth/google', { credential: await idToken({ iss: 'accounts.google.com' }) })).status, 200, 'the bare issuer too');
+  // me, never another's; a bad session is signed out
+  assert.deepStrictEqual(await (await au('/auth/me', { session: g.session })).json(), { email: 'eli@example.com', pro: false });
+  assert.strictEqual((await au('/auth/me', { session: 'f'.repeat(64) })).status, 401);
+  assert.strictEqual((await au('/auth/me', { session: 'short' })).status, 401);
+  // email links: off without Resend, then one use, 15 minutes, the same answer for anyone
+  assert.strictEqual((await au('/auth/email', { email: 'pat@example.com' })).status, 503, 'no RESEND_KEY: off');
+  set({ RESEND_KEY: 're_test_key', MAIL_FROM: 'Two-Minute Drill <signin@nfl2mindrill.com>', SITE: 'https://nfl2mindrill.com' });
+  assert.deepStrictEqual(await (await au('/auth')).json(), { google: true, email: true });
+  for (const bad of ['', 'pat', 'pat@', '@example.com', 'pat@example', 'a b@example.com', `${'x'.repeat(190)}@example.com`]) assert.strictEqual((await au('/auth/email', { email: bad })).status, 400, `address ${bad}`);
+  r = await au('/auth/email', { email: ' Pat@Example.com ' });
+  assert.strictEqual(r.status, 200);
+  const answer = await r.json();
+  const [mh, mb] = mails[mails.length - 1];
+  assert.strictEqual(mh.Authorization, 'Bearer re_test_key');
+  assert.deepStrictEqual([mb.from, mb.to], ['Two-Minute Drill <signin@nfl2mindrill.com>', ['pat@example.com']]);
+  const linkTok = (m) => (m.text.match(/https:\/\/nfl2mindrill\.com\/\?login=([0-9a-f]{64})/) || [])[1];
+  const t1 = linkTok(mb);
+  assert.ok(t1, 'the link: SITE/?login=<token>');
+  assert.ok(!JSON.stringify([...store]).includes(t1), 'only the token\'s hash is stored');
+  assert.deepStrictEqual(await (await au('/auth/email', { email: 'nobody-yet@example.com' })).json(), answer, 'the same answer for any address');
+  r = await au('/auth/email/verify', { token: t1 });
+  assert.strictEqual(r.status, 200);
+  const e1 = await r.json();
+  assert.deepStrictEqual([e1.email, e1.pro, /^[0-9a-f]{64}$/.test(e1.session)], ['pat@example.com', false, true]);
+  assert.ok(store.get('acct:e:pat@example.com'), 'the account is e:<address>');
+  assert.strictEqual((await au('/auth/email/verify', { token: t1 })).status, 401, 'a link works once');
+  assert.strictEqual((await au('/auth/email/verify', { token: 'f'.repeat(64) })).status, 401, 'a token never sent');
+  assert.strictEqual((await au('/auth/email/verify', { token: 'nope' })).status, 400);
+  await au('/auth/email', { email: 'pat@example.com' });
+  const t2 = linkTok(mails[mails.length - 1][1]), k2 = `auth:login:${await sha256hex(t2)}`;
+  store.set(k2, { ...store.get(k2), exp: Date.now() - 1 });                // 15 minutes on
+  assert.strictEqual((await au('/auth/email/verify', { token: t2 })).status, 401, 'an expired link');
+  assert.ok(!store.has(k2), 'and gone');
+  r = await au('/auth/email', { email: 'PAT@example.com' });
+  assert.strictEqual(r.status, 200, 'a third link for the address');
+  assert.strictEqual((await au('/auth/email', { email: 'pat@example.com' })).status, 429, 'a fourth in 15 minutes: refused');
+  const one = { ip: '6.6.6.6' };
+  for (const a of ['a1@example.com', 'a2@example.com', 'a3@example.com']) assert.strictEqual((await au('/auth/email', { email: a }, one)).status, 200);
+  assert.strictEqual((await au('/auth/email', { email: 'a4@example.com' }, one)).status, 429, 'and per address (IP)');
+  // Pro on an account: link a code this device holds; a code belongs to one account
+  set({ STRIPE_SECRET: 'rk_live_x', KEY_REQUIRED_FROM: '2000-01-01' });
+  const code = 'TMD-KKKK-MMMM-NNNN', dk = 'acct-device-key-00000001';
+  store.set(`pro:code:${code}`, { s: 'cs_test_k', at: '2026-10-16' });
+  assert.strictEqual((await au('/auth/link', { session: g.session, code: 'TMD-AAAA-AAAA-AAAA', key: dk })).status, 404, 'a code never issued');
+  assert.strictEqual((await au('/auth/link', { session: 'f'.repeat(64), code, key: dk })).status, 401, 'signed out');
+  r = await au('/auth/link', { session: g.session, code: code.toLowerCase(), key: dk });
+  assert.deepStrictEqual([r.status, await r.json()], [200, { email: 'eli@example.com', pro: true, code }], 'linked');
+  assert.strictEqual(store.get(`pro:code:${code}`).acct, 'g:1100220033');
+  r = await au('/auth/link', { session: e1.session, code, key: 'acct-device-key-00000002' });
+  assert.deepStrictEqual([r.status, (await r.json()).error], [409, 'This Pro code belongs to another account.'], 'one account a code');
+  assert.strictEqual((await au('/auth/link', { session: g.session, code, key: dk })).status, 200, 'linking again: the same');
+  assert.deepStrictEqual(await (await au('/auth/me', { session: e1.session })).json(), { email: 'pat@example.com', pro: false }, 'never another account\'s Pro');
+  // Pro by session: /restore and /pro/data, no device limit; the code itself keeps its limit
+  for (const k of ['acct-device-key-00000003', 'acct-device-key-00000004']) assert.strictEqual((await au('/restore', { code, key: k })).status, 200);
+  assert.strictEqual((await au('/restore', { code, key: 'acct-device-key-00000005' })).status, 409, 'the code: 3 devices, as ever');
+  assert.deepStrictEqual(await (await au('/restore', { session: g.session })).json(), { ok: true, code }, 'signed in: any device');
+  r = await au('/restore', { session: e1.session });
+  assert.deepStrictEqual([r.status, (await r.json()).noPro], [403, true], 'an account without Pro');
+  r = await au('/restore', { session: 'f'.repeat(64) });
+  assert.deepStrictEqual([r.status, (await r.json()).signedOut], [401, true], 'a session gone');
+  set({ ASSETS: { fetch: async () => new Response('{"drives":[]}', { status: 200 }) } });
+  r = await au('/pro/data', { session: g.session, name: 'drives.json' });
+  assert.deepStrictEqual([r.status, await r.json()], [200, { drives: [] }], 'the Pro data by session');
+  assert.strictEqual((await au('/pro/data', { session: e1.session, name: 'drives.json' })).status, 403);
+  assert.strictEqual((await au('/pro/data', { session: 'f'.repeat(64), name: 'drives.json' })).status, 401);
+  assert.strictEqual((await au('/pro/data', { code, key: 'acct-device-key-00000005', name: 'drives.json' })).status, 409, 'the code path keeps its limit');
+  // the Gauntlet: an entry by session is the entry of the account's code
+  r = await au('/race/join', { session: g.session, name: 'Signed In Eli' });
+  const viaSess = await r.json();
+  assert.strictEqual(r.status, 200);
+  const viaCode = await (await au('/race/me', { code, key: dk })).json();
+  assert.deepStrictEqual(viaCode.me, viaSess.me, 'the same entry by code');
+  assert.ok(store.get(`race:e:${(await sha256hex('race:' + code)).slice(0, 24)}`), 'keyed by the code');
+  assert.strictEqual((await au('/race/me', { session: e1.session })).status, 403, 'no Pro, no entry');
+  // a purchase made signed in: the account goes to Stripe, and the code joins it (the claim, or the webhook)
+  r = await au('/pay', { session: e1.session });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(stripeForms[stripeForms.length - 1].get('client_reference_id'), 'e:pat@example.com');
+  await au('/pay', {});
+  assert.strictEqual(stripeForms[stripeForms.length - 1].get('client_reference_id'), null, 'not signed in: no account');
+  assert.strictEqual((await au('/pay', { session: 'f'.repeat(64) })).status, 401, 'a session gone: not bought blind');
+  const bought = (await (await au('/claim', { s: 'cs_test_buyemail000001', key: 'acct-device-key-00000009' })).json()).code;
+  assert.match(bought, /^TMD-/);
+  assert.deepStrictEqual(await (await au('/auth/me', { session: e1.session })).json(), { email: 'pat@example.com', pro: true, code: bought }, 'the purchase is the account\'s');
+  assert.strictEqual(store.get(`pro:code:${bought}`).acct, 'e:pat@example.com');
+  const plainBuy = (await (await au('/claim', { s: 'cs_test_buyplain00001' })).json()).code;
+  assert.ok(!store.get(`pro:code:${plainBuy}`).acct, 'a purchase not signed in: a plain code');
+  const whsec = 'whsec_test_acct_0001';
+  set({ STRIPE_WEBHOOK_SECRET: whsec });
+  const body = JSON.stringify({ type: 'checkout.session.completed', data: { object: { id: 'cs_test_hookacct000001', payment_status: 'paid', client_reference_id: 'g:5550001' } } });
+  const t = Math.floor(Date.now() / 1000), hk = await crypto.subtle.importKey('raw', new TextEncoder().encode(whsec), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = Buffer.from(await crypto.subtle.sign('HMAC', hk, new TextEncoder().encode(`${t}.${body}`))).toString('hex');
+  const gs = await (await au('/auth/google', { credential: await idToken({ sub: '5550001', email: 'new@example.com' }) })).json();
+  r = await worker.fetch(new Request('https://w.example/stripe-webhook', { method: 'POST', body, headers: { 'Stripe-Signature': `t=${t},v1=${mac}` } }), env);
+  assert.strictEqual(r.status, 200);
+  assert.deepStrictEqual(await (await au('/auth/me', { session: gs.session })).json(), { email: 'new@example.com', pro: true, code: store.get('pro:sess:cs_test_hookacct000001') }, 'the webhook attaches it too');
+  // sign out; an old session expires
+  assert.strictEqual((await au('/auth/logout', { session: gs.session })).status, 200);
+  assert.strictEqual((await au('/auth/me', { session: gs.session })).status, 401, 'signed out');
+  const sk = `auth:sess:${await sha256hex(g.session)}`;
+  store.set(sk, { ...store.get(sk), at: Date.now() - 181 * 864e5 });
+  assert.strictEqual((await au('/auth/me', { session: g.session })).status, 401, 'a session lasts 180 days');
+  assert.ok(!store.has(sk));
+  // turned off again: sessions are not honoured, codes still are
+  unset('GOOGLE_CLIENT_ID', 'RESEND_KEY', 'MAIL_FROM');
+  assert.strictEqual((await au('/restore', { session: e1.session })).status, 401, 'accounts off: a session is no use');
+  assert.strictEqual((await au('/restore', { code: bought, key: 'acct-device-key-00000009' })).status, 200, 'the code still works');
+  unset('STRIPE_SECRET', 'STRIPE_WEBHOOK_SECRET', 'ASSETS', 'SITE');
+  globalThis.fetch = realFetch;
+}
 console.log('board worker ok');

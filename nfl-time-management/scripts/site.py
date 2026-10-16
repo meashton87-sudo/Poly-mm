@@ -224,7 +224,7 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
           site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, pro_at: str | None = None, no_ads: bool = False,
-          fulldef: bool = False) -> Path:
+          fulldef: bool = False, google_client_id: str | None = None) -> Path:
     global NO_ADS
     NO_ADS = no_ads
     adsense, ad_slot = (adsense or "").strip() or None, (ad_slot or "").strip() or None     # "" (an unset variable): off
@@ -232,6 +232,9 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         adsense = ad_slot = None
     if adsense and not re.fullmatch(r"ca-pub-\d{16}", adsense):
         raise SystemExit(f"--adsense wants a publisher id like ca-pub-1234567890123456, not {adsense!r}")
+    google_client_id = (google_client_id or "").strip() or None          # "" (an unset variable): Sign in with Google off
+    if google_client_id and not re.fullmatch(r"[0-9A-Za-z_-]+\.apps\.googleusercontent\.com", google_client_id):
+        raise SystemExit(f"--google-client-id wants an OAuth client id like 1234-abc.apps.googleusercontent.com, not {google_client_id!r}")
     if ad_slot and not re.fullmatch(r"\d{6,12}", ad_slot):
         raise SystemExit(f"--ad-slot wants an ad unit's slot number, not {ad_slot!r}")
     missing = [f for f in FILES + ["stats.html", "privacy.html", "about.html", "how-it-works.html"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
@@ -254,6 +257,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         extra += "<meta name=\"pro\" content=\"on\">"
         if pro_at:                           # ... and not before this time (ISO, UTC): the page turns it on then
             extra += f"<meta name=\"pro-at\" content=\"{html.escape(pro_at, quote=True)}\">"
+    if google_client_id:                     # Sign in with Google on the Pro tab (the board checks the same client id)
+        extra += f"<meta name=\"google-client-id\" content=\"{html.escape(google_client_id, quote=True)}\">"
     if fulldef:                              # the full defensive call in the daily and survivor: off until it is approved
         extra += "<meta name=\"fulldef\" content=\"on\">"
     if vs:                                   # Versus (two players live, board/match.js): off until it is turned on
@@ -342,9 +347,11 @@ if __name__ == "__main__":
     ap.add_argument("--pro-at", help="with --pro: the Pro tab stays hidden until this time (ISO 8601, e.g. 2026-10-16T18:00:00Z)")
     ap.add_argument("--vs", action="store_true", help="turn on Versus (two players live); off until approved")
     ap.add_argument("--fulldef", action="store_true", help="the full defensive call (personnel, front, coverage, rush) in every mode; off until approved")
+    ap.add_argument("--google-client-id", help="a Google OAuth web client id (....apps.googleusercontent.com): Sign in with Google on the Pro tab; empty: off")
     ap.add_argument("--pro", action="store_true", help="turn on the Pro tab (the archive, the historic drives, the purchase); off until approved")
     a = ap.parse_args()
-    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, vs=a.vs, fulldef=a.fulldef, no_ads=a.no_ads)
+    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, vs=a.vs, fulldef=a.fulldef, no_ads=a.no_ads,
+              google_client_id=a.google_client_id)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6
     print(f"site in {o}: {n} files, {size:.1f} MB")

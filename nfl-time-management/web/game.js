@@ -5245,9 +5245,35 @@
     raceBar();
     proVerify();
   }
+  // ---- Accounts (board/worker.js /auth*): Pro on an account, Sign in with Google or an emailed link. The session the
+  // board gives is kept here (SESS_KEY); signed in, Pro comes from the account (on any device, no device limit) and the
+  // board is asked with { session } in place of { code, key }. A code on the device works as before, signed in or not.
+  const SESS_KEY = `${STORE}:session`;
+  const GOOGLE_ID = ((document.querySelector('meta[name="google-client-id"]') || {}).content || '').trim();
+  const ACCT = { cfg: null, me: null };           // cfg: { google, email } (GET /auth); me: { email, pro, code? } (signed in)
+  const authSession = () => { const s = String(load(SESS_KEY, '') || ''); return /^[0-9a-f]{64}$/.test(s) ? s : ''; };
+  const acctPro = () => !!(ACCT.me && ACCT.me.pro && authSession());
+  function authClear() { ACCT.me = null; try { localStorage.removeItem(SESS_KEY); } catch (e) { /* no storage */ } }
+  // what proves Pro to the board: the session when the account has Pro, else this device's code and key
+  const proCred = () => (acctPro() ? { session: authSession() } : { code: proCode(), key: deviceKey() });
+  const proHave = () => acctPro() || !!proCode();
+  const proShownCode = () => (acctPro() && ACCT.me.code) || proCode();
+  // a session the board no longer knows (signed out elsewhere, expired, accounts off): forget it, Pro by code goes on
+  function authLost() { const was = !!authSession(); authClear(); if (was) toast('You are signed out. Sign in again on the Pro tab.'); }
   async function proVerify() {
+    if (!PRO_ON) { PRO_LIVE = false; return; }
+    if (authSession() && BOARD.api) {
+      try {
+        const r = await fetch(`${BOARD.api}/auth/me`, POST_JSON({ session: authSession() }));
+        if (r.ok) {
+          ACCT.me = await r.json();
+          if (ACCT.me.pro) { PRO_LIVE = true; if (RACE.refresh) RACE.refresh(); return; }
+        } else if (r.status === 401 || r.status === 503) authLost();
+        else if (!proCode()) { PRO_LIVE = null; return; }
+      } catch (e) { if (!proCode()) { PRO_LIVE = null; return; } }
+    }
     const code = proCode();
-    if (!code || !PRO_ON) { PRO_LIVE = false; return; }
+    if (!code) { PRO_LIVE = false; return; }
     if (!BOARD.api) { PRO_LIVE = null; return; }
     try {
       const r = await fetch(`${BOARD.api}/restore`, POST_JSON({ code, key: deviceKey() }));
@@ -5280,6 +5306,127 @@
       openModal('Pro unlocked', [proCodeCard(true)]);
     } catch (e) { toast('The purchase could not be confirmed: ' + e.message); }
   }
+  // signed in (Google, or an emailed link): keep the session; on to the Pro tab, where it shows
+  function authSignedIn(d) {
+    save(SESS_KEY, d.session);
+    ACCT.me = { email: d.email, pro: !!d.pro, ...(d.code ? { code: d.code } : {}) };
+    if (d.pro) PRO_LIVE = true;
+    track('login');
+    toast(`Signed in as ${d.email}`);
+    if (!PRO_ON) return;
+    if (location.hash === '#archive') location.reload(); else location.hash = '#archive';     // (a new hash reloads the page)
+  }
+  async function authGoogle(credential) {
+    try { authSignedIn(await proApi('/auth/google', { credential })); } catch (e) { toast('Google sign-in did not work: ' + e.message); }
+  }
+  // back from the sign-in email: ?login=<token> (used once; the address is tidied either way)
+  async function authLoginFromUrl() {
+    const q = new URLSearchParams(location.search), tok = q.get('login');
+    if (!tok) return;
+    q.delete('login');
+    const rest = q.toString();
+    const tidy = (hash) => history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : '') + hash);
+    tidy(location.hash);
+    try {
+      const d = await proApi('/auth/email/verify', { token: tok });
+      save(SESS_KEY, d.session);
+      ACCT.me = { email: d.email, pro: !!d.pro, ...(d.code ? { code: d.code } : {}) };
+      track('login');
+      if (PRO_ON && !ARCH) { tidy('#archive'); location.reload(); return; }     // on to the Pro tab, where it shows
+      toast(`Signed in as ${d.email}`);
+    } catch (e) { toast(e.message || 'That sign-in link did not work'); }
+  }
+  async function authSignOut() {
+    const s = authSession();
+    authClear();
+    try { if (window.google && window.google.accounts) window.google.accounts.id.disableAutoSelect(); } catch (e) { /* no Google */ }
+    if (s && BOARD.api) await fetch(`${BOARD.api}/auth/logout`, POST_JSON({ session: s })).catch(() => {});
+    track('logout');
+    location.reload();
+  }
+  // Google's own button (Google Identity Services), loaded only when the page names a client id
+  let gisLoad = null;
+  function loadGis() {
+    if (window.google && window.google.accounts && window.google.accounts.id) return Promise.resolve();
+    if (!gisLoad) {
+      gisLoad = new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
+        s.onload = () => res(); s.onerror = () => { gisLoad = null; rej(new Error('Google sign-in did not load')); };
+        document.head.append(s);
+      });
+    }
+    return gisLoad;
+  }
+  // the Sign in card on the Pro tab: signed in (who, Sign out, and Pro on this device's code to add to the account),
+  // or the ways to sign in the board has set up (none: no card)
+  function authNodes() {
+    const box = el('div', 'acct');
+    box.hidden = true;
+    (async () => {
+      if (!BOARD.api) return;
+      if (!ACCT.cfg) {
+        try { const r = await fetch(`${BOARD.api}/auth`, { cache: 'no-store' }); ACCT.cfg = r.ok ? await r.json() : { google: false, email: false }; } catch (e) { return; }
+      }
+      const google = !!(ACCT.cfg.google && GOOGLE_ID), email = !!ACCT.cfg.email;
+      if (ACCT.me && authSession()) {
+        const row = el('div', 'arow'), out = el('button', 'btn ghostbtn', 'Sign out');
+        out.type = 'button';
+        out.addEventListener('click', authSignOut);
+        row.append(el('span', 'who', `Signed in as ${ACCT.me.email}`), out);
+        box.append(el('div', 'k', 'Your account'), row);
+        if (ACCT.me.pro) box.append(el('p', 'note', 'Pro is on your account: sign in on any device to play it there.'));
+        else if (proCode() && isPro()) {
+          const add = el('button', 'btn', 'Add Pro to this account');
+          add.type = 'button';
+          add.addEventListener('click', async () => {
+            add.disabled = true;
+            try {
+              const d = await proApi('/auth/link', { session: authSession(), code: proCode(), key: deviceKey() });
+              ACCT.me = d;
+              track('pro_linked');
+              toast('Pro is on your account now');
+              location.reload();
+            } catch (e) { toast(e.message); add.disabled = false; }
+          });
+          box.append(el('p', 'note', 'This device has Pro by code. Add it to your account and it works on any device you sign in on, no code needed.'), add);
+        } else box.append(el('p', 'note', 'No Pro on this account yet. Buy it while signed in (or add a code you have) and it stays with the account.'));
+        box.hidden = false;
+        return;
+      }
+      if (!google && !email) return;
+      box.append(el('div', 'k', 'Sign in'), el('p', 'note', isPro() ? 'Keep your Pro on an account: sign in and add it, and it works on any device you sign in on, no code needed.'
+        : 'Signed in, a purchase stays with your account: it works on any device you sign in on, no code to keep.'));
+      if (google) {
+        const g = el('div', 'gbtn');
+        box.append(g);
+        loadGis().then(() => {
+          window.google.accounts.id.initialize({ client_id: GOOGLE_ID, callback: (resp) => authGoogle(resp && resp.credential), ux_mode: 'popup', auto_select: false, cancel_on_tap_outside: true });
+          window.google.accounts.id.renderButton(g, { type: 'standard', theme: 'outline', size: 'large', text: 'continue_with', shape: 'pill', logo_alignment: 'left' });
+        }).catch(() => { g.replaceWith(el('p', 'note', 'Google sign-in did not load. Reload to try again, or use email.')); });
+      }
+      if (email) {
+        const form = el('form', 'row'), inp = el('input'), go = el('button', 'btn', 'Email me a sign-in link');
+        inp.type = 'email'; inp.placeholder = 'you@example.com'; inp.autocomplete = 'email'; inp.required = true; inp.setAttribute('aria-label', 'Your email');
+        go.type = 'submit';
+        form.append(inp, go);
+        form.addEventListener('submit', async (ev) => {
+          ev.preventDefault();
+          const addr = inp.value.trim();
+          if (!addr) { inp.focus(); return; }
+          go.disabled = true;
+          try {
+            await proApi('/auth/email', { email: addr });
+            track('login_email');
+            form.replaceWith(el('p', 'sent', `Check your inbox: a sign-in link is on its way to ${addr}. It works once, for 15 minutes.`));
+          } catch (e) { toast(e.message); go.disabled = false; }
+        });
+        box.append(form);
+      }
+      box.hidden = false;
+    })();
+    return box;
+  }
   // ---- The Gauntlet: the contest across the historic drives (board/worker.js /race). Pass all of them (an A each)
   // first and win. A Pro code enters under a public name; only passes made after entering count, each drive once; the
   // board is live (polled while it is on screen) and open to everyone, Pro or not
@@ -5294,7 +5441,7 @@
     const d = await r.json().catch(() => ({}));
     return { ok: r.ok, status: r.status, ...d };
   }
-  const raceFetch = () => (isPro() ? raceCall('/race/me', { code: proCode(), key: deviceKey() }) : raceCall('/race'));
+  const raceFetch = () => (isPro() ? raceCall('/race/me', proCred()) : raceCall('/race'));
   const hms = (ms) => { const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60;
     return `${h ? `${h}:` : ''}${String(m).padStart(h ? 2 : 1, '0')}:${String(x).padStart(2, '0')}`; };
   // the board's clock (a phone's own can be minutes off): the countdown and the Live chip go by it
@@ -5342,7 +5489,7 @@
               if (!name) { inp.focus(); return; }
               go.disabled = true;
               try {
-                const d = await raceCall('/race/join', { code: proCode(), key: deviceKey(), name, rename: true });
+                const d = await raceCall('/race/join', { ...proCred(), name, rename: true });
                 if (!d.ok) { toast(d.error || 'Could not change it'); go.disabled = false; return; }
                 RACE.view = d;
                 toast(`You're on the board as ${d.me.name}.`);
@@ -5366,7 +5513,7 @@
           if (!name) { inp.focus(); return; }
           go.disabled = true;
           try {
-            const d = await raceCall('/race/join', { code: proCode(), key: deviceKey(), name });
+            const d = await raceCall('/race/join', { ...proCred(), name });
             if (!d.ok) { toast(d.error || 'Could not enter'); go.disabled = false; return; }
             RACE.view = d;
             track('race_join');
@@ -5375,7 +5522,7 @@
           } catch (e) { toast('No connection to the board. Try again.'); go.disabled = false; }
         });
         you.append(el('div', 'rme', 'Enter the race'), form, el('p', 'note', 'Your name shows on the board for everyone. Only drives you pass after entering count, so enter before you play.'));
-      } else if (proCode() && PRO_LIVE !== false) {      // a Pro code on this device, not confirmed yet: the entry comes once it is
+      } else if ((proCode() || authSession()) && PRO_LIVE === null) {      // Pro on this device or account, not confirmed yet: the entry comes once it is
         you.append(el('div', 'rme', 'Checking your Pro…'), el('p', 'note', 'One moment: your entry shows here once your Pro code is confirmed.'));
       } else {
         const a = el('a', 'btn', 'Get Pro to enter');
@@ -5442,8 +5589,8 @@
   // a new try of a historic drive: the board's token for it (only an entrant gets one, and only once the Gauntlet has
   // started), so only a try started in the Gauntlet can count; a reloaded try keeps its own
   async function raceStart() {
-    if (!PRO_ON || !BOARD.api || !proCode()) return;
-    const d = await raceRetry('/race/start', () => ({ code: proCode(), key: deviceKey(), drive: DRIVE }));
+    if (!PRO_ON || !BOARD.api || !proHave()) return;
+    const d = await raceRetry('/race/start', () => ({ ...proCred(), drive: DRIVE }));
     if (d && d.ok && d.tok && state && !state.done) { state.raceTok = d.tok; saveState(); }
   }
   // a call to the board that must get through (a try's token, a pass): a busy board (429 slow down, 5xx) or no
@@ -5466,7 +5613,7 @@
     state.raceSent = false; saveState();
     try {
       note.textContent = `${RACE_NAME}: sending your pass…`; note.hidden = false;
-      const d = await raceRetry('/race/pass', () => ({ code: proCode(), key: deviceKey(), drive: DRIVE, p: clip(p, 0, 1), decs: calls, tryAt: state.tryAt || null, tok: state.raceTok || null,
+      const d = await raceRetry('/race/pass', () => ({ ...proCred(), drive: DRIVE, p: clip(p, 0, 1), decs: calls, tryAt: state.tryAt || null, tok: state.raceTok || null,
         res: state.spots.map((x) => (x && x.result ? [x.result.mine, x.result.theirs] : null)) }), [2, 4, 8, 15, 30, 35, 60]);
       if (!d) throw new Error('no connection');
       state.raceSent = true; saveState();
@@ -5496,7 +5643,7 @@
   }
   // your Pro code, where you can't miss it: the code, Copy, and how to use it on your other devices
   function proCodeCard(fresh) {
-    const box = el('div', 'procode'), code = proCode();
+    const box = el('div', 'procode'), code = proShownCode();
     const row = el('div', 'pcrow'), c = el('code', 'pcc', code), copy = el('button', 'btn', 'Copy');
     copy.type = 'button';
     copy.addEventListener('click', async () => {
@@ -5505,7 +5652,7 @@
     });
     row.append(c, copy);
     box.append(el('div', 'k', fresh ? 'Pro unlocked: save your code' : 'Your Pro code'), row,
-      el('p', 'note', 'On your phone, computer or another browser: open the Pro tab, tap "Already have Pro?", paste this code and tap Restore. It works on up to 3 devices. Screenshot it or save it somewhere: it is not in the Stripe receipt.'));
+      el('p', 'note', acctPro() ? 'Pro is on your account: sign in on any device and it is there. The code also works on its own, on up to 3 devices.' : 'On your phone, computer or another browser: open the Pro tab, tap "Already have Pro?", paste this code and tap Restore. It works on up to 3 devices. Screenshot it or save it somewhere: it is not in the Stripe receipt.'));
     return box;
   }
   function proNodes() {
@@ -5517,20 +5664,22 @@
       'The playoff runs. A team’s whole postseason, every late-game spot in order. Win them all'].forEach((t) => ul.append(el('li', '', t)));
     box.append(ul);
     if (isPro()) {
-      box.append(el('p', '', `Pro is on. Your code: ${proCode()}. Keep it: it unlocks Pro on up to 3 of your devices.`));
+      box.append(el('p', '', acctPro() ? `Pro is on your account (${ACCT.me.email}): sign in on any device to play it there.` : `Pro is on. Your code: ${proCode()}. Keep it: it unlocks Pro on up to 3 of your devices.`));
       return [box];
     }
     const row = el('div', 'row'), buy = el('button', 'btn', 'Unlock · $4.99');
     buy.type = 'button';
     buy.addEventListener('click', async () => {
       buy.disabled = true;
-      try { track('pro_pay'); const d = await proApi('/pay'); location.href = d.url; } catch (e) {
+      try { track('pro_pay'); const d = await proApi('/pay', authSession() ? { session: authSession() } : {}); location.href = d.url; } catch (e) {
+        if (/sign-in has expired/.test(e.message)) authClear();
         toast(/not set up/.test(e.message) ? 'Payments open soon' : 'Could not start the purchase: ' + e.message);
         buy.disabled = false;
       }
     });
     row.append(buy);
-    box.append(row, el('p', 'note', 'Apple Pay, Google Pay or a card, on Stripe’s secure page. One code, up to 3 of your devices.'));
+    box.append(row, el('p', 'note', acctPro() || !authSession() ? 'Apple Pay, Google Pay or a card, on Stripe’s secure page. One code, up to 3 of your devices.'
+      : `Apple Pay, Google Pay or a card, on Stripe’s secure page. Signed in as ${(ACCT.me && ACCT.me.email) || 'you'}: Pro goes on your account, for any device you sign in on.`));
     const rs = el('div', 'row'), inp = el('input'), go = el('button', 'btn', 'Restore');
     inp.placeholder = 'TMD-XXXX-XXXX-XXXX'; inp.setAttribute('aria-label', 'Your Pro code'); inp.autocapitalize = 'characters'; inp.spellcheck = false;
     go.type = 'button';
@@ -5552,9 +5701,11 @@
   // The Pro data (nflclock.pro: drives.json, d{k}.json, runs.json, r{k}.json) is not on the site: the board serves
   // each file to a valid Pro code (POST /pro/data). null where the board has none or refuses the code.
   async function proFile(name) {
-    if (!BOARD.api || !proCode()) return null;
+    if (!BOARD.api || !proHave()) return null;
     let r;
-    try { r = await fetch(`${BOARD.api}/pro/data`, POST_JSON({ code: proCode(), name, key: deviceKey() })); } catch (e) { return null; }
+    try { r = await fetch(`${BOARD.api}/pro/data`, POST_JSON({ ...proCred(), name })); } catch (e) { return null; }
+    if (r.status === 401 && proCred().session) { authLost(); return proCode() ? proFile(name) : null; }      // signed out: the device's code, if any
+    if (proCred().session) return r.ok ? r.json().catch(() => null) : null;
     if (r.status === 403 || r.status === 409) { const d = await r.json().catch(() => ({})); proOff(r.status === 409 ? d.error || 'This code is in use on too many devices' : 'That Pro code is not valid any more'); return null; }
     if (!r.ok) return null;
     return r.json().catch(() => null);
@@ -5600,14 +5751,15 @@
     if (BOARD.api) box.append(racePanel());
     if (!isPro()) {
       box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''}, the historic drives and the playoff runs: play any of them, graded like the day it ran.`));
-      if (PRO_LIVE === null && proCode()) {              // a code is kept here but the board could not confirm it
+      if (PRO_LIVE === null && (proCode() || authSession())) {     // a code (or a session) is kept here but the board could not confirm it
         const again = el('button', 'btn', 'Try again');
         again.type = 'button'; again.addEventListener('click', () => location.reload());
         box.append(el('p', '', 'Your Pro code could not be checked (no connection to the board). Try again in a moment.'), again);
-      } else box.append(...proNodes());
+      } else box.append(...proNodes(), authNodes());
       return;
     }
     box.append(proCodeCard(false));
+    box.append(authNodes());        // Pro by code: keep it on an account; signed in: who, and Sign out
     const pro = await loadPro(), ds = load(`${STORE}:drives`, {});
     if (pro && pro.drives.length) {
       // your record across them: passed (an A), the rank it earns, the next rank, every drive's best grade
@@ -5662,7 +5814,7 @@
         st.days[n] ? (() => { const g = el('span', 'gr'); g.append(gradeBadge(Math.round(st.days[n].p * 100)), el('small', '', String(Math.round(st.days[n].p * 100)))); return g; })() : el('span', 'sc', 'Play'));
       list.append(a);
     }
-    box.append(list, el('p', 'note', `Pro is on this device · code ${proCode()}`));
+    box.append(list, el('p', 'note', acctPro() ? `Pro is on your account · ${ACCT.me.email}` : `Pro is on this device · code ${proCode()}`));
   }
 
   // -------------------------------------------------------------- versus ---
@@ -6324,6 +6476,7 @@
       idx.calls.forEach((c) => { CALL[c.id] = c; });
       const now = new Date();
       dayN = ARCH_DAY || dayOf(now);
+      await authLoginFromUrl();
       await proClaimFromUrl();
       await proVerify();
       if (VS_LOBBY) { renderVsLobby(); return; }

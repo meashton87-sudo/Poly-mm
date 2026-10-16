@@ -70,3 +70,9 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   a public name (blocked() names refused); a drive counts the first time it is passed (an A, 90+, and the game won) after entering and after
   RACE_FROM (4 pm Eastern, Oct 16 2026 by default); each pass keeps its calls (race:audit) for the check before a prize.
   The first to pass all RACE_N (24) wins. `DELETE /race?id=` with the admin token takes a run off the board.
+- Accounts (board/worker.js /auth*, game.js authNodes/proVerify): Pro can belong to an account (Sign in with Google: the
+  ID token is verified in the worker; or a one-use emailed link via Resend). Off (503, hidden on the page) without
+  GOOGLE_CLIENT_ID (wrangler.toml var; site.py --google-client-id puts the same id in the page) or RESEND_KEY + MAIL_FROM.
+  Sessions and link tokens are stored only as SHA-256 hashes. A code belongs to one account (pro:code:X.acct). Signed
+  in, /restore, /pro/data and /race/* take { session } (the account's code, no device limit; the same Gauntlet entry as
+  the code); the code path and its 3-device limit are unchanged. Never return another account's data.

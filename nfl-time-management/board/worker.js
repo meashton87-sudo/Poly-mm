@@ -24,11 +24,12 @@
 // secret STRIPE_SECRET (a restricted key: Checkout Sessions read and write) and the vars STRIPE_PRICE (a one-time
 // price id, price_...; or the product id, prod_..., charged PRO_CENTS) and SITE; without them /pay answers 503):
 //   GET    /pro                      -> { on, price }        whether payments are set up, and the price shown
-//   POST   /pay                      -> { url }              a Checkout session: send the player to url; Stripe sends
+//   POST   /pay   { session? }       -> { url }              a Checkout session: send the player to url; Stripe sends
 //                                                            him back to SITE/?claim=<session id>
 //   POST   /claim   { s }            -> { code }             after paying: the session's Pro code (the same code
 //                                                            every time for one session; TMD-XXXX-XXXX-XXXX)
-//   POST   /restore { code }         -> { ok, code }         the code on another device (404 for one never issued)
+//   POST   /restore { code }         -> { ok, code }         the code on another device (404 for one never issued);
+//                                                            or { session }: the signed-in account's code (Accounts)
 //   POST   /pro/data { code, name }  -> the file               the Pro data (board/assets/pro: drives.json, d0.json,
 //                                                            runs.json, r0.json, ...) to a valid code only; the files
 //                                                            are never served as plain assets (403 without a code)
@@ -37,7 +38,8 @@
 //                                                            buyer who never lands back on the site (closed the tab,
 //                                                            a bank payment that cleared later) still has one to claim
 // A code is 12 letters and digits (no 0/O, 1/I/L) drawn at random: about 60 bits, posted at RATE_PER_MIN an IP.
-// Nothing about the buyer is kept here (Stripe has the receipt); only the session id behind each code.
+// Nothing about the buyer is kept here (Stripe has the receipt); only the session id behind each code (and, for a
+// purchase made signed in, the account it belongs to: see Accounts below).
 const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
 const RACE_PATHS = ['/race', '/race/me', '/race/join', '/race/start', '/race/pass'];
 const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook', '/pro/data', '/pro/reset', '/pro/gift'];
@@ -238,13 +240,16 @@ const stripe = (env, path, form) => fetch(`https://api.stripe.com/v1/${path}`, {
   body: form ? new URLSearchParams(form) : undefined,
 });
 const tag = () => 'tmd_pro_' + Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => 'abcdefghijklmnopqrstuvwxyz'[b % 26]).join('');
-// the code for a paid session: the one it already has, else a new one (one code per session, whoever asks first)
-async function codeFor(storage, s) {
+// the code for a paid session: the one it already has, else a new one (one code per session, whoever asks first).
+// acct: the account the purchase was made from (the session's client_reference_id): the new code joins it (unless the
+// account has Pro already: then the code stays a plain code, the buyer's to use or give)
+async function codeFor(storage, s, acct) {
   const have = await storage.get(`pro:sess:${s}`);
   if (have) return have;
   const code = proCode();
   await storage.put(`pro:code:${code}`, { s, at: new Date().toISOString() });
   await storage.put(`pro:sess:${s}`, code);
+  if (typeof acct === 'string' && /^[eg]:/.test(acct)) await attachCode(storage, acct, code);
   return code;
 }
 // The device (the hash of the site's anonymous device key) joins the code's devices, or is refused when the code is
@@ -274,6 +279,203 @@ async function signedByStripe(req, body, secret) {
   const mac = Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${t}.${body}`))), (b) => b.toString(16).padStart(2, '0')).join('');
   return sig.split(',').some((kv) => kv.startsWith('v1=') && same(kv.slice(3), mac));
 }
+
+// ---- Accounts: Pro on an account (Sign in with Google, or a sign-in link by email), so it works on any device signed
+// in, and a lost code is no loss. Codes keep working as before for anyone who never signs in.
+//   GET  /auth                          -> { google, email }      which ways to sign in are set up
+//   POST /auth/google  { credential }   -> { session, email, pro, code? }   a Google Identity Services ID token, checked
+//                                          here (RS256 against Google's keys, aud = GOOGLE_CLIENT_ID, iss, exp,
+//                                          email_verified); the account is g:<sub>. Off (503) without GOOGLE_CLIENT_ID.
+//   POST /auth/email   { email }        -> { ok }                 a one-use sign-in link (15 minutes) mailed by Resend to
+//                                          SITE/?login=<token> (the same answer whoever the address is); at most
+//                                          MAIL_MAX a MAIL_WINDOW per address and per IP. Off (503) without RESEND_KEY
+//                                          and MAIL_FROM. The account is e:<the address, lowercased>.
+//   POST /auth/email/verify { token }   -> { session, email, pro, code? }   the link's token, used up
+//   POST /auth/me      { session }      -> { email, pro, code? }  (401: signed out)
+//   POST /auth/logout  { session }      -> { ok }
+//   POST /auth/link    { session, code, key } -> { email, pro, code }   a valid Pro code (on this device: the device
+//                                          limit applies) joins the account; a code belongs to one account only
+// Sessions are 32 random bytes (hex) the page keeps; only their SHA-256 is stored (auth:sess:<hash> -> { acct, at }),
+// for SESS_DAYS. An account is acct:<id> -> { email, code?, at }; its code's row carries acct. /pay with a session
+// sends the account to Stripe (client_reference_id), and the code minted for that purchase joins the account. /restore,
+// /pro/data and /race/* take { session } in place of { code, key }: the account's code, without the device limit (the
+// account is its own protection; the code is the same, so the Gauntlet entry is the same).
+const AUTH_PATHS = ['/auth', '/auth/google', '/auth/email', '/auth/email/verify', '/auth/me', '/auth/logout', '/auth/link'];
+// a session lasts SESS_DAYS; a link LOGIN_MS; an address is at most 198 characters (e:<address> fits Stripe's
+// 200-character client_reference_id)
+const SESS_DAYS = 180, LOGIN_MS = 15 * 60e3, MAIL_MAX = 3, MAIL_WINDOW = 15 * 60e3;
+const GOOGLE_CERTS = 'https://www.googleapis.com/oauth2/v3/certs', GOOGLE_ISS = ['accounts.google.com', 'https://accounts.google.com'];
+const TOKEN_RE = /^[0-9a-f]{64}$/, EMAIL_RE = /^[^\s@<>()[\]\\,;:"]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
+const googleOn = (env) => !!env.GOOGLE_CLIENT_ID;
+const emailOn = (env) => !!(env.RESEND_KEY && env.MAIL_FROM);
+const authOn = (env) => googleOn(env) || emailOn(env);
+const randHex = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => b.toString(16).padStart(2, '0')).join('');
+const b64url = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+const b64json = (s) => JSON.parse(new TextDecoder().decode(b64url(s)));
+// Google's signing keys, by kid, kept as long as Google's Cache-Control says (an unknown kid asks again, once a minute at most)
+const GKEYS = { at: 0, until: 0, keys: new Map() };
+async function googleKey(kid) {
+  const now = Date.now();
+  if ((now > GKEYS.until || !GKEYS.keys.has(kid)) && now - GKEYS.at > 60e3) {
+    GKEYS.at = now;
+    const r = await fetch(GOOGLE_CERTS);
+    if (r.ok) {
+      const d = await r.json(), keys = new Map();
+      for (const k of (d && d.keys) || []) {
+        if (k.kty !== 'RSA' || !k.kid || !k.n || !k.e) continue;
+        try { keys.set(k.kid, await crypto.subtle.importKey('jwk', { kty: 'RSA', n: k.n, e: k.e, alg: 'RS256', ext: true }, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify'])); } catch (e) { /* a key we can't use */ }
+      }
+      const age = Number(((r.headers.get('Cache-Control') || '').match(/max-age=(\d+)/) || [])[1] || 3600);
+      if (keys.size) { GKEYS.keys = keys; GKEYS.until = now + Math.min(age, 86400) * 1000; }
+    }
+  }
+  return GKEYS.keys.get(kid) || null;
+}
+// a Google ID token's claims when it is genuine, for this site, current and of a verified address; else null
+async function verifyGoogle(cred, env) {
+  const jwt = String(cred || ''), parts = jwt.split('.');
+  if (parts.length !== 3 || jwt.length > 4096) return null;
+  let head, claims;
+  try { head = b64json(parts[0]); claims = b64json(parts[1]); } catch (e) { return null; }
+  if (!head || head.alg !== 'RS256' || typeof head.kid !== 'string') return null;
+  const key = await googleKey(head.kid);
+  if (!key) return null;
+  let ok = false;
+  try { ok = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, b64url(parts[2]), new TextEncoder().encode(`${parts[0]}.${parts[1]}`)); } catch (e) { ok = false; }
+  if (!ok || !claims) return null;
+  if (claims.aud !== env.GOOGLE_CLIENT_ID || !GOOGLE_ISS.includes(claims.iss)) return null;
+  if (!(Number(claims.exp) * 1000 > Date.now())) return null;
+  if (!(claims.email_verified === true || claims.email_verified === 'true')) return null;
+  if (typeof claims.sub !== 'string' || !claims.sub || typeof claims.email !== 'string') return null;
+  return claims;
+}
+// a session's account id, or null (an unknown, expired or malformed session; any while accounts are off)
+async function sessionAcct(storage, env, session) {
+  const tok = String(session || '');
+  if (!authOn(env) || !TOKEN_RE.test(tok)) return null;
+  const k = `auth:sess:${await sha256(tok)}`, s = await storage.get(k);
+  if (!s) return null;
+  if (Date.now() - s.at > SESS_DAYS * 864e5) { await storage.delete(k); return null; }
+  return s.acct;
+}
+async function newSession(storage, acct, email) {
+  const a = (await storage.get(`acct:${acct}`)) || { at: new Date().toISOString() };
+  if (a.email !== email) { a.email = email; await storage.put(`acct:${acct}`, a); }
+  const tok = randHex(32);
+  await storage.put(`auth:sess:${await sha256(tok)}`, { acct, at: Date.now() });
+  return { session: tok, ...(await acctView(storage, acct)) };
+}
+// what the page is told about its own account (never anyone else's)
+async function acctView(storage, acct) {
+  const a = (await storage.get(`acct:${acct}`)) || {};
+  const pro = !!(a.code && await storage.get(`pro:code:${a.code}`));
+  return { email: a.email || '', pro, ...(pro ? { code: a.code } : {}) };
+}
+// a code joins an account: refused when it belongs to another account, or the account has another code
+async function attachCode(storage, acct, code) {
+  const row = await storage.get(`pro:code:${code}`), a = await storage.get(`acct:${acct}`);
+  if (!row || !a) return 'unknown';
+  if (row.acct && row.acct !== acct) return 'taken';
+  if (a.code && a.code !== code && await storage.get(`pro:code:${a.code}`)) return 'has';
+  if (row.acct !== acct) await storage.put(`pro:code:${code}`, { ...row, acct });
+  if (a.code !== code) await storage.put(`acct:${acct}`, { ...a, code });
+  return 'ok';
+}
+// at most MAIL_MAX in MAIL_WINDOW for one key (kept in storage, so the limit holds across restarts)
+async function mailLimited(storage, key) {
+  const now = Date.now(), k = `auth:rl:${key}`, hitsAt = ((await storage.get(k)) || []).filter((t) => now - t < MAIL_WINDOW);
+  if (hitsAt.length >= MAIL_MAX) return true;
+  hitsAt.push(now);
+  await storage.put(k, hitsAt);
+  return false;
+}
+const siteFor = (req, env) => {
+  const allowed = String(env.ALLOWED_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean), origin = req.headers.get('Origin') || '';
+  return String(allowed.includes(origin) && origin !== '*' ? origin : env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, '');
+};
+async function auth(req, env, storage, hits, h, url) {
+  if (url.pathname === '/auth') return req.method === 'GET' ? json({ google: googleOn(env), email: emailOn(env) }, 200, h) : json({ error: 'method' }, 405, h);
+  if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
+  const p = url.pathname;
+  if (p === '/auth/google' ? !googleOn(env) : p.startsWith('/auth/email') ? !emailOn(env) : !authOn(env)) return json({ error: 'sign-in is not set up' }, 503, h);
+  if (p !== '/auth/me' && limited(req, hits)) return json({ error: 'slow down' }, 429, h);
+  let body;
+  try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
+  body = body && typeof body === 'object' ? body : {};
+  if (p === '/auth/google') {
+    const c = await verifyGoogle(body.credential, env);
+    if (!c) return json({ error: 'that Google sign-in could not be checked' }, 401, h);
+    return json(await newSession(storage, `g:${c.sub}`, String(c.email).toLowerCase()), 200, h);
+  }
+  if (p === '/auth/email') {
+    const email = String(body.email || '').trim().toLowerCase();
+    if (email.length > 198 || !EMAIL_RE.test(email)) return json({ error: 'that does not look like an email address' }, 400, h);
+    const ip = req.headers.get('CF-Connecting-IP') || 'local';
+    if (await mailLimited(storage, `ip:${await sha256(ip)}`) || await mailLimited(storage, `em:${await sha256(email)}`)) return json({ error: 'Too many sign-in emails. Try again in 15 minutes.' }, 429, h);
+    const tok = randHex(32), link = `${siteFor(req, env)}/?login=${tok}`;
+    await storage.put(`auth:login:${await sha256(tok)}`, { email, exp: Date.now() + LOGIN_MS });
+    let r;
+    try {
+      r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${env.RESEND_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: env.MAIL_FROM, to: [email], subject: 'Your Two-Minute Drill sign-in link',
+          text: `Sign in to Two-Minute Drill:\n\n${link}\n\nThe link works once, for 15 minutes. If you didn't ask for it, ignore this email.`,
+          html: `<p>Sign in to Two-Minute Drill:</p><p><a href="${link}">Sign in</a></p><p>The link works once, for 15 minutes. If you didn't ask for it, ignore this email.</p>` }) });
+    } catch (e) { r = null; }
+    if (!r || !r.ok) { console.error('resend refused the email', r ? r.status : 'unreachable'); return json({ error: 'the email could not be sent; try again' }, 502, h); }
+    return json({ ok: true }, 200, h);
+  }
+  if (p === '/auth/email/verify') {
+    const tok = String(body.token || '');
+    if (!TOKEN_RE.test(tok)) return json({ error: 'that sign-in link is not valid' }, 400, h);
+    const k = `auth:login:${await sha256(tok)}`, row = await storage.get(k);
+    if (row) await storage.delete(k);                           // one use, whatever happens next
+    if (!row || Date.now() > row.exp) return json({ error: 'that sign-in link has expired or was used already: ask for a new one' }, 401, h);
+    return json(await newSession(storage, `e:${row.email}`, row.email), 200, h);
+  }
+  const acct = await sessionAcct(storage, env, body.session);
+  if (p === '/auth/logout') {
+    if (TOKEN_RE.test(String(body.session || ''))) await storage.delete(`auth:sess:${await sha256(String(body.session))}`);
+    return json({ ok: true }, 200, h);
+  }
+  if (!acct) return json({ error: 'signed out', signedOut: true }, 401, h);
+  if (p === '/auth/me') return json(await acctView(storage, acct), 200, h);
+  if (p === '/auth/link') {
+    const code = normCode(body.code);
+    if (!code) return json({ error: 'a code looks like TMD-XXXX-XXXX-XXXX' }, 400, h);
+    const owner = ((await storage.get(`pro:code:${code}`)) || {}).acct;          // (before it takes a device's place)
+    if (owner && owner !== acct) return json({ error: 'This Pro code belongs to another account.' }, 409, h);
+    const st = await bindDevice(storage, code, String(body.key || ''));
+    if (st === 'key') return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
+    if (st === 'unknown') return json({ error: 'unknown code' }, 404, h);
+    if (st === 'full') return json({ error: DEV_FULL }, 409, h);
+    const at = await attachCode(storage, acct, code);
+    if (at === 'taken') return json({ error: 'This Pro code belongs to another account.' }, 409, h);
+    if (at === 'has') return json({ error: 'This account already has Pro.' }, 409, h);
+    if (at !== 'ok') return json({ error: 'unknown code' }, 404, h);
+    return json(await acctView(storage, acct), 200, h);
+  }
+  return json({ error: 'not found' }, 404, h);
+}
+// Pro by a session (the account's code; no device limit) or by a code on a device (the device limit, as ever):
+// { code } or { status, error }
+async function proAccess(storage, env, body, needCode = 'a valid Pro code is needed') {
+  if (body && body.session) {
+    const acct = await sessionAcct(storage, env, body.session);
+    if (!acct) return { status: 401, error: 'signed out', signedOut: true };
+    const a = await storage.get(`acct:${acct}`);
+    if (!(a && a.code && await storage.get(`pro:code:${a.code}`))) return { status: 403, error: 'this account has no Pro', noPro: true };
+    return { code: a.code };
+  }
+  const code = normCode(body && body.code);
+  if (!code) return { status: 403, error: needCode };
+  const st = await bindDevice(storage, code, String((body && body.key) || ''));
+  if (st === 'key') return { status: 400, error: 'key (16-128 letters, digits, - or _) wanted' };
+  if (st === 'unknown') return { status: 403, error: needCode };
+  if (st === 'full') return { status: 409, error: DEV_FULL };
+  return { code };
+}
+const refusal = (x, h) => json({ error: x.error, ...(x.signedOut ? { signedOut: true } : {}), ...(x.noPro ? { noPro: true } : {}) }, x.status, h);
+
 async function pro(req, env, storage, hits, h, url) {
   if (url.pathname === '/pro') return req.method === 'GET' ? json({ on: proOn(env), price: PRO_PRICE }, 200, h) : json({ error: 'method' }, 405, h);
   if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
@@ -285,7 +487,7 @@ async function pro(req, env, storage, hits, h, url) {
     try { ev = JSON.parse(raw); } catch (e) { return json({ error: 'bad json' }, 400, h); }
     const sess = ev && ev.data && ev.data.object;
     if (['checkout.session.completed', 'checkout.session.async_payment_succeeded'].includes(ev && ev.type) && sess && SESSION_RE.test(String(sess.id || ''))
-        && sess.payment_status && sess.payment_status !== 'unpaid') await codeFor(storage, sess.id);
+        && sess.payment_status && sess.payment_status !== 'unpaid') await codeFor(storage, sess.id, sess.client_reference_id);
     return json({ received: true }, 200, h);
   }
   if (!proOn(env)) return json({ error: 'payments are not set up yet' }, 503, h);
@@ -293,8 +495,12 @@ async function pro(req, env, storage, hits, h, url) {
   let body = {};
   if (url.pathname !== '/pay') {
     try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
-  }
+  } else body = await req.json().catch(() => ({}));
+  body = body && typeof body === 'object' ? body : {};
   if (url.pathname === '/pay') {
+    // signed in: the purchase is the account's (Stripe hands the account back with the paid session)
+    const acct = body.session ? await sessionAcct(storage, env, body.session) : null;
+    if (body.session && !acct) return json({ error: 'Your sign-in has expired: sign in again (or sign out to buy with a code).', signedOut: true }, 401, h);
     // the buyer goes back to the site he came from (an allowed origin: the site, or the Pro preview), else SITE
     const allowed = String(env.ALLOWED_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean), origin = req.headers.get('Origin') || '';
     const site = String(allowed.includes(origin) ? origin : env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, '');
@@ -310,7 +516,8 @@ async function pro(req, env, storage, hits, h, url) {
             : { 'line_items[0][price_data][product_data][name]': 'Two-Minute Drill Pro', 'line_items[0][price_data][product_data][tax_code]': PRO_TAX_CODE,
               'line_items[0][price_data][product_data][description]': 'Every past daily, the historic drives and the playoff runs. One code, any device.' }) };
       r = await stripe(env, 'checkout/sessions', { mode: 'payment', ...item, 'line_items[0][quantity]': '1',
-        success_url: `${site}/?claim={CHECKOUT_SESSION_ID}`, cancel_url: `${site}/?pro=cancel`, integration_identifier: tag() });
+        success_url: `${site}/?claim={CHECKOUT_SESSION_ID}`, cancel_url: `${site}/?pro=cancel`, integration_identifier: tag(),
+        ...(acct ? { client_reference_id: acct } : {}) });
     } catch (e) { return json({ error: 'stripe unreachable' }, 502, h); }
     const sess = await r.json().catch(() => ({}));
     if (!r.ok || !sess.url) {                               // Stripe's reason, for the buyer's screen and the worker's log
@@ -330,11 +537,15 @@ async function pro(req, env, storage, hits, h, url) {
     const sess = await r.json().catch(() => ({}));
     if (!r.ok) return json({ error: 'no such session' }, 404, h);
     if (sess.payment_status === 'unpaid') return json({ error: 'not paid' }, 402, h);     // 'no_payment_required' counts as paid
-    const minted = await codeFor(storage, s);
+    const minted = await codeFor(storage, s, sess.client_reference_id);
     if (KEY_RE.test(String(body.key || ''))) await bindDevice(storage, minted, String(body.key));    // the buyer's device is the first
     return json({ code: minted }, 200, h);
   }
   if (url.pathname === '/restore') {
+    if (body.session) {                                     // signed in: the account's code
+      const x = await proAccess(storage, env, body);
+      return x.code ? json({ ok: true, code: x.code }, 200, h) : refusal(x, h);
+    }
     const code = normCode(body.code);
     if (!code) return json({ error: 'a code looks like TMD-XXXX-XXXX-XXXX' }, 400, h);
     const st = await bindDevice(storage, code, String(body.key || ''));
@@ -362,12 +573,10 @@ async function pro(req, env, storage, hits, h, url) {
     return json({ ok: true, code }, 200, h);
   }
   if (url.pathname === '/pro/data') {
-    const code = normCode(body.code), name = String(body.name || '');
+    const name = String(body.name || '');
     if (!PRO_FILE_RE.test(name)) return json({ error: 'no such file' }, 404, h);
-    const st = code ? await bindDevice(storage, code, String(body.key || '')) : 'unknown';
-    if (st === 'key') return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
-    if (st === 'unknown') return json({ error: 'a valid Pro code is needed' }, 403, h);
-    if (st === 'full') return json({ error: DEV_FULL }, 409, h);
+    const x = await proAccess(storage, env, body);
+    if (!x.code) return refusal(x, h);
     if (!env.ASSETS) return json({ error: 'the Pro data is not deployed' }, 503, h);
     const file = await env.ASSETS.fetch(new Request(new URL(`/pro/${name}`, req.url), { method: 'GET' }));
     if (!file.ok) return json({ error: 'no such file' }, 404, h);
@@ -381,6 +590,7 @@ export async function handle(req, env, storage, hits) {
   const h = cors(req, env), url = new URL(req.url);
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: h });
   if (PRO_PATHS.includes(url.pathname)) return pro(req, env, storage, hits, h, url);
+  if (AUTH_PATHS.includes(url.pathname)) return auth(req, env, storage, hits, h, url);
   if (url.pathname === '/race' || url.pathname.startsWith('/race/')) return race(req, env, storage, hits, h, url);
   if (url.pathname === '/daily') return daily(req, env, storage, hits, h, url);
   if (url.pathname === '/days') return req.method === 'GET' ? days(storage, h) : json({ error: 'method' }, 405, h);
@@ -480,12 +690,9 @@ async function race(req, env, storage, hits, h, url) {
   if (url.pathname !== '/race/me' && limited(req, hits)) return json({ error: 'slow down' }, 429, h);
   let body;
   try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
-  const code = normCode(body && body.code);
-  if (!code) return json({ error: 'a Pro code is needed to enter' }, 403, h);
-  const st = await bindDevice(storage, code, String(body.key || ''));
-  if (st === 'key') return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
-  if (st === 'unknown') return json({ error: 'a valid Pro code is needed to enter' }, 403, h);
-  if (st === 'full') return json({ error: DEV_FULL }, 409, h);
+  const x = await proAccess(storage, env, body, 'a valid Pro code is needed to enter');
+  if (!x.code) return refusal(x, h);
+  const code = x.code;                                     // signed in or by code: the same code, the same entry
   const id = (await sha256(`race:${code}`)).slice(0, 24), now = Date.now();
   if (url.pathname === '/race/me') return json(await raceView(storage, env, id), 200, h);
   let e = await storage.get(`race:e:${id}`);
@@ -585,7 +792,7 @@ export default {
   fetch(req, env) {
     const url = new URL(req.url);
     if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me'].includes(url.pathname)) return versus(req, env, url);
-    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, '/board', '/daily', '/days', '/madden'].includes(url.pathname)) return handle(req, env, null, null);
+    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, '/board', '/daily', '/days', '/madden'].includes(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },
 };

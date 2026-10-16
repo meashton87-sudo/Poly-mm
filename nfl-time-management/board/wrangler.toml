@@ -14,6 +14,10 @@ keep_vars = true        # a deploy keeps plain variables set in the Cloudflare d
 [vars]
 ALLOWED_ORIGINS = "https://nfl2mindrill.com,https://www.nfl2mindrill.com,https://nfl2mindrill.pages.dev,https://nfl2mindrill-pro-preview.pages.dev"
 SITE = "https://nfl2mindrill.com"
+# Accounts (worker.js /auth*): GOOGLE_CLIENT_ID (public; the same id the site's page names) turns on Sign in with
+# Google; email sign-in links need the secret RESEND_KEY and the var MAIL_FROM (e.g. "Two-Minute Drill
+# <signin@nfl2mindrill.com>", a domain verified in Resend); without them those answer 503 and the page hides them.
+GOOGLE_CLIENT_ID = "1079340119845-i8p0d0c57dmoa1hluqkm15ofi33oe9ms.apps.googleusercontent.com"
 STRIPE_PRICE = "prod_VRryrvDrQxpAC7"      # the live product (Two-Minute Drill Pro; its category carries the tax code Managed Payments needs), charged $4.99
 
 # The Pro data (board/assets/pro, put there by the site workflow): never served as plain files (run_worker_first), only
