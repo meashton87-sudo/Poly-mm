@@ -33,4 +33,17 @@ jobs:
       - name: Test
         run: node worker_test.mjs
 
-      # The deploy lives in site.yml (the worker ships with the Pro data as its assets); this workflow only tests.
+      # The regular deploy lives in site.yml (the worker ships with the Pro data as its assets). Run this workflow by
+      # hand (workflow_dispatch) to deploy the worker's code right away, on its own: the Pro data it holds then is
+      # whatever the last site run left in assets/pro (nothing, from a fresh checkout) until the next site run.
+      - name: Deploy now (manual run only)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "no Cloudflare token: skipped"; exit 0; fi
+          if [ -n "$SITE_DOMAIN" ]; then sed -i "s#^ALLOWED_ORIGINS = .*#ALLOWED_ORIGINS = \"https://$SITE_DOMAIN,https://www.$SITE_DOMAIN,https://nfl2mindrill.pages.dev,https://nfl2mindrill-pro-preview.pages.dev\"#" wrangler.toml; fi
+          grep ^ALLOWED_ORIGINS wrangler.toml
+          npx --yes wrangler@4.144.0 deploy
