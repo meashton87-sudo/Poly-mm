@@ -240,6 +240,8 @@
   // off, the defense is the three looks (blitz, load the box, play it soft)
   const FULLDEF = VS || !!document.querySelector('meta[name="fulldef"]');
   const VS_DECIDE_MS = 30000;      // the play clock in Versus: 30 seconds a call (board/match.js DECIDE_MS)
+  // spots whose data was corrected, and when the fix went live: a drive's try saved before it starts over
+  const SPOT_FIXED = { '2018_14_NE_MIA#4172': Date.parse('2026-10-16T22:50:00Z') };
   const stateKey = () => (VS ? `${STORE}:vs:${VS_ROOM}` : SURV ? `${STORE}:surv` : DRIVE ? `${STORE}:drive:${DRIVE}` : RUN_N ? `${STORE}:run:${RUN_N}` : `${STORE}:day:${dayN}`);
   const saveState = () => save(stateKey(), state);
   const seedKey = () => (VS ? `vs${vs.seed}` : SURV ? `s${state.run}:${state.games.length}` : DRIVE ? `drive${DRIVE}` : RUN_N ? `run${RUN_N}` : dayN);    // what the engine's draws are seeded by
@@ -1104,7 +1106,10 @@
       if (t > Wd.t + 1e-9) Wd.run(t);
       t = Math.max(t, Wd.t);
       const b = a.b, s = Math.hypot(b.vx, b.vy), st = [[b.x, b.y]];
-      if (s > 1.2) { const k = Math.min(4, Math.max(1, s * 0.45)) / s; st.push([b.x + b.vx * k, b.y + b.vy * k]); }
+      if (s > 1.2) {
+        const k = Math.min(4, Math.max(1, s * 0.45)) / s, m = [b.x + b.vx * k, b.y + b.vy * k];
+        st.push(o && o.lim ? o.lim(m) : m);          // (lim: a ball carrier's momentum never takes him past the spot)
+      }
       return follow(a, t, plan(a, st.concat(pts.map((p) => [inX(p[0]), p[1]])), { v0: s, ...(o || {}) }));
     }
     const nearest = (list, p, skip) => {
@@ -1228,7 +1233,9 @@
       // (inside the sideline, as every run is: the pile below starts where his run ended)
       let contact = tackled ? [inX(endPt[0] - ex * after), endPt[1] - ey * after] : endPt;
       let route = dist(start, contact) > 0.6 ? pts.concat([contact]) : [contact];
-      const runO = { eff: o.eff ?? 0.97, v1: tackled ? 3.4 : undefined };
+      // forward progress: his momentum carries him to where he is met at most (the spot, when nobody meets him)
+      const lim = o.td ? null : (p) => { const yy = tackled ? contact[1] : endPt[1]; return [p[0], fd > 0 ? Math.min(p[1], yy) : Math.max(p[1], yy)]; };
+      const runO = { eff: o.eff ?? 0.97, v1: tackled ? 3.4 : undefined, lim };
       let A = runFrom(car, t0, route, runO);
       let tC = t0 + A.T;
       // who gets there: the defender with the shortest time to the contact point, from where he is now
@@ -1288,7 +1295,7 @@
       if (tackled && reach.length) {
         tackler = reach[0].d;
         if (reach[0].T > tC - t0 + 0.1) {            // still nobody (the field ran out): he slows in traffic
-          A = runFrom(car, t0, route, { T: reach[0].T + 0.1, v1: 3.4 });
+          A = runFrom(car, t0, route, { T: reach[0].T + 0.1, v1: 3.4, lim });
           tC = t0 + A.T;
         }
         busy.add(tackler);
@@ -6776,6 +6783,10 @@
         $('dayLabel').textContent = `No. ${dayN} · ${dayDate(dayN).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${ARCH_DAY ? ' · archive' : ''}`;
       }
     } catch (e) { $('boot').textContent = 'Today\'s spots did not load (' + e.message + '). Check your connection and reload.'; return; }
+    // a try saved on a spot's data since corrected (the Miami Miracle began with the touchdown on the board until the fix
+    // went out): thrown away, so it starts over from the right spot
+    const stale = (st) => DRIVE && st && today[0] && SPOT_FIXED[today[0].id] && !(st.tryAt >= SPOT_FIXED[today[0].id]);
+    if (stale(load(stateKey(), null))) { try { localStorage.removeItem(stateKey()); } catch (e) { /* storage off */ } }
     const fresh = !load(stateKey(), null);
     state = load(stateKey(), null) || { spots: [], current: 0, done: false, tryAt: Date.now() };     // tryAt: this try (a drive's record)
     if (fresh && DRIVE) raceStart();      // a new try of a historic drive: the Gauntlet's token for it
