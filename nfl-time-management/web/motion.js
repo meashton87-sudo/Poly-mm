@@ -118,10 +118,13 @@
   // v0 at the start to at most v1 at the end; returns the samples with their times. He comes in at v0 whatever this
   // path's effort, and no faster than he can brake does he slow: a path that asks more (a stop he can't make in its
   // length, a top speed under the one he has) is run as fast as that allows (past the end, he coasts: World.step).
+  // A path that must stop at its end (v1 = 0: a ball carrier at the spot, a man at the sideline) may stop harder than a
+  // player brakes by choice, up to STOP_HARD: he plants, or he is driven down (a tackle is a collision), never slides past.
+  const STOP_HARD = 9;
   function profile(R, en, v0, v1) {
-    const n = R.P.length, v = new Float64Array(n);
+    const n = R.P.length, v = new Float64Array(n), floorBrake = v1 === 0 ? Math.max(en.brake, STOP_HARD) : en.brake;
     v[0] = v0;
-    const slowest = (i) => Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] - 2 * en.brake * (R.s[i] - R.s[i - 1])));
+    const slowest = (i) => Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] - 2 * floorBrake * (R.s[i] - R.s[i - 1])));
     for (let i = 1; i < n; i++) {
       const ds = R.s[i] - R.s[i - 1];
       v[i] = Math.min(R.vlim[i], Math.max(slowest(i), Math.min(en.top, Math.sqrt(v[i - 1] * v[i - 1] + 2 * fwdAcc(en, v[i - 1]) * ds))));
@@ -160,7 +163,7 @@
       }
     }
     const { R, pr } = best;
-    const plan = { T: pr.T, eff, late: o.T != null ? Math.max(0, pr.T - o.T) : 0, end: R.P[R.P.length - 1].slice(),
+    const plan = { T: pr.T, eff, stop: o.v1 === 0, late: o.T != null ? Math.max(0, pr.T - o.T) : 0, end: R.P[R.P.length - 1].slice(),
       vEnd: pr.v[pr.v.length - 1] };
     // position and velocity at time t after the start (held at the end once there)
     plan.at = (t) => {
@@ -264,6 +267,7 @@
       // a path used up while still moving (a route run through its end, a pursuit cut short): he carries his
       // momentum and pulls up within his envelope, as a player does, instead of stopping dead on the spot
       const spent = L && L.kind === 'path' && t + dt - L.t0 > L.plan.T + 1e-9;
+      if (spent && L.plan.stop) { b.vx = 0; b.vy = 0; b.nx = b.x; b.ny = b.y; continue; }    // (a stop path: down where it ends)
       if (L && L.kind === 'path' && !spent) {
         const p = L.plan.at(t + dt - L.t0);
         b.vx = (p[0] - b.x) / dt; b.vy = (p[1] - b.y) / dt;
