@@ -259,13 +259,35 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.deepStrictEqual(Object.keys(store.get(`pro:code:${code}`)).sort(), ['at', 's'], 'only the session behind the code is kept');
   // restoring: the code as typed, any case, dashes or not, with 0/1 for O/I corrected
   const typed = code.toLowerCase().replace(/-/g, ' ').replace(/^tmd/, '');
-  r = await pro('POST', '/restore', { code: typed });
+  r = await pro('POST', '/restore', { code: typed, key: KEY.eli });
   assert.deepStrictEqual(await r.json(), { ok: true, code });
-  assert.strictEqual((await pro('POST', '/restore', { code: 'TMD-AAAA-AAAA-AAAA' })).status, 404, 'never issued');
-  assert.strictEqual((await pro('POST', '/restore', { code: 'TMD-AAAA' })).status, 400, 'too short');
-  assert.strictEqual((await pro('POST', '/restore', {})).status, 400);
-  for (let i = 0; i < RATE; i++) await pro('POST', '/restore', { code: 'TMD-AAAA-AAAA-AAAB' }, { ip: '7.7.7.7' });
-  assert.strictEqual((await pro('POST', '/restore', { code: 'TMD-AAAA-AAAA-AAAB' }, { ip: '7.7.7.7' })).status, 429, 'guessing codes is rate limited');
+  assert.strictEqual((await pro('POST', '/restore', { code: 'TMD-AAAA-AAAA-AAAA', key: KEY.eli })).status, 404, 'never issued');
+  assert.strictEqual((await pro('POST', '/restore', { code: 'TMD-AAAA', key: KEY.eli })).status, 400, 'too short');
+  assert.strictEqual((await pro('POST', '/restore', { key: KEY.eli })).status, 400);
+  assert.strictEqual((await pro('POST', '/restore', { code })).status, 400, 'a device key is wanted');
+  for (let i = 0; i < RATE; i++) await pro('POST', '/restore', { code: 'TMD-AAAA-AAAA-AAAB', key: KEY.eli }, { ip: '7.7.7.7' });
+  assert.strictEqual((await pro('POST', '/restore', { code: 'TMD-AAAA-AAAA-AAAB', key: KEY.eli }, { ip: '7.7.7.7' })).status, 429, 'guessing codes is rate limited');
+  // one code, three devices: the fourth is refused until one has been away 30 days (or support resets the code)
+  const dev4 = 'fourth-device-key-000000004', dev5 = 'fifth-device-key-0000000005';
+  assert.strictEqual((await pro('POST', '/restore', { code, key: KEY.matt })).status, 200, 'device 2');
+  assert.strictEqual((await pro('POST', '/restore', { code, key: KEY.spam })).status, 200, 'device 3');
+  r = await pro('POST', '/restore', { code, key: dev4 });
+  assert.strictEqual(r.status, 409, 'device 4 refused');
+  assert.match((await r.json()).error, /3 devices/);
+  assert.strictEqual((await pro('POST', '/restore', { code, key: KEY.eli })).status, 200, 'a device already on it stays');
+  const rowKeys = Object.keys(store.get(`pro:code:${code}`).dev);
+  assert.strictEqual(rowKeys.length, 3);
+  assert.ok(!JSON.stringify(store.get(`pro:code:${code}`)).includes(KEY.eli), 'only the hash of a device key is stored');
+  store.get(`pro:code:${code}`).dev[rowKeys[2]] = Date.now() - 31 * 864e5;       // device 3 away 31 days
+  assert.strictEqual((await pro('POST', '/restore', { code, key: dev4 })).status, 200, 'its place is free');
+  assert.strictEqual((await pro('POST', '/restore', { code, key: KEY.spam })).status, 409, 'and device 3 is now the odd one out');
+  for (const e of [env, board.env]) e.ADMIN_TOKEN = 'commish-secret-123';
+  assert.strictEqual((await pro('POST', '/pro/reset', { code })).status, 403, 'reset needs the admin token');
+  assert.strictEqual((await pro('POST', '/pro/reset', { code }, { auth: 'Bearer commish-secret-123' })).status, 200);
+  assert.strictEqual((await pro('POST', '/pro/reset', { code: 'TMD-AAAA-AAAA-AAAA' }, { auth: 'Bearer commish-secret-123' })).status, 404);
+  assert.strictEqual((await pro('POST', '/restore', { code, key: KEY.spam })).status, 200, 'after a reset the devices start over');
+  assert.strictEqual((await pro('POST', '/restore', { code, key: dev5 })).status, 200);
+
   assert.strictEqual((await pro('GET', '/pay')).status, 405);
   assert.strictEqual(init0.headers['Stripe-Version'], '2026-08-26.dahlia', 'the API version is pinned');
   assert.match(form.get('integration_identifier'), /^tmd_pro_[a-z]{8}$/, 'sessions carry an integration tag');
@@ -302,17 +324,20 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
     ? new Response('{"0":{"home":{}}}', { status: 200, headers: { 'Content-Type': 'application/json' } }) : new Response('nf', { status: 404 })) };
   for (const e of [env, board.env]) e.ASSETS = assets;
   const data = (body, o = {}) => pro('POST', '/pro/data', body, o);
-  assert.strictEqual((await data({ name: 'd0.json' })).status, 403, 'no code');
-  assert.strictEqual((await data({ code: 'TMD-AAAA-AAAA-AAAA', name: 'd0.json' })).status, 403, 'a code never issued');
-  assert.strictEqual((await data({ code, name: '../worker.js' })).status, 404, 'only the Pro files');
-  assert.strictEqual((await data({ code, name: 'd9.json' })).status, 404, 'a file not there');
-  r = await data({ code, name: 'd0.json' });
+  assert.strictEqual((await data({ name: 'd0.json', key: KEY.eli })).status, 403, 'no code');
+  assert.strictEqual((await data({ code: 'TMD-AAAA-AAAA-AAAA', name: 'd0.json', key: KEY.eli })).status, 403, 'a code never issued');
+  assert.strictEqual((await data({ code, name: 'd0.json' })).status, 400, 'a device key is wanted');
+  assert.strictEqual((await data({ code, name: 'd0.json', key: KEY.eli })).status, 200, 'the third device since the reset');
+  assert.strictEqual((await data({ code, name: 'd0.json', key: 'sixth-device-key-0000000006' })).status, 409, 'a fourth device gets no data either');
+  assert.strictEqual((await data({ code, name: '../worker.js', key: KEY.eli })).status, 404, 'only the Pro files');
+  assert.strictEqual((await data({ code, name: 'd9.json', key: KEY.eli })).status, 404, 'a file not there');
+  r = await data({ code, name: 'd0.json', key: KEY.eli });
   assert.strictEqual(r.status, 200);
   assert.strictEqual(r.headers.get('Cache-Control'), 'private, no-store');
   assert.deepStrictEqual(await r.json(), { 0: { home: {} } }, 'the file, to a valid code');
   assert.strictEqual((await call('GET', undefined, { path: '/pro/d0.json' })).status, 404, 'the plain file path is not served');
   for (const e of [env, board.env]) delete e.ASSETS;
-  assert.strictEqual((await data({ code, name: 'd0.json' })).status, 503, 'no assets deployed');
+  assert.strictEqual((await data({ code, name: 'd0.json', key: KEY.eli })).status, 503, 'no assets deployed');
   globalThis.fetch = realFetch;
   for (const e of [env, board.env]) { delete e.STRIPE_SECRET; delete e.STRIPE_PRICE; delete e.SITE; }
 }
