@@ -13,7 +13,7 @@ compatibility_date = "2025-06-01"
 [vars]
 ALLOWED_ORIGINS = "https://nfl2mindrill.com,https://www.nfl2mindrill.com,https://nfl2mindrill.pages.dev,https://nfl2mindrill-pro-preview.pages.dev"
 SITE = "https://nfl2mindrill.com"
-STRIPE_PRICE = "prod_VRryrvDrQxpAC7"      # the sandbox product (Two-Minute Drill Pro, $4.99); at launch set it to "" (or a live id)
+STRIPE_PRICE = ""                        # empty: the worker describes Two-Minute Drill Pro, $4.99, itself (a live price_/prod_ id works too)
 
 # The Pro data (board/assets/pro, put there by the site workflow): never served as plain files (run_worker_first), only
 # by the worker to a valid Pro code (POST /pro/data)

@@ -188,14 +188,14 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   // not set up: /pro says so and /pay refuses
   assert.deepStrictEqual(await (await pro('GET', '/pro')).json(), { on: false, price: '$4.99' });
   assert.strictEqual((await pro('POST', '/pay')).status, 503, 'no Stripe keys: 503');
-  for (const e of [env, board.env]) { e.STRIPE_SECRET = 'sk_test_x'; e.STRIPE_PRICE = 'price_123'; e.SITE = 'https://nfl2mindrill.com/'; }    // (board was remade above with its own env)
+  for (const e of [env, board.env]) { e.STRIPE_SECRET = 'rk_live_x'; e.STRIPE_PRICE = 'price_123'; e.SITE = 'https://nfl2mindrill.com/'; }    // (board was remade above with its own env)
   assert.deepStrictEqual(await (await pro('GET', '/pro')).json(), { on: true, price: '$4.99' });
   r = await pro('POST', '/pay');
   assert.strictEqual(r.status, 200);
   assert.strictEqual((await r.json()).url, 'https://checkout.stripe.com/c/pay/cs_test_new1234567890');
   const [u0, init0] = stripeCalls[0];
   assert.strictEqual(u0, 'https://api.stripe.com/v1/checkout/sessions');
-  assert.strictEqual(init0.headers.Authorization, 'Bearer sk_test_x');
+  assert.strictEqual(init0.headers.Authorization, 'Bearer rk_live_x');
   const form = new URLSearchParams(init0.body);
   assert.strictEqual(form.get('mode'), 'payment');
   assert.strictEqual(form.get('line_items[0][price]'), 'price_123');
@@ -207,6 +207,16 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   await pro('POST', '/pay', undefined, { origin: 'https://evil.example' });
   assert.strictEqual(new URLSearchParams(stripeCalls[stripeCalls.length - 1][1].body).get('success_url'), 'https://nfl2mindrill.com/?claim={CHECKOUT_SESSION_ID}', 'an unknown origin gets the site');
   for (const e of [env, board.env]) e.ALLOWED_ORIGINS = 'https://nfl2mindrill.com';
+  // a test-mode key pays only from the preview, never from the site (or an unknown origin): no real card works there
+  for (const e of [env, board.env]) { e.STRIPE_SECRET = 'rk_test_x'; e.ALLOWED_ORIGINS = 'https://nfl2mindrill.com,https://nfl2mindrill-pro-preview.pages.dev'; }
+  assert.strictEqual((await pro('POST', '/pay')).status, 503, 'the site with a test key');
+  assert.strictEqual((await pro('POST', '/pay', undefined, { origin: 'https://www.nfl2mindrill.com' })).status, 503, 'www too');
+  assert.strictEqual((await pro('POST', '/pay', undefined, { origin: 'https://evil.example' })).status, 503, 'an unknown origin with a test key');
+  assert.strictEqual((await pro('POST', '/pay', undefined, { origin: 'https://nfl2mindrill-pro-preview.pages.dev' })).status, 200, 'the preview pays in test mode');
+  for (const e of [env, board.env]) e.STRIPE_SECRET = 'rk_live_x';
+  assert.strictEqual((await pro('POST', '/pay')).status, 200, 'a live key pays from the site');
+  assert.strictEqual((await pro('POST', '/pay', undefined, { origin: 'https://nfl2mindrill-pro-preview.pages.dev' })).status, 200, 'and from the preview');
+  for (const e of [env, board.env]) { e.STRIPE_SECRET = 'rk_live_x'; e.ALLOWED_ORIGINS = 'https://nfl2mindrill.com'; }
   // a product id instead of a price id: the product, charged $4.99
   for (const e of [env, board.env]) e.STRIPE_PRICE = 'prod_abc123';
   await pro('POST', '/pay');

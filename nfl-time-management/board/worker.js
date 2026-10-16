@@ -211,6 +211,10 @@ async function daily(req, env, storage, hits, h, url) {
 
 // ---- Pro
 const proOn = (env) => !!env.STRIPE_SECRET;
+// a test-mode key (sk_test_/rk_test_) only ever pays from somewhere other than the site itself (the Pro preview):
+// the site with a test key would send real buyers to a page that takes no real card
+const testKey = (env) => /^(sk|rk)_test_/.test(String(env.STRIPE_SECRET || ''));
+const isSite = (env, origin) => { const s = String(env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, ''); return origin === s || origin === s.replace('://', '://www.'); };
 function proCode() {
   const b = crypto.getRandomValues(new Uint8Array(12));
   const s = Array.from(b, (x) => PRO_ALPHABET[x % PRO_ALPHABET.length]).join('');     // 256 % 31 = 8: a slight lean, fine for a code
@@ -274,6 +278,7 @@ async function pro(req, env, storage, hits, h, url) {
     // the buyer goes back to the site he came from (an allowed origin: the site, or the Pro preview), else SITE
     const allowed = String(env.ALLOWED_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean), origin = req.headers.get('Origin') || '';
     const site = String(allowed.includes(origin) ? origin : env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, '');
+    if (testKey(env) && (isSite(env, origin) || !allowed.includes(origin))) return json({ error: 'payments are not set up yet (test key)' }, 503, h);
     let r;
     try {
       // the line: a price id as is; a product id, or nothing, charged PRO_CENTS (with nothing set, the product is

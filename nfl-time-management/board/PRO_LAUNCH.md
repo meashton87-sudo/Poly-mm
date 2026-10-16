@@ -1,6 +1,6 @@
 # Pro launch runbook
 
-Pro is built, deployed and tested in Stripe's sandbox but off. Launch is two secrets and one line.
+Pro is on (`PRO_ON: "on"` in `.github/workflows/site.yml`; `"off"` turns the tab off again). Payments need the two live secrets below; with a test key the worker refuses purchases from the site itself and the Pro tab says "Payments open soon".
 
 ## 1. Stripe (once, the account owner)
 
