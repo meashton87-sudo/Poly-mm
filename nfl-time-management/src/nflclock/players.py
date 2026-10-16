@@ -99,9 +99,40 @@ def load_tables(seasons) -> dict:
     out["players"] = pd.read_parquet(_get("players", "players.parquet"),
                                      columns=["gsis_id", "pfr_id", "display_name", "position", "pff_position"])
     cols = ["season", "week", "season_type", "posteam", "play_type", "qb_dropback", "id", "qb_epa", "epa",
-            "receiver_player_id", "two_point_attempt"]
+            "receiver_player_id", "two_point_attempt", "game_id", "passer_player_id", "rusher_player_id"]
     pbp = pd.concat([pd.read_parquet(pbp_path(s), columns=cols) for s in pbp_seasons(seasons)], ignore_index=True)
+    out["snaps"] = fix_snap_teams(out["snaps"], out["players"], pbp)
     out["pbp"] = pbp[pbp["two_point_attempt"].fillna(0) == 0]
+    return out
+
+
+def fix_snap_teams(snaps: pd.DataFrame, players: pd.DataFrame, pbp: pd.DataFrame) -> pd.DataFrame:
+    """The snap counts with each game's teams the right way round: PFR's file has some (Super Bowls XLIX, 50 and LIII,
+    neutral sites) with each team's players under the other's name. A team's offensive players are the ones who
+    passed, ran and caught for it in the play-by-play; a game whose two lists match the other team better is
+    swapped back."""
+    if not len(snaps) or "game_id" not in pbp:
+        return snaps
+    pfr2g = dict(zip(players["pfr_id"], players["gsis_id"]))
+    ids = pd.concat([pbp[["game_id", "posteam", c]].rename(columns={c: "id"}) for c in
+                     ("passer_player_id", "rusher_player_id", "receiver_player_id")]).dropna()
+    own = set(zip(ids["game_id"], ids["posteam"], ids["id"]))
+    off = snaps[snaps["offense_snaps"].fillna(0) > 0]
+    swap = set()
+    for gid, g in off.groupby("game_id"):
+        same = other = 0
+        for t, o, pid in zip(g["team"], g["opponent"], g["pfr_player_id"]):
+            x = pfr2g.get(pid)
+            if x:
+                same += (gid, t, x) in own
+                other += (gid, o, x) in own
+        if other > same:
+            swap.add(gid)
+    if not swap:
+        return snaps
+    m = snaps["game_id"].isin(swap)
+    out = snaps.copy()
+    out.loc[m, ["team", "opponent"]] = snaps.loc[m, ["opponent", "team"]].to_numpy()
     return out
 
 
