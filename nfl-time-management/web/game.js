@@ -5760,6 +5760,7 @@
     }
     box.append(proCodeCard(false));
     box.append(authNodes());        // Pro by code: keep it on an account; signed in: who, and Sign out
+    gauntletFresh();
     const pro = await loadPro(), ds = load(`${STORE}:drives`, {});
     if (pro && pro.drives.length) {
       // your record across them: passed (an A), the rank it earns, the next rank, every drive's best grade
@@ -6437,7 +6438,27 @@
   }
 
   // ----------------------------------------------------------------- boot ---
+  // The Gauntlet's start: every player's historic-drive record starts over then, like the board (the grades from before
+  // move to drives_before_gauntlet, kept, not shown), and a try begun before it is dropped (it could never count)
+  const GAUNTLET_FROM = Date.parse('2026-10-16T20:00:00Z');
+  function gauntletFresh() {
+    if (Date.now() < GAUNTLET_FROM || load(`${STORE}:gauntlet_fresh`, false)) return;
+    try {
+      const ds = load(`${STORE}:drives`, {}), keep = {}, old = load(`${STORE}:drives_before_gauntlet`, {});
+      for (const [k, r] of Object.entries(ds)) { if (r && r.at && r.at >= GAUNTLET_FROM && !(r.prev)) keep[k] = r; else old[k] = r; }
+      save(`${STORE}:drives_before_gauntlet`, old);
+      save(`${STORE}:drives`, keep);
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith(`${STORE}:drive:`)) continue;
+        const st = load(k, null);
+        if (!st || !st.tryAt || st.tryAt < GAUNTLET_FROM) localStorage.removeItem(k);
+      }
+    } catch (e) { /* storage off: nothing to start over */ }
+    save(`${STORE}:gauntlet_fresh`, true);
+  }
   async function boot() {
+    gauntletFresh();
     const topH = () => document.documentElement.style.setProperty('--top-h', `${document.querySelector('.top').offsetHeight}px`);
     topH(); addEventListener('resize', topH);
     $('helpBtn').addEventListener('click', openHelp);

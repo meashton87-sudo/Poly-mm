@@ -203,6 +203,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   const form = new URLSearchParams(init0.body);
   assert.strictEqual(form.get('mode'), 'payment');
   assert.strictEqual(form.get('line_items[0][price]'), 'price_123');
+  assert.strictEqual(form.get('allow_promotion_codes'), 'true', 'checkout takes promotion codes');
   assert.strictEqual(form.get('success_url'), 'https://nfl2mindrill.com/?claim={CHECKOUT_SESSION_ID}', 'the site without its trailing slash');
   // from the Pro preview (an allowed origin), the buyer is sent back there; from anywhere else, to the site
   for (const e of [env, board.env]) e.ALLOWED_ORIGINS = 'https://nfl2mindrill.com,https://nfl2mindrill-pro-preview.pages.dev';
@@ -455,13 +456,14 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   const kp = await crypto.subtle.generateKey(alg, true, ['sign', 'verify']), other = await crypto.subtle.generateKey(alg, true, ['sign', 'verify']);
   const jwk = await crypto.subtle.exportKey('jwk', kp.publicKey);
   const mails = [], stripeForms = [];
+  let buyRef = null;                    // the reference Stripe hands back with the signed-in purchase
   let certFetches = 0;
   globalThis.fetch = async (u, init) => {
     if (u === 'https://www.googleapis.com/oauth2/v3/certs') { certFetches++; return new Response(JSON.stringify({ keys: [{ kty: 'RSA', n: jwk.n, e: jwk.e, kid: 'test-kid-1', alg: 'RS256', use: 'sig' }] }), { status: 200, headers: { 'Cache-Control': 'public, max-age=20000' } }); }
     if (u === 'https://api.resend.com/emails') { mails.push([init.headers, JSON.parse(init.body)]); return new Response(JSON.stringify({ id: 'mail_1' }), { status: 200 }); }
     if (u === 'https://api.stripe.com/v1/checkout/sessions') { stripeForms.push(new URLSearchParams(init.body)); return new Response(JSON.stringify({ id: 'cs_test_acct1234567890', url: 'https://checkout.stripe.com/c/pay/cs_test_acct1234567890' }), { status: 200 }); }
     const m = String(u).match(/checkout\/sessions\/(cs_test_[A-Za-z0-9]+)$/);
-    if (m && m[1].startsWith('cs_test_buy')) return new Response(JSON.stringify({ id: m[1], payment_status: 'paid', client_reference_id: m[1] === 'cs_test_buyemail000001' ? 'e:pat@example.com' : null }), { status: 200 });
+    if (m && m[1].startsWith('cs_test_buy')) return new Response(JSON.stringify({ id: m[1], payment_status: 'paid', client_reference_id: m[1] === 'cs_test_buyemail000001' ? buyRef : null }), { status: 200 });
     return new Response('{}', { status: 404 });
   };
   const CLIENT = '1234-test.apps.googleusercontent.com';
@@ -567,7 +569,9 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   // a purchase made signed in: the account goes to Stripe, and the code joins it (the claim, or the webhook)
   r = await au('/pay', { session: e1.session });
   assert.strictEqual(r.status, 200);
-  assert.strictEqual(stripeForms[stripeForms.length - 1].get('client_reference_id'), 'e:pat@example.com');
+  buyRef = stripeForms[stripeForms.length - 1].get('client_reference_id');
+  assert.match(buyRef, /^a_[0-9a-f]{40}$/, 'Stripe gets an opaque reference, never the address');
+  assert.ok(!stripeForms[stripeForms.length - 1].toString().includes('pat%40example') && !stripeForms[stripeForms.length - 1].toString().includes('pat@example'), 'no email address goes to Stripe');
   await au('/pay', {});
   assert.strictEqual(stripeForms[stripeForms.length - 1].get('client_reference_id'), null, 'not signed in: no account');
   assert.strictEqual((await au('/pay', { session: 'f'.repeat(64) })).status, 401, 'a session gone: not bought blind');
@@ -579,10 +583,12 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.ok(!store.get(`pro:code:${plainBuy}`).acct, 'a purchase not signed in: a plain code');
   const whsec = 'whsec_test_acct_0001';
   set({ STRIPE_WEBHOOK_SECRET: whsec });
-  const body = JSON.stringify({ type: 'checkout.session.completed', data: { object: { id: 'cs_test_hookacct000001', payment_status: 'paid', client_reference_id: 'g:5550001' } } });
+  const gs = await (await au('/auth/google', { credential: await idToken({ sub: '5550001', email: 'new@example.com' }) })).json();
+  await au('/pay', { session: gs.session });
+  const hookRef = stripeForms[stripeForms.length - 1].get('client_reference_id');
+  const body = JSON.stringify({ type: 'checkout.session.completed', data: { object: { id: 'cs_test_hookacct000001', payment_status: 'paid', client_reference_id: hookRef } } });
   const t = Math.floor(Date.now() / 1000), hk = await crypto.subtle.importKey('raw', new TextEncoder().encode(whsec), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const mac = Buffer.from(await crypto.subtle.sign('HMAC', hk, new TextEncoder().encode(`${t}.${body}`))).toString('hex');
-  const gs = await (await au('/auth/google', { credential: await idToken({ sub: '5550001', email: 'new@example.com' }) })).json();
   r = await worker.fetch(new Request('https://w.example/stripe-webhook', { method: 'POST', body, headers: { 'Stripe-Signature': `t=${t},v1=${mac}` } }), env);
   assert.strictEqual(r.status, 200);
   assert.deepStrictEqual(await (await au('/auth/me', { session: gs.session })).json(), { email: 'new@example.com', pro: true, code: store.get('pro:sess:cs_test_hookacct000001') }, 'the webhook attaches it too');

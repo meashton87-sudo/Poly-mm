@@ -241,7 +241,7 @@ const stripe = (env, path, form) => fetch(`https://api.stripe.com/v1/${path}`, {
 });
 const tag = () => 'tmd_pro_' + Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => 'abcdefghijklmnopqrstuvwxyz'[b % 26]).join('');
 // the code for a paid session: the one it already has, else a new one (one code per session, whoever asks first).
-// acct: the account the purchase was made from (the session's client_reference_id): the new code joins it (unless the
+// acct: the session's client_reference_id (acctRef: the account the purchase was made from): the new code joins it (unless the
 // account has Pro already: then the code stays a plain code, the buyer's to use or give)
 async function codeFor(storage, s, acct) {
   const have = await storage.get(`pro:sess:${s}`);
@@ -249,8 +249,20 @@ async function codeFor(storage, s, acct) {
   const code = proCode();
   await storage.put(`pro:code:${code}`, { s, at: new Date().toISOString() });
   await storage.put(`pro:sess:${s}`, code);
-  if (typeof acct === 'string' && /^[eg]:/.test(acct)) await attachCode(storage, acct, code);
+  const a = await refAcct(storage, acct);
+  if (a) await attachCode(storage, a, code);
   return code;
+}
+// what Stripe is told about the buyer's account: an opaque reference (never the email address), stored here -> account
+async function acctRef(storage, acct) {
+  const ref = 'a_' + (await sha256(`ref:${acct}`)).slice(0, 40);
+  await storage.put(`auth:ref:${ref}`, acct);
+  return ref;
+}
+async function refAcct(storage, ref) {
+  if (typeof ref !== 'string' || !/^a_[0-9a-f]{40}$/.test(ref)) return null;
+  const a = await storage.get(`auth:ref:${ref}`);
+  return typeof a === 'string' && /^[eg]:/.test(a) ? a : null;
 }
 // The device (the hash of the site's anonymous device key) joins the code's devices, or is refused when the code is
 // already on DEV_MAX others: a shared code stops working for the fourth friend. Seen-at times are kept, written at
@@ -297,7 +309,8 @@ async function signedByStripe(req, body, secret) {
 //                                          limit applies) joins the account; a code belongs to one account only
 // Sessions are 32 random bytes (hex) the page keeps; only their SHA-256 is stored (auth:sess:<hash> -> { acct, at }),
 // for SESS_DAYS. An account is acct:<id> -> { email, code?, at }; its code's row carries acct. /pay with a session
-// sends the account to Stripe (client_reference_id), and the code minted for that purchase joins the account. /restore,
+// sends an opaque reference to the account to Stripe (client_reference_id, acctRef: never the address), and the code
+// minted for that purchase joins the account. /restore,
 // /pro/data and /race/* take { session } in place of { code, key }: the account's code, without the device limit (the
 // account is its own protection; the code is the same, so the Gauntlet entry is the same).
 const AUTH_PATHS = ['/auth', '/auth/google', '/auth/email', '/auth/email/verify', '/auth/me', '/auth/logout', '/auth/link'];
@@ -515,9 +528,9 @@ async function pro(req, env, storage, hits, h, url) {
           ...(price.startsWith('prod_') ? { 'line_items[0][price_data][product]': price }
             : { 'line_items[0][price_data][product_data][name]': 'Two-Minute Drill Pro', 'line_items[0][price_data][product_data][tax_code]': PRO_TAX_CODE,
               'line_items[0][price_data][product_data][description]': 'Every past daily, the historic drives and the playoff runs. One code, any device.' }) };
-      r = await stripe(env, 'checkout/sessions', { mode: 'payment', ...item, 'line_items[0][quantity]': '1',
+      r = await stripe(env, 'checkout/sessions', { mode: 'payment', ...item, 'line_items[0][quantity]': '1', allow_promotion_codes: 'true',
         success_url: `${site}/?claim={CHECKOUT_SESSION_ID}`, cancel_url: `${site}/?pro=cancel`, integration_identifier: tag(),
-        ...(acct ? { client_reference_id: acct } : {}) });
+        ...(acct ? { client_reference_id: await acctRef(storage, acct) } : {}) });
     } catch (e) { return json({ error: 'stripe unreachable' }, 502, h); }
     const sess = await r.json().catch(() => ({}));
     if (!r.ok || !sess.url) {                               // Stripe's reason, for the buyer's screen and the worker's log
