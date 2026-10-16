@@ -5,6 +5,7 @@
 name = "two-minute-drill-board"
 main = "worker.js"
 compatibility_date = "2025-06-01"
+keep_vars = true        # a deploy keeps plain variables set in the Cloudflare dashboard (secrets always survive)
 
 # Pro purchases: the secret STRIPE_SECRET (a restricted Stripe key, Checkout Sessions write; set in the Cloudflare
 # dashboard) turns them on. STRIPE_PRICE is optional: a price id (price_...) or a product id (prod_...) from the
