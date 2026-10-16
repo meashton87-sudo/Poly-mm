@@ -5251,7 +5251,7 @@
     if (!BOARD.api) { PRO_LIVE = null; return; }
     try {
       const r = await fetch(`${BOARD.api}/restore`, POST_JSON({ code, key: deviceKey() }));
-      if (r.ok) { PRO_LIVE = true; return; }
+      if (r.ok) { PRO_LIVE = true; if (RACE.refresh) RACE.refresh(); return; }
       if (r.status === 409) { const d = await r.json().catch(() => ({})); proOff(d.error || 'This code is in use on too many devices'); return; }
       if (r.status === 404 || r.status === 400) { proOff('That Pro code is not valid any more'); return; }
       PRO_LIVE = null;                                                   // the board is down: neither on nor off
@@ -5347,6 +5347,8 @@
           } catch (e) { toast('No connection to the board. Try again.'); go.disabled = false; }
         });
         you.append(el('div', 'rme', 'Enter the race'), form, el('p', 'note', 'Your name shows on the board for everyone. Only drives you pass after entering count, so enter before you play.'));
+      } else if (proCode() && PRO_LIVE !== false) {      // a Pro code on this device, not confirmed yet: the entry comes once it is
+        you.append(el('div', 'rme', 'Checking your Pro…'), el('p', 'note', 'One moment: your entry shows here once your Pro code is confirmed.'));
       } else {
         const a = el('a', 'btn', 'Get Pro to enter');
         a.href = '#proBuy';
@@ -5393,6 +5395,7 @@
       if (shown && (document.visibilityState !== 'visible' || $('arch').hidden)) return;
       try { const d = await raceFetch(); if (d.rows) { RACE.view = d; raceSkew(d); draw(); } } catch (e) { /* the next tick */ }
     };
+    RACE.refresh = () => { if (!shown || box.isConnected) tick(); };      // Pro confirmed after the panel was drawn: ask again at once
     draw();
     clearInterval(RACE.timer);
     RACE.timer = setInterval(() => { if (RACE.view && raceNow() < Date.parse(RACE.view.from) + 1500) draw(); }, 1000);
