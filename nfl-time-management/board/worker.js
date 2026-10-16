@@ -39,7 +39,7 @@
 // A code is 12 letters and digits (no 0/O, 1/I/L) drawn at random: about 60 bits, posted at RATE_PER_MIN an IP.
 // Nothing about the buyer is kept here (Stripe has the receipt); only the session id behind each code.
 const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
-const RACE_PATHS = ['/race', '/race/me', '/race/join', '/race/pass'];
+const RACE_PATHS = ['/race', '/race/me', '/race/join', '/race/start', '/race/pass'];
 const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook', '/pro/data', '/pro/reset'];
 const PRO_FILE_RE = /^(drives|runs|d\d{1,3}|r\d{1,3})\.json$/;
 const STRIPE_VERSION = '2026-08-26.dahlia', WEBHOOK_TOLERANCE = 300;   // the API version pinned; a signature older than this is refused
@@ -425,10 +425,14 @@ export async function handle(req, env, storage, hits) {
 //   GET    /race                          -> { n, from, now, entrants, winner, rows: [{ name, n, at, done? }] }   the top RACE_TOP
 //   POST   /race/me   { code, key }       -> the board, and { me: { name, n, passes, rank } } (me null: not entered)
 //   POST   /race/join { code, key, name } -> the same, entered (409 a name taken or not allowed; one entry a code)
-//   POST   /race/pass { code, key, drive, p, decs, tryAt } -> the same, the drive counted (p: the score, 0.895 and up)
+//   POST   /race/start { code, key, drive } -> { ok, tok }: a try of a drive starts (only once the Gauntlet has started,
+//                                         and only for an entrant): its pass counts only with this token, so a drive
+//                                         started before the start (or before entering) never counts
+//   POST   /race/pass { code, key, drive, p, decs, tryAt, tok, res } -> the same, the drive counted (p: the score, 0.895
+//                                         and up; res: the final score, the game won)
 //   DELETE /race?name=X (Authorization: Bearer <ADMIN_TOKEN>) -> an entrant off the board, for good (a run that fails
 //                                                                the check)
-const RACE_N = 24, RACE_TOP = 100, RACE_GAP = 30e3, RACE_DECS_MAX = 80, RACE_BYTES_MAX = 60000;
+const RACE_N = 24, RACE_TOP = 100, RACE_GAP = 30e3, RACE_DECS_MAX = 80, RACE_BYTES_MAX = 60000, RACE_MIN_TRY = 20e3;
 const raceFrom = (env) => Date.parse(env.RACE_FROM || '2026-10-16T18:00:00Z');
 // the leaderboard: most drives passed, then whoever got there first
 const raceRows = (list) => Object.values(list).filter((x) => !x.out && !blocked(x.name))
@@ -462,7 +466,7 @@ async function race(req, env, storage, hits, h, url) {
     }
     return json({ ok: true }, 200, h);
   }
-  if (req.method !== 'POST' || !['/race/me', '/race/join', '/race/pass'].includes(url.pathname)) return json({ error: 'not found' }, 404, h);
+  if (req.method !== 'POST' || !['/race/me', '/race/join', '/race/start', '/race/pass'].includes(url.pathname)) return json({ error: 'not found' }, 404, h);
   if (limited(req, hits)) return json({ error: 'slow down' }, 429, h);
   let body;
   try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
@@ -491,20 +495,33 @@ async function race(req, env, storage, hits, h, url) {
     await storage.put('race:list', list);
     return json(await raceView(storage, env, id), 200, h);
   }
-  // a pass
   if (!e || e.out) return json({ error: 'enter the Gauntlet first' }, 403, h);
-  const drive = Number(body.drive), p = Number(body.p), decs = body.decs;
+  const drive = Number(body.drive);
   if (!Number.isInteger(drive) || drive < 1 || drive > RACE_N) return json({ error: 'no such drive' }, 400, h);
+  // a try starts: its token (a new try replaces the last one's)
+  if (url.pathname === '/race/start') {
+    if (now < raceFrom(env)) return json({ error: 'the Gauntlet has not started' }, 409, h);
+    const tok = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('');
+    await storage.put(`race:try:${id}:${drive}`, { tok, at: now });
+    return json({ ok: true, tok }, 200, h);
+  }
+  // a pass
+  const p = Number(body.p), decs = body.decs;
   if (!(p >= 0.895 && p <= 1)) return json({ error: 'not a pass (90 or better)' }, 400, h);
   if (!Array.isArray(decs) || !decs.length || decs.length > RACE_DECS_MAX || JSON.stringify(decs).length > RACE_BYTES_MAX) return json({ error: 'the calls behind the grade are needed' }, 400, h);
   if (now < raceFrom(env)) return json({ error: 'the Gauntlet has not started', ...(await raceView(storage, env, id)) }, 409, h);
+  // the try was started in the Gauntlet (after the start, after entering, this drive) and took a real drive's time
+  const tr = await storage.get(`race:try:${id}:${drive}`);
+  if (!tr || typeof body.tok !== 'string' || !same(body.tok, tr.tok)) return json({ error: 'this try started before you were in the Gauntlet (or before 2 PM ET): play the drive again to count it', notry: true }, 409, h);
+  if (now - tr.at < RACE_MIN_TRY) return json({ error: 'too fast for a real drive' }, 429, h);
   if (e.passes[drive]) return json(await raceView(storage, env, id), 200, h);           // passed already: its first pass counts
   if (now - (e.last || 0) < RACE_GAP) return json({ error: 'too fast: one drive at a time' }, 429, h);
   // the mission: a pass takes winning the game
   const won = Array.isArray(body.res) && Array.isArray(body.res[0]) && Number(body.res[0][0]) > Number(body.res[0][1]);
   if (!won) return json({ error: 'a pass takes winning the game' }, 400, h);
   const res = Array.isArray(body.res) ? body.res.slice(0, 4).map((r) => (Array.isArray(r) ? r.slice(0, 2).map(Number) : null)) : null;
-  await storage.put(`race:audit:${id}:${drive}`, { at: now, p, tryAt: Number(body.tryAt) || null, decs, res });
+  await storage.put(`race:audit:${id}:${drive}`, { at: now, p, tryAt: Number(body.tryAt) || null, started: tr.at, decs, res });
+  await storage.put(`race:try:${id}:${drive}`, { ...tr, used: now });
   e.passes[drive] = now; e.n = Object.keys(e.passes).length; e.nAt = now; e.last = now;
   if (e.n >= RACE_N && !e.done) e.done = now;
   await storage.put(`race:e:${id}`, e);
