@@ -293,7 +293,11 @@ async function pro(req, env, storage, hits, h, url) {
         success_url: `${site}/?claim={CHECKOUT_SESSION_ID}`, cancel_url: `${site}/?pro=cancel`, integration_identifier: tag() });
     } catch (e) { return json({ error: 'stripe unreachable' }, 502, h); }
     const sess = await r.json().catch(() => ({}));
-    if (!r.ok || !sess.url) return json({ error: 'stripe refused the session' }, 502, h);
+    if (!r.ok || !sess.url) {                               // Stripe's reason, for the buyer's screen and the worker's log
+      const why = sess.error && sess.error.message ? String(sess.error.message).slice(0, 200) : '';
+      console.error('stripe refused the session', r.status, sess.error ? JSON.stringify(sess.error).slice(0, 600) : '');
+      return json({ error: `stripe refused the session${why ? ': ' + why : ''}` }, 502, h);
+    }
     return json({ url: sess.url }, 200, h);
   }
   if (url.pathname === '/claim') {
