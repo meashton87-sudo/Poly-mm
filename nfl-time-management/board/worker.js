@@ -491,6 +491,19 @@ async function race(req, env, storage, hits, h, url) {
   let e = await storage.get(`race:e:${id}`);
   if (url.pathname === '/race/join') {
     if (e && e.out) return json({ error: 'this code is out of the Gauntlet' }, 403, h);
+    if (e && body.rename && now < raceFrom(env)) {                                // before the start: a new name for the same entry
+      const name = clean(body.name);
+      if (!name) return json({ error: 'a name (1-24 characters) is needed' }, 400, h);
+      if (blocked(name)) return json({ error: 'That name is not allowed. Pick another.', refused: true }, 409, h);
+      const lower = name.toLowerCase(), old = e.name.toLowerCase();
+      if (lower !== old && await storage.get(`race:name:${lower}`)) return json({ error: 'That name is taken. Pick another.' }, 409, h);
+      if (lower !== old) { await storage.put(`race:name:${lower}`, id); await storage.delete(`race:name:${old}`); }
+      e.name = name;
+      await storage.put(`race:e:${id}`, e);
+      const list = (await storage.get('race:list')) || {};
+      if (list[id]) { list[id].name = name; await storage.put('race:list', list); }
+      return json(await raceView(storage, env, id), 200, h);
+    }
     if (e) return json(await raceView(storage, env, id), 200, h);              // entered already: the same entry
     const name = clean(body.name);
     if (!name) return json({ error: 'a name (1-24 characters) is needed' }, 400, h);
