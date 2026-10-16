@@ -259,6 +259,9 @@ async function bindDevice(storage, code, devKey) {
   if (!(kh in dev) || now - dev[kh] > 36e5) { dev[kh] = now; await storage.put(`pro:code:${code}`, { ...row, dev }); }
   return 'ok';
 }
+// Until this moment a /restore without a device key (a page from before the cap, cached) is still answered, unbound;
+// after it the key is wanted. (KEY_REQUIRED_FROM in the env overrides it, for the tests.)
+const keyRequired = (env) => Date.now() >= Date.parse(env.KEY_REQUIRED_FROM || '2026-10-18T06:00:00Z');
 const DEV_FULL = `This code is already in use on ${DEV_MAX} devices. Pro works on up to ${DEV_MAX} at once; a device unused for ${DEV_DAYS} days frees its place.`;
 // Stripe's signature on a webhook: t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>"> with the endpoint's signing secret
 async function signedByStripe(req, body, secret) {
@@ -334,6 +337,7 @@ async function pro(req, env, storage, hits, h, url) {
     const code = normCode(body.code);
     if (!code) return json({ error: 'a code looks like TMD-XXXX-XXXX-XXXX' }, 400, h);
     const st = await bindDevice(storage, code, String(body.key || ''));
+    if (st === 'key' && !keyRequired(env)) return (await storage.get(`pro:code:${code}`)) ? json({ ok: true, code }, 200, h) : json({ error: 'unknown code' }, 404, h);
     if (st === 'key') return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
     if (st === 'unknown') return json({ error: 'unknown code' }, 404, h);
     if (st === 'full') return json({ error: DEV_FULL }, 409, h);
