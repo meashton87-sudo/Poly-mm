@@ -75,4 +75,6 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   GOOGLE_CLIENT_ID (wrangler.toml var; site.py --google-client-id puts the same id in the page) or RESEND_KEY + MAIL_FROM.
   Sessions and link tokens are stored only as SHA-256 hashes. A code belongs to one account (pro:code:X.acct). Signed
   in, /restore, /pro/data and /race/* take { session } (the account's code, no device limit; the same Gauntlet entry as
-  the code); the code path and its 3-device limit are unchanged. Never return another account's data.
+  the code); the code path and its 3-device limit are unchanged. Never return another account's data. The top bar's
+  account button (game.js acctBar) is Log in, then the account's username (/auth/name: 3-20 characters, one account each,
+  never blocked()).

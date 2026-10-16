@@ -303,7 +303,10 @@ async function signedByStripe(req, body, secret) {
 //                                          MAIL_MAX a MAIL_WINDOW per address and per IP. Off (503) without RESEND_KEY
 //                                          and MAIL_FROM. The account is e:<the address, lowercased>.
 //   POST /auth/email/verify { token }   -> { session, email, pro, code? }   the link's token, used up
-//   POST /auth/me      { session }      -> { email, pro, code? }  (401: signed out)
+//   POST /auth/me      { session }      -> { email, name, pro, code? }  (401: signed out)
+//   POST /auth/name    { session, name } -> { email, name, pro, code? }  the account's username, shown in the page's top
+//                                          bar: 3-20 letters, digits, spaces, _ - . or ', one account each (any case),
+//                                          never a blocked() one
 //   POST /auth/logout  { session }      -> { ok }
 //   POST /auth/link    { session, code, key } -> { email, pro, code }   a valid Pro code (on this device: the device
 //                                          limit applies) joins the account; a code belongs to one account only
@@ -313,7 +316,8 @@ async function signedByStripe(req, body, secret) {
 // minted for that purchase joins the account. /restore,
 // /pro/data and /race/* take { session } in place of { code, key }: the account's code, without the device limit (the
 // account is its own protection; the code is the same, so the Gauntlet entry is the same).
-const AUTH_PATHS = ['/auth', '/auth/google', '/auth/email', '/auth/email/verify', '/auth/me', '/auth/logout', '/auth/link'];
+const AUTH_PATHS = ['/auth', '/auth/google', '/auth/email', '/auth/email/verify', '/auth/me', '/auth/logout', '/auth/link', '/auth/name'];
+const UNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9 _.'-]{1,18})[A-Za-z0-9.]$/;
 // a session lasts SESS_DAYS; a link LOGIN_MS; an address is at most 198 characters (e:<address> fits Stripe's
 // 200-character client_reference_id)
 const SESS_DAYS = 180, LOGIN_MS = 15 * 60e3, MAIL_MAX = 3, MAIL_WINDOW = 15 * 60e3;
@@ -382,7 +386,7 @@ async function newSession(storage, acct, email) {
 async function acctView(storage, acct) {
   const a = (await storage.get(`acct:${acct}`)) || {};
   const pro = !!(a.code && await storage.get(`pro:code:${a.code}`));
-  return { email: a.email || '', pro, ...(pro ? { code: a.code } : {}) };
+  return { email: a.email || '', name: a.name || '', pro, ...(pro ? { code: a.code } : {}) };
 }
 // a code joins an account: refused when it belongs to another account, or the account has another code
 async function attachCode(storage, acct, code) {
@@ -452,6 +456,22 @@ async function auth(req, env, storage, hits, h, url) {
   }
   if (!acct) return json({ error: 'signed out', signedOut: true }, 401, h);
   if (p === '/auth/me') return json(await acctView(storage, acct), 200, h);
+  if (p === '/auth/name') {
+    const name = clean(body.name);
+    if (!UNAME_RE.test(name)) return json({ error: 'A username is 3-20 letters or digits (spaces, _ - . and \' inside are fine).' }, 400, h);
+    if (blocked(name)) return json({ error: 'That username is not allowed. Pick another.', refused: true }, 409, h);
+    const a = await storage.get(`acct:${acct}`);
+    if (!a) return json({ error: 'signed out', signedOut: true }, 401, h);
+    const lower = name.toLowerCase(), old = a.name ? a.name.toLowerCase() : '';
+    if (lower !== old) {
+      const owner = await storage.get(`auth:name:${lower}`);
+      if (owner && owner !== acct) return json({ error: 'That username is taken. Pick another.', taken: true }, 409, h);
+      await storage.put(`auth:name:${lower}`, acct);
+      if (old) await storage.delete(`auth:name:${old}`);
+    }
+    await storage.put(`acct:${acct}`, { ...a, name });
+    return json(await acctView(storage, acct), 200, h);
+  }
   if (p === '/auth/link') {
     const code = normCode(body.code);
     if (!code) return json({ error: 'a code looks like TMD-XXXX-XXXX-XXXX' }, 400, h);
