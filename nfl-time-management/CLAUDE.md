@@ -59,3 +59,7 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   against that defense (sampleVsDefense) but its mean EPA is recentered on the offense's own plus the matchup tilt, so
   balance lives in dcMatch alone: after changing it, run vs_balance_test.mjs (it solves the call-by-defense game per
   situation: no fixed call or defense may be safe, and every option must be near the best somewhere).
+- The Gauntlet (board/worker.js /race*, game.js racePanel): the contest on the historic drives. A Pro code enters once under
+  a public name (blocked() names refused); a drive counts the first time it is passed (an A, 90+) after entering and after
+  RACE_FROM (2 pm Eastern, Oct 16 2026 by default); each pass keeps its calls (race:audit) for the check before a prize.
+  The first to pass all RACE_N (24) wins. `DELETE /race?id=` with the admin token takes a run off the board.
