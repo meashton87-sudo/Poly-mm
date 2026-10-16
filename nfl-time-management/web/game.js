@@ -5277,6 +5277,7 @@
       track('pro_unlocked');
       track('purchase', { currency: 'USD', value: 4.99, transaction_id: d.code, items: [{ item_id: 'pro', item_name: 'Two-Minute Drill Pro', price: 4.99, quantity: 1 }] });
       toast('Pro unlocked');
+      openModal('Pro unlocked', [proCodeCard(true)]);
     } catch (e) { toast('The purchase could not be confirmed: ' + e.message); }
   }
   // ---- The Gauntlet: the contest across the historic drives (board/worker.js /race). Pass all of them (an A each)
@@ -5493,6 +5494,20 @@
     a.addEventListener('click', () => track('race_bar'));
     $('modeArch').closest('nav').after(a);
   }
+  // your Pro code, where you can't miss it: the code, Copy, and how to use it on your other devices
+  function proCodeCard(fresh) {
+    const box = el('div', 'procode'), code = proCode();
+    const row = el('div', 'pcrow'), c = el('code', 'pcc', code), copy = el('button', 'btn', 'Copy');
+    copy.type = 'button';
+    copy.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(code); copy.textContent = 'Copied'; track('pro_code_copy'); }
+      catch (e) { const r = document.createRange(); r.selectNodeContents(c); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); copy.textContent = 'Selected: copy it'; }
+    });
+    row.append(c, copy);
+    box.append(el('div', 'k', fresh ? 'Pro unlocked: save your code' : 'Your Pro code'), row,
+      el('p', 'note', 'On your phone, computer or another browser: open the Pro tab, tap "Already have Pro?", paste this code and tap Restore. It works on up to 3 devices. Screenshot it or save it somewhere: it is not in the Stripe receipt.'));
+    return box;
+  }
   function proNodes() {
     const box = el('div', 'pro'), days = Math.max(0, dayOf(new Date()) - 1);
     box.append(el('div', 'k', 'Two-Minute Drill Pro'), el('div', 'price', '$4.99 · once'));
@@ -5592,6 +5607,7 @@
       } else box.append(...proNodes());
       return;
     }
+    box.append(proCodeCard(false));
     const pro = await loadPro(), ds = load(`${STORE}:drives`, {});
     if (pro && pro.drives.length) {
       // your record across them: passed (an A), the rank it earns, the next rank, every drive's best grade
