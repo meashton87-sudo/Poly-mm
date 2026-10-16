@@ -28,6 +28,7 @@ node board/worker_test.mjs            # the website's survivor leaderboard (Clou
 node board/match_test.mjs             # Versus: rooms, lobby, ladder in memory (board/vs_world.mjs), a stand-in engine (a second)
 node board/lazy_sim_test.mjs          # Versus: the room's lazily built simulator equals the engine's, table by table and play by play
 node board/vs_pairs_test.mjs          # Versus: every one of the 992 matchups (32 teams, home and away) played to the end, the rules on every snap
+node board/vs_balance_test.mjs        # Versus: no defense or call is safe against everything; every defensive option has a use
 node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real engine, misbehaving phones; every match replayed and checked
 ```
 
@@ -52,3 +53,7 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   page); phones only send calls. Each snap's seed is drawn fresh by the room and never sent to a phone (a phone that
   knew it could see what a call does before making it). lazy_sim_test.mjs and vs_stress.mjs need board/assets/vs (the
   engine packs and teams.json; the site workflow copies them there before deploying the worker).
+- Versus defense: the defense calls personnel, front, coverage and rush (engine.js DC, dcMatch). The real play is drawn
+  against that defense (sampleVsDefense) but its mean EPA is recentered on the offense's own plus the matchup tilt, so
+  balance lives in dcMatch alone: after changing it, run vs_balance_test.mjs (it solves the call-by-defense game per
+  situation: no fixed call or defense may be safe, and every option must be near the best somewhere).

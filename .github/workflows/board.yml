@@ -76,6 +76,6 @@ jobs:
           rm -rf assets/pro && mkdir -p assets/pro && cp ../web/pro/*.json assets/pro/
           ls assets/pro/drives.json assets/pro/runs.json assets/pro/d0.json assets/pro/r0.json      # no Pro data, no deploy
           rm -rf assets/vs && mkdir -p assets/vs && cp ../_site_test/engine_data.pack ../_site_test/playbook.pack ../web/teams.json assets/vs/
-          node lazy_sim_test.mjs && node vs_pairs_test.mjs && node vs_stress.mjs 400 "$GITHUB_RUN_NUMBER" 24      # Versus: no engine data, no deploy
+          node lazy_sim_test.mjs && node vs_pairs_test.mjs && node vs_balance_test.mjs && node vs_stress.mjs 400 "$GITHUB_RUN_NUMBER" 24      # Versus: no engine data, no deploy
           if [ -n "$SITE_DOMAIN" ]; then sed -i "s#^ALLOWED_ORIGINS = .*#ALLOWED_ORIGINS = \"https://$SITE_DOMAIN,https://www.$SITE_DOMAIN,https://nfl2mindrill.pages.dev,https://nfl2mindrill-pro-preview.pages.dev\"#" wrangler.toml; fi
           npx --yes wrangler@4.144.0 deploy

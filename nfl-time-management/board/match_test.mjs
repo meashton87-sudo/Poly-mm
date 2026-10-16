@@ -3,7 +3,7 @@
 // (vs_stress.mjs plays thousands of whole matches with the real engine.)
 import assert from 'node:assert';
 import { World, FakeClient } from './vs_world.mjs';
-import { ROOM_RE, PLAY_MS, FIRST_MS, FORFEIT_MS, AFK_LIMIT, NOSHOW_MS, ELO, MM } from './match.js';
+import { ROOM_RE, PLAY_MS, WATCH_MS, DECIDE_MS, FIRST_MS, FORFEIT_MS, AFK_LIMIT, NOSHOW_MS, ELO, MM } from './match.js';
 import VSCore from '../web/vs_core.js';
 
 // the stand-in engine: a snap gains (seed % 15) - 3 yards; a call 'fg' kicks a field goal (good); 'td' scores
@@ -93,14 +93,19 @@ assert.ok(ROOM_RE.test('ABC234') && !ROOM_RE.test('ABCD10') && !ROOM_RE.test('ab
   assert.deepStrictEqual(def.last('locked'), { t: 'locked', n: 2, seat: first }, 'the other side sees a lock');
   assert.ok(!JSON.stringify(def.inbox).includes('inside'), 'the call never reaches the other side early');
   off.send({ t: 'half', n: 2, half: { action: { call: 'td' } } });  // locked: no change
-  def.send({ t: 'half', n: 2, half: { def: 'blitz', score: [99, 99] } });
+  const DCALL = { pers: 'nickel', front: 'even', cover: 'c3', rush: 5 };
+  def.send({ t: 'half', n: 2, half: { dc: { ...DCALL, rush: '5', evil: 1 }, score: [99, 99] } });
   await w.settle();
   const s2 = a.last('step');
-  assert.deepStrictEqual(s2.halves[first], { action: { call: 'inside', play: 'run' } }, 'the first call stays, cleaned');
-  assert.deepStrictEqual(s2.halves[1 - first], { def: 'blitz' }, 'only the defense call');
-  assert.strictEqual(s2.res.action.looks, VSCore.LOOKS.blitz, 'the defense call is the look the play is drawn against');
+  assert.deepStrictEqual(s2.halves[first], { action: { call: 'inside', play: 'run' } }, 'the first call stays, cleaned (no look of its own)');
+  assert.deepStrictEqual(s2.halves[1 - first], { dc: DCALL }, 'only the defense call, cleaned');
+  assert.deepStrictEqual(s2.res.action.dc, DCALL, 'the defense call is what the play is drawn against');
   assert.deepStrictEqual(b.last('step'), s2, 'both phones get the same');
   assert.strictEqual(s2.deadline, w.now + PLAY_MS);
+  assert.deepStrictEqual(s2.dl, [w.now + PLAY_MS, w.now + PLAY_MS], 'each seat: the decision\'s last moment until its call is up');
+  for (const bad of [{ dc: { ...DCALL, cover: 'c9' } }, { dc: { ...DCALL, rush: 7 } }, { dc: 'blitz' }, { def: 'blitz' }]) {
+    assert.strictEqual(VSCore.cleanHalf(s2.ms, 1 - s2.ms.root.pos, bad, null), null, `junk defense: the default ${JSON.stringify(bad)}`);
+  }
   // a stale or a future n, or junk: nothing
   off.send({ t: 'half', n: 2, half: { action: { call: 'td' } } });
   off.send({ t: 'half', n: 9, half: {} });
@@ -108,12 +113,42 @@ assert.ok(ROOM_RE.test('ABC234') && !ROOM_RE.test('ABCD10') && !ROOM_RE.test('ab
   off.send(JSON.stringify({ t: 'half', n: 3, half: 'x'.repeat(5000) }));
   await w.settle();
   assert.strictEqual(a.last('step').n, 2);
-  // the clock: a missing call is played as the default at the deadline
+  // the clock: a missing call is played as the default at the deadline (no ready: the decision's last moment)
   off.send({ t: 'half', n: 3, half: { action: { call: 'slant', play: 'pass' } } });
   await w.advance(PLAY_MS - 1000);
   assert.strictEqual(a.last('step').n, 2, 'not before the deadline');
   await w.advance(1000);
   assert.deepStrictEqual([a.last('step').n, a.last('step').halves[1 - first]], [3, null], 'the defense defaulted');
+  // the play clock: 30 seconds from the moment the call is up on the phone (ready), for each seat on its own
+  const t4 = w.now;
+  await w.advance(4000);
+  off.send({ t: 'ready', n: 4 });
+  await w.settle();
+  assert.deepStrictEqual([off.last('clock').n, off.last('clock').deadline], [4, t4 + 4000 + DECIDE_MS], 'the clock starts when the call is up');
+  assert.strictEqual(def.last('clock'), undefined, 'the other phone is not told');
+  off.send({ t: 'ready', n: 4 });                                     // again: the clock does not start over
+  await w.advance(2000);
+  assert.strictEqual(off.last('clock').deadline, t4 + 4000 + DECIDE_MS, 'a second ready changes nothing');
+  def.send({ t: 'half', n: 4, half: { dc: DCALL } });
+  await w.advance(DECIDE_MS - 2000 - 100);
+  assert.strictEqual(a.last('step').n, 3, 'not before its 30 seconds');
+  await w.advance(200);
+  const s4 = a.last('step');
+  assert.deepStrictEqual([s4.n, s4.halves[first], s4.halves[1 - first]], [4, null, { dc: DCALL }], '30 seconds and no call: the default, well before the decision\'s last moment');
+  assert.ok(s4.at <= t4 + 4000 + DECIDE_MS + 100);
+  // a ready late in the watch window: the clock never runs past the decision's last moment
+  await w.advance(WATCH_MS + 10000);
+  def.send({ t: 'ready', n: 5 });
+  await w.settle();
+  assert.strictEqual(def.last('clock').deadline, s4.deadline, 'capped at the decision\'s last moment');
+  def.send({ t: 'half', n: 5, half: { dc: DCALL } }); off.send({ t: 'half', n: 5, half: { action: { call: 'inside', play: 'run' } } });
+  await w.settle();
+  // a phone that drops and comes back: its own deadline in the hello
+  const up = VSCore.need(a.last('step').ms)[0], upC = up === 0 ? a : b;
+  upC.send({ t: 'ready', n: 6 });
+  await w.settle();
+  const myDl = upC.last('clock').deadline;
+  assert.strictEqual(upC.last('clock').n, 6);
   // reconnect: the decisions since the phone's last, the state now
   b.drop();
   await w.settle();
@@ -122,7 +157,8 @@ assert.ok(ROOM_RE.test('ABC234') && !ROOM_RE.test('ABCD10') && !ROOM_RE.test('ab
   const b2 = new FakeClient(w, b.key);
   await b2.open('ABC234', { since: 2 });
   const h = b2.last('hello');
-  assert.deepStrictEqual([h.seat, h.n, h.decisions.map((d) => d.n)], [1, 4, [2, 3]], 'back in its seat, caught up from where it was');
+  assert.deepStrictEqual([h.seat, h.n, h.decisions.map((d) => d.n)], [1, 6, [2, 3, 4, 5]], 'back in its seat, caught up from where it was');
+  assert.strictEqual(h.dl[up], myDl, 'the play clock, as the room keeps it');
   assert.deepStrictEqual(h.ms, a.last('step').ms, 'the same state');
   assert.strictEqual((await state(w, 'ABC234')).off[1], 0, 'back: no forfeit clock');
   assert.ok(![...a.inbox, ...b.inbox, ...b2.inbox].some((m) => JSON.stringify(m).includes('"seed"')), 'no seed ever reaches a phone');
@@ -141,18 +177,30 @@ async function live(w, mode = 'friend') {
   await w.settle();
   return { a, b };
 }
+// seat 0 answers every call of its own while the clock runs (the other side's calls left to the clock)
+async function runAnswering(w, a, ms) {
+  for (let t = 0; t < ms; t += 1000) {
+    const s = a.last('step') || { ...a.last('start'), n: -1 };
+    if (s.ms && !a.last('over') && VSCore.need(s.ms).includes(0) && a.answered !== s.n + 1) {
+      const role = VSCore.role(s.ms, 0);
+      a.answered = s.n + 1;
+      a.send({ t: 'half', n: s.n + 1, half: role === 'pick' ? { pick: 'offense' } : role === 'defense' ? { dc: { pers: 'base', front: 'even', cover: 'c3', rush: 4 } } : role === 'pat' ? { two: true } : { action: { call: 'inside' } } });
+    }
+    await w.advance(1000);
+  }
+}
 {
   const w = new World({ engine: stub });
   const { a, b } = await live(w);
   b.drop();
-  await w.advance(FORFEIT_MS - 5000);
+  await runAnswering(w, a, FORFEIT_MS - 5000);
   const b2 = new FakeClient(w, b.key);
   await b2.open('FFF234');
-  await w.advance(30000);
+  await w.advance(5000);
   assert.strictEqual(a.last('over'), undefined, 'back in time: no forfeit');
   b2.drop();
-  await w.advance(FORFEIT_MS);
-  assert.deepStrictEqual([a.last('over').result.winner, a.last('over').result.by, a.last('over').result.loser], [0, 'forfeit', 1], 'gone a minute: a forfeit');
+  await runAnswering(w, a, FORFEIT_MS + 1000);
+  assert.deepStrictEqual([a.last('over').result.winner, a.last('over').result.by, a.last('over').result.loser], [0, 'forfeit', 1], 'gone a minute (or its calls left to the clock): a forfeit');
   w.close();
 }
 {
@@ -163,7 +211,7 @@ async function live(w, mode = 'friend') {
     const s = a.last('step') || { ...a.last('start'), n: -1 };
     if (VSCore.need(s.ms).includes(0)) {
       const role = VSCore.role(s.ms, 0);
-      a.send({ t: 'half', n: s.n + 1, half: role === 'pick' ? { pick: 'offense' } : role === 'defense' ? { def: 'load' } : { action: { call: 'inside' } } });
+      a.send({ t: 'half', n: s.n + 1, half: role === 'pick' ? { pick: 'offense' } : role === 'defense' ? { dc: { pers: 'base', front: 'loaded', cover: 'c1', rush: 4 } } : role === 'pat' ? { two: true } : { action: { call: 'inside' } } });
     }
     await w.advance(PLAY_MS + 10);
   }
@@ -190,7 +238,7 @@ async function live(w, mode = 'friend') {
     const s = a.last('step') || { ...a.last('start'), n: -1 };
     for (const seat of VSCore.need(s.ms)) {
       const role = VSCore.role(s.ms, seat);
-      c[seat].send({ t: 'half', n: s.n + 1, half: role === 'pick' ? { pick: 'offense' } : role === 'defense' ? { def: 'soft' } : role === 'pat' ? { two: true } : { action: { call: 'td' } } });
+      c[seat].send({ t: 'half', n: s.n + 1, half: role === 'pick' ? { pick: 'offense' } : role === 'defense' ? { dc: { pers: 'dime', front: 'light', cover: 'c4', rush: 3 } } : role === 'pat' ? { two: true } : { action: { call: 'td' } } });
     }
     await w.settle();
   }

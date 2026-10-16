@@ -78,6 +78,59 @@
   // the defense's pre-snap look, as the engine buckets real plays: a light box (6 or fewer near the line) or a loaded
   // one (7 or more), with or without a blitz
   const LOOKS = [{ loaded: false, blitz: false }, { loaded: false, blitz: true }, { loaded: true, blitz: false }, { loaded: true, blitz: true }];
+  // Versus: the defense's whole call (engine.js DC): personnel, front, coverage and pass rush. The offense's play is a
+  // real one run against that defense, and the matchup of the two calls tilts it (engine.js dcMatch)
+  const VDEF = [
+    ['pers', 'Personnel', [['heavy', 'Goal line', '3 DBs'], ['base', 'Base', '4 DBs'], ['nickel', 'Nickel', '5 DBs'], ['dime', 'Dime', '6 DBs']]],
+    ['front', 'Front', [['light', 'Light', '6 in box'], ['even', 'Even', '7 in box'], ['loaded', 'Stacked', '8 in box']]],
+    ['cover', 'Coverage', [['c0', 'Cover 0', 'Man, 0 deep'], ['c1', 'Cover 1', 'Man, 1 deep'], ['2man', '2-Man', 'Man, 2 deep'], ['c2', 'Cover 2', 'Zone, 2 deep'],
+      ['c3', 'Cover 3', 'Zone, 3 deep'], ['c4', 'Cover 4', 'Quarters'], ['c6', 'Cover 6', 'Split field'], ['prevent', 'Prevent', 'All deep']]],
+    ['rush', 'Rush', [[3, '3', 'Drop 8'], [4, '4', 'Standard'], [5, '5', 'Blitz'], [6, '6+', 'All-out']]],
+  ];
+  const vdefName = (part, k) => ((VDEF.find((x) => x[0] === part)[2].find((o) => o[0] === k) || [])[1] || '');
+  // what each coverage does and gives up, in a line
+  const COVER_TIP = {
+    c0: 'Everyone in man, nobody deep. Beat a man and it is a touchdown.',
+    c1: 'Man with one safety deep. Tight on the quick game; the quarterback can run on it.',
+    '2man': 'Man underneath, two safeties deep. Smothers passes, light against the run.',
+    c2: 'Five underneath, two deep. Takes the short game away; the deep middle is open.',
+    c3: 'Three deep, four under. Stops the deep ball, gives the quick game room.',
+    c4: 'Four deep. Nothing over the top, room underneath.',
+    c6: 'Quarters to one side, Cover 2 to the other: a little of both.',
+    prevent: 'Everyone back. Nothing deep, anything short.',
+  };
+  // the call a defense would make here: goal line near the goal, dime on 2nd to 4th and long, else nickel Cover 3
+  function vdefDefault(r) {
+    if (r.try2 || r.yl <= 3) return { pers: 'heavy', front: 'loaded', cover: 'c1', rush: 5 };
+    if (r.ytg <= 2) return { pers: 'base', front: 'loaded', cover: 'c1', rush: 4 };
+    if (r.down >= 2 && r.ytg >= 7) return { pers: 'dime', front: 'light', cover: 'c4', rush: 4 };
+    return { pers: 'nickel', front: 'even', cover: 'c3', rush: 4 };
+  }
+  const vdefText = (dc) => `${vdefName('pers', dc.pers)}, ${vdefName('cover', dc.cover)}, ${dc.rush >= 6 ? '6+' : dc.rush} rushing, ${({ light: 6, even: 7, loaded: 8 })[dc.front]} in the box`;
+  // why a matchup went the way it did (engine.js dcMatch reasons), as a phrase
+  const WHY = {
+    light_box: 'a run at a light box', loaded_box: 'a run into a stacked box', goal_line_run: 'a run into goal-line personnel',
+    base_run: 'a run into base personnel', dime_run: 'a run against dime', small_vs_heavy: 'heavy personnel against a small defense',
+    two_high: 'a run against two deep safeties', eighth_man: 'a run into an eighth man in the box', prevent_run: 'a run against prevent',
+    drop8_run: 'a run against a three-man rush', run_blitz: 'a run into a run blitz', zero_box: 'a run into Cover 0, everyone up', big_vs_pass: 'a pass against goal-line personnel',
+    base_vs_pass: 'a pass against base personnel', dime_vs_pass: 'a pass against dime', lb_on_slot: 'a linebacker stuck on a slot receiver',
+    light_vs_pass: 'a pass against extra men in coverage', loaded_vs_pass: 'a pass over a stacked box', no_safety: 'a shot with no safety deep',
+    one_deep: 'a shot at one deep safety', two_deep: 'a shot into two deep safeties', quarters_deep: 'a shot into quarters',
+    prevent_deep: 'a shot into prevent', sack_risk: 'a long throw against an all-out rush', blitz_deep: 'a long throw against a blitz',
+    sneak_wall: 'a sneak into a stacked line', qb_vs_man: 'the quarterback running on man coverage', spy: 'the quarterback running at a spy',
+    qb_lanes: 'the quarterback running through blitz lanes', reverse_blitz: 'the end-around against a blitz', reverse_deep: 'the end-around against deep help',
+    hot_vs_blitz: 'a quick throw against the blitz', drop8: 'a quick throw into eight in coverage', no_help: 'a quick throw with no help over the top',
+    soft_cushion: 'a quick throw under soft zone', under_zone: 'a quick throw into underneath zone', trail_man: 'a quick throw against trail man',
+    rub_vs_man: 'a rub route against man', screen_blitz: 'a screen against the blitz', screen_drop8: 'a screen against eight in coverage',
+    screen_man: 'a screen against man, backs turned', screen_eyes: 'a screen into zone eyes', middle_open: 'a shot down the open middle',
+    c3_seam: 'a shot up the seam against Cover 3', pa_loaded: 'play action against a stacked box', pa_light: 'play action against a light box',
+    pa_heavy: 'play action out of heavy personnel', time_to_throw: 'all day to throw against three rushers', pa_time: 'play action against an all-out rush',
+    pa_flood: 'a flood against single-high', roll_contain: 'a rollout into a contain blitz', qb_escapes: 'the quarterback rolling away from man, nobody deep',
+    roll_man: 'a rollout against man', roll_flat: 'a rollout into a flat defender', rpo_loaded: 'an RPO against a stacked box',
+    rpo_light: 'an RPO against a light box', rpo_read: 'an RPO against a box that gave no read', rpo_blitz: 'an RPO against a blitz',
+    trick_loaded: 'a trick play against a stacked box', trick_eyes: 'a trick play against zone eyes', trick_deep: 'a trick play against deep help',
+    trick_blitz: 'a trick play into a blitz', seen_it: 'a trick play they had already seen',
+  };
   // with the clock running: the tempo of the next snap (the engine's typical seconds between snaps), or stop it
   const CLOCK = {
     nohuddle: { label: 'No-huddle', short: 'No-huddle' },
@@ -149,6 +202,7 @@
   const VS_LOBBY = VS_ON && location.hash === '#vs';
   const VS_ROOM = VS_ON ? ((location.hash.match(/^#vs-([A-HJ-KM-NP-Z2-9]{6})$/) || [])[1] || '') : '';
   const VS = !!VS_ROOM;
+  const VS_DECIDE_MS = 30000;      // the play clock in Versus: 30 seconds a call (board/match.js DECIDE_MS)
   const stateKey = () => (VS ? `${STORE}:vs:${VS_ROOM}` : SURV ? `${STORE}:surv` : DRIVE ? `${STORE}:drive:${DRIVE}` : RUN_N ? `${STORE}:run:${RUN_N}` : `${STORE}:day:${dayN}`);
   const saveState = () => save(stateKey(), state);
   const seedKey = () => (VS ? `vs${vs.seed}` : SURV ? `s${state.run}:${state.games.length}` : DRIVE ? `drive${DRIVE}` : RUN_N ? `run${RUN_N}` : dayN);    // what the engine's draws are seeded by
@@ -2457,7 +2511,8 @@
   }
 
   // ------------------------------------------------------------ narration ---
-  function lookText(k) {
+  function lookText(k, e) {
+    if (e && e.dc) return ` (${k && k.form ? `${k.form}, ` : ''}against ${vdefName('pers', e.dc.pers).toLowerCase()} ${vdefName('cover', e.dc.cover)}, ${e.dc.rush >= 6 ? '6+' : e.dc.rush} rushing)`;
     if (!k || (!k.form && !k.box)) return '';
     const bits = [];
     if (k.form) bits.push(k.form);
@@ -2473,11 +2528,11 @@
     let what;
     if (mine && act && act.targetName && act.route && e.call >= 0) {       // your pass: to the receiver you picked, on his route
       const to = shortName(act.targetName) || act.targetPos;
-      what = `${nm.qb || `The ${who}`} ${act.pa ? 'fakes the handoff, then looks for' : act.roll ? 'rolls out and looks for' : 'looks for'} ${to} on ${routeSay(act.targetPos, act.route)}${e.row >= 0 ? lookText(e.look) : ''}`;
+      what = `${nm.qb || `The ${who}`} ${act.pa ? 'fakes the handoff, then looks for' : act.roll ? 'rolls out and looks for' : 'looks for'} ${to} on ${routeSay(act.targetPos, act.route)}${e.row >= 0 ? lookText(e.look, e) : ''}`;
     } else if (e.call >= 0) {
       const c = idx.calls[e.call];
       const actor = c.id.startsWith('rb_') ? nm.rb : nm.qb;
-      what = `${TRICK_SAY[c.id] ? `The ${who} ${TRICK_SAY[c.id]}` : `${actor || `The ${who}`} ${c.say}`}${e.row >= 0 ? lookText(e.look) : ''}`;
+      what = `${TRICK_SAY[c.id] ? `The ${who} ${TRICK_SAY[c.id]}` : `${actor || `The ${who}`} ${c.say}`}${e.row >= 0 ? lookText(e.look, e) : ''}`;
     } else what = `${nm.qb || who} ${e.kind === RUN ? 'hands off' : 'drops back'}`;
     const y = Math.round(e.td && !e.turnover ? e.yl : e.yards);      // a touchdown gains the distance to the goal line
     const gain = y > 0 ? `${y} yard${y === 1 ? '' : 's'}` : y < 0 ? `loss of ${-y}` : 'no gain';
@@ -3377,8 +3432,58 @@
     const kick = peek.log.find((e) => e.ev === 'fg' || e.ev === 'punt');
     if (kick) { G.fast = false; return promptChoice(kick.ev === 'fg' ? 'fgdef' : 'puntdef'); }
     G.fast = false;
+    if (VS) { ui = { step: 'vdef', dc: vdefDefault(r) }; drawVsDefDock(); return; }
     ui = { step: 'defense', to: false };
     drawDefDock();
+  }
+  // Versus: your defense in full. Every part preset to what a defense would call here; one tap on Call it sends it
+  function drawVsDefDock() {
+    const r = G.root, d = $('dock');
+    d.textContent = '';
+    takeBanner(d);
+    const head = el('div', 'ask');
+    head.append(el('h2', '', r.try2 ? 'Stop the two-point try' : 'Your defense'), el('span', 'sub', `${teamName(code(r.pos))} ball · ${ddText(r)} · ${spotText(r)}`));
+    d.append(head);
+    const box = el('div', 'vdef');
+    const tip = el('p', 'vdeftip');
+    const sum = el('div', 'vdefsum');
+    const mark = () => {
+      box.querySelectorAll('.segb').forEach((b) => { const on = ui.dc[b.dataset.part] === (b.dataset.part === 'rush' ? +b.dataset.k : b.dataset.k); b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
+      sum.textContent = vdefText(ui.dc);
+      tip.textContent = COVER_TIP[ui.dc.cover];
+    };
+    VDEF.forEach(([part, label, opts]) => {
+      const row = el('div', 'tempo vrow');
+      row.append(el('span', 'lab', label));
+      const seg = el('div', 'seg n');
+      seg.style.setProperty('--cols', Math.min(opts.length, 4));
+      seg.setAttribute('role', 'radiogroup');
+      seg.setAttribute('aria-label', label);
+      opts.forEach(([k, t, sub]) => {
+        const b = el('button', 'segb');
+        b.type = 'button';
+        b.setAttribute('role', 'radio');
+        b.dataset.part = part; b.dataset.k = String(k);
+        b.append(el('b', '', t), el('small', '', sub));
+        b.addEventListener('click', () => { if (busy || ui.step !== 'vdef') return; ui.dc = { ...ui.dc, [part]: k }; mark(); });
+        seg.append(b);
+      });
+      row.append(seg);
+      box.append(row);
+    });
+    d.append(box, sum, tip);
+    const keys = el('div', 'keys');
+    keys.style.setProperty('--cols', 1);
+    const go = key('Call it', null, 'big', 0);
+    go.addEventListener('click', () => {
+      if (busy || ui.step !== 'vdef') return;
+      track('defense_call', { mode: modeName(), call: `${ui.dc.pers}/${ui.dc.front}/${ui.dc.cover}/${ui.dc.rush}` });
+      ui.step = 'sent';
+      vsSubmit({ dc: { ...ui.dc } });
+    });
+    keys.append(go);
+    d.append(keys);
+    mark();
   }
   function drawDefDock() {
     const r = G.root, d = $('dock');
@@ -5066,7 +5171,7 @@
     if (m.t === 'hello') {
       vs.retry = 0;
       Object.assign(vs, { seat: m.seat, mode: m.mode || vs.mode, teams: m.teams, names: m.names, full: !!m.full, online: m.online, off: m.off || [0, 0],
-        phase: m.phase, n: m.n, ms: m.ms, ms0: m.ms0 || vs.ms0, deadline: m.deadline || 0, result: m.result || null, rated: m.rated || vs.rated });
+        phase: m.phase, n: m.n, ms: m.ms, ms0: m.ms0 || vs.ms0, deadline: m.deadline || 0, dl: m.dl || null, result: m.result || null, rated: m.rated || vs.rated });
       (m.decisions || []).forEach((d) => { if (d) vs.got[d.n] = d; });
       if (vs.last && vs.last.n === m.n && m.phase === 'live') vsSend(vs.last);    // a call sent as the line dropped
       vsBanner('');
@@ -5084,8 +5189,10 @@
       vs.taken = m.team;
       renderVsWaiting();
     } else if (m.t === 'start') {
-      Object.assign(vs, { phase: 'live', ms: m.ms, ms0: m.ms, n: 0, deadline: m.deadline });
+      Object.assign(vs, { phase: 'live', ms: m.ms, ms0: m.ms, n: 0, deadline: m.deadline, dl: m.dl || null });
       vsMaybeStart();
+    } else if (m.t === 'clock') {                    // the room's word on your play clock for this call
+      if (m.n === vs.n && vs.seat >= 0) { vs.dl = vsDls(); vs.dl[vs.seat] = m.deadline; vsDrawBar(); }
     } else if (m.t === 'locked') {
       if (m.n === vs.n && m.seat !== vs.seat) { vs.oppLocked = m.n; vsDrawBar(); }
       if (m.n === vs.n && m.seat === vs.seat && vs.waiting !== m.n) {          // back after a reload: your call is already in
@@ -5094,7 +5201,7 @@
       }
     } else if (m.t === 'step') {
       vs.got[m.n] = m;
-      Object.assign(vs, { ms: m.ms, n: m.n + 1, deadline: m.deadline, oppLocked: -1 });
+      Object.assign(vs, { ms: m.ms, n: m.n + 1, deadline: m.deadline, dl: m.dl || null, oppLocked: -1 });
       if (m.result) { vs.result = m.result; vs.phase = 'over'; }
       vsWake();
     } else if (m.t === 'over') {
@@ -5189,7 +5296,7 @@
     box.append(el('div', 'cat', `${VS_MODES[vs.mode] || 'Versus'} · College overtime`),
       el('div', 'game', `Your ${teamName(me)} vs ${oppName ? `${oppName}’s` : 'their'} ${teamName(op)}`), el('div', 'big', 'Overtime'));
     box.append(el('p', 'story', `Each team gets the ball at the other’s 25, no clock. From the second overtime, a touchdown has to go for two; from the third, it’s a two-point play each. Ahead after both teams have had it, you win. ${first === G.me ? 'You won the toss: you choose offense, defense or the end of the field.' : `The ${teamName(op)} won the toss and choose first.`} The choice alternates every overtime.`));
-    box.append(el('div', 'who', 'You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap, and the play clock is 30 seconds.'));
+    box.append(el('div', 'who', 'You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap. You get 30 seconds a call; miss two in a row and you forfeit.'));
     const go = el('button', 'btn', 'Kick it off');
     go.type = 'button';
     go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
@@ -5378,20 +5485,29 @@
     }
     b.textContent = '';
     if (vs.banner) b.append(el('span', 'warn', vs.banner));
-    if (vs.ui === 'prompt' && vs.deadline) {
-      const s = Math.max(0, Math.ceil((vs.deadline - vsNow()) / 1000));
+    if (vs.ui === 'prompt' && vsMyDl()) {
+      const s = Math.max(0, Math.ceil((vsMyDl() - vsNow()) / 1000));
       b.append(el('span', `clk${s <= 10 ? ' low' : ''}`, `Play clock ${s}`));
     }
     if (G && vs.oppLocked === G.vsN && vs.n === G.vsN) b.append(el('span', 'lock', 'Opponent locked in'));
     b.hidden = !b.childNodes.length;
   }
-  // your call's clock: the room's (out of time, the room plays your default)
+  // your call's clock: 30 seconds from the moment the call is up (the room starts it on {t:'ready'} and says when it
+  // runs out; until it answers, the same 30 seconds here), never past the decision's last moment. Out of time: the
+  // room plays your default
+  const vsDls = () => (vs.dl && vs.dl.length === 2 ? vs.dl.slice() : [vs.deadline, vs.deadline]);
+  const vsMyDl = () => (vs.seat >= 0 ? vsDls()[vs.seat] : vs.deadline);
   function vsClockStart() {
     clearInterval(vs.timer);
     vs.ui = 'prompt';
+    if (vs.n === G.vsN && vs.seat >= 0) {
+      vs.dl = vsDls();
+      vs.dl[vs.seat] = Math.min(vs.dl[vs.seat], vsNow() + VS_DECIDE_MS);
+      vsSend({ t: 'ready', n: G.vsN });
+    }
     vs.timer = setInterval(() => {
       if (vs.ui !== 'prompt') { clearInterval(vs.timer); return; }
-      if (vsNow() >= vs.deadline) {
+      if (vsNow() >= vsMyDl()) {
         clearInterval(vs.timer);
         if (!busy && vs.waiting !== G.vsN) { vs.ui = 'idle'; status('Out of time: your default call is in'); }
       }
@@ -5429,7 +5545,7 @@
       G.root = { ...res.root };
       if (res.done) G.root.phase = DONE;
       const pe = res.log.find((x) => x.ev === 'play');
-      const look = before.pos === G.me ? null : res.action && res.action.def && pe && pe.look && pe.look.box ? (pe.look.box >= 7 ? 2 : 0) + (pe.look.blitz ? 1 : 0) : null;
+      const look = pe && pe.look && pe.look.box && res.action && (res.action.dc || (before.pos !== G.me && res.action.def)) ? (pe.look.box >= 7 ? 2 : 0) + (pe.look.blitz ? 1 : 0) : null;
       G.lastPlay = { before, res, side, look };
       res.animated = await animatePlay(before, res, side, false, look);
       out = { res, d };
@@ -5439,13 +5555,27 @@
     persist();
     return out;
   }
+  // Versus: the matchup behind a snap, from the reasons the engine gave (e.why, engine.js dcMatch), the one that
+  // mattered most for the side it favored; nothing when it was close to even
+  function vsMatchupLine(e, mine) {
+    if (!e || e.ev !== 'play' || !Array.isArray(e.why) || !e.why.length || Math.abs(e.match || 0) < 0.5) return null;
+    const off = e.match > 0, w = e.why.find(([, v]) => (v > 0) === off);
+    const why = w && WHY[w[0]];
+    if (!why) return null;
+    const big = !e.turnover && (e.td || e.yards >= 10), none = e.turnover || e.incomplete || e.yards <= 0;
+    const W = why[0].toUpperCase() + why.slice(1);
+    if (mine) return off ? { good: true, text: none ? `Good call: ${why}. It just didn't work this time.` : `Good call: ${why}.` }
+      : { good: false, text: big ? `${W}: their call had you, but you made the play anyway.` : `${W}: their defense had it covered.` };
+    return off ? { good: false, text: none ? `${W}: they had the edge, and you still stopped it.` : `${W}: they had the edge on that one.` }
+      : { good: true, text: big ? `Your call was right (${why}), but they made the play anyway.` : `Your call won it: ${why}.` };
+  }
   // what each side called, shown once the snap is in
   function vsCalls(d, root) {
     const off = d.halves[root.pos], def = d.halves[1 - root.pos];
     const a = off && off.action;
     const offTxt = !off ? 'no call in time (the default)' : off.timeout ? 'a timeout' : off.two ? 'going for two' : a && a.call ? (CALL[a.call] || {}).label || 'a play'
       : a && a.play ? specialLabel(a.play) : a && a.pat ? (a.pat === 'two' ? 'going for two' : 'the extra point') : 'a play';
-    const defTxt = root.phase !== SNAP ? null : !def ? 'no call in time (the default)' : (DEF[def.def] || {}).label || 'a defense';
+    const defTxt = root.phase !== SNAP ? null : !def ? 'no call in time (the default)' : def.dc ? vdefText(def.dc) : 'a defense';
     const me = root.pos === G.me;
     return `${me ? 'You' : 'They'}: ${offTxt}${defTxt ? ` · ${me ? 'They' : 'You'}: ${defTxt}` : ''}`;
   }
@@ -5459,8 +5589,7 @@
     txt.append(el('span', 'yd', x.head || headline(main, res.log)), document.createTextNode(lines.length ? lines[0][0] : ''));
     top.append(txt);
     wrap.append(top, el('div', 'vscalls', vsCalls(x.d, before)));
-    const dh = x.d.halves[1 - before.pos];
-    const mu = main ? matchupLine(main, before.pos === G.me ? res.action : { ...res.action, def: dh && dh.def }) : null;
+    const mu = main ? vsMatchupLine(main, before.pos === G.me) : null;
     if (mu) wrap.append(el('div', `mline ${mu.good ? 'won' : 'lost'}`, mu.text));
     const btn = el('button', 'btn', G.root.phase === DONE || vs.result ? 'Final' : 'Next play');
     btn.type = 'button';
@@ -5470,9 +5599,9 @@
     wrap.append(btn);
     d.append(wrap);
     vs.ui = 'card';
-    // the play clock runs whether or not Next is tapped: the card gives way with 30 seconds left on it
+    // the play clock runs whether or not Next is tapped: the card gives way when the clock would start anyway (WATCH_MS after the snap)
     clearTimeout(vs.cardTimer);
-    vs.cardTimer = setTimeout(go, vs.result ? 8000 : Math.max(4000, vs.deadline - 30000 - vsNow()));     // the last play: then the final
+    vs.cardTimer = setTimeout(go, vs.result ? 8000 : Math.max(4000, vs.deadline - VS_DECIDE_MS - vsNow()));     // the last play: then the final
   }
   // the next decision of the match: one the room already played, yours (a prompt, on the play clock) or theirs (wait)
   async function vsAdvance(r) {
@@ -5500,7 +5629,7 @@
       return 'stop';
     }
     if (vs.waiting === G.vsN) { vs.ui = 'idle'; status('Locked in. Waiting for your opponent…'); vsDrawBar(); return 'stop'; }
-    if (vsNow() >= vs.deadline) { vs.ui = 'idle'; status('Out of time: your default call is in'); return 'stop'; }
+    if (vsNow() >= vsMyDl()) { vs.ui = 'idle'; status('Out of time: your default call is in'); return 'stop'; }
     vsClockStart();
     if (role === 'pick') vsPromptPick();
     else if (role === 'offense') promptOffense();
@@ -5559,8 +5688,8 @@
       : res.by === 'forfeit' ? (won ? 'You win: they forfeited' : 'You forfeited')
         : res.by === 'abandoned' ? 'No result: both sides left' : 'No result';
     card.append(el('h2', '', head));
-    if (res.by === 'forfeit') card.append(el('p', 'note', won ? (res.why === 'afk' ? 'They let the play clock run out three calls in a row.' : 'They left the match for more than a minute.')
-      : (res.why === 'afk' ? 'The play clock ran out on three of your calls in a row.' : `You were away from the match for more than ${VS_FORFEIT} seconds.`)));
+    if (res.by === 'forfeit') card.append(el('p', 'note', won ? (res.why === 'afk' ? 'They let the play clock run out on two calls in a row.' : 'They left the match for more than a minute.')
+      : (res.why === 'afk' ? 'The play clock ran out on two of your calls in a row.' : `You were away from the match for more than ${VS_FORFEIT} seconds.`)));
     if (res.by === 'error') card.append(el('p', 'note', 'Something went wrong in the match. Nobody’s rating changed.'));
     card.append(el('p', 'note', `Your ${teamName(code(G.me))} vs ${vs.names[1 - vs.seat] ? `${vs.names[1 - vs.seat]}’s` : 'their'} ${teamName(code(1 - G.me))} · ${VS_MODES[vs.mode] || 'Versus'}`));
     card.append(el('p', 'vsrating', ''));
