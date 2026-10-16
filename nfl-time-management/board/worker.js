@@ -39,7 +39,7 @@
 // A code is 12 letters and digits (no 0/O, 1/I/L) drawn at random: about 60 bits, posted at RATE_PER_MIN an IP.
 // Nothing about the buyer is kept here (Stripe has the receipt); only the session id behind each code.
 const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
-const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook', '/pro/data'];
+const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook', '/pro/data', '/pro/reset'];
 const PRO_FILE_RE = /^(drives|runs|d\d{1,3}|r\d{1,3})\.json$/;
 const STRIPE_VERSION = '2026-08-26.dahlia', WEBHOOK_TOLERANCE = 300;   // the API version pinned; a signature older than this is refused
 const PRO_PRICE = '$4.99', PRO_CENTS = 499, PRO_TAX_CODE = 'txcd_10201001',    // video games, downloaded, non-subscription: the product's category; Managed Payments refuses a line without one
@@ -48,6 +48,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const clean = (name) => String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
 const KEY_RE = /^[A-Za-z0-9_-]{16,128}$/;
+const DEV_MAX = 3, DEV_DAYS = 30;        // a Pro code works on this many devices at once; a device unseen this long frees its place
 // Names are shown publicly (the stats page, the survivor board): slurs and obscenities are refused, spelled any way
 // (case, spaces, punctuation, digits for letters, repeated letters). SUB: refused anywhere in a name; WORD: refused as
 // a whole word (they occur inside ordinary names: "Cassel", "Dickerson", "Hancock"). Stored rows with such a name are
@@ -245,6 +246,23 @@ async function codeFor(storage, s) {
   await storage.put(`pro:sess:${s}`, code);
   return code;
 }
+// The device (the hash of the site's anonymous device key) joins the code's devices, or is refused when the code is
+// already on DEV_MAX others: a shared code stops working for the fourth friend. Seen-at times are kept, written at
+// most hourly per device, so a device unseen for DEV_DAYS frees its place (a new phone replaces a lost one).
+async function bindDevice(storage, code, devKey) {
+  const row = await storage.get(`pro:code:${code}`);
+  if (!row) return 'unknown';
+  if (!KEY_RE.test(devKey)) return 'key';
+  const kh = (await sha256(devKey)).slice(0, 24), now = Date.now(), keep = now - DEV_DAYS * 864e5;
+  const dev = Object.fromEntries(Object.entries(row.dev || {}).filter(([, t]) => t >= keep));
+  if (!(kh in dev) && Object.keys(dev).length >= DEV_MAX) return 'full';
+  if (!(kh in dev) || now - dev[kh] > 36e5) { dev[kh] = now; await storage.put(`pro:code:${code}`, { ...row, dev }); }
+  return 'ok';
+}
+// Until this moment a /restore without a device key (a page from before the cap, cached) is still answered, unbound;
+// after it the key is wanted. (KEY_REQUIRED_FROM in the env overrides it, for the tests.)
+const keyRequired = (env) => Date.now() >= Date.parse(env.KEY_REQUIRED_FROM || '2026-10-18T06:00:00Z');
+const DEV_FULL = `This code is already in use on ${DEV_MAX} devices. Pro works on up to ${DEV_MAX} at once; a device unused for ${DEV_DAYS} days frees its place.`;
 // Stripe's signature on a webhook: t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>"> with the endpoint's signing secret
 async function signedByStripe(req, body, secret) {
   const sig = req.headers.get('Stripe-Signature') || '';
@@ -311,18 +329,36 @@ async function pro(req, env, storage, hits, h, url) {
     const sess = await r.json().catch(() => ({}));
     if (!r.ok) return json({ error: 'no such session' }, 404, h);
     if (sess.payment_status === 'unpaid') return json({ error: 'not paid' }, 402, h);     // 'no_payment_required' counts as paid
-    return json({ code: await codeFor(storage, s) }, 200, h);
+    const minted = await codeFor(storage, s);
+    if (KEY_RE.test(String(body.key || ''))) await bindDevice(storage, minted, String(body.key));    // the buyer's device is the first
+    return json({ code: minted }, 200, h);
   }
   if (url.pathname === '/restore') {
     const code = normCode(body.code);
     if (!code) return json({ error: 'a code looks like TMD-XXXX-XXXX-XXXX' }, 400, h);
-    const row = await storage.get(`pro:code:${code}`);
-    return row ? json({ ok: true, code }, 200, h) : json({ error: 'unknown code' }, 404, h);
+    const st = await bindDevice(storage, code, String(body.key || ''));
+    if (st === 'key' && !keyRequired(env)) return (await storage.get(`pro:code:${code}`)) ? json({ ok: true, code }, 200, h) : json({ error: 'unknown code' }, 404, h);
+    if (st === 'key') return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
+    if (st === 'unknown') return json({ error: 'unknown code' }, 404, h);
+    if (st === 'full') return json({ error: DEV_FULL }, 409, h);
+    return json({ ok: true, code }, 200, h);
+  }
+  if (url.pathname === '/pro/reset') {                    // support: a code's devices start over (Authorization: Bearer <ADMIN_TOKEN>)
+    const auth = req.headers.get('Authorization') || '', want = env.ADMIN_TOKEN ? `Bearer ${env.ADMIN_TOKEN}` : '';
+    if (!want || !same(auth, want)) return json({ error: 'forbidden' }, 403, h);
+    const code = normCode(body.code), row = code && await storage.get(`pro:code:${code}`);
+    if (!row) return json({ error: 'unknown code' }, 404, h);
+    delete row.dev;
+    await storage.put(`pro:code:${code}`, row);
+    return json({ ok: true, code }, 200, h);
   }
   if (url.pathname === '/pro/data') {
     const code = normCode(body.code), name = String(body.name || '');
     if (!PRO_FILE_RE.test(name)) return json({ error: 'no such file' }, 404, h);
-    if (!code || !(await storage.get(`pro:code:${code}`))) return json({ error: 'a valid Pro code is needed' }, 403, h);
+    const st = code ? await bindDevice(storage, code, String(body.key || '')) : 'unknown';
+    if (st === 'key') return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
+    if (st === 'unknown') return json({ error: 'a valid Pro code is needed' }, 403, h);
+    if (st === 'full') return json({ error: DEV_FULL }, 409, h);
     if (!env.ASSETS) return json({ error: 'the Pro data is not deployed' }, 503, h);
     const file = await env.ASSETS.fetch(new Request(new URL(`/pro/${name}`, req.url), { method: 'GET' }));
     if (!file.ok) return json({ error: 'no such file' }, 404, h);

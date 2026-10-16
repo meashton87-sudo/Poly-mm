@@ -4688,8 +4688,9 @@
     if (!code || !PRO_ON) { PRO_LIVE = false; return; }
     if (!BOARD.api) { PRO_LIVE = null; return; }
     try {
-      const r = await fetch(`${BOARD.api}/restore`, POST_JSON({ code }));
+      const r = await fetch(`${BOARD.api}/restore`, POST_JSON({ code, key: deviceKey() }));
       if (r.ok) { PRO_LIVE = true; return; }
+      if (r.status === 409) { const d = await r.json().catch(() => ({})); proOff(d.error || 'This code is in use on too many devices'); return; }
       if (r.status === 404 || r.status === 400) { proOff('That Pro code is not valid any more'); return; }
       PRO_LIVE = null;                                                   // the board is down: neither on nor off
     } catch (e) { PRO_LIVE = null; }
@@ -4708,7 +4709,7 @@
     history.replaceState(null, '', location.pathname + location.hash);
     if (!s || !PRO_ON) return;
     try {
-      const d = await proApi('/claim', { s });
+      const d = await proApi('/claim', { s, key: deviceKey() });
       save(PRO_KEY, { code: d.code, at: Date.now() });
       PRO_LIVE = true;
       track('pro_unlocked');
@@ -4724,7 +4725,7 @@
       'The playoff runs. A team’s whole postseason, every late-game spot in order. Win them all'].forEach((t) => ul.append(el('li', '', t)));
     box.append(ul);
     if (isPro()) {
-      box.append(el('p', '', `Pro is on. Your code: ${proCode()}. Keep it: it unlocks Pro on any other device.`));
+      box.append(el('p', '', `Pro is on. Your code: ${proCode()}. Keep it: it unlocks Pro on up to 3 of your devices.`));
       return [box];
     }
     const row = el('div', 'row'), buy = el('button', 'btn', 'Unlock · $4.99');
@@ -4737,13 +4738,13 @@
       }
     });
     row.append(buy);
-    box.append(row, el('p', 'note', 'Apple Pay, Google Pay or a card, on Stripe’s secure page. One code, any device.'));
+    box.append(row, el('p', 'note', 'Apple Pay, Google Pay or a card, on Stripe’s secure page. One code, up to 3 of your devices.'));
     const rs = el('div', 'row'), inp = el('input'), go = el('button', 'btn', 'Restore');
     inp.placeholder = 'TMD-XXXX-XXXX-XXXX'; inp.setAttribute('aria-label', 'Your Pro code'); inp.autocapitalize = 'characters'; inp.spellcheck = false;
     go.type = 'button';
     go.addEventListener('click', async () => {
       try {
-        const d = await proApi('/restore', { code: inp.value });
+        const d = await proApi('/restore', { code: inp.value, key: deviceKey() });
         save(PRO_KEY, { code: d.code, at: Date.now() });
         PRO_LIVE = true;
         track('pro_restored');
@@ -4761,8 +4762,8 @@
   async function proFile(name) {
     if (!BOARD.api || !proCode()) return null;
     let r;
-    try { r = await fetch(`${BOARD.api}/pro/data`, POST_JSON({ code: proCode(), name })); } catch (e) { return null; }
-    if (r.status === 403) { proOff('That Pro code is not valid any more'); return null; }
+    try { r = await fetch(`${BOARD.api}/pro/data`, POST_JSON({ code: proCode(), name, key: deviceKey() })); } catch (e) { return null; }
+    if (r.status === 403 || r.status === 409) { const d = await r.json().catch(() => ({})); proOff(r.status === 409 ? d.error || 'This code is in use on too many devices' : 'That Pro code is not valid any more'); return null; }
     if (!r.ok) return null;
     return r.json().catch(() => null);
   }

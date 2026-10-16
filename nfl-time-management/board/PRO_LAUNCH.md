@@ -40,6 +40,7 @@ The sandbox dry run is the same on the unlisted preview, https://nfl2mindrill-pr
 - `/pay` creates a Checkout session (API version pinned, session tagged `tmd_pro_…`), with the success address `/?claim=<session>`. Payment methods come from the Stripe Dashboard, not the call.
 - `/claim` checks the session is paid and gives the code (the same code again for the same session). The webhook mints the code the moment Stripe marks the session paid, so a buyer who closed the tab, or paid by a slower bank method, still has a code waiting the first time the page asks.
 - `/restore` turns a code into Pro on another device. Codes have about 60 bits of entropy and guesses are rate limited per IP.
+- A code works on up to 3 devices at once (the hash of the site's anonymous device key, with when it was last seen); a fourth is refused with a message saying so, and a device unseen for 30 days frees its place. Support: `POST /pro/reset {"code": "TMD-…"}` with `Authorization: Bearer <ADMIN_TOKEN>` starts a code's devices over.
 - Stored on the worker: the code and the session id behind it. No names, emails or card details; Stripe holds the receipt. The privacy page says so.
 
 ## Not automated (by choice)
