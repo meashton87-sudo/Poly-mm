@@ -1004,9 +1004,10 @@
   // charting says: the target's route and the depth of the throw, man or zone and the coverage shell, how many
   // rushed, whether the passer was pressured and how long he held the ball. Tap the field to skip; with reduced
   // motion the result just shows.
+  // (dead-ball fouls: nobody plays; illegal formation, shift or motion and the defense's twelfth man are live-ball fouls,
+  // flagged after a snap that is played)
   const PRE_SNAP = new Set(['False Start', 'Offside', 'Defensive Offside', 'Encroachment', 'Neutral Zone Infraction', 'Delay of Game',
-    'Illegal Formation', 'Illegal Shift', 'Illegal Motion', 'Defensive Delay of Game', 'Defensive Too Many Men on Field',
-    'Offensive Too Many Men on Field', 'Illegal Substitution']);
+    'Defensive Delay of Game', 'Offensive Too Many Men on Field', 'Illegal Substitution']);
   const RUN_GAP = { 'Outside run': 92, 'Off-tackle run': 58, 'Inside run': 26, 'Up the middle': 0, 'QB sneak': 0, 'QB keeper': 60, RPO: 30 };
   const AIR = { quick_strong: 5, quick_weak: 5, quick_middle: 7, screen: -2, deep_strong: 24, deep_weak: 24, deep_middle: 22,
     pa_short: 9, pa_deep: 27, roll_strong: 8, roll_weak: 8, hail_mary: 48, rpo_strong: 4, rpo_weak: 4, trick_flea: 30, trick_pass: 16 };
@@ -1081,8 +1082,11 @@
     const FW = (SX1 - SX0) / XYD, yx = (p) => (p - SX0) / XYD, px = (x) => SX0 + x * XYD;
     const inX = (x) => clip(x, 1.4, FW - 1.4);
     const inL = (L) => clip(L, -9.4, 109.4);
-    const Wd = new Motion.World();
-    sc.actors.forEach((a) => { a.trk = null; a.b = Wd.add({ g: GROUP[a.label] || 'LB', x: yx(a.x0), y: a.L0, spd: 1 + jit(0.035) }); });
+    // a route that runs out at a sideline or the end line: he pulls up there (a route's end at full speed carries him on)
+    // (a route not thrown to ends at a jog: the receiver settles where it ends instead of gliding on at full speed)
+    const edgeStop = (pts) => { const q = pts[pts.length - 1]; return q[0] < 3 || q[0] > FW - 3 || q[1] < -7 || q[1] > 107 ? { v1: 0 } : { v1: 2.5 }; };
+    const Wd = new Motion.World({ field: [0, FW] });
+    sc.actors.forEach((a) => { a.trk = null; a.endAt = null; a.b = Wd.add({ id: a.label + (a.p && a.p.num), g: GROUP[a.label] || 'LB', x: yx(a.x0), y: a.L0, spd: 1 + jit(0.035), team: a.off ? 1 : 0 }); });
     const BX = yx(bx);
     let snapAt = 0, frozen = false;            // frozen: the play never started (a flag before the snap)
     const busy = new Set();                    // players with a part in the outcome
@@ -1222,22 +1226,68 @@
         if (fd * ey <= 0.25 || after < 0.5) { ex = Math.sign(endPt[0] - ref[0]) || (endPt[0] < FW / 2 ? 1 : -1); ey = 0; after = Math.min(after0, 0.6 + R() * 0.4); }
       }
       // (inside the sideline, as every run is: the pile below starts where his run ended)
-      const contact = tackled ? [inX(endPt[0] - ex * after), endPt[1] - ey * after] : endPt;
-      const route = dist(start, contact) > 0.6 ? pts.concat([contact]) : [contact];
-      let A = runFrom(car, t0, route, { eff: o.eff ?? 0.97, v1: tackled ? 3.4 : undefined });
+      let contact = tackled ? [inX(endPt[0] - ex * after), endPt[1] - ey * after] : endPt;
+      let route = dist(start, contact) > 0.6 ? pts.concat([contact]) : [contact];
+      const runO = { eff: o.eff ?? 0.97, v1: tackled ? 3.4 : undefined };
+      let A = runFrom(car, t0, route, runO);
       let tC = t0 + A.T;
       // who gets there: the defender with the shortest time to the contact point, from where he is now
       // (from where he is, carrying his momentum the way runFrom does: a man going full speed the other way first
       // has to turn, so he is slower to get there than from a standing start)
-      const reach = defs.map((d) => {
+      const reachTo = (pt) => defs.map((d) => {
         const p = here(d), s = vel(d), st = [p];
         if (s > 1.2) { const k = Math.min(4, Math.max(1, s * 0.45)) / s; st.push([d.b.x + d.b.vx * k, d.b.y + d.b.vy * k]); }
-        return { d, T: Motion.minTime(st.concat([contact]), d.b.g, { v0: s, spd: d.b.spd }) };
+        return { d, T: Motion.minTime(st.concat([pt]), d.b.g, { v0: s, spd: d.b.spd }) };
       }).sort((x, y) => x.T - y.T);
+      let reach = reachTo(contact);
+      // stopped at or behind the line, and nobody can get there from where the defense is now: a defender beat his
+      // block. Back at the handoff, the one who can best make it is sent through the line, timed to meet him there
+      // (a stuff is penetration, not a back waiting in the backfield for someone to come)
+      if (tackled && o.from != null && o.from < t0 - 0.1 && reach.length && reach[0].T > tC - t0 + 0.1
+        && fd * (contact[1] - L0) < 1.5) {
+        const tf = Math.max(o.from, REACT_DEF + 0.2);
+        Wd.rewind(tf);
+        const pick = defs.filter((d) => d.b.g !== 'CB').map((d) => ({ d, T: Motion.minTime([here(d), contact], d.b.g, { v0: vel(d), spd: d.b.spd }) }))
+          .sort((x, y) => x.T - y.T)[0];
+        if (pick) {
+          runFrom(pick.d, tf, [contact], { T: Math.max(pick.T, tC - tf - 0.15) });
+          leg(pick.d, tC + 0.05, 'stick', { who: car.b, dx: 0, dy: fd * 0.7 });
+        }
+        Wd.run(t0);
+        A = runFrom(car, t0, route, runO);
+        tC = t0 + A.T;
+        reach = reachTo(contact);
+        if (pick) {
+          const me = reach.find((r) => r.d === pick.d);
+          if (me) reach = [me].concat(reach.filter((r) => r !== me));                // he is the tackler
+        }
+      }
+      // nobody can get there in time: he doesn't wait for them. He bounces wider at full speed, toward the sideline he
+      // is headed for (else the other), and the pursuit runs him down at the same yard line, the spot the result gives
+      // (where across the field he goes down is the animation's to choose; a back slowing in open space is not football)
+      if (tackled && reach.length && reach[0].T > tC - t0 + 0.1 && !o.straight) {
+        const lean = Math.sign(contact[0] - start[0]) || (contact[0] < FW / 2 ? -1 : 1);
+        let done = false;
+        for (const sh of [3, 6, 9, 12, 16]) {
+          for (const side of [lean, -lean]) {
+            const c2 = [inX(contact[0] + side * sh), contact[1]];
+            if (Math.abs(c2[0] - contact[0]) < sh - 0.5) continue;             // past the sideline that way
+            const r2 = (pts.length ? [[inX(pts[0][0] + side * sh * 0.4), pts[0][1]]] : []).concat([c2]);
+            const A2 = runFrom(car, t0, r2, runO), re2 = reachTo(c2);
+            if (re2.length && re2[0].T <= A2.T + 0.1) {
+              endPt[0] = inX(endPt[0] + side * sh); contact = c2; route = r2; A = A2; tC = t0 + A2.T; reach = re2; done = true;
+              break;
+            }
+          }
+          if (done) break;
+        }
+        if (!done) A = runFrom(car, t0, route, runO);                              // (back to his own run)
+      }
+      car.endAt = endPt;
       let tackler = null, tEnd = tC, tGo = t0, B = null;
       if (tackled && reach.length) {
         tackler = reach[0].d;
-        if (reach[0].T > tC - t0 + 0.1) {            // nobody can get there in time: he slows in traffic
+        if (reach[0].T > tC - t0 + 0.1) {            // still nobody (the field ran out): he slows in traffic
           A = runFrom(car, t0, route, { T: reach[0].T + 0.1, v1: 3.4 });
           tC = t0 + A.T;
         }
@@ -1325,6 +1375,7 @@
     }
     // how the ball carrier's play ends: the call-outs, a fumble
     function finish(car, tEnd, xyEnd) {
+      xyEnd = car.endAt || xyEnd;                  // (where runDown put the spot across the field)
       const fumble = !e.td && ['fumble_lost', 'fumble_kept', 'scoop_score'].includes(e.evt);
       let t = tEnd;
       if (e.td) say(tEnd, two ? 'Two-point try good!' : 'Touchdown!', 'good', { follow: car });
@@ -1348,7 +1399,13 @@
           }
         }
         t += 0.2;
-      } else if (e.oob) say(tEnd, 'Out of bounds', 'info', { follow: car });
+      } else if (e.oob) {
+        say(tEnd, 'Out of bounds', 'info', { follow: car });
+        // he pulls up past the sideline; the ball goes back to where he went out (an official's toss to the spot)
+        Wd.run(tEnd + 0.5);
+        const q = here(car);
+        if (dist(q, xyEnd) > 0.8) { fly(tEnd + 0.5, tEnd + 0.9, px(q[0]), q[1], px(xyEnd[0]), xyEnd[1], 0.12); rest(tEnd + 0.9, px(xyEnd[0]), xyEnd[1]); t = tEnd + 0.2; }
+      }
       else {
         // the call-out from the play's own yards (as the play-by-play has it), the size of a loss said
         const lossOf = Math.round(-(e.yards || 0));
@@ -1411,7 +1468,8 @@
         const D = (ROUTE_DEPTH[name] ?? 6) + (name === 'go' ? 2 : name === 'post' || name === 'corner' ? 1 : 0) + jit(2);
         const out = ei >= 0 ? outOf(sc, a) : Math.sign(a.b.x - BX) || side || 1;
         const r = Motion.routeOnField(name, D, a.b.x, out, dir, L0, Math.abs(a.b.y - L0), R());
-        const pl = follow(a, REACT_OFF, plan(a, r.pts.map((p) => [inX(p[0]), inL(p[1])]), { eff: 0.86 + R() * 0.1 }));
+        const rp = r.pts.map((p) => [inX(p[0]), inL(p[1])]);
+        const pl = follow(a, REACT_OFF, plan(a, rp, { eff: 0.86 + R() * 0.1, ...edgeStop(rp) }));
         runners.push([a, pl]);
         leg(a, Math.max(tCatch, tThrow + 0.5) + 0.3 + R() * 0.4, 'stand');
       });
@@ -1428,7 +1486,8 @@
           const rbRoute = ei >= 0 && act.routes[ei] ? act.routes[ei] : 'flat';
           const out = ei >= 0 ? outOf(sc, K.rb) : Math.sign(K.rb.b.x - BX) || side;
           const r = Motion.routeOnField(rbRoute, ROUTE_DEPTH[rbRoute] ?? 0, K.rb.b.x, out, dir, L0, Math.abs(K.rb.b.y - L0), R());
-          follow(K.rb, 1.3, plan(K.rb, r.pts.map((p) => [inX(p[0]), p[1]]), { eff: 0.75 }));
+          const rp = r.pts.map((p) => [inX(p[0]), inL(p[1])]);
+          follow(K.rb, 1.3, plan(K.rb, rp, { eff: 0.75, ...edgeStop(rp) }));
         }
       }
       // coverage: man (trail him a beat behind, a cushion deep) or zone (drop to the landmark), then break on the ball
@@ -1835,7 +1894,9 @@
         const meshPt = carrier.label === 'WR' ? [q0[0] + (c0[0] > q0[0] ? 1.2 : -1.2), fwd(L0, md + 0.1)]
           : across ? [q0[0] + (c0[0] - q0[0]) * 0.3, fwd(L0, md)] : [c0[0] + (hole[0] - c0[0]) * 0.15, fwd(L0, md)];
         const start = carrier.label === 'WR' ? 0.35 : REACT_OFF;
-        const pl = follow(carrier, start, plan(carrier, [c0, meshPt, hole], { eff: carrier.label === 'WR' ? 0.95 : 0.9, v1: e.td || e.yards >= 4 ? undefined : 2.5 }));
+        // (at speed into the hole whatever the result: the contact, if it comes there, is runDown's; slowing into it
+        // left a back jogging at the edge with nobody there)
+        const pl = follow(carrier, start, plan(carrier, [c0, meshPt, hole], { eff: carrier.label === 'WR' ? 0.95 : 0.9 }));
         let best = 9, bt = 0.7;
         for (let s = 0; s <= pl.T; s += 0.05) { const p = pl.at(s), d = dist([p[0], p[1]], meshPt); if (d < best) { best = d; bt = s; } }
         tMesh = Math.max(T_SNAP + 0.35, start + bt);
@@ -2002,22 +2063,35 @@
         rest(0.55, px(l[0]), l[1]);
         say(0.5, 'Bad snap!', 'hit', { x: px(l[0]), L: l[1] });
         lineplay('pass', 0, K.rush);
+        // the rest start the play (receivers into their routes, the coverage bailing) and pull up once the ball is loose
+        K.recv.concat(K.rb ? [K.rb] : []).forEach((a) => {
+          const p = here(a);
+          leg(a, REACT_OFF, 'go', { x: inX(p[0] + jit(1.5)), y: fwd(p[1], 3 + R() * 3), eff: 0.75 });
+          leg(a, 1.0 + R() * 0.4, 'stand');
+        });
+        K.def.filter((d) => !K.rush.includes(d)).forEach((d) => {
+          const p = here(d);
+          leg(d, REACT_DEF, 'go', { x: p[0], y: fwd(p[1], 1 + R() * 1.5), eff: 0.6 });
+          leg(d, 0.9, 'go', { x: inX(p[0] + (l[0] - p[0]) * 0.2), y: p[1] + (l[1] - p[1]) * 0.2, eff: 0.6 });
+        });
         const rec = e.turnover ? nearest(K.rush.concat(K.def), l) : qb;
-        let tRec = 1.07;           // he has the ball when he gets to it
+        let tRec = 1.07, tRun = 0;           // he has the ball when he gets to it
         if (rec) {
           busy.add(rec);
           tRec = 0.32 + follow(rec, 0.3, plan(rec, [here(rec), l], { T: 0.75, v1: 0 })).T;
           hold(tRec, rec);
-          if (rec === qb && qb) { Wd.run(tRec + 0.03); runFrom(qb, tRec + 0.03, [[inX(l[0] + jit(2)), inL(fwd(L0, e.yards))]], { eff: 0.8, v1: 0 }); }
+          // (to the spot the result gives, however far: the play lasts until he gets there)
+          if (rec === qb && qb) { Wd.run(tRec + 0.03); tRun = runFrom(qb, tRec + 0.03, [[inX(l[0] + jit(2)), inL(fwd(L0, e.yards))]], { eff: 0.8, v1: 0 }).T; }
         }
         if (rec && rec !== qb && e.tdDef) {
           const tEnd = returnTd(rec, tRec + 0.03, l, 'Scoop and score!');
           P.T = tEnd + 1.2;
         } else {
           say(tRec + 0.13, e.turnover ? `${defName} ball` : 'Recovered', e.turnover ? 'hit' : 'info', { slot: 1, follow: rec || qb });
-          Wd.run(tRec + 0.23);
-          whistle(tRec + 0.83, l);
-          P.T = tRec + 1.93;
+          const tDown = tRec + Math.max(0.83, tRun + 0.1);
+          Wd.run(tDown - 0.6);
+          whistle(tDown, rec === qb && qb ? here(qb) : l);
+          P.T = tDown + 1.1;
         }
       } else if (e.kind === SPIKE) {
         underCenter();
