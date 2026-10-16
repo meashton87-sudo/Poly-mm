@@ -218,7 +218,7 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
 
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
-          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False,
+          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, pro_at: str | None = None,
           fulldef: bool = False) -> Path:
     adsense, ad_slot = (adsense or "").strip() or None, (ad_slot or "").strip() or None     # "" (an unset variable): off
     if adsense and not re.fullmatch(r"ca-pub-\d{16}", adsense):
@@ -243,6 +243,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         extra += f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">"
     if pro:                                  # the Pro tab (archive, historic drives, the purchase): off until it is turned on
         extra += "<meta name=\"pro\" content=\"on\">"
+        if pro_at:                           # ... and not before this time (ISO, UTC): the page turns it on then
+            extra += f"<meta name=\"pro-at\" content=\"{html.escape(pro_at, quote=True)}\">"
     if fulldef:                              # the full defensive call in the daily and survivor: off until it is approved
         extra += "<meta name=\"fulldef\" content=\"on\">"
     if vs:                                   # Versus (two players live, board/match.js): off until it is turned on
@@ -327,11 +329,12 @@ if __name__ == "__main__":
     ap.add_argument("--site-url", help="the site's address for link previews (default https://<domain>, else nfl2mindrill.com)")
     ap.add_argument("--adsense", help="Google AdSense publisher id (ca-pub-...); empty: no ads")
     ap.add_argument("--ad-slot", help="an AdSense display ad unit's slot id, shown between games; empty: AdSense's own placement only")
+    ap.add_argument("--pro-at", help="with --pro: the Pro tab stays hidden until this time (ISO 8601, e.g. 2026-10-16T18:00:00Z)")
     ap.add_argument("--vs", action="store_true", help="turn on Versus (two players live); off until approved")
     ap.add_argument("--fulldef", action="store_true", help="the full defensive call (personnel, front, coverage, rush) in every mode; off until approved")
     ap.add_argument("--pro", action="store_true", help="turn on the Pro tab (the archive, the historic drives, the purchase); off until approved")
     a = ap.parse_args()
-    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, vs=a.vs, fulldef=a.fulldef)
+    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, vs=a.vs, fulldef=a.fulldef)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6
     print(f"site in {o}: {n} files, {size:.1f} MB")
