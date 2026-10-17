@@ -663,6 +663,37 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 .remind .rtimes, .remind .rlinks { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .remind .chip[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 .remind .btn { width: auto; }
+/* Add to Home Screen (game.js a2hsCard): the icon, a line, the one button (or Safari's two taps), a close */
+.a2hs { position: relative; display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 4px 12px; align-items: center; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; animation: rise .35s ease both; }
+.a2hs b, .a2hs .sub { padding-right: 24px; }      /* (room for the close) */
+.a2hs > img { grid-row: span 2; width: 52px; height: 52px; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.18); }
+.a2hs b { font: 900 19px/1.1 var(--display); letter-spacing: .03em; text-transform: uppercase; }
+.a2hs .sub { font-size: 13px; color: var(--muted); }
+.a2hs .go { grid-column: 1 / -1; margin-top: 8px; }
+.a2hs ol { grid-column: 1 / -1; margin: 8px 0 0; padding: 0 0 0 20px; display: grid; gap: 4px; font-size: 14px; }
+.a2hs ol svg { width: 18px; height: 18px; vertical-align: -3px; margin: 0 2px; color: var(--los); }
+.a2hs .x { position: absolute; top: 6px; right: 6px; width: 34px; height: 34px; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; }
+.a2hs .x:hover { background: var(--key); color: var(--ink); }
+/* the first drive's tour (game.js TOUR): a tip beside what it points at, a ring around that; no backdrop, so every tap
+   still lands; under the top bar and any sheet */
+.tip { position: absolute; z-index: 4; background: var(--ink); color: var(--paper); border-radius: 12px; padding: 12px 14px 10px; box-shadow: 0 8px 28px rgba(0,0,0,.28); animation: rise .25s ease both; }
+.tip .tiparrow { position: absolute; left: var(--ax, 50%); top: -7px; width: 14px; height: 14px; margin-left: -7px; background: inherit; transform: rotate(45deg); border-radius: 2px; }
+.tip[data-side="above"] .tiparrow { top: auto; bottom: -7px; }
+.tip[data-side="left"] .tiparrow, .tip[data-side="right"] .tiparrow { left: auto; top: var(--ay, 24px); margin: -7px 0 0; }
+.tip[data-side="left"] .tiparrow { right: -7px; }
+.tip[data-side="right"] .tiparrow { left: -7px; }
+.tip .tiph { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.tip .tiph b { font: 900 18px/1.1 var(--display); letter-spacing: .04em; text-transform: uppercase; }
+.tip .tiph .n { font-size: 11.5px; opacity: .7; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tip p { margin: 4px 0 8px; font-size: 14px; line-height: 1.4; }
+.tip .tipacts { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.tip button { border: 0; cursor: pointer; font: 700 13.5px var(--body); min-height: 36px; border-radius: 8px; }
+.tip .tipskip { background: transparent; color: inherit; opacity: .75; padding: 0 4px; text-decoration: underline; text-underline-offset: 3px; }
+.tip .tipok { background: var(--chain); color: var(--chain-ink); padding: 0 18px; letter-spacing: .04em; text-transform: uppercase; font-weight: 800; }
+.tip button:focus-visible { outline: 3px solid var(--los); outline-offset: 2px; }
+.tipring { position: absolute; z-index: 4; pointer-events: none; border: 2.5px solid var(--chain); border-radius: 12px; box-shadow: 0 0 0 4px rgba(244, 196, 0, .22); animation: tipring 1.6s ease-in-out infinite; }
+@keyframes tipring { 50% { box-shadow: 0 0 0 9px rgba(244, 196, 0, 0); } }
+@media (prefers-reduced-motion: reduce) { .tip, .a2hs { animation: none; } .tipring { animation: none; } }
 .provalue { text-align: left; }
 .provalue .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .provalue .row .btn { width: auto; flex: 1 1 auto; }

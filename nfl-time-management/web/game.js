@@ -3232,7 +3232,7 @@
       head.append(el('h2', '', 'Your call'), el('span', 'sub', `${ddText(r)} · ${spotText(r)}`));
       if (G.look != null) d.append(readLine(G.look));
       if (r.clock_running) d.append(tempoPicker(r));
-      const fam = el('div', 'keys');
+      const fam = el('div', 'keys fam');          // (fam: what the first drive's tour points at)
       fam.style.setProperty('--cols', 4);
       Object.entries(FAM).forEach(([f, label], i) => {
         const b = key(label, null, 'big', i);
@@ -3896,7 +3896,7 @@
     const head = el('div', 'ask');
     head.append(el('h2', '', 'Your defense'), el('span', 'sub', `${teamName(code(r.pos))} ball · ${ddText(r)} · ${spotText(r)}`));
     d.append(head);
-    const keys = el('div', 'keys');
+    const keys = el('div', 'keys fam def');
     keys.style.setProperty('--cols', 3);
     DEFS.forEach((k, i) => {
       const b = key(DEF[k].label, DEF[k].sub, 'big def', i);
@@ -5256,7 +5256,7 @@
     box.insertBefore(callsExplained(decs), dbox);
     if (!DRIVE && !RUN_N && !ARCH_DAY) { const lg = el('p', 'lglink'); lg.hidden = true; box.insertBefore(lg, dbox); leagueNudge(); }
     box.append(countdown(streak >= 1 ? 'Keep the streak: next drive in ' : null));
-    if (!DRIVE && !RUN_N && !ARCH_DAY) box.append(reminderNodes());
+    if (!DRIVE && !RUN_N && !ARCH_DAY) box.append(a2hsSlotEl(), reminderNodes());     // the habit: an icon on the phone, a reminder
     const ad = adBox();
     if (ad) box.append(ad);
     box.append(disclaimer());
@@ -5304,6 +5304,91 @@
     box.append(open);
     if (load(`${STORE}:remind`, null) != null) open.textContent = '\u23f0 Reminder set \u00b7 change it';
     return box;
+  }
+  // ---- Add to Home Screen: the game as an icon on the phone (site.webmanifest, sw.js), offered on the day's end card to a
+  // player who has come back (two days played or more), never on a first visit and never inside the installed app.
+  // Chrome and Android hand the page an install prompt (beforeinstallprompt: held until the card's button); Safari on
+  // iOS has none, so the card says where the two taps are. Asked at most three times, a week apart at least.
+  const A2HS_KEY = `${STORE}:a2hs`;
+  const STANDALONE = (typeof matchMedia === 'function' && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+  const UA = navigator.userAgent || '';
+  const IOS = /iPhone|iPad|iPod/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  // Safari itself (the other iOS browsers and the apps' own browsers put Add to Home Screen elsewhere, or nowhere)
+  const IOS_SAFARI = IOS && /Safari\//.test(UA) && !/CriOS|FxiOS|EdgiOS|OPiOS|GSA\/|FBAN|FBAV|Instagram|Line\/|Snapchat|Twitter/.test(UA);
+  let a2hsEvt = null, a2hsSlot = null;
+  addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();                  // not Chrome's own bar on a first visit: the end card asks, when it is time
+    a2hsEvt = e;
+    if (a2hsSlot && a2hsSlot.isConnected && !a2hsSlot.firstChild) a2hsFill(a2hsSlot);      // came after the card was drawn
+  });
+  addEventListener('appinstalled', () => { a2hsEvt = null; const s = load(A2HS_KEY, {}); if (!s.done) { s.done = true; save(A2HS_KEY, s); } });
+  // opened from the home screen: installed (on iOS the only sign there is; counted once)
+  if (STANDALONE && BUILD) { const s = load(A2HS_KEY, {}); if (!s.done) { s.done = true; save(A2HS_KEY, s); track('install_accepted', { platform: IOS ? 'ios' : 'prompt', via: 'launch' }); } }
+  function a2hsSlotEl() { a2hsSlot = el('div', 'a2hsslot'); a2hsFill(a2hsSlot); return a2hsSlot; }
+  function a2hsFill(slot) {
+    const plat = a2hsEvt ? 'prompt' : IOS_SAFARI ? 'ios' : null;
+    if (!BUILD || STANDALONE || !plat || DRIVE || RUN_N || ARCH_DAY || SURV) return;
+    if (Object.keys(load(`${STORE}:stats`, { days: {} }).days).length < 2) return;
+    const s = load(A2HS_KEY, {}), now = Date.now();
+    if (s.done || s.offDay === dayN) return;                        // installed, or closed today
+    if (s.day !== dayN) {                                           // a new offer: the third is the last, a week after the one before
+      if ((s.n || 0) >= 3 || (s.at && now - s.at < 7 * 864e5)) return;
+      Object.assign(s, { n: (s.n || 0) + 1, day: dayN, at: now });
+      save(A2HS_KEY, s);
+      track('install_prompt_shown', { platform: plat, n: s.n });
+    }
+    slot.textContent = '';
+    const card = el('div', 'a2hs');
+    card.setAttribute('role', 'region'); card.setAttribute('aria-label', 'Add to Home Screen');
+    const img = el('img'); img.src = 'icon-180.png'; img.alt = ''; img.width = img.height = 52;
+    const phone = TOUCH || IOS;
+    card.append(img, el('b', '', phone ? 'Add Two-Minute Drill to your home screen' : 'Install Two-Minute Drill'),
+      el('span', 'sub', phone ? 'Today’s drive in one tap, full screen, like an app.' : 'Its own window and an icon: today’s drive in one click.'));
+    const x = el('button', 'x', '×');
+    x.type = 'button'; x.setAttribute('aria-label', 'Not now');
+    x.addEventListener('click', () => {
+      const t = load(A2HS_KEY, {}); t.offDay = dayN; save(A2HS_KEY, t);
+      track('install_dismissed', { platform: plat, n: t.n || 0, how: 'close' });
+      slot.textContent = '';
+    });
+    if (plat === 'prompt') {
+      const go = el('button', 'btn alt go', phone ? 'Add to Home Screen' : 'Install');
+      go.type = 'button';
+      go.addEventListener('click', async () => {
+        const ev = a2hsEvt;
+        if (!ev) { slot.textContent = ''; return; }
+        a2hsEvt = null;                                             // a prompt can be shown once
+        try {
+          ev.prompt();
+          const { outcome } = await ev.userChoice;
+          const t = load(A2HS_KEY, {});
+          if (outcome === 'accepted') { t.done = true; track('install_accepted', { platform: plat, n: t.n || 0 }); }
+          else { t.offDay = dayN; track('install_dismissed', { platform: plat, n: t.n || 0, how: 'prompt' }); }
+          save(A2HS_KEY, t);
+          slot.textContent = '';
+          if (outcome === 'accepted') toast('Added. Find Two-Minute Drill on your home screen.');
+        } catch (e) { slot.textContent = ''; }
+      });
+      card.append(go);
+    } else {
+      // Safari's Share button (the square with the arrow) and its Add to Home Screen (the square with the plus)
+      const ic = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+      const ol = el('ol');
+      const a = el('li'), b = el('li');
+      a.innerHTML = `Tap Share ${ic('<path d="M12 3v12M8 7l4-4 4 4"/><path d="M6 11v9h12v-9"/>')} in Safari’s toolbar`;
+      b.innerHTML = `Then Add to Home Screen ${ic('<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8M8 12h8"/>')}`;
+      ol.append(a, b);
+      card.append(ol);
+    }
+    card.append(x);
+    slot.append(card);
+  }
+  // the service worker (sw.js, the installable app's offline copy): on the website only, never on a local server (the
+  // browser test reloads mid-drive, and a worker kept from an older build would only get in the way there) unless a
+  // test asks for it (tmd:v3:sw_local); the worker itself goes to the network first, so a deploy is seen on the next load
+  if (BUILD && 'serviceWorker' in navigator && (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) || load(`${STORE}:sw_local`, false))) {
+    const reg = () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => { /* no worker: the site works the same */ });
+    if (document.readyState === 'complete') reg(); else addEventListener('load', reg);
   }
   // ---- your result as a picture (for Instagram, X, the group chat): drawn on a canvas, the phone's share sheet when it
   // takes files, else saved as a file
@@ -5628,6 +5713,168 @@
     });
     openModal('This game', [dl, el('p', 'note', `The players who were on the field in that game (${gameTag(sc)}), each rated against his position as of that week, and the real point spread.`)]);
   }
+  // ---- the first drive's tour: a few tips that point at the real screen as it comes up (the spot, the scoreboard, the
+  // call, the clock, the graded result), each once, in place of a manual up front. Never a wall: no backdrop, and a tap
+  // anywhere else moves on (a tap on what a later tip points at counts that one as seen too), so a player who just
+  // plays never waits on it. Daily and Survivor only (a Pro drive or Versus is no first visit); kept in storage, so a
+  // reload picks up where it was and a finished or skipped tour never comes back. The full help stays on the ?.
+  const TOUR_KEY = `${STORE}:tour`;
+  const TOUR_OK = !(VS || VS_LOBBY || DRIVE || RUN_N || ARCH || ARCH_DAY || GAUNTLET);
+  const qs = (s) => document.querySelector(s);
+  const TOUR = [
+    { id: 'spot', at: () => qs('#intro .chips'), side: 'below', title: 'Your spot',
+      text: () => `A real NFL ending: the real score, clock, ball and timeouts. ${SURV ? 'Win it to stay alive.' : 'Tap Next to take over.'}` },
+    { id: 'bar', at: () => $('bar'), side: 'below', title: 'The scoreboard',
+      text: () => 'Score, quarter and clock. The dashes under each team are its timeouts left. Tap it for the game details.' },
+    { id: 'call', at: () => qs('#dock .keys.fam'), side: 'below', title: 'Your call',
+      text: (a) => (a.classList.contains('def') ? 'Their ball: you call the defense. A blitz beats deep shots but loses to quick throws; a loaded box stuffs the run.'
+        : 'Pick Run, Pass, RPO or Trick, then the play. Every snap is a real NFL play run against your call.') },
+    { id: 'result', at: () => qs('#dock .result'), side: 'above', title: 'How it went',
+      text: () => 'The big number is how the play moved your win chance. The small square grades your call, whatever happened: green is the best one, red a big miss, and a miss says what was better and why.' },
+    { id: 'clock', at: () => qs('#dock .tempo'), side: 'below', title: 'The clock is running',
+      text: () => 'Tempo is how much clock runs before the snap: hurry up to save it, huddle to burn it. Timeouts and spikes show up when they matter.' },
+  ];
+  let tour = null;              // { seen: [step ids], shown: [step ids], done } while a tour runs
+  let tip = null;               // the tip on screen: { step, anchor, box, ring, back }
+  let tourRaf = 0;
+  function tourStart(fresh) {
+    if (!TOUR_OK) return;
+    const t = fresh ? { seen: [], shown: [], done: false } : load(TOUR_KEY, null);
+    if (!t || t.done) return;
+    tour = { seen: t.seen || [], shown: t.shown || [], done: false };
+    tourSave();
+    // what moves the tour along: the screens it points at changing (the dock's calls and results, the intro, a sheet
+    // opening over them, a play's animation), a click, a scroll (the scoreboard sticks to the top) and the window's size
+    tour.mo = new MutationObserver(tourSoon);
+    ['dock', 'intro'].forEach((id) => tour.mo.observe($(id), { childList: true }));
+    ['intro', 'play', 'done', 'modal', 'deep'].forEach((id) => tour.mo.observe($(id), { attributes: true, attributeFilter: ['hidden'] }));
+    tour.mo.observe($('field'), { attributes: true, attributeFilter: ['class'] });
+    document.addEventListener('click', tourTap, true);
+    addEventListener('scroll', tourSoon, { passive: true });
+    addEventListener('resize', tourSoon);
+    tourSoon();
+  }
+  function tourSoon() { if (tour && !tourRaf) tourRaf = requestAnimationFrame(() => { tourRaf = 0; tourTick(); }); }
+  function tourSave() { save(TOUR_KEY, { seen: tour.seen, shown: tour.shown, done: tour.done }); }
+  const shownEl = (a) => !!a && a.isConnected && a.getClientRects().length > 0;
+  function tourTick() {
+    if (!tour) return;
+    if (!$('done').hidden) return tourEnd('onboard_done');       // the drive is over: whatever it never came to stays unsaid
+    // a sheet over the game or a play running: the tip waits, unseen
+    const away = !$('modal').hidden || !$('deep').hidden || $('field').classList.contains('playing');
+    if (tip) {
+      const a = tip.step.at();
+      if (!away && shownEl(a)) { tip.anchor = a; return tipPlace(); }
+      tipHide();                                                  // its screen redrew or went: back when it is up again
+    }
+    if (away) return;
+    const step = TOUR.find((s) => !tour.seen.includes(s.id) && shownEl(s.at()));
+    if (step) tipShow(step);
+  }
+  function tipShow(step) {
+    const a = step.at(), n = (tour.shown.includes(step.id) ? tour.shown.indexOf(step.id) : tour.shown.length) + 1;     // in the order they come up
+    const box = el('div', 'tip'), ring = el('div', 'tipring');
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-labelledby', 'tipT'); box.setAttribute('aria-describedby', 'tipX');
+    const h = el('div', 'tiph'), t = el('b', '', step.title);
+    t.id = 'tipT';
+    h.append(t, el('span', 'n', `${n} of ${TOUR.length}`));
+    const p = el('p', '', step.text(a)); p.id = 'tipX';
+    const acts = el('div', 'tipacts');
+    const skip = el('button', 'tipskip', 'Skip tour'), ok = el('button', 'tipok', 'Got it');
+    skip.type = ok.type = 'button';
+    skip.addEventListener('click', () => { track('onboard_skip', { step: step.id, n }); tourEnd(null); });
+    ok.addEventListener('click', tipDone);
+    acts.append(skip, ok);
+    box.append(el('i', 'tiparrow'), h, p, acts);
+    ring.setAttribute('aria-hidden', 'true');
+    document.body.append(ring, box);
+    const back = document.activeElement;
+    tip = { step, anchor: a, box, ring, back: back && back !== document.body ? back : null };
+    // the first time it is up (a tip back after a sheet closed, or after a reload, is not a new step)
+    if (!tour.shown.includes(step.id)) { tour.shown.push(step.id); tourSave(); track('onboard_step', { step: step.id, n }); }
+    tipPlace();
+    tipReveal();
+    ok.focus({ preventScroll: true });               // a screen reader hears the tip; Got it or Escape closes it
+  }
+  // where a tip goes: beside what it points at (below or above, as the step prefers, else to its left or right on a wide
+  // screen), never over a button the player may want next (the dock's, the intro's Next, the scoreboard) and never
+  // under the top bar; of the places that cover none, one already on screen; else the one that covers least. In the
+  // page's own coordinates, so a scroll carries it along; it keeps its side while that side stays clear.
+  const visTop = (anchor) => Math.max((qs('.top') || { offsetHeight: 0 }).offsetHeight,
+    !$('play').hidden && anchor !== $('bar') ? $('bar').getBoundingClientRect().bottom : 0);
+  function tipPlace() {
+    const { box, ring, anchor, step } = tip, r = anchor.getBoundingClientRect(), sx = scrollX, sy = scrollY;
+    const vw = document.documentElement.clientWidth, w = Math.min(320, vw - 24), gap = 12;
+    box.style.width = `${w}px`;
+    const h = box.offsetHeight, topH = (qs('.top') || { offsetHeight: 0 }).offsetHeight, vt = visTop(anchor);
+    const cx = Math.min(Math.max(12, r.left + r.width / 2 - w / 2), vw - 12 - w), cy = Math.max(vt + 8, r.top);
+    const at = { below: [cx, r.bottom + gap], above: [cx, r.top - gap - h], left: [r.left - gap - w, cy], right: [r.right + gap, cy] };
+    const clear = [...document.querySelectorAll('#dock button, #intro .btn, #bar')].filter((b) => b !== anchor && !anchor.contains(b))
+      .map((b) => b.getBoundingClientRect()).filter((b) => b.width);
+    const cost = ([x, y]) => clear.reduce((a, b) => a + Math.max(0, Math.min(x + w, b.right) - Math.max(x, b.left)) * Math.max(0, Math.min(y + h, b.bottom) - Math.max(y, b.top)), 0);
+    const ok = ([x, y]) => x >= 8 && x + w <= vw - 8 && y + sy >= topH;
+    const off = ([, y]) => y < vt || y + h > innerHeight;
+    let side = tip.side && ok(at[tip.side]) && !cost(at[tip.side]) ? tip.side : null;
+    if (!side) {
+      const order = [step.side, step.side === 'below' ? 'above' : 'below', 'left', 'right'].filter((k) => ok(at[k]));
+      const score = (k) => { const c = cost(at[k]); return c ? 1e9 + c : off(at[k]) ? 1 : 0; };
+      side = order.reduce((a, k) => (a == null || score(k) < score(a) ? k : a), null) || step.side;
+    }
+    tip.side = side;
+    const [x, y] = at[side];
+    box.style.left = `${x + sx}px`;
+    box.style.top = `${y + sy}px`;
+    box.dataset.side = side;
+    box.style.setProperty('--ax', `${Math.min(Math.max(18, r.left + r.width / 2 - x), w - 18)}px`);
+    box.style.setProperty('--ay', `${Math.min(Math.max(18, r.top + Math.min(r.height / 2, 28) - y), h - 18)}px`);
+    Object.assign(ring.style, { left: `${r.left + sx - 4}px`, top: `${r.top + sy - 4}px`, width: `${r.width + 8}px`, height: `${r.height + 8}px` });
+  }
+  // a new tip and what it points at, both in view (the least scroll that does it; the top stays in view first)
+  function tipReveal() {
+    const a = tip.anchor.getBoundingClientRect(), b = tip.box.getBoundingClientRect(), vt = visTop(tip.anchor);
+    const top = Math.min(a.top, b.top), bot = Math.max(a.bottom, b.bottom);
+    const dy = top < vt + 8 ? top - vt - 8 : bot > innerHeight - 8 ? Math.min(bot - innerHeight + 16, top - vt - 8) : 0;
+    if (Math.abs(dy) > 2) scrollBy({ top: dy, behavior: reduced() ? 'auto' : 'smooth' });
+  }
+  function tipHide() {
+    if (!tip) return;
+    const { box, ring, back, anchor } = tip, had = box.contains(document.activeElement);
+    tip = null;
+    box.remove(); ring.remove();
+    // focus back where it was, or on what the tip pointed at (not lost to the top of the page)
+    const to = had && ((back && back.isConnected && back) || (anchor.matches('button') ? anchor : anchor.querySelector('button')));
+    if (to && to.isConnected) to.focus({ preventScroll: true });
+  }
+  function tipDone() {
+    if (!tip || !tour) return;
+    if (!tour.seen.includes(tip.step.id)) tour.seen.push(tip.step.id);
+    tipHide();
+    if (TOUR.every((s) => tour.seen.includes(s.id))) return tourEnd('onboard_done');
+    tourSave();
+    tourSoon();
+  }
+  // a tap (or a key's click) anywhere but the tip: the player has moved on, so the tip has been seen; a tap on what a
+  // later tip points at (a call tapped while the scoreboard's tip is up) is that one seen too. A click, not a touch: a
+  // finger scrolling the page leaves the tip up
+  function tourTap(e) {
+    if (!tour || (tip && tip.box.contains(e.target))) return;
+    TOUR.forEach((s) => { const a = s.at(); if (!tour.seen.includes(s.id) && shownEl(a) && a.contains(e.target)) tour.seen.push(s.id); });
+    if (tip) tipDone(); else tourSave();
+  }
+  function tourEnd(event) {
+    if (!tour) return;
+    tipHide();
+    if (event) track(event, { seen: tour.seen.length });
+    tour.done = true;
+    tourSave();
+    tour.mo.disconnect();
+    document.removeEventListener('click', tourTap, true);
+    removeEventListener('scroll', tourSoon);
+    removeEventListener('resize', tourSoon);
+    tour = null;
+  }
+
   function openHelp(auto) {
     track('help_open', { auto: auto === true });     // auto: shown on a first visit (not a tap on ?)
     // a first visit gets three lines and a button, not the manual: the full help is one tap away on ?
@@ -7424,6 +7671,7 @@
       if (e.key !== 'Escape') return;
       if (!$('modal').hidden) closeModal();
       else if (!$('deep').hidden) closeDeep();
+      else if (tip) tipDone();               // the tour's tip: Escape is Got it
     });
     let rz = null;
     // (not while a play runs: the redraw would wipe the animation; the next draw picks up the new size)
@@ -7451,7 +7699,7 @@
       if (ARCH || (ARCH_DAY && (!isPro() || ARCH_DAY >= dayOf(now))) || ((DRIVE || RUN_N) && !isPro())) { await renderArchive(now); return; }
       if (SURV) {
         state = load(stateKey(), null) || newRun();
-        if (!load(`${STORE}:seen`, false)) { openHelp(true); save(`${STORE}:seen`, true); }
+        if (!load(`${STORE}:seen`, false)) { if (TOUR_OK) tourStart(true); else openHelp(true); save(`${STORE}:seen`, true); } else tourStart(false);
         startWorkers();
         if (state.out) renderSurvSummary(); else await survOpen();
         return;
@@ -7490,7 +7738,7 @@
     const fresh = !load(stateKey(), null);
     state = load(stateKey(), null) || { spots: [], current: 0, done: false, tryAt: Date.now() };     // tryAt: this try (a drive's record)
     if (fresh && DRIVE) raceStart();      // a new try of a historic drive: the Gauntlet's token for it
-    if (!load(`${STORE}:seen`, false)) { openHelp(true); save(`${STORE}:seen`, true); }
+    if (!load(`${STORE}:seen`, false)) { if (TOUR_OK) tourStart(true); else openHelp(true); save(`${STORE}:seen`, true); } else tourStart(false);
     drawTiles();
     startWorkers();
     if (state.done) renderSummary();

@@ -369,11 +369,24 @@ players (a name is claimed the same way as on the survivor board). The day is th
 `drive_start` (mode, kind of spot, day), `play_call` (mode, family, call, routes changed, out of bounds),
 `defense_call` (call), `daily_finish` (day, kind, score, better/worse/same than the real coach, snaps),
 `survivor_game` (win/loss/tie, overtime, streak), `overtime`, `share` (daily or survivor; share sheet, copy or
-select), `help_open` (auto: shown on a first visit), `sim_ready` (packed data or JSON, ms since load, ms a player
+select), `help_open` (a tap on ?; auto: the three-line help a first visit to a Pro drive still gets),
+`onboard_step` (the first drive's tour: step, its number as shown), `onboard_done` (steps seen) or `onboard_skip`
+(step), `install_prompt_shown` (the Add to Home Screen card: prompt or ios, which offer of three),
+`install_accepted` (via launch: first opened from the home screen) and `install_dismissed` (close or the
+browser's prompt), `sim_ready` (packed data or JSON, ms since load, ms a player
 sat waiting on it), `drive_leave` (the page went to the background mid-drive: calls made, seconds in, still
 loading), `stats_open`, `stats_page_link`, `replay`, `name_set`. Share opens the phone's share sheet
 where there is one. In Google Analytics: Reports, Engagement, Events (custom fields need registering as custom
 dimensions under Admin, Custom definitions, to show in reports).
+
+**First visit and the home screen**: a first visit to the Daily or Survivor gets a short tour of the first drive
+(`game.js` TOUR: five tips that point at the spot, the scoreboard, the call, the result and the clock as each comes
+up; no backdrop, a tap anywhere moves on, kept in `tmd:v3:tour`). The site is installable (`site.webmanifest`,
+`web/sw.js`): from the second day played the daily end card offers Add to Home Screen (Chrome's install prompt, or
+Safari's two taps on iOS), at most three times, a week apart, never inside the installed app. The service worker
+goes to the network first for every page, script and data file and answers from its cache only offline; its cache
+is named for the build stamp, so a deploy is a new worker that drops the old copy. It is registered on the real site
+only (not on localhost or 127.0.0.1, where the browser test runs, unless `tmd:v3:sw_local` is set).
 
 **Packed data**: on the website the simulator's data ships as `engine_data.pack` and `playbook.pack`
 (`scripts/site.py pack`: the same typed arrays as raw bytes, index arrays as differences, multi-byte arrays
