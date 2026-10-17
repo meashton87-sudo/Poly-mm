@@ -27,7 +27,7 @@
   // Analytics events (the website's Google tag, scripts/site.py --ga; nothing anywhere else): what players do, so the
   // next changes follow the data. Event names and fields are listed in the README.
   const track = (name, params) => { try { if (typeof window.gtag === 'function') window.gtag('event', name, params || {}); } catch (e) { /* never in the way */ } };
-  const modeName = () => (VS ? 'versus' : SURV ? 'survivor' : DRIVE ? 'drive' : RUN_N ? 'run' : ARCH_DAY ? 'archive' : 'daily');
+  const modeName = () => (VS ? 'versus' : SURV ? 'survivor' : PRACTICE ? 'practice' : DRIVE ? 'drive' : RUN_N ? 'run' : ARCH_DAY ? 'archive' : 'daily');
   // a drive left half-played: when the page goes to the background mid-drive (closed, or switched away from), once
   // a page load, with how far in it was and whether it was still waiting on the simulator's data
   const liveDrive = { on: false, calls: 0, t0: 0, kind: null, left: false };
@@ -197,6 +197,10 @@
   // two modes: the daily three spots, or survivor (#survivor): random real fourth-quarter spots back to back, win to
   // keep going, one loss and the run is over (a tie at the gun goes to overtime, played out: see overtime())
   const SURV = location.hash === '#survivor';
+  // practice (#practice, the daily end card's "Keep playing"): one random real drive, graded like the day's, that
+  // counts for nothing (no stats day, streak, tendencies or daily list); only once the day's drive is done (boot)
+  let PRACTICE = location.hash === '#practice';
+  const PRACTICE_KEY = `${STORE}:practice`;
   // Pro is off until it is turned on in the site build (scripts/site.py --pro: <meta name="pro">): no tab, no
   // archive, no drives, no purchase
   // ... and, when the build sets a launch time (scripts/site.py --pro-at: <meta name="pro-at">), not before it: a page
@@ -244,9 +248,9 @@
   const VS_DECIDE_MS = 30000;      // the play clock in Versus: 30 seconds a call (board/match.js DECIDE_MS)
   // spots whose data was corrected, and when the fix went live: a drive's try saved before it starts over
   const SPOT_FIXED = { '2018_14_NE_MIA#4172': Date.parse('2026-10-16T22:50:00Z') };
-  const stateKey = () => (VS ? `${STORE}:vs:${VS_ROOM}` : SURV ? `${STORE}:surv` : DRIVE ? `${STORE}:drive:${DRIVE}` : RUN_N ? `${STORE}:run:${RUN_N}` : `${STORE}:day:${dayN}`);
+  const stateKey = () => (VS ? `${STORE}:vs:${VS_ROOM}` : SURV ? `${STORE}:surv` : PRACTICE ? PRACTICE_KEY : DRIVE ? `${STORE}:drive:${DRIVE}` : RUN_N ? `${STORE}:run:${RUN_N}` : `${STORE}:day:${dayN}`);
   const saveState = () => save(stateKey(), state);
-  const seedKey = () => (VS ? `vs${vs.seed}` : SURV ? `s${state.run}:${state.games.length}` : DRIVE ? `drive${DRIVE}` : RUN_N ? `run${RUN_N}` : dayN);    // what the engine's draws are seeded by
+  const seedKey = () => (VS ? `vs${vs.seed}` : SURV ? `s${state.run}:${state.games.length}` : PRACTICE ? `p${state.run}` : DRIVE ? `drive${DRIVE}` : RUN_N ? `run${RUN_N}` : dayN);    // what the engine's draws are seeded by
   let G = null;                   // the spot being played
   let ui = { step: null, fam: null, oob: false };
   let busy = false, lastFocus = null, tick = null, lastBall = null;
@@ -3008,7 +3012,7 @@
     const big = el('div', 'big', state_);
     big.append(el('span', 'left', left));
     if (VS) return renderVsIntro();
-    box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : DRIVE ? 'Historic drive'
+    box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : PRACTICE ? `Practice drive · ${catLabel(sc)}` : DRIVE ? 'Historic drive'
       : RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · Game ${G.si + 1} of ${today.length} · ${PRO_RUNS.runs[RUN_N - 1].games[G.si].round}`
         : (today.length > 1 ? `Spot ${G.si + 1} of ${today.length} · ` : ARCH_DAY ? `No. ${dayN}, from the archive · ` : 'Today’s drive · ') + catLabel(sc)),
       el('div', 'game', `${gameTag(sc)} · ${matchLine(sc)}`), big);
@@ -3033,6 +3037,7 @@
     box.append(el('div', 'who', VS ? `You're the ${teamName(me)}. Your opponent has the ${teamName(op)}: they call their side, you call yours.`
       : `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
     if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
+    if (PRACTICE) box.append(el('div', 'who surv', 'Practice: graded like the daily, but it doesn’t count toward your stats, streak or the leaderboard.'));
     const go = el('button', 'btn', 'Next');
     go.type = 'button';
     go.addEventListener('click', () => {
@@ -4617,7 +4622,7 @@
     if (cc) card.append(cc.el);
     const wpa = G.decisions.reduce((a, x) => a + x.wpa, 0);
     card.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller in this spot.`));
-    const btn = el('button', 'btn', SURV ? (state.out ? 'Your run' : 'Next game') : G.si < today.length - 1 ? 'Next spot' : "Today's score");
+    const btn = el('button', 'btn', SURV ? (state.out ? 'Your run' : 'Next game') : PRACTICE ? 'Your score' : G.si < today.length - 1 ? 'Next spot' : "Today's score");
     btn.type = 'button';
     if (SURV) card.append(...lifeOffer());
     let went = false;                  // once: the await below leaves room for a second tap
@@ -4980,7 +4985,7 @@
   // three middling calls, so the league's calls score about 50 lost and 65-75 won; a 90 takes sharp calls (a loss
   // with near-perfect ones still gets there in a long shot) and poor calls stay poor, won or lost.
   const RESULT_W = 0.03, RESULT_FROM = 6;
-  const resultScored = () => !!(DRIVE || RUN_N || dayN >= RESULT_FROM);
+  const resultScored = () => !!(DRIVE || RUN_N || PRACTICE || dayN >= RESULT_FROM);
   function spotGroups() {
     const out = [];
     for (let i = 0; i < today.length; i++) {
@@ -5128,6 +5133,7 @@
     return row;
   }
   function renderSummary() {
+    if (PRACTICE) return renderPractice();
     if (!G) resumeSpot(today.length - 1);
     show('done');
     const decs = allDecisions();
@@ -5191,6 +5197,7 @@
     box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller ${today.length > 1 ? 'across today’s spots' : 'on today’s drive'}.`));
     const dbox = dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0)));
     box.append(dbox);
+    if (!DRIVE && !RUN_N && !ARCH_DAY) box.append(practiceNodes());
     if (ARCH_DAY || RUN_N) { const a = el('a', 'btn', RUN_N ? 'More runs' : 'Back to the archive'); a.href = '#archive'; box.append(a); }
     else if (PRO_ON && !isPro() && BOARD.api) box.append(proValueCard());       // the website: what Pro adds, after the free drive
     const rec = [0, 0, 0];             // against the real coaches: better, worse, the same (a W-L-T record)
@@ -5260,6 +5267,60 @@
     const ad = adBox();
     if (ad) box.append(ad);
     box.append(disclaimer());
+  }
+  // ---- Practice (#practice): after the day's drive, one more real drive at a time. The spot: survivor's pool (every
+  // fourth-quarter spot, played to the final gun; never a featured one) less today's, none twice until the pool is
+  // used up. Its own saved state (PRACTICE_KEY), so a refresh picks the drive up where it was and the finished card
+  // stays until the next one is asked for (stale: the next visit draws a new drive)
+  const dayDone = (n) => !!((load(`${STORE}:day:${n}`, null) || {}).done || (load(`${STORE}:stats`, { days: {} }).days || {})[n]);
+  function practiceState() {
+    const st = load(PRACTICE_KEY, null);
+    if (st && !st.stale && st.pickId && idx.spots[st.pick] && idx.spots[st.pick].id === st.pickId) return st;   // the drive in progress, or its card
+    const todays = new Set(dayIds(dayN)), all = survPool().filter((i) => !todays.has(i));
+    const played = ((st && st.played) || []).filter((i) => all.includes(i)), left = all.filter((i) => !played.includes(i)), from = left.length ? left : all;
+    const pick = from[Math.floor(Math.random() * from.length)];
+    const nx = { run: Math.floor(Math.random() * 2 ** 31), pick, pickId: idx.spots[pick].id, played: [...(left.length ? played : []), pick],
+      n: ((st && st.n) || 0) + 1, spots: [], current: 0, done: false, tryAt: Date.now() };
+    save(PRACTICE_KEY, nx);
+    return nx;
+  }
+  // a new practice drive on the next visit (the finished one's card is kept until then)
+  const practiceNext = () => { const st = load(PRACTICE_KEY, null); if (st && st.done) save(PRACTICE_KEY, { ...st, stale: true }); };
+  function practiceNodes() {
+    const w = el('div', 'keepplay');
+    const a = el('a', 'btn', 'Keep playing: practice drive');
+    a.href = '#practice';                         // (the hash change reloads the page into practice)
+    a.addEventListener('click', () => { practiceNext(); track('practice_start', { from: 'daily' }); scrollTo(0, 0); });     // (the reload keeps the scroll: the drive opens at the top)
+    w.append(a, el('p', 'note', 'A random real drive, graded the same way. It doesn’t touch today’s score, your streak or the leaderboard.'));
+    return w;
+  }
+  function renderPractice() {
+    if (!G) resumeSpot(0);
+    show('done');
+    const decs = allDecisions(), p = decs.length ? scoreVsNFL(decs) : 0, wpa = decs.reduce((a, x) => a + x.wpa, 0), score = Math.round(p * 100);
+    if (!state.done) track('practice_finish', { n: state.n, kind: today[0] && today[0].category, score, snaps: decs.length });
+    state.done = true;
+    saveState();
+    liveDrive.on = false;
+    drawTiles();
+    const box = $('done'), r = state.spots[0] && state.spots[0].result;
+    box.textContent = '';
+    box.append(el('div', 'note', `Practice drive ${state.n} · ${gameTag(today[0])}`), el('div', 'big-pct', String(score)),
+      el('div', 'pct-lab', `Better than ${score}% of NFL play\u2011callers, the calls and the result`),
+      el('div', 'streak', 'Practice: not in your stats, streak or the leaderboard'));
+    const hh = r ? headToHead(0, r) : null;
+    if (hh) box.append(hhCard(hh));
+    box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller on this drive.`), callsExplained(decs));
+    const row = el('div', 'row pacts');
+    const again = el('button', 'btn', 'Another practice drive');
+    again.type = 'button';
+    again.addEventListener('click', () => { practiceNext(); track('practice_start', { from: 'practice' }); scrollTo(0, 0); location.reload(); });
+    const back = el('a', 'btn ghostbtn', 'Back to today');
+    back.href = '#daily';
+    back.addEventListener('click', () => scrollTo(0, 0));
+    row.append(again, back);
+    box.append(row, disclaimer());
+    again.focus({ preventScroll: true });
   }
   // ---- the daily habit: the streak in the top bar, and a reminder in the player's own calendar (a daily event at the
   // hour they pick: Google Calendar's own page, or a .ics file site.py writes for Apple and Outlook calendars)
@@ -5522,15 +5583,7 @@
       sp.append(row);
     });
     box.append(sp);
-    if (d.top && d.top.length) {
-      const ol = el('ol', 'brows'), me = myName().toLowerCase();
-      d.top.forEach((r, i) => {
-        const li = el('li', String(r.name).toLowerCase() === me ? 'me' : '');
-        li.append(el('span', 'n', String(i + 1)), el('span', 'nm', String(r.name)), el('b', '', String(Math.round(r.p * 100))));
-        ol.append(li);
-      });
-      box.append(el('div', 'k sub', 'Today’s best'), ol);
-    }
+    box.append(leaders(d, { rank: above + 1, n: d.n, pt }));
     if (d.refused) box.append(el('p', 'note', 'That name isn’t allowed on the list. Your result still counts; pick another name to be on it.'));
     else if (d.taken) box.append(el('p', 'note', `Someone else already plays as ${myName()} here. Pick another name to get on the list.`));
     if (!myName() || d.taken || d.refused) box.append(nameInput(again));
@@ -5543,6 +5596,79 @@
     const row = el('div', 'res-acts');
     row.append(btn, all);
     box.append(row);
+  }
+  // The day's top 10 and the week's, by name (worker.js /daily: a name's first result of a day; the week, its best
+  // WEEK_BEST days of the last 7 added up), two tabs; you highlighted on either, and your own rank under the list
+  // when you are not on it (the day's among everyone who played, named or not; the week's among the names in it)
+  const LB_TAB = `${STORE}:lbtab`;
+  function leaders(d, day) {
+    const wrap = el('div', 'lb'), me = myName().toLowerCase(), wk = d.week;
+    const tabs = el('div', 'lbtabs'), panel = el('div', 'lbpanel');
+    tabs.setAttribute('role', 'tablist');
+    panel.setAttribute('role', 'tabpanel');
+    const md = (iso, o) => new Date(iso + 'T12:00:00').toLocaleDateString(undefined, o || { month: 'short', day: 'numeric' });
+    const span = (a, b) => `${md(a)}–${a.slice(0, 7) === b.slice(0, 7) ? md(b, { day: 'numeric' }) : md(b)}`;      // Oct 11–17, Oct 28–Nov 3
+    const youRow = (rank, n, score, sub) => {
+      const li = el('li', 'me you');
+      li.append(el('span', 'n', ''), el('span', 'nm', `You: #${rank.toLocaleString()} of ${n.toLocaleString()}`));
+      if (sub) li.append(el('small', 'd', sub));
+      li.append(el('b', '', score));
+      return li;
+    };
+    const list = (rows, mine) => {
+      const ol = el('ol', 'brows');
+      let onIt = false;
+      rows.forEach((r, i) => {
+        const it = !!me && String(r.name).toLowerCase() === me;
+        onIt = onIt || it;
+        const li = el('li', it ? 'me' : '');
+        li.append(el('span', 'n', String(i + 1)), el('span', 'nm', String(r.name)));
+        if (r.sub) li.append(el('small', 'd', r.sub));
+        li.append(el('b', '', r.score));
+        ol.append(li);
+      });
+      if (mine && !onIt) ol.append(youRow(...mine));
+      return ol;
+    };
+    const views = {
+      day: () => {
+        const ol = list((d.top || []).map((r) => ({ name: r.name, score: String(Math.round(r.p * 100)) })), d.n > 0 ? [day.rank, day.n, String(day.pt)] : null);
+        if (!(d.top || []).length) panel.append(el('p', 'note', 'Nobody with a name on today’s list yet.'));
+        panel.append(ol);
+      },
+      week: () => {
+        if (!wk) { panel.append(el('p', 'note', 'The week’s list did not load. Refresh to try again.')); return; }
+        panel.append(el('p', 'note lbrule', `${span(wk.from, wk.to)}: each player’s best ${wk.best} daily scores of the 7 days, added up (${wk.best * 100} is perfect). Play ${wk.best} days to max it out; a bad day never counts against you.`));
+        const y = wk.you;
+        panel.append(list(wk.top.map((r) => ({ name: r.name, score: String(r.pts), sub: `${r.days}d` })), y ? [y.rank, wk.n, String(y.pts), `${y.days}d`] : null));
+        if (!wk.top.length) panel.append(el('p', 'note', 'Nobody on this week’s list yet.'));
+        if (!y) panel.append(el('p', 'note', myName() ? 'Your days this week count once your name is on today’s list.' : 'Put a name on today’s list to be on the week’s.'));
+      },
+    };
+    const tab = (k, label) => {
+      const b = el('button', 'chip opt', label);
+      b.type = 'button';
+      b.setAttribute('role', 'tab');
+      b.dataset.k = k;
+      b.addEventListener('click', () => pick(k, true));
+      tabs.append(b);
+      return b;
+    };
+    tab('day', 'Today’s top 10'); tab('week', 'This week');
+    const pick = (k, user) => {
+      tabs.querySelectorAll('button').forEach((b) => { const on = b.dataset.k === k; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; });
+      panel.textContent = '';
+      views[k]();
+      if (user) { save(LB_TAB, k); track('leaderboard_tab', { tab: k }); }
+    };
+    tabs.addEventListener('keydown', (e) => {                // arrows move between the two tabs (the tablist pattern)
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      const nx = tabs.querySelector('[aria-selected="false"]');
+      if (nx) { pick(nx.dataset.k, true); nx.focus(); }
+    });
+    pick(load(LB_TAB, 'day') === 'week' ? 'week' : 'day', false);
+    wrap.append(tabs, panel);
+    return wrap;
   }
   function countdown(label) {
     const w = el('div', 'countdown');
@@ -6136,7 +6262,7 @@
   // a day finished on another phone: the end card's streak line, if it is up, counts it
   function streakRedraw() {
     const line = document.querySelector('#done .streak');
-    if (!line || !state || !state.done || SURV || DRIVE || RUN_N || ARCH_DAY) return;
+    if (!line || !state || !state.done || SURV || PRACTICE || DRIVE || RUN_N || ARCH_DAY) return;
     const st = load(`${STORE}:stats`, { days: {} });
     let streak = 0; for (let k = dayN; st.days[k]; k--) streak++;
     line.textContent = streak >= 2 ? `🔥 ${streak}-day streak` : 'Day 1 of your streak · come back tomorrow';
@@ -7456,7 +7582,14 @@
         if (state.out) renderSurvSummary(); else await survOpen();
         return;
       }
-      if (RUN_N) {
+      // practice comes after the day's drive: before it, #practice is the day's drive (no reload: replaceState fires no hashchange)
+      if (PRACTICE && !dayDone(dayN)) { PRACTICE = false; history.replaceState(null, '', location.pathname + location.search); }
+      if (PRACTICE) {
+        state = practiceState();
+        const teams = await loadTeams([state.pick]);
+        today = [buildScen(idx.spots[state.pick], teams[state.pick])];
+        $('dayLabel').textContent = `Practice · drive ${state.n}`;
+      } else if (RUN_N) {
         PRO_RUNS = await loadRuns();
         const run = PRO_RUNS && PRO_RUNS.runs[RUN_N - 1];
         if (!run) { location.replace(location.pathname + '#archive'); return; }

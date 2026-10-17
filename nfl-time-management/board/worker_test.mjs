@@ -688,6 +688,97 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   unset('STRIPE_SECRET', 'STRIPE_WEBHOOK_SECRET', 'ASSETS', 'SITE');
   globalThis.fetch = realFetch;
 }
+// the day's top 10 and the week (POST /daily's week, GET /week, DELETE /week): a name's best 5 days of the 7 added up,
+// once a name a day, the window moving day by day, your rank from the counts, blocked names, the caps, the commissioner
+{
+  const realNow = Date.now, at = (date) => { Date.now = () => Date.parse(date + 'T15:00:00Z'); };
+  const D = (k) => new Date(Date.parse('2027-03-01T12:00:00Z') + k * 864e5).toISOString().slice(0, 10);     // D(0) = 2027-03-01
+  const wkey = (who) => `week-test-key-${who}`.padEnd(24, '0');
+  const post = async (k, who, p, name) => { at(D(k)); return (await day({ date: D(k), key: wkey(`${who}-${k}`), p, spots: [0], ...(name !== null ? { name: name || who } : {}) })).json(); };
+  // Wes plays 7 days running: 50 60 70 80 90 40 30 -> best 5: 90+80+70+60+50 = 350
+  const wes = [0.5, 0.6, 0.7, 0.8, 0.9, 0.4, 0.3];
+  // a name stays one device's: Wes posts each day from his own device (the key is his, the same one every day)
+  const wesPost = async (k, p) => { at(D(k)); return (await day({ date: D(k), key: wkey('wes'), p, spots: [0], name: 'Wes' })).json(); };
+  let w;
+  for (let k = 0; k < 7; k++) w = await wesPost(k, wes[k]);
+  assert.deepStrictEqual(w.week.you, { pts: 350, days: 7, rank: 1 }, 'his best 5 of 7, added up');
+  assert.deepStrictEqual([w.week.from, w.week.to, w.week.best, w.week.n], [D(0), D(6), 5, 1]);
+  // Val plays 3 days late in the week, all high: 95+95+95 = 285, behind Wes
+  const valPost = async (k, p, name = 'Val') => { at(D(k)); return (await day({ date: D(k), key: wkey('val'), p, spots: [0], name })).json(); };
+  for (const k of [4, 5]) await valPost(k, 0.95);
+  w = await valPost(6, 0.95);
+  assert.deepStrictEqual(w.week.you, { pts: 285, days: 3, rank: 2 }, 'three days: 285, second');
+  assert.deepStrictEqual(w.week.top.map((x) => [x.name, x.pts, x.days]), [['Wes', 350, 7], ['Val', 285, 3]]);
+  // an anonymous result counts in the day (n, histogram) but not in the week
+  at(D(6));
+  w = await (await day({ date: D(6), key: wkey('anon-6'), p: 1, spots: [0] })).json();
+  assert.strictEqual(w.week.n, 2, 'no name: not in the week'); assert.strictEqual(w.week.you, undefined);
+  assert.strictEqual(w.n, 3, 'but in the day'); assert.strictEqual(w.hist[100], 1);
+  // the day's top 10 lists names only, best first
+  assert.deepStrictEqual(w.top.map((x) => x.name), ['Val', 'Wes']);
+  // a replay of the day changes nothing; a name given afterwards puts the day's first result on both lists
+  w = await wesPost(6, 1);
+  assert.strictEqual(w.counted, false); assert.deepStrictEqual(w.week.you, { pts: 350, days: 7, rank: 1 });
+  at(D(6));
+  w = await (await day({ date: D(6), key: wkey('anon-6'), p: 0.2, spots: [0], name: 'Late Larry' })).json();
+  assert.strictEqual(w.counted, false); assert.deepStrictEqual(w.week.you, { pts: 100, days: 1, rank: 3 }, 'named afterwards: its first result, 100');
+  assert.ok(w.top.some((x) => x.name === 'Late Larry' && x.p === 1));
+  // the window moves: the week to D(7) drops D(0) (Wes's 50: his best 5 now 90+80+70+60+40 = 340; with D(7)'s 20 still 340)
+  w = await wesPost(7, 0.2);
+  assert.deepStrictEqual(w.week.you, { pts: 340, days: 7, rank: 1 }, 'D(0) out of the window, D(7) in');
+  assert.strictEqual(w.week.from, D(1));
+  let g = await (await call('GET', null, { path: `/week?date=${D(6)}` })).json();
+  assert.deepStrictEqual(g.top.map((x) => [x.name, x.pts]), [['Wes', 350], ['Val', 285], ['Late Larry', 100]], 'a past week stands as it was');
+  assert.strictEqual(g.you, undefined, 'a GET has no "you"'); assert.ok(!JSON.stringify(g).includes('kh') && !JSON.stringify(g).includes('"at"'), 'no key hashes or times out');
+  // a result counts in the weeks it is in, and only those: D(6)'s in the week to D(12), not D(13)
+  g = await (await call('GET', null, { path: `/week?date=${D(12)}` })).json();
+  assert.deepStrictEqual(g.top.map((x) => [x.name, x.pts]), [['Late Larry', 100], ['Val', 95], ['Wes', 50]], 'the week to D(12): D(6) and D(7) only (Wes 30 + 20)');
+  g = await (await call('GET', null, { path: `/week?date=${D(13)}` })).json();
+  assert.deepStrictEqual(g.top.map((x) => [x.name, x.pts]), [['Wes', 20]], 'the week to D(13): D(7) only');
+  assert.deepStrictEqual((await (await call('GET', null, { path: `/week?date=${D(40)}` })).json()).top, [], 'a week nobody played');
+  // a name's own record keeps two weeks: older days are dropped as new ones come
+  w = await wesPost(22, 0.5);
+  assert.deepStrictEqual(Object.keys(store.get('wn:wes').d), [D(22)], 'days more than two weeks before dropped');
+  // ties: the same points, whoever got there first
+  for (const nm of ['Tie One', 'Tie Two']) { at(D(30)); await day({ date: D(30), key: wkey(nm.replace(' ', '')), p: 0.66, spots: [0], name: nm }); }
+  g = await (await call('GET', null, { path: `/week?date=${D(30)}` })).json();
+  assert.deepStrictEqual(g.top.map((x) => x.name), ['Tie One', 'Tie Two'], 'a tie: the first there first');
+  // validation: a date wanted; only GET and the commissioner's DELETE
+  for (const q of ['', '?date=today', '?date=2027-13-45']) assert.strictEqual((await call('GET', null, { path: `/week${q}` })).status, 400, q);
+  assert.strictEqual((await call('POST', {}, { path: `/week?date=${D(6)}` })).status, 405);
+  // blocked names: refused on the post (the result counts, unnamed), and a stored row with one is never shown
+  w = await post(30, 'bad', 0.99, 'sh1t h3ad');
+  assert.strictEqual(w.refused, true); assert.strictEqual(w.week.you, undefined); assert.strictEqual(w.week.n, 2);
+  const wk30 = store.get(`wk:${D(30)}`);
+  wk30.top.unshift({ name: 'b!tch', pts: 500, days: 5, at: 0 }); store.set(`wk:${D(30)}`, wk30);
+  g = await (await call('GET', null, { path: `/week?date=${D(30)}` })).json();
+  assert.deepStrictEqual(g.top.map((x) => x.name), ['Tie One', 'Tie Two'], 'a stored blocked name left out');
+  // caps: 120 names in a day: the day keeps 25 and shows 10, the week keeps 100 and shows 10, and every name's rank is
+  // its own (from the counts, past the lists)
+  for (let i = 0; i < 120; i++) w = await post(50, `cap${i}`, (i % 100) / 100, `Cap ${i}`);
+  assert.deepStrictEqual([store.get(`day:${D(50)}`).top.length, w.top.length], [25, 10], 'day: 25 kept, 10 shown');
+  assert.deepStrictEqual([store.get(`wk:${D(50)}`).top.length, w.week.top.length, w.week.n], [100, 10, 120], 'week: 100 kept, 10 shown, 120 ranked');
+  assert.deepStrictEqual(w.week.you, { pts: 19, days: 1, rank: 81 }, 'Cap 119 (19 points): the 80 names on 20-99 above it, past the lists');
+  assert.deepStrictEqual(w.week.top.slice(0, 2).map((x) => [x.name, x.pts]), [['Cap 99', 99], ['Cap 98', 98]]);
+  assert.ok(JSON.stringify(store.get(`wk:${D(50)}`)).length < 16000, 'a week stays small');
+  // the commissioner takes a name off: off the day and week lists, out of the counts, and kept off
+  assert.strictEqual((await call('DELETE', null, { path: '/week?name=Cap%2099' })).status, 403, 'no token');
+  assert.strictEqual((await call('DELETE', null, { path: '/week?name=Cap%2099', auth: 'Bearer wrong-token-xxxxxxxx' })).status, 403);
+  r = await call('DELETE', null, { path: '/week?name=cap%2099', auth: `Bearer ${env.ADMIN_TOKEN}` });
+  assert.deepStrictEqual([r.status, (await r.json()).removed > 0], [200, true]);
+  g = await (await call('GET', null, { path: `/week?date=${D(50)}` })).json();
+  assert.deepStrictEqual([g.top[0].name, g.n], ['Cap 98', 119], 'off the week, out of its count');
+  assert.ok(!(await (await call('GET', null, { path: `/daily?date=${D(50)}` })).json()).top.some((x) => x.name === 'Cap 99'), 'off the day list');
+  at(D(51));
+  w = await (await day({ date: D(51), key: wkey('cap99-51'), p: 1, spots: [0], name: 'Cap 99' })).json();
+  assert.strictEqual(w.counted, true); assert.ok(!w.top.some((x) => x.name === 'Cap 99') && w.week.you === undefined, 'kept off');
+  // posts are limited per address, like every post
+  at(D(51));
+  const one = { ip: '10.9.9.9' };
+  for (let i = 0; i < 30; i++) assert.strictEqual((await day({ date: D(51), key: wkey(`rl${i}`), p: 0.5, spots: [0] }, one)).status, 200);
+  assert.strictEqual((await day({ date: D(51), key: wkey('rl-x'), p: 0.5, spots: [0] }, one)).status, 429, 'rate limited');
+  Date.now = realNow;
+}
 // Accounts, continued: stats that follow the account, usernames on the boards, friend leagues, the daily email
 {
   const realFetch = globalThis.fetch;
@@ -752,6 +843,9 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.ok(!b.taken && b.top.some((x) => x.name === 'Amy Hawk'), 'the day\'s list: her name from the new phone');
   b = await (await day({ date: today, key: 'stranger-key-000000000004', p: 0.9, spots: [0.1], name: 'Amy Hawk' })).json();
   assert.strictEqual(b.taken, true, 'and nobody else\'s');
+  b = await (await day({ date: today, key: kA, p: 0.95, spots: [0.1], name: 'Amy Hawk', session: sa })).json();
+  assert.strictEqual(b.counted, true, 'her other phone\'s result counts in the day');
+  assert.deepStrictEqual([b.top.filter((x) => x.name === 'Amy Hawk').map((x) => x.p), b.week.you.pts], [[0.77], 77], 'listed once a day: her first result');
 
   // leagues: made and joined with a username, a board of usernames and daily numbers only, limits, leaving
   const lg = (path, body) => au(`/league/${path}`, body);

@@ -94,3 +94,9 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   account; a board shows usernames and daily numbers only, to members only); the daily email (/auth/remind, the cron in
   wrangler.toml [triggers], `scheduled` -> the Board's reminders: one a day an account, 1000 a run, an HMAC unsubscribe
   link; only with RESEND_KEY + MAIL_FROM). Never put an address or account id in anything another account can read.
+- The day's and week's lists (board/worker.js /daily, /week; game.js leaders): a name's first result of a day goes on the
+  day's list (25 kept, 10 shown) and into its weeks (wk:<end date>: each name's best WEEK_BEST of 7 days added up, a
+  histogram for ranks, 100 kept); kept as results come (a result touches 7 week values), never rebuilt by scanning.
+  Never a blocked() name; `DELETE /week?name=` (admin token) takes a name off for good. Practice (#practice, game.js
+  practiceState/renderPractice): only after the day's drive is done; its own saved state; it must never write a stats
+  day, the streak, tendencies or post to /daily.

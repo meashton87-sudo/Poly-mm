@@ -750,6 +750,23 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
 .board.daily .dspots { display: grid; gap: 6px; text-align: left; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .board.daily .dsp { display: grid; gap: 1px; } .board.daily .dsp span { color: var(--muted); }
 .board.daily .k.sub { margin-top: 4px; }
+/* the day's top 10 and the week's (two tabs), your own line under the list when you're not on it */
+.lb { display: grid; gap: 8px; margin-top: 4px; }
+.lbtabs { display: flex; gap: 6px; }
+.lbtabs .chip { flex: 1 1 0; min-height: 36px; }
+.lbtabs .chip[aria-selected="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.lbpanel { display: grid; gap: 6px; }
+.lbpanel .note { margin: 0; font-size: 12.5px; }
+.lbpanel .brows li { grid-template-columns: 22px minmax(0, 1fr) auto 2.6em; }      /* the scores (and the week's days) line up row to row */
+.lbpanel .brows li small.d { grid-column: 3; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.lbpanel .brows li b { grid-column: 4; text-align: right; }
+.brows li.me { background: color-mix(in srgb, var(--sq-g) 12%, transparent); border-radius: 6px; margin-inline: -4px; padding: 2px 4px; }
+.brows li.you { margin-top: 4px; position: relative; }
+.brows li.you::before { content: ''; position: absolute; left: 4px; right: 4px; top: -4px; border-top: 1px dashed var(--line); }
+/* after the day's drive: one more, for practice */
+.keepplay { display: grid; gap: 6px; margin-top: 12px; text-align: center; }
+.keepplay .note { margin: 0; font-size: 12.5px; }
+.endcard > .row.pacts .btn { flex-basis: 100%; }      /* one under the other: the long labels never wrap to three lines */
 .ex { display: flex; gap: 4px; margin: 6px 0 10px; }
 .ex .sq { width: 30px; height: 30px; font-size: 14px; }
 .facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; font-size: 13.5px; margin: 0 0 10px; }
