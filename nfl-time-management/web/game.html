@@ -390,6 +390,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
   body.bcast .bmenu > [data-mode] { font-weight: 600; color: var(--muted); }
   body.bcast .fieldbox .fov { top: calc(env(safe-area-inset-top, 0px) + 66px); bottom: auto; align-items: flex-start; }
   body.bcast .fieldbox .fovl .ramp { display: none; }      /* (the color key: in the ratings) */
+  body.bcast .fieldbox .fov .dd { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: calc(100vw - 200px); line-height: 1.3; }
   body.bcast .fieldbox .tobtn { top: calc(env(safe-area-inset-top, 0px) + 112px); bottom: auto; }
   body.bcast .sheet { display: flex; flex-direction: column; position: absolute; z-index: 4; left: 0; right: 0; bottom: 0; max-height: 52%;
     background: var(--paper); border-radius: 20px 20px 0 0; box-shadow: 0 -8px 28px rgba(0, 0, 0, .3); transition: transform .24s ease; }

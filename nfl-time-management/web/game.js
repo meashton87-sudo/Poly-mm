@@ -4210,6 +4210,14 @@
   };
   // the timeout on the field, by the other buttons there (players asked): yours to call with the clock running, or,
   // on defense, the "timeout first" before their snap (the same switch as in the calls below)
+  function placeTo() {
+    const b = $('toBtn'), fov = document.querySelector('.fieldbox .fov');
+    if (!b || !fov) return;
+    if (!bcast()) { b.style.top = ''; return; }
+    const fb = fov.parentElement.getBoundingClientRect(), last = [...fov.querySelectorAll('.btns > :not([hidden])')].pop();
+    const bottom = (last || fov).getBoundingClientRect().bottom;
+    b.style.top = `${Math.round(bottom - fb.top + 8)}px`;
+  }
   function toButton() {
     const b = $('toBtn'), r = G && G.root;
     if (!b) return;
@@ -4221,6 +4229,8 @@
     b.textContent = off ? '⏱ Timeout' : `⏱ Timeout first${ui.to ? ' ✓' : ''}`;
     if (off) b.append(el('small', '', `${r.to[G.me]} left`));
     b.setAttribute('aria-pressed', String(def && !!ui.to));
+    // (the broadcast view: just under the chips on the field, however many rows they wrap to)
+    placeTo();
     b.onclick = () => {
       if (busy) return;
       if (off) { b.hidden = true; decideTimeout(); return; }
@@ -8910,7 +8920,7 @@
     });
     let rz = null;
     // (not while a play runs: the redraw would wipe the animation; the next draw picks up the new size)
-    window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } }, 150); });
+    window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); }, 150); });
     show('boot');
     if (!(VS || VS_LOBBY || GAUNTLET || ARCH || ARCH_DAY || DRIVE || RUN_N)) fetchData();      // the daily, survivor, practice
     try {
