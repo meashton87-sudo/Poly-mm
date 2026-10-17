@@ -722,9 +722,20 @@
     window.scrollTo({ top: 0, behavior: reduced() ? 'auto' : 'smooth' });
   }
   const DOCK_ROOM = 205;    // px under the field on a phone: the call's heading and its first row of keys
+  // a phone playing (game.html): the field is the whole screen, under the scoreboard and the calls' sheet
+  const bcast = () => document.body.classList.contains('bcast') && !(window.matchMedia && window.matchMedia('(min-width: 1000px)').matches);
+  // what covers the field in the broadcast view, in px: the scoreboard and the chips under it at the top, the calls'
+  // sheet (or its bar, when it is down) at the bottom
+  function covers() {
+    if (!bcast()) return { top: 0, bot: 0 };
+    const play = $('play'), sh = $('sheet'), vh = play.clientHeight || window.innerHeight;
+    const bot = sh.classList.contains('down') ? 66 : clip(sh.offsetHeight || vh * 0.45, 66, vh * 0.52);
+    return { top: 104, bot };
+  }
   function fieldHeight() {
     const svg = $('field');
     const wpx = svg.parentElement.clientWidth || 360;
+    if (bcast()) return Math.round((360 * ($('play').clientHeight || window.innerHeight)) / wpx);
     // room left for the field: on wide screens the calls sit beside it (game.html); on a phone, what is above it (the
     // header, the score bar) and the call's first row below it (DOCK_ROOM) fit on the screen with no scrolling
     const side = window.matchMedia && window.matchMedia('(min-width: 1000px)').matches;
@@ -735,8 +746,16 @@
   // Before the snap the camera frames the play, true to scale (as many yards tall as the field is wide, in the
   // box's shape): a short way behind the offense and well downfield, where the routes go. Kicks and the final
   // whistle show the whole field.
-  function preCam(H, L, dir, mode) {
+  // In the broadcast view (cover: px of field under the scoreboard and under the calls, k: px per field unit) the
+  // play is framed in the part that shows, between them, and the field runs on past its ends if it must
+  function preCam(H, L, dir, mode, cover, k) {
     if (mode !== 'snap' && mode !== 'pat') return { ...FULL };
+    if (cover && cover.bot) {
+      const K = 360 / 53.333, span = (H - 6) / K, cb = (cover.bot * k) / K, ct = (cover.top * k) / K;
+      const back = clip((span - cb - ct) * 0.22, 9, 20);
+      const lo = dir > 0 ? L - back - cb : L + back + ct - span;
+      return { lo, hi: lo + span };
+    }
     const span = clip((H - 6) / (360 / 53.333), 50, 120), back = clip(span * 0.22, 12, 20);
     let lo = dir > 0 ? L - back : L + back - span, hi = lo + span;
     if (lo < FULL.lo) { hi += FULL.lo - lo; lo = FULL.lo; }
@@ -790,7 +809,8 @@
     }
     const { L, dir, mode } = spotGeom(r);
     Object.assign(sc, { losL: L, dir, mode });
-    sc.cam = preCam(H, L, dir, mode);
+    sc.cover = covers();
+    sc.cam = preCam(H, L, dir, mode, sc.cover, 360 / (svg.parentElement.clientWidth || 360));
     sc.cam0 = { ...sc.cam };
     if (mode === 'done') { place(sc); return sc; }
     hline(L, { stroke: 'var(--los)', 'stroke-width': 2.4 });
@@ -1014,6 +1034,56 @@
   // the field takes the tap itself (phones do not always send taps on small SVG shapes): a quick touch, not a scroll,
   // anywhere near a receiver's dot or along his route changes that route
   let routeTapAt = 0;                 // when the field last used a tap for a route (the dot under it then stays shut)
+  // the calls' sheet (broadcast view): drag its grip down to a bar to see the whole field, up (or tap it) for the calls;
+  // the field frames the play again in what then shows
+  function sheetDown(on) {
+    const sh = $('sheet');
+    if (!sh || on === sh.classList.contains('down')) return;
+    sh.classList.toggle('down', on);
+    $('grip').setAttribute('aria-expanded', String(!on));
+    track('sheet', { down: on });
+  }
+  function sheetSetup() {
+    const sh = $('sheet'), grip = $('grip');
+    let drag = null, moved = false;
+    grip.addEventListener('pointerdown', (ev) => { drag = { y0: ev.clientY, dy: 0 }; moved = false; sh.classList.add('dragging'); try { grip.setPointerCapture(ev.pointerId); } catch (e) { /* the drag still works */ } });
+    grip.addEventListener('pointermove', (ev) => {
+      if (!drag) return;
+      const down = sh.classList.contains('down'), dy = ev.clientY - drag.y0;
+      if (Math.abs(dy) > 5) moved = true;
+      drag.dy = down ? clip(dy, -sh.offsetHeight, 0) : Math.max(0, dy);
+      sh.style.transform = down ? `translateY(calc(100% - 66px - env(safe-area-inset-bottom, 0px) + ${drag.dy}px))` : `translateY(${drag.dy}px)`;
+    });
+    const end = () => {
+      if (!drag) return;
+      const down = sh.classList.contains('down'), dy = drag.dy;
+      drag = null;
+      sh.classList.remove('dragging'); sh.style.transform = '';
+      if (moved) sheetDown(down ? dy > -40 : dy > 60);
+    };
+    grip.addEventListener('pointerup', end);
+    grip.addEventListener('pointercancel', end);
+    grip.addEventListener('click', () => { if (moved) { moved = false; return; } sheetDown(!sh.classList.contains('down')); });
+    // down, a tap anywhere on its bar brings it back up (not a call made by accident)
+    sh.addEventListener('click', (ev) => { if (sh.classList.contains('down') && !grip.contains(ev.target)) { ev.preventDefault(); ev.stopPropagation(); sheetDown(false); } }, true);
+    // a new size (another step's calls, up or down): the play framed again in what shows, between plays
+    let h0 = 0, rz = 0;
+    const again = () => {
+      const h = sh.classList.contains('down') ? 66 : sh.offsetHeight;
+      if (Math.abs(h - h0) < 24 || !bcast()) return;
+      h0 = h;
+      if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing') && scene && scene.cover && Math.abs(covers().bot - scene.cover.bot) >= 24) drawField();
+    };
+    if (window.ResizeObserver) new ResizeObserver(() => { clearTimeout(rz); rz = setTimeout(again, 90); }).observe(sh);
+    sh.addEventListener('transitionend', again);
+    // the menu: what the page's header has, on the field
+    const mb = $('menuBtn'), menu = $('bmenu');
+    const close = () => { menu.hidden = true; mb.setAttribute('aria-expanded', 'false'); };
+    mb.addEventListener('click', () => { menu.hidden = !menu.hidden; mb.setAttribute('aria-expanded', String(!menu.hidden)); });
+    menu.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => { close(); const t = $(b.dataset.go); if (t) t.click(); }));
+    menu.querySelectorAll('[data-mode]').forEach((a) => a.addEventListener('click', close));
+    document.addEventListener('pointerdown', (ev) => { if (!menu.hidden && !menu.contains(ev.target) && !mb.contains(ev.target)) close(); });
+  }
   function fieldTaps() {
     const svg = $('field');
     let down = null;
@@ -3329,6 +3399,9 @@
   }
   function drawAll() { drawTiles(); drawBar(); drawField(); }
   function show(which) {
+    // (a phone playing: the broadcast view, game.html; the page under it starts from the top again after)
+    const bc = which === 'play';
+    if (bc !== document.body.classList.contains('bcast')) { document.body.classList.toggle('bcast', bc); window.scrollTo(0, 0); if (!bc) sheetDown(false); }
     $('arch').hidden = which !== 'arch';
     $('intro').hidden = which !== 'intro';
     $('play').hidden = which !== 'play';
@@ -4038,7 +4111,7 @@
     }
     fetchOdds();
     // only on the way in: after that the page stays put while you change routes
-    if (P.fresh) { P.fresh = false; requestAnimationFrame(() => list.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' })); }
+    if (P.fresh) { P.fresh = false; if (!bcast()) requestAnimationFrame(() => list.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' })); }
   }
 
   // how fast to get to the next snap while the clock runs: no-huddle, huddle or milk it
@@ -8784,6 +8857,7 @@
     $('helpBtn').addEventListener('click', openHelp);
     fieldTaps();
     drawTaps();
+    sheetSetup();
     boardInit();
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
     $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE || GAUNTLET ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
