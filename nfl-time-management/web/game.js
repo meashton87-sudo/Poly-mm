@@ -3038,6 +3038,7 @@
       : `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
     if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
     if (PRACTICE) box.append(el('div', 'who prac', 'Practice: graded like the daily, but it doesn’t count toward your stats, streak or the leaderboard.'));
+    box.append(todaySoFar());
     const go = el('button', 'btn', 'Next');
     go.type = 'button';
     go.addEventListener('click', () => {
@@ -5169,7 +5170,8 @@
       save(`${STORE}:runs`, rs);
     } else {
       // (vs: against the real coach, so a badge for beating him counts the days on any phone)
-      st.days[dayN] = { p, wpa, coach: cc ? cc.name : null, ...(hhN.length ? { vs: Math.sign(hhN.reduce((a, h) => a + h.v, 0)) } : {}) };
+      // (the card drawn again, on a reload: a record already here stays, which may be another phone's, synced in)
+      if (!state.done || !st.days[dayN]) st.days[dayN] = { p, wpa, coach: cc ? cc.name : null, ...(hhN.length ? { vs: Math.sign(hhN.reduce((a, h) => a + h.v, 0)) } : {}) };
       // a missed day the streak's freezes now cover (this day played after it): kept, told about on this card
       const fz = st.frozen || (st.frozen = {}), sk0 = streakOf(st, ARCH_DAY ? dayOf(new Date()) : dayN);
       const newly = [...sk0.frozen].filter((k) => !fz[k]);
@@ -5796,6 +5798,25 @@
   // that day's, and a result posted to the next day would lock out the real one)
   const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const driveDate = () => { const d = new Date(idx.launch + 'T12:00:00'); d.setDate(d.getDate() + dayN - 1); return ymd(d); };
+  // the day's daily, before its first snap: how many have played it so far, the typical score and the one to beat
+  // (a target to chase; nothing until a few have finished, and nothing off the website or in the other modes)
+  function todaySoFar() {
+    const line = el('div', 'who sofar');
+    line.hidden = true;
+    if (SURV || PRACTICE || VS || DRIVE || RUN_N || ARCH_DAY || G.si || G.started || state.done) return line;
+    (BOARD.ready || Promise.resolve()).then(async () => {
+      if (BOARD.mode !== 'api') return;
+      const d = await (await fetch(`${BOARD.api}/daily?date=${driveDate()}`)).json();
+      if (!d || !(d.n >= 3) || !Array.isArray(d.hist)) return;
+      let run = 0, med = 0, hi = 0;
+      d.hist.forEach((c, k) => { if (c > 0) hi = k; });
+      for (let k = 0; k < d.hist.length; k++) { run += d.hist[k]; if (run >= d.n / 2) { med = k; break; } }
+      const top = (d.top || [])[0], named = top && Math.round(top.p * 100) === hi;
+      line.textContent = `${d.n.toLocaleString()} have played today. Typical score ${med}; the one to beat is ${hi}${named ? ` (${top.name})` : ''}.`;
+      line.hidden = false;
+    }).catch(() => { /* offline or the stats are down: no line */ });
+    return line;
+  }
   function dailyBox(p, spotW) {
     const box = el('div', 'board daily');
     box.hidden = true;
