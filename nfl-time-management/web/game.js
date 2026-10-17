@@ -722,6 +722,9 @@
     window.scrollTo({ top: 0, behavior: reduced() ? 'auto' : 'smooth' });
   }
   const DOCK_ROOM = 205;    // px under the field on a phone: the call's heading and its first row of keys
+  // px over the field during a play in the broadcast view: the scoreboard at the top, the skip note at the bottom
+  const PLAY_COVER = { top: 72, bot: 52 };
+  const BCAST_YARDS = 42;          // yards of field the broadcast view shows before the snap, between scoreboard and calls
   // a phone playing (game.html): the field is the whole screen, under the scoreboard and the calls' sheet
   const bcast = () => document.body.classList.contains('bcast') && !(window.matchMedia && window.matchMedia('(min-width: 1000px)').matches);
   // what covers the field in the broadcast view, in px: the scoreboard and the chips under it at the top, the calls'
@@ -751,8 +754,10 @@
   function preCam(H, L, dir, mode, cover, k) {
     if (mode !== 'snap' && mode !== 'pat') return { ...FULL };
     if (cover && cover.bot) {
-      const K = 360 / 53.333, span = (H - 6) / K, cb = (cover.bot * k) / K, ct = (cover.top * k) / K;
-      const back = clip((span - cb - ct) * 0.22, 9, 20);
+      // (zoomed in to about BCAST_YARDS of field in what shows, like a broadcast, never wider than true to scale)
+      const band = H - 6 - (cover.bot + cover.top) * k, K = Math.max(360 / 53.333, band / BCAST_YARDS);
+      const span = (H - 6) / K, cb = (cover.bot * k) / K, ct = (cover.top * k) / K;
+      const back = clip((span - cb - ct) * 0.22, 8, 20);
       const lo = dir > 0 ? L - back - cb : L + back + ct - span;
       return { lo, hi: lo + span };
     }
@@ -3198,7 +3203,15 @@
       lo = mid - span / 2; hi = mid + span / 2;
       if (lo < -10) { hi += -10 - lo; lo = -10; }
       if (hi > 110) { lo -= hi - 110; hi = 110; }
-      P.cam = { lo: Math.max(lo, -10), hi: Math.min(hi, 110) };
+      lo = Math.max(lo, -10); hi = Math.min(hi, 110);
+      // (the broadcast view: the calls' sheet is away for the play, so the whole play is framed in what shows,
+      // under the scoreboard and above the skip note: the quarterback's drop and throw included)
+      if (bcast()) {
+        const u = 360 / (sc.svg.parentElement.clientWidth || 360), ct = PLAY_COVER.top * u, cb = PLAY_COVER.bot * u;
+        const K = (sc.H - 6 - ct - cb) / (hi - lo);
+        lo -= cb / K; hi += ct / K;
+      }
+      P.cam = { lo, hi };
       P.segs.sort((a, b) => a.t0 - b.t0);
       return P;
     }
