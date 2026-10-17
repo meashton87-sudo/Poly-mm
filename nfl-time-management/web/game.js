@@ -1261,7 +1261,10 @@
     track('route_drawn', { route: d.name, depth: d.depth, legs: d.pts.length - 1 });
     if (window.__sepLog) (window.__drawLog = window.__drawLog || []).push({ i, label: a.label, ...d });      // (browser tests)
   }
+  // drawing plays: Pro games for now (a historic drive, a playoff run, a past day), every mode later
+  const drawOK = () => isPro() && !!(DRIVE || RUN_N || ARCH_DAY);
   function setDraw(on) {
+    if (on && !drawOK()) return;
     const P = ui.pass;
     P.draw = on; P.sel = null;
     save(DRAW_KEY, on);
@@ -3810,7 +3813,7 @@
         b.addEventListener('click', () => {
           if (busy) return;
           ui.fam = f;
-          if (f === 'pass') { save(`${STORE}:usedpass`, true); ui.step = 'pass'; ui.pass = { target: null, routes: null, drawn: [], draw: !!load(DRAW_KEY, false), sel: null, pa: false, roll: false, fresh: true }; drawField(); }
+          if (f === 'pass') { save(`${STORE}:usedpass`, true); ui.step = 'pass'; ui.pass = { target: null, routes: null, drawn: [], draw: drawOK() && !!load(DRAW_KEY, false), sel: null, pa: false, roll: false, fresh: true }; drawField(); }
           else ui.step = 'detail';
           drawDock();
         });
@@ -3955,15 +3958,23 @@
       undo.addEventListener('click', undoRoute);
       head.append(undo);
     }
-    const pen = el('button', `chip pen${P.draw ? ' on' : ''}`, P.draw ? '✓ Done' : '✏️ Draw');
-    pen.type = 'button'; pen.id = 'drawBtn';
-    pen.setAttribute('aria-label', P.draw ? 'Done drawing routes' : 'Draw routes');
-    pen.setAttribute('aria-pressed', String(!!P.draw));
-    pen.addEventListener('click', () => { if (!busy) setDraw(!P.draw); });
-    head.append(pen);
+    if (drawOK()) {
+      const pen = el('button', `chip pen${P.draw ? ' on' : ''}`, P.draw ? '✓ Done' : '✏️ Draw');
+      pen.type = 'button'; pen.id = 'drawBtn';
+      pen.setAttribute('aria-label', P.draw ? 'Done drawing routes' : 'Draw routes');
+      pen.setAttribute('aria-pressed', String(!!P.draw));
+      pen.addEventListener('click', () => { if (!busy) setDraw(!P.draw); });
+      head.append(pen);
+    } else if (PRO_ON) {
+      // (elsewhere, while it is tried out in Pro: what it is, and that it is coming)
+      const lock = el('button', 'chip pen locked', '✏️ Draw · Pro');
+      lock.type = 'button'; lock.id = 'drawLock';
+      lock.addEventListener('click', () => { toast('Draw your own routes: in Pro games now, coming to every mode soon'); track('draw_locked', { mode: modeName() }); });
+      head.append(lock);
+    }
     if (G.look != null) d.append(readLine(G.look));
     const E = eligibles(sc), selA = P.draw && P.sel != null ? E[P.sel] : null;
-    if (!P.draw) d.append(el('p', 'hint', 'Tap a receiver on the field to change his route, or ✏️ draw your own. Tap a name below to throw it to him.'));
+    if (!P.draw) d.append(el('p', 'hint', `Tap a receiver on the field to change his route${drawOK() ? ', or ✏️ draw your own' : ''}. Tap a name below to throw it to him.`));
     else {
       const h = el('p', 'hint draw', selA ? `Now drag from ${shortName(selA.p ? selA.p.name : '') || selA.label} to where he should go.`
         : 'Tap a receiver, then drag on the field where you want him to go. Each line plays as the real route it is closest to.');
@@ -6970,7 +6981,7 @@
     const ul = el('ul');
     [
       'You call the plays at the end of a real NFL game. A new drive every day.',
-      'Pick Run, Pass, RPO or Trick. On a pass, tap a receiver on the field to change his route (or ✏️ draw it), then tap his name to throw it.',
+      'Pick Run, Pass, RPO or Trick. On a pass, tap a receiver on the field to change his route, then tap his name to throw it.',
       'Every snap is a real NFL play. Read the defense: a blitz loses to quick throws, a loaded box to play action.',
       SURV ? 'Survivor: win each real game to keep going. One loss ends your run; put your name on the board.'
         : 'Beat the real coach, and see how you rank against everyone who played today.',
