@@ -266,22 +266,34 @@
     uint32: Uint32Array, float32: Float32Array, float64: Float64Array };
   // The website's packed data (scripts/site.py pack, gunzipped; game_worker.js unpack, the same): "NFCP", the header's length, the
   // header (the JSON with each array as {dtype, n, enc, off, len}) and the arrays' bytes. enc: s = byte planes
-  // shuffled, d = differences (summed back with the typed array's own wraparound), ds = both.
-  function unpack(buf) {
+  // shuffled, d = differences (summed back with the typed array's own wraparound), ds = both; x = the bytes XORed
+  // with ref's array (the unpacked engine data: the playbook's plays are nearly all its library's) at the rows in src
+  // (-1: none), xs = shuffled too. The playbook's pack needs the engine's: unpack(playbook, unpack(engine)).
+  function unpack(buf, ref) {
     const u8 = new Uint8Array(buf), dv = new DataView(buf);
     if (String.fromCharCode(u8[0], u8[1], u8[2], u8[3]) !== 'NFCP') throw new Error('bad data pack');
-    const hl = dv.getUint32(4, true), base = 8 + hl;
-    const walk = (x) => {
-      if (Array.isArray(x)) return x.map(walk);
-      if (!x || typeof x !== 'object') return x;
-      if (x.off == null || !x.dtype) { const o = {}; for (const k in x) o[k] = walk(x[k]); return o; }
+    const hl = dv.getUint32(4, true), base = 8 + hl, srcs = new Map();
+    const arrOf = (x) => {
       const C = CTORS[x.dtype], k = C.BYTES_PER_ELEMENT, n = x.n, src = u8.subarray(base + x.off, base + x.off + x.len);
       const bytes = new Uint8Array(n * k);
       if (x.enc.includes('s')) { for (let j = 0; j < k; j++) { const p = j * n; for (let i = 0; i < n; i++) bytes[i * k + j] = src[p + i]; } }
       else bytes.set(src);
+      if (x.enc.includes('x')) {
+        const r = x.ref.reduce((o, key) => (o ? o[key] : o), ref);
+        if (!r || !r.arr || r.dtype !== x.dtype) throw new Error('data pack needs the engine data');
+        if (!srcs.has(x.src.off)) srcs.set(x.src.off, arrOf(x.src));     // one row map, shared by the arrays
+        const s = srcs.get(x.src.off), rb = new Uint8Array(r.arr.buffer, r.arr.byteOffset, r.arr.byteLength);
+        for (let i = 0; i < n; i++) { const q = s[i] * k; if (q >= 0) for (let j = 0; j < k; j++) bytes[i * k + j] ^= rb[q + j]; }
+      }
       const a = new C(bytes.buffer, 0, n);
       if (x.enc.includes('d')) for (let i = 1; i < n; i++) a[i] += a[i - 1];
-      return { dtype: x.dtype, n, arr: a };
+      return a;
+    };
+    const walk = (x) => {
+      if (Array.isArray(x)) return x.map(walk);
+      if (!x || typeof x !== 'object') return x;
+      if (x.off == null || !x.dtype) { const o = {}; for (const k in x) o[k] = walk(x[k]); return o; }
+      return { dtype: x.dtype, n: x.n, arr: arrOf(x) };
     };
     return walk(JSON.parse(new TextDecoder().decode(u8.subarray(8, base))));
   }

@@ -428,20 +428,41 @@
     }
     return new Blob(parts).arrayBuffer();
   }
+  // the packs are stamped with what is in them (site.py <meta name="data">), not the build: kept across deploys (sw.js)
+  const DATA = (document.querySelector('meta[name="data"]') || {}).content || '';
   async function fetchPacked(name, size) {
-    const zipped = await fetchBytes(asset(name), name, size);
-    const out = await new Response(new Blob([zipped]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+    // gunzipped as it comes in (the bytes counted on the way), not all at the end: the last chunk is the only wait
+    const url = DATA ? `${name}?d=${encodeURIComponent(DATA)}` : asset(name);
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`${name} ${r.status}`);
+    dl.total += +r.headers.get('content-length') || size;
+    // the first visit (no service worker yet, so nothing kept it): a copy goes into this build's worker's cache, so the
+    // next visit doesn't download it again
+    const keep = DATA && swOn() && !navigator.serviceWorker.controller && typeof caches !== 'undefined' && r.type === 'basic' ? r.clone() : null;
+    let body = r.body;
+    if (body && typeof TransformStream === 'function') body = body.pipeThrough(new TransformStream({ transform(c, ctl) { dl.got += c.length; ctl.enqueue(c); } }));
+    else { const b = await r.arrayBuffer(); dl.got += b.byteLength; body = new Blob([b]).stream(); }
+    const out = await new Response(body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
     const h = new Uint8Array(out, 0, 4);
     if (String.fromCharCode(h[0], h[1], h[2], h[3]) !== 'NFCP') throw new Error('not a data pack');
+    if (keep) caches.open(`tmd-${BUILD}`).then((c) => c.put(new URL(url, location.href).href, keep)).catch(() => { /* storage full or off */ });
     return out;
   }
-  function startWorkers() {
+  // the download starts as soon as the page knows it will play (boot, before game.json): it is most of what the first
+  // call waits on, and the intro's few small files go alongside it
+  let fetched = false;
+  function fetchData() {
+    if (fetched) return;
+    fetched = true;
     const json = () => Promise.all([fetchBytes(asset('engine_data.json'), 'engine data', 5.5e6), fetchBytes(asset('playbook.json'), 'playbook', 6.1e6)]);
     const pk = BUILD && typeof DecompressionStream === 'function'
-      ? Promise.all([fetchPacked('engine_data.pack', 1.6e6), fetchPacked('playbook.pack', 1.7e6)]).then((b) => { packed = true; return b; })
+      ? Promise.all([fetchPacked('engine_data.pack', 1.8e6), fetchPacked('playbook.pack', 1.3e6)]).then((b) => { packed = true; return b; })
       : Promise.reject(new Error('no pack'));
     dataBytes = pk.catch(() => { dl.got = 0; dl.total = 0; packed = false; return json(); });
     dataBytes.catch((e) => fatal('The simulator could not load (' + e.message + '). Check your connection and reload.'));
+  }
+  function startWorkers() {
+    fetchData();
     startWorker();
   }
   function startWorker() {
@@ -471,16 +492,23 @@
         const now = performance.now();
         track('sim_ready', { mode: modeName(), packed, ms: Math.round(now), waited_ms: huddleT0 ? Math.round(now - huddleT0) : 0 });
       }
-      if (readyCount === 1) for (let i = 1; i < POOL; i++) startWorker();
       if (readyCount === POOL) dataBytes = null;               // every worker has its copy: let the bytes go
-      pump(); return;
+      pump();
+      if (!slot.busy) morePool();
+      return;
     }
     if (m.type === 'error' && m.id == null) { fatal('The simulator could not load (' + m.message + '). Check your connection and reload.'); return; }
     slot.busy = false;
     const p = pending.get(m.id);
     pending.delete(m.id);
     if (p) { if (m.type === 'error') p.reject(new Error(m.message)); else p.resolve(m); }
+    morePool();
     pump();
+  }
+  // the rest of the pool starts once the first worker has answered what was waiting on it (the first call's facts):
+  // their setting up would otherwise share a slow phone's CPU with it
+  function morePool() {
+    if (readyCount && pool.length < POOL) for (let i = pool.length; i < POOL; i++) startWorker();
   }
   // urgent: the snap itself and the facts for a call go ahead of any grading still queued
   function send(msg, urgent) {
@@ -5751,7 +5779,10 @@
   // the service worker (sw.js, the installable app's offline copy): on the website only, never on a local server (the
   // browser test reloads mid-drive, and a worker kept from an older build would only get in the way there) unless a
   // test asks for it (tmd:v3:sw_local); the worker itself goes to the network first, so a deploy is seen on the next load
-  if (BUILD && 'serviceWorker' in navigator && (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) || load(`${STORE}:sw_local`, false))) {
+  function swOn() {
+    return !!BUILD && 'serviceWorker' in navigator && (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) || load(`${STORE}:sw_local`, false));
+  }
+  if (swOn()) {
     const reg = () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => { /* no worker: the site works the same */ });
     if (document.readyState === 'complete') reg(); else addEventListener('load', reg);
   }
@@ -8229,6 +8260,7 @@
     // (not while a play runs: the redraw would wipe the animation; the next draw picks up the new size)
     window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } }, 150); });
     show('boot');
+    if (!(VS || VS_LOBBY || GAUNTLET || ARCH || ARCH_DAY || DRIVE || RUN_N)) fetchData();      // the daily, survivor, practice
     try {
       idx = await fetch(asset('game.json')).then((r) => { if (!r.ok) throw new Error('game data ' + r.status); return r.json(); });
       idx.calls.forEach((c) => { CALL[c.id] = c; });

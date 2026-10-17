@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import base64
 import gzip
+import hashlib
 import html
 import struct
 import zlib
@@ -41,8 +42,8 @@ HEAD = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
 
 # The simulator's data (engine_data.json, playbook.json: typed arrays as base64 in JSON) re-packed for phones: the
 # same arrays as raw bytes, the integer index arrays as differences and every multi-byte array byte-plane shuffled
-# (both lossless, both gzip much better), gzipped. Half the download before the first snap. game_worker.js unpacks
-# it (DecompressionStream); browsers without one, and the claude.ai artifact, still load the JSON.
+# (both lossless, both gzip much better), gzipped. Half the download before the first snap. The page gunzips it
+# (DecompressionStream) and vs_core.js unpacks it in the worker; browsers without one, and the claude.ai artifact, still load the JSON.
 PACKED = {"engine_data.json": "engine_data.pack", "playbook.json": "playbook.pack"}
 
 
@@ -61,24 +62,80 @@ def _encode(spec: dict) -> tuple[dict, bytes]:
     return {"dtype": spec["dtype"], "n": int(spec["n"]), "enc": enc}, cands[enc]
 
 
-def pack(src: Path, dst: Path) -> int:
-    """src JSON -> dst: gzip("NFCP", uint32 header length, header JSON, blob); each base64 array in the JSON becomes
-    {dtype, n, enc, off, len} pointing into the blob."""
-    blob = bytearray()
+# The playbook's plays are nearly all the engine library's plays, in nearly the same order: its EPA, yards, clock and
+# flags are stored as the bytes that differ from the library's row (XOR: zeros where they match, which gzip all but
+# drops), with the row each play matches (src, -1 for none). A fifth of the download; unpacked bit for bit the same.
+REFS = {("rows", k): ("lib", k) for k in ("epa", "yards", "dur10", "to_rel", "flags")}
 
-    def walk(x):
+
+def _arr(spec: dict) -> np.ndarray:
+    return np.frombuffer(base64.b64decode(spec["b64"]), dtype=spec["dtype"])[: spec["n"]]
+
+
+def _align(lib_epa: np.ndarray, epa: np.ndarray) -> np.ndarray:
+    """For each play, the library row with the same EPA bits: the row after the last match when it is one (the order
+    is nearly the same, so the differences of src are nearly all 1), else the first such row, else -1."""
+    first: dict[int, int] = {}
+    for i, b in enumerate(lib_epa.view(np.uint32).tolist()):
+        first.setdefault(b, i)
+    lb, out, prev = lib_epa.view(np.uint32), np.full(len(epa), -1, np.int32), -1
+    for i, b in enumerate(epa.view(np.uint32).tolist()):
+        j = prev + 1 if prev + 1 < len(lb) and lb[prev + 1] == b else first.get(b, -1)
+        out[i] = j
+        if j >= 0:
+            prev = j
+    return out
+
+
+def pack(src: Path, dst: Path, ref: dict | None = None) -> int:
+    """src JSON -> dst: gzip("NFCP", uint32 header length, header JSON, blob); each base64 array in the JSON becomes
+    {dtype, n, enc, off, len} pointing into the blob. With ref (the engine data's JSON), the arrays in REFS may be
+    enc x (xs: shuffled too): XOR with ref's array (a path, "ref") at the rows in "src" (an int32 array, its own spec)."""
+    blob = bytearray()
+    doc = json.loads(src.read_text())
+    srcs: dict = {}
+    if ref is not None:
+        lib = ref["lib"]
+        rows = doc.get("rows", {})
+        if "epa" in rows and "epa" in lib:
+            s = _align(_arr(lib["epa"]), _arr(rows["epa"]))
+            sh, sraw = _encode({"dtype": "int32", "n": len(s), "b64": base64.b64encode(s.tobytes()).decode()})
+            sh.update(off=len(blob), len=len(sraw))
+            blob.extend(sraw)
+            srcs = {"head": sh, "idx": s}
+
+    def xor(spec: dict, path: tuple) -> tuple[dict, bytes] | None:
+        rp = REFS.get(path)
+        r = ref and rp and ref.get(rp[0], {}).get(rp[1])
+        if not srcs or not r or r["dtype"] != spec["dtype"] or spec["n"] != len(srcs["idx"]):
+            return None
+        a, b = _arr(spec), _arr(r)
+        s = srcs["idx"]
+        got = np.zeros_like(a)
+        got[s >= 0] = b[s[s >= 0]]
+        x = (a.view(np.uint8) ^ got.view(np.uint8)).view(a.dtype)
+        cands = {"x": x.tobytes()}
+        if x.itemsize > 1:
+            cands["xs"] = x.view(np.uint8).reshape(-1, x.itemsize).T.tobytes()
+        enc = min(cands, key=lambda k: (len(zlib.compress(cands[k], 6)), len(k)))
+        return {"dtype": spec["dtype"], "n": int(spec["n"]), "enc": enc, "ref": list(rp), "src": srcs["head"]}, cands[enc]
+
+    def walk(x, path=()):
         if isinstance(x, dict):
             if "b64" in x and "dtype" in x:
                 head, raw = _encode(x)
+                alt = xor(x, path)
+                if alt and len(zlib.compress(alt[1], 6)) < len(zlib.compress(raw, 6)):
+                    head, raw = alt
                 head.update(off=len(blob), len=len(raw))
                 blob.extend(raw)
                 return head
-            return {k: walk(v) for k, v in x.items()}
+            return {k: walk(v, path + (k,)) for k, v in x.items()}
         if isinstance(x, list):
             return [walk(v) for v in x]
         return x
 
-    header = json.dumps(walk(json.loads(src.read_text())), separators=(",", ":"), allow_nan=False).encode()
+    header = json.dumps(walk(doc), separators=(",", ":"), allow_nan=False).encode()
     data = b"NFCP" + struct.pack("<I", len(header)) + header + bytes(blob)
     dst.write_bytes(gzip.compress(data, 9, mtime=0))
     return dst.stat().st_size
@@ -273,6 +330,16 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     stamp = (commit[:12] or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"))
     # every file the page loads carries the build stamp (game.js reads the meta), so phones never mix two builds
     extra += f"<meta name=\"build\" content=\"{stamp}\">" + canonical(site_url, "") + FOOT_CSS
+    # game.json (the intro needs it) downloads alongside game.js instead of after it: the same request game.js makes
+    # (fetch: cors, same-origin credentials), so the browser hands that one over
+    extra = f"<link rel=\"preload\" href=\"game.json?v={stamp}\" as=\"fetch\" crossorigin>" + extra
+    eng = json.loads((WEB / "engine_data.json").read_text())
+    for f, p in PACKED.items():
+        pack(WEB / f, out / p, ref=eng if f == "playbook.json" else None)
+    # the packs are named by what is in them (?d=, not the build's ?v=): the site deploys many times a day and the
+    # data seldom changes, so a phone that has them (the service worker's copy) keeps them across deploys
+    data_stamp = hashlib.sha256(b"".join((out / p).read_bytes() for p in PACKED.values())).hexdigest()[:12]
+    extra += f"<meta name=\"data\" content=\"{data_stamp}\">"
     extra += ('<script type="application/ld+json">' + json.dumps({"@context": "https://schema.org", "@type": "WebSite",
               "name": "Two-Minute Drill", "url": site_url.rstrip("/") + "/", "description": desc}) + "</script>")
     page = (WEB / "game.html").read_text()
@@ -309,8 +376,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
             {"src": "/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
             {"src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}]}, indent=1) + "\n")
     # the service worker (web/sw.js: network first, its cache only offline), stamped with this build: a new build is a new
-    # worker, which drops the last build's cache
-    (out / "sw.js").write_text((WEB / "sw.js").read_text().replace("__BUILD__", stamp))
+    # worker, which drops the last build's cache (all but the packs this build still uses: their stamp, __DATA__)
+    (out / "sw.js").write_text((WEB / "sw.js").read_text().replace("__BUILD__", stamp).replace("__DATA__", data_stamp))
     # for crawlers: every page allowed, and the sitemap of the site's pages
     base = site_url.rstrip("/")
     (out / "robots.txt").write_text(f"User-agent: *\nAllow: /\n\nSitemap: {base}/sitemap.xml\n")
@@ -333,8 +400,6 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         shutil.copy2(WEB / f, out / f)
     if (WEB / "teams.json").exists():           # Versus: the 32 teams as they line up now (nflclock.pro.versus_teams)
         shutil.copy2(WEB / "teams.json", out / "teams.json")
-    for f, p in PACKED.items():
-        pack(WEB / f, out / p)
     for f in sorted((WEB / "spots").glob("s*.json")):
         shutil.copy2(f, out / "spots" / f.name)
     # The Pro data (web/pro, nflclock.pro.build) is never copied here: the board worker serves it (POST /pro/data)
