@@ -41,6 +41,17 @@ STATE = """() => {
   if (d.querySelector('button')) return 'choose';
   return 'wait';
 }"""
+# the receivers' dots on the field (page coordinates) and which way is downfield on the screen (+1 down, -1 up)
+DOTS = """() => {
+  const svg = document.getElementById('field'), M = svg.getScreenCTM();
+  const tr = (g) => { const m = /translate\\(([-\\d.]+),([-\\d.]+)\\)/.exec(g.getAttribute('transform') || ''); return m ? [+m[1], +m[2]] : null; };
+  const pt = (q) => { const p = new DOMPoint(q[0], q[1]).matrixTransform(M); return [p.x, p.y]; };
+  const me = [...svg.querySelectorAll('g.dot.me')], qb = me.find((g) => /Quarterback/.test(g.getAttribute('aria-label') || ''));
+  const rec = me.filter((g) => /Wide receiver|Tight end|Running back/.test(g.getAttribute('aria-label') || '')).map((g) => pt(tr(g)));
+  const ball = [...svg.children].find((g) => g.tagName === 'g' && g.querySelector('ellipse'));
+  const up = qb && ball ? Math.sign(pt(tr(ball))[1] - pt(tr(qb))[1]) || -1 : -1;
+  return { rec, up };
+}"""
 SNAP = "() => [document.getElementById('dock').innerText, document.getElementById('bar').innerText].join('|')"
 BAD_TEXT = re.compile(r"undefined|NaN|\[object|Infinity")
 # how long a screen may sit unchanged before it counts as frozen (s); a play's animation runs ~5-15 s
@@ -87,7 +98,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     page.on("requestfailed", lambda r: base in r.url and problems.append(f"request failed: {r.url} {r.failure}"))
     url = f"{base}/index.html" + ("#survivor" if mode == "survivor" else "")
     await page.goto(url)
-    finished = reloads = steps = rundowns = 0
+    finished = reloads = steps = rundowns = drawn = 0
     last_key, since, chaos_done = None, time.time(), set()
     trail: list[str] = []            # the last screens and actions, printed with a failure
     first_q = None                   # the quarter a daily drive starts in: a first-half drive ends at halftime
@@ -202,6 +213,22 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                                 break
                         else:
                             problems.append("a call tapped during a replay did nothing")
+                    elif await page.locator("#drawBtn:visible").count() and rnd.random() < 0.45:
+                        # draw a route: drawing on, a receiver, a line of one to three legs from him (the field takes the drag)
+                        act("draw a route")
+                        if await page.get_attribute("#drawBtn", "aria-pressed") != "true":
+                            await page.click("#drawBtn", timeout=3000)
+                        g = await page.evaluate(DOTS)
+                        if g["rec"]:
+                            x, y = rnd.choice(g["rec"])
+                            await page.mouse.move(x, y); await page.mouse.down()
+                            for _ in range(rnd.randint(1, 3)):
+                                nx, ny = x + rnd.uniform(-90, 90), y + g["up"] * rnd.uniform(-25, 150)
+                                for t in range(1, 7):
+                                    await page.mouse.move(x + (nx - x) * t / 6, y + (ny - y) * t / 6)
+                                x, y = nx, ny
+                            await page.mouse.up()
+                            drawn += 1
                     elif r < 0.14 and reloads < 2:
                         reloads += 1
                         act("RELOAD")
@@ -238,8 +265,9 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             seps = await page.evaluate("() => window.__sepLog || []")
             tackles = await page.evaluate("() => window.__tackleLog || []")
             fps = await page.evaluate("() => window.__fpLog || []")
+            kept = await page.evaluate("() => (window.__drawLog || []).length")
         except Exception:
-            seps, tackles, fps = [], [], []
+            seps, tackles, fps, kept = [], [], [], 0
         if problems:
             status = "fail"
             shot = out / f"{name}.png"
@@ -249,7 +277,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 pass
         await ctx.close()
     return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
-            "secs": round(time.time() - t_start), "rundowns": rundowns, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "trail": trail if problems else []}
+            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "trail": trail if problems else []}
 
 
 async def main(a) -> int:
@@ -315,6 +343,7 @@ async def main(a) -> int:
     # a short throw with a man running free deep reads as a QB who missed him (players saw it): report how often
     sh = [x for r in results for x in r.get("seps", []) if x.get("caught") and x.get("air", 99) <= 6]
     print(f"short completions: {len(sh)}, with a deep man 5+ yards clear: {sum(1 for x in sh if x.get('openDeep', 0) > 0)}")
+    print(f"routes drawn: {sum(r.get('drawn', 0) for r in results)} drags, {sum(r.get('kept', 0) for r in results)} kept as routes (since the last reload)")
     late = sum(1 for r in results for x in r.get("seps", []) if x.get("late"))
     print(f"cover man too far to break it up (shown as a bad ball instead): {late} of {len(inc)} incompletions")
     lonely = [x for r in results for x in r.get("seps", []) if x.get("label") == "Broken up" and x.get("ballD", 0) > 3]

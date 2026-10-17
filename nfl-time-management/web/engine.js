@@ -700,7 +700,7 @@
     // the charting, and with a depth the code ri + 16 * (depth + 32), which keeps only the throws on that route that
     // went within DRAWN_WIN of that depth (a draw with none of them falls back to the route alone)
     _ri(route) {
-      const P = this.e.pb, k = route.indexOf('@'), ri = P.routeNames.indexOf(k < 0 ? route : route.slice(0, k));
+      const P = this.e.pb, k = typeof route === 'string' ? route.indexOf('@') : -1, ri = P.routeNames.indexOf(k < 0 ? route : route.slice(0, k));
       if (!(ri > 0) || k < 0) return ri;
       const d = Math.round(Number(route.slice(k + 1)));
       return Number.isFinite(d) ? ri + 16 * (clip(d, -20, 70) + 32) : ri;

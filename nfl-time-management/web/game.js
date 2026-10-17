@@ -3876,13 +3876,15 @@
     back.addEventListener('click', () => { if (busy) return; ui.step = 'family'; drawField(); drawDock(); });
     head.append(back);
     if (P.hist && P.hist.length) {
-      const undo = el('button', 'chip', '↶ Undo route');
+      const undo = el('button', 'chip', '↶ Undo');
       undo.type = 'button';
+      undo.setAttribute('aria-label', 'Undo the last route change');
       undo.addEventListener('click', undoRoute);
       head.append(undo);
     }
-    const pen = el('button', `chip pen${P.draw ? ' on' : ''}`, P.draw ? '✓ Done drawing' : '✏️ Draw routes');
+    const pen = el('button', `chip pen${P.draw ? ' on' : ''}`, P.draw ? '✓ Done' : '✏️ Draw');
     pen.type = 'button'; pen.id = 'drawBtn';
+    pen.setAttribute('aria-label', P.draw ? 'Done drawing routes' : 'Draw routes');
     pen.setAttribute('aria-pressed', String(!!P.draw));
     pen.addEventListener('click', () => { if (!busy) setDraw(!P.draw); });
     head.append(pen);
@@ -6895,7 +6897,7 @@
     const ul = el('ul');
     [
       'You call the plays at the end of a real NFL game. A new drive every day.',
-      'Pick Run, Pass, RPO or Trick. On a pass, tap a receiver on the field to change his route, then tap his name to throw it.',
+      'Pick Run, Pass, RPO or Trick. On a pass, tap a receiver on the field to change his route (or ✏️ draw it), then tap his name to throw it.',
       'Every snap is a real NFL play. Read the defense: a blitz loses to quick throws, a loaded box to play action.',
       SURV ? 'Survivor: win each real game to keep going. One loss ends your run; put your name on the board.'
         : 'Beat the real coach, and see how you rank against everyone who played today.',
