@@ -3098,17 +3098,8 @@
     [`${r.pos === G.me ? 'Your' : `${teamName(op)}`} ball, ${ddText(r)} ${onSpot(r)}`, `You: ${tos(r.to[G.me])}`,
       `${teamName(op)}: ${tos(r.to[1 - G.me])}`].forEach((f) => facts.append(el('span', '', f)));
     box.append(facts);
-    const rc = (sc.real || {}).coach, feat = !SURV && idx.featured && idx.featured[dayN];
-    if (feat && feat.note && idx.spots[feat.spot] && idx.spots[feat.spot].id === sc.id) box.append(el('p', 'story', feat.note));
-    else if (sc.story) box.append(el('p', 'story', sc.story));
-    box.append(el('div', 'who', VS ? `You're the ${teamName(me)}. Your opponent has the ${teamName(op)}: they call their side, you call yours.`
-      : `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
-    if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
-    if (PRACTICE) box.append(el('div', 'who prac', 'Practice: graded like the daily, but it doesn’t count toward your stats, streak or the leaderboard.'));
-    const chl = challengeLine();
-    if (chl) box.append(chl);
-    box.append(todaySoFar());
-    const go = el('button', 'btn', 'Next');
+    // Play right under the spot, on the first screen without scrolling (players asked); the story and the rest below
+    const go = el('button', 'btn play', G.started ? 'Back to the drive' : 'Play');
     go.type = 'button';
     go.addEventListener('click', () => {
       if (!G.started) {
@@ -3118,6 +3109,26 @@
       G.started = true; persist(); enterField();
     });
     box.append(go);
+    const rc = (sc.real || {}).coach, feat = !SURV && idx.featured && idx.featured[dayN];
+    const tale = feat && feat.note && idx.spots[feat.spot] && idx.spots[feat.spot].id === sc.id ? feat.note : sc.story;
+    if (tale) {
+      // a long story folds to a few lines (a tap opens it)
+      const st = el('p', `story${tale.length > 240 ? ' fold' : ''}`, tale);
+      box.append(st);
+      if (tale.length > 240) {
+        const more = el('button', 'more-story', 'Read more');
+        more.type = 'button';
+        more.addEventListener('click', () => { st.classList.remove('fold'); more.remove(); });
+        box.append(more);
+      }
+    }
+    box.append(el('div', 'who', VS ? `You're the ${teamName(me)}. Your opponent has the ${teamName(op)}: they call their side, you call yours.`
+      : `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
+    if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
+    if (PRACTICE) box.append(el('div', 'who prac', 'Practice: graded like the daily, but it doesn’t count toward your stats, streak or the leaderboard.'));
+    const chl = challengeLine();
+    if (chl) box.append(chl);
+    box.append(todaySoFar());
     const rl = sc.real || {};
     box.append(el('div', 'from', `The real score, clock, ball and timeouts from that game, with the players who were on the field and how good they were that week.`));
     box.append(el('div', 'from legal', 'Fan-made. Not affiliated with or endorsed by the NFL or its teams.'));
@@ -6261,7 +6272,7 @@
   const qs = (s) => document.querySelector(s);
   const TOUR = [
     { id: 'spot', at: () => qs('#intro .chips'), side: 'below', title: 'Your spot',
-      text: () => `A real NFL ending: the real score, clock, ball and timeouts. ${SURV ? 'Win it to stay alive.' : 'Tap Next to take over.'}` },
+      text: () => `A real NFL ending: the real score, clock, ball and timeouts. ${SURV ? 'Win it to stay alive.' : 'Tap Play to take over.'}` },
     { id: 'bar', at: () => $('bar'), side: 'below', title: 'The scoreboard',
       text: () => 'Score, quarter and clock. The dashes under each team are its timeouts left. Tap it for the game details.' },
     { id: 'call', at: () => qs('#dock .keys.fam'), side: 'below', title: 'Your call',
@@ -7402,9 +7413,9 @@
   // on the Daily and Survivor tabs, once it is on: a bar to the race
   function raceBar() {
     if (!PRO_ON || !BOARD.api || ARCH || ARCH_DAY || DRIVE || RUN_N || VS || GAUNTLET || document.querySelector('.racebar')) return;
-    const a = el('a', 'racebar'), over = gauntletOver();
+    const over = gauntletOver(), a = el('a', `racebar${over ? ' slim' : ''}`);       // (over: one line, out of Play's way)
     a.href = over ? '#gauntlet-results' : '#archive';
-    a.append(el('b', '', `🏁 ${RACE_NAME}`), el('span', '', over ? 'It’s over: the champion and the final standings →' : 'First to pass all 24 historic drives wins. Leaderboard →'));
+    a.append(el('b', '', `🏁 ${RACE_NAME}`), el('span', '', over ? 'Final results →' : 'First to pass all 24 historic drives wins. Leaderboard →'));
     a.addEventListener('click', () => track('race_bar'));
     $('modeArch').closest('nav').after(a);
   }
