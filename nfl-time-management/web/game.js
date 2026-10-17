@@ -1161,10 +1161,11 @@
       fly(0, T_SNAP, bx, L0, qb.x0, qb.L0, 0.15);
       hold(T_SNAP, qb);
     }
-    // pass protection gives ground the way NFL lines do (depth curves from tracking), each rusher a yard off his
-    // blocker; run blocking drives forward and toward the play side, pushing the defensive line back
+    // pass protection is a pocket (below); run blocking drives forward and toward the play side, pushing the
+    // defensive line back
     const blockerOf = new Map();
-    function lineplay(kind, side, rushers) {
+    function lineplay(kind, side, rushers, o) {
+      if (kind === 'pass' && K.ol.length) { pocket(rushers, o || {}); return; }
       const ol = K.ol.slice();
       ol.forEach((a) => {
         const x0 = a.b.x, y0 = a.b.y, tackle = a.label === 'LT' || a.label === 'RT';
@@ -1183,6 +1184,124 @@
           const p = Wd.posAt(blk.b, t), u = clip((t - REACT_DEF) / 0.45, 0, 1);
           const ex = p[0] + dx, ey = p[1] + dir * 0.95;
           return [sx + (ex - sx) * u, sy + (ey - sy) * u];
+        } });
+      });
+    }
+    // Pass protection: a pocket round the passer's spot Q (7.2 yards deep, or o.q). Each rusher is met by the lineman
+    // across from him (matched in order across the line, one each while there are enough; a spare one doubles the
+    // nearest inside rusher), who stays between him and the passer a body's width off. Inside rushers push the pocket
+    // in at the pace of the defensive line's depth curve from tracking (CURVES.pass.DL), each pair its own strength (a
+    // doubled one held up), the pocket narrowing as it shrinks; edge rushers come upfield and bend round the tackles,
+    // who kick-slide out and ride them past the passer's depth. A winner (o.win: rusher -> the time he is free: the
+    // sacker, the pressure, the man who flushes a scrambler) gets to his blocker's shoulder by then (off the edge,
+    // round the tackle's hip), then goes for the passer; the beaten man turns and chases. Every pair sways a little,
+    // out of step with the others (hand fighting): a line moving as one block reads as a picture, not a play.
+    const passRush = new Map();      // rusher -> (t) => [x, y, nx, ny]: where he is, and the way to him from the passer
+    function pocket(rushers, o) {
+      const ol = K.ol.slice().sort((a, b) => a.b.x - b.b.x), rs = rushers.slice().sort((a, b) => a.b.x - b.b.x);
+      const Q = o.q || [BX, fwd(L0, -7.2)], win = o.win || new Map(), passer = o.passer || qb;
+      const shift = (t) => Motion.curveShift('pass', 'DL', t), gDL = (t) => clip(-shift(t) / 4.5, 0, 1);
+      const ease = (u) => { u = clip(u, 0, 1); return u * u * (3 - 2 * u); };
+      const rot = (v, a) => [v[0] * Math.cos(a) - v[1] * Math.sin(a), v[0] * Math.sin(a) + v[1] * Math.cos(a)];
+      const env = (t) => clip((t - 0.6) / 0.5, 0, 1);              // the sway starts once they are engaged
+      // the matching: in order across the line, the least lateral distance in all
+      const m = rs.length, n = ol.length, blk = new Array(m).fill(null);
+      if (m <= n) {
+        const C = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(Infinity));
+        for (let j = 0; j <= n; j++) C[0][j] = 0;
+        for (let i = 1; i <= m; i++) for (let j = i; j <= n; j++) C[i][j] = Math.min(C[i][j - 1], C[i - 1][j - 1] + Math.abs(rs[i - 1].b.x - ol[j - 1].b.x));
+        for (let i = m, j = n; i > 0; j--) if (C[i][j] !== C[i][j - 1]) { blk[i - 1] = ol[j - 1]; i--; }
+      }
+      // the lineman's own set (before the rusher gets to him): tackles kick out and back, the inside men a short set
+      const setOf = (a) => {
+        const x0 = a.b.x, y0 = a.b.y, tackle = a === ol[0] || a === ol[n - 1], out = Math.sign(x0 - Q[0]) || 1;
+        return (t) => [x0 + (tackle ? out * 0.9 * clip((t - REACT_OFF) / 0.8, 0, 1) : 0), y0 + dir * Motion.curveShift('pass', 'OL', t) * (tackle ? 1.3 : 0.8)];
+      };
+      // a blocker on a rusher: from his set into contact (the gap closing from where they started to a body's width),
+      // on the line from the rusher to the passer turned by `turn` (a lean, a double team's side, a man beaten)
+      const engage = (a, at, d0, turn) => {
+        const own = setOf(a);
+        return (t) => {
+          const P = at(t), v = turn(t, [P[2], P[3]]), u = ease((t - 0.3) / 0.7), gap = d0 + (0.9 - d0) * ease((t - 0.25) / 0.8);
+          const q = own(t), c = [P[0] - v[0] * gap, P[1] - v[1] * gap];
+          return [q[0] + (c[0] - q[0]) * u, q[1] + (c[1] - q[1]) * u];
+        };
+      };
+      const pairs = [];
+      rs.forEach((d, i) => {
+        const b = blk[i];
+        if (!b) return;
+        blockerOf.set(d, b);
+        const x0 = d.b.x, s = Math.sign(x0 - Q[0]) || Math.sign(b.b.x - BX) || 1;
+        pairs.push({ d, b, s, edge: (b === ol[0] || b === ol[n - 1]) && s * (x0 - b.b.x) > -0.3, tw: win.get(d), ph: R() * 6.28, w: 3.5 + R() * 2,
+          k: 0.75 + R() * 0.35, sw: R() < 0.5 ? -1 : 1, help: [] });
+      });
+      // a spare lineman doubles the nearest inside rusher (who is held up the more for it); with nobody near, he sets
+      const spare = ol.filter((a) => !pairs.some((p) => p.b === a));
+      spare.forEach((a) => {
+        const p = pairs.filter((q) => !q.edge && !q.help.length && Math.abs(q.d.b.x - a.b.x) < 3.4).sort((x, y) => Math.abs(x.d.b.x - a.b.x) - Math.abs(y.d.b.x - a.b.x))[0];
+        if (p) { p.help.push(a); p.k *= 0.75; } else leg(a, REACT_OFF, 'track', { gain: 3, eff: 0.9, fn: setOf(a) });
+      });
+      pairs.forEach((p) => {
+        const { d, s, edge, tw, ph, w } = p, x0 = d.b.x, y0 = d.b.y, won = tw != null;
+        let at;
+        if (edge) {
+          // round the corner: from the passer, his distance shrinks with the line's depth curve and his angle opens
+          // (later: upfield first, then the bend) from where he lined up to level with the passer or past him
+          const lat0 = s * (x0 - Q[0]), dep0 = dir * (y0 - Q[1]), R0 = Math.hypot(lat0, dep0), th0 = Math.atan2(lat0, dep0);
+          const Re = won ? 3.4 : 4.8 + R(), thE = ((won ? 92 : 60 + R() * 24) * Math.PI) / 180;
+          at = (t) => {
+            const u = won ? ease((t - REACT_DEF) / (tw - REACT_DEF)) : gDL(Math.min(t, 3)), e_ = env(t);
+            const th = th0 + (thE - th0) * Math.pow(u, 1.5) + 0.05 * Math.sin(w * t + ph) * e_, r = R0 + (Re - R0) * u + 0.2 * Math.sin(0.7 * w * t + ph * 1.7) * e_;
+            const nx = s * Math.sin(th), ny = dir * Math.cos(th);
+            return [Q[0] + nx * r, Q[1] + ny * r, nx, ny];
+          };
+        } else {
+          // straight ahead: pushed back on the curve (never closer than 2.6 yards to the passer's spot unless he wins),
+          // closing in toward the middle as the pocket shrinks
+          const lat0 = x0 - Q[0], dep0 = dir * (y0 - L0), floor = dir * (Q[1] - L0) + (won ? 1.6 : 2.6), k = p.k * (won ? 1.2 : 1);
+          at = (t) => {
+            const e_ = env(t), u = gDL(t);
+            const x = Q[0] + lat0 * (1 - 0.3 * u) + 0.25 * Math.sin(w * t + ph) * e_;
+            const y = L0 + dir * Math.max(floor, dep0 + k * shift(t) + 0.15 * Math.sin(0.7 * w * t + ph * 1.7) * e_);
+            const [nx, ny] = unit(x - Q[0], y - Q[1]);
+            return [x, y, nx, ny];
+          };
+        }
+        passRush.set(d, at);
+        leg(d, REACT_DEF, 'track', { gain: 3.2, eff: 0.95, fn: at });
+        // his blocker: square to him, leaning a little each way; beaten, turned (off the edge: the rusher is round his
+        // hip, the blocker upfield of him; inside: the rusher at his shoulder) so the way to the passer is open
+        const d0 = Math.max(0.9, dist(here(d), here(p.b)));
+        const turn = (t, v) => {
+          if (!won) return rot(v, 0.2 * Math.sin(0.8 * w * t + ph * 2.3) * env(t));
+          const a = (edge ? 1.65 : 1.4) * ease((t - (tw - 0.75)) / 0.75);
+          if (!edge) return rot(v, a * p.sw);
+          const v1 = rot(v, a), v2 = rot(v, -a);
+          return dir * v1[1] < dir * v2[1] ? v1 : v2;
+        };
+        leg(p.b, REACT_OFF, 'track', { gain: 3, eff: 0.9, fn: engage(p.b, at, d0, turn) });
+        // the double team: beside the first man, on the spare's side of the rusher
+        p.help.forEach((a) => {
+          const sg = Math.sign(a.b.x - d.b.x) || 1, hd0 = Math.max(0.95, dist(here(d), here(a)));
+          leg(a, REACT_OFF, 'track', { gain: 3, eff: 0.85, fn: engage(a, at, hd0, (t, v) => { const r1 = rot(v, 1.05), r2 = rot(v, -1.05); return sg * r1[0] < sg * r2[0] ? r1 : r2; }) });
+        });
+        if (won) {
+          leg(d, tw, 'chase', { who: passer.b, gap: 0.9, eff: 1, lead: 0.3 });
+          leg(p.b, tw + 0.15, 'chase', { who: d.b, gap: 1.1, eff: 0.6, lead: 0 });
+          p.help.forEach((a) => leg(a, tw + 0.25, 'go', { x: here(a)[0], y: fwd(here(a)[1], -0.6), eff: 0.4 }));
+        }
+      });
+      // more rushers than linemen (a goal-line front): the extra men a yard off the nearest blocker, as he gives ground
+      rs.forEach((d, i) => {
+        if (blk[i]) return;
+        const b = nearest(ol, here(d));
+        if (!b) return;
+        blockerOf.set(d, b);
+        const sx = d.b.x, sy = d.b.y, dx = clip(sx - b.b.x, -1.2, 1.2) * 0.5;
+        leg(d, REACT_DEF, 'track', { gain: 3.2, eff: 0.95, fn: (t) => {
+          const q = Wd.posAt(b.b, t), u = clip((t - REACT_DEF) / 0.45, 0, 1);
+          return [sx + (q[0] + dx - sx) * u, sy + (q[1] + dir * 0.95 - sy) * u];
         } });
       });
     }
@@ -1484,8 +1603,16 @@
       others.forEach((a, i) => {
         const yours = mine && act && act.routes && eligibles(sc).indexOf(a) >= 0;    // you gave him a route: he runs it
         if (a.label === 'TE' && (rushers.length >= 6 || (!yours && R() < 0.3))) {        // stays in to block
-          const edge = nearest(K.rush, here(a));
-          leg(a, REACT_OFF, 'track', { gain: 3, eff: 0.8, fn: (t) => { const q = edge ? Wd.posAt(edge.b, t) : here(a); return [q[0], q[1] - dir * 0.95]; } });
+          const edge = nearest(K.rush, here(a)), at = edge && passRush.get(edge);
+          // (on a rusher in the pocket: beside his blocker, on the outside of him)
+          if (at) {
+            const out = Math.sign(a.b.x - BX) || 1, s0 = here(a), rot = (v, k) => [v[0] * 0.5 - v[1] * 0.866 * k, v[0] * 0.866 * k + v[1] * 0.5];
+            leg(a, REACT_OFF, 'track', { gain: 3, eff: 0.8, fn: (t) => {
+              const P = at(t), v1 = rot([P[2], P[3]], 1), v2 = rot([P[2], P[3]], -1), v = out * v1[0] < out * v2[0] ? v1 : v2;
+              const u = clip((t - REACT_OFF) / 0.8, 0, 1), q = [P[0] - v[0] * 0.95, P[1] - v[1] * 0.95];
+              return [s0[0] + (q[0] - s0[0]) * u, s0[1] + (q[1] - s0[1]) * u];
+            } });
+          } else leg(a, REACT_OFF, 'track', { gain: 3, eff: 0.8, fn: (t) => { const q = edge ? Wd.posAt(edge.b, t) : here(a); return [q[0], q[1] - dir * 0.95]; } });
           return;
         }
         const ei = mine && act && act.routes ? eligibles(sc).indexOf(a) : -1;
@@ -1596,8 +1723,9 @@
       while (i < w.length - 1 && u > w[i]) { u -= w[i]; i++; }
       const sep = SEP[i][0] + R() * (SEP[i][1] - SEP[i][0]);
       // a catch with little after it: a man was right there to make the tackle (never one caught in space who then
-      // stands waiting for a tackler; players saw it)
-      return { sep: caught ? (yac < 3 ? Math.min(sep, 1.2 + yac * 0.4) : sep) : Math.min(sep, air >= 15 ? 3 : 3.5), bucket: i };
+      // stands waiting for a tackler; players saw it), but a step or two off, not on him (completions are mostly made
+      // with a yard or more of room: Next Gen Stats has 2.5-3 yards on average at the catch)
+      return { sep: caught ? (yac < 3 ? Math.min(sep, 1.7 + yac * 0.5) : sep) : Math.min(sep, air >= 15 ? 3 : 3.5), bucket: i };
     }
 
     function pass(c, id, sign) {
@@ -1739,7 +1867,10 @@
       // the rush and the line
       const nRush = e.rushers || (e.look && e.look.blitz ? 5 : 4);
       const rushers = rushersOf(nRush);
-      lineplay('pass', side, rushers.filter((d) => K.rush.includes(d)));
+      // pressure: one rusher beats his man and is on the passer as he throws (his win is drawn from the snap on)
+      const front = rushers.filter((d) => K.rush.includes(d)), wP = e.pressure ? pickOf(rushers) : null;
+      const tWin = Math.max(REACT_DEF + 0.7, tThrow - 1.0);
+      lineplay('pass', side, front, { passer, q: passer === qb && !philly && kind !== 'flea' ? qPlan.end : null, win: wP && front.includes(wP) ? new Map([[wP, tWin]]) : null });
       const blitzers = rushers.filter((d) => !K.rush.includes(d));
       blitzers.forEach((d, i) => leg(d, REACT_DEF + 0.1, 'chase', { who: passer.b, gap: 1.6 + i * 0.6, eff: 0.95, lead: 0.2 }));
       // the fullback stays in: he picks up the first blitzer, else sets up beside the passer
@@ -1747,11 +1878,7 @@
         if (blitzers.length) leg(K.fb, REACT_OFF, 'chase', { who: blitzers[0].b, gap: 0.9, eff: 0.85, lead: 0.3 });
         else leg(K.fb, REACT_OFF, 'track', { gain: 2.4, eff: 0.6, fn: (t) => { const Q = qbSpot(t); return [Q[0] + side * 1.6, Q[1] + dir * 1.4]; } });
       }
-      // pressure: one rusher beats his man and is on the passer as he throws
-      if (e.pressure) {
-        const w = pickOf(rushers);
-        leg(w, Math.max(REACT_DEF + 0.4, tThrow - 1.1), 'chase', { who: passer.b, gap: 1.1, eff: 1, lead: 0.3 });
-      }
+      if (wP) leg(wP, tWin, 'chase', { who: passer.b, gap: 1.1, eff: 1, lead: 0.3 });
       const cov = passShape({ kind, tgt, catchPt, tThrow, tCatch, rushers, shell: shellOf(), side, qbSpot, passer });
       // the coverage on the target fits the outcome: one defender (his man, or the zone defender nearest where the
       // ball is going) closes to the separation drawn above by the time the ball arrives
@@ -1775,8 +1902,11 @@
           const rel0 = [d0[0] - r0[0], d0[1] - r0[1]];
           // where he ends up: trailing (between the receiver and the line) and to the inside in man; in zone, from
           // where he came, closing; at the drawn distance
-          const ins = Math.sign(BX - end[0]) || 1;
-          const u = cov.man ? [ins * 0.55, -dir * 0.83] : (() => { const l = Math.hypot(rel0[0], rel0[1]) || 1; return [rel0[0] / l, rel0[1] / l]; })();
+          // (a ball he will break up: at the receiver's hip rather than trailing, so the step he takes to the ball as
+          // it comes is across, not a chase from behind he cannot finish on a ball thrown downfield)
+          const ins = Math.sign(BX - end[0]) || 1, toBreak = (e.incomplete || e.evt === 'near_pick') && e.evt !== 'drop' && !thrownAway && kind !== 'hail' && sepd.sep < 2;
+          const z = unit(rel0[0], rel0[1]);
+          const u = cov.man ? (toBreak ? [ins * 0.89, -dir * 0.45] : [ins * 0.55, -dir * 0.83]) : toBreak ? unit((Math.sign(z[0]) || ins) * 0.9, z[1] * 0.5) : z;
           const span = Math.max(0.3, tCatch - tS);
           leg(shadow, tS, 'track', { gain: 3, eff: 1, fn: (t) => {
             const k = clip((t - tS) / span, 0, 1), q = rAt(Math.min(t, tCatch));
@@ -1807,7 +1937,7 @@
       const contest = !intc && !thrownAway && kind !== 'hail' && (e.incomplete || e.evt === 'near_pick') && e.evt !== 'drop';
       if (contest) {
         // a covered man: his defender gets a hand on it; an open one (the rare open incompletion): a bad ball
-        if (shadow && sepd && sepd.sep < 2) { broke = shadow; leg(shadow, tCatch - 0.15, 'go', { x: catchPt[0] - out * 0.2, y: catchPt[1] + dir * 0.3, eff: 1 }); }
+        if (shadow && sepd && sepd.sep < 2) broke = shadow;            // (he goes for the ball below)
         else overthrow = true;
       }
       breakers.forEach((d, i) => {
@@ -1828,6 +1958,17 @@
         leg(d, tThrow + 0.35 + lag * 0.4, 'go', { x: catchPt[0] + jit(1.2), y: catchPt[1] + dir * (1.2 + lag), eff: i ? 0.8 : 0.95 });
         if (near_ > 25) leg(d, tThrow + 0.35, 'go', { x: catchPt[0], y: catchPt[1] + dir * 6, eff: 0.85 });
       });
+      // the breakup: from the step or two he was off, he closes on the ball as it comes and gets a hand to it (a
+      // "Broken up" with the man still a stride away reads as no play on the ball at all)
+      if (broke) {
+        const tB = Math.max(Wd.t, tCatch - 0.8), to = [catchPt[0] - out * 0.25, catchPt[1] + dir * 0.3];
+        Wd.run(tB);
+        // (already running his way, as a man trailing a receiver is: straight there; runFrom's step along his
+        // momentum would carry him past the ball and back)
+        const p = here(broke), [ux, uy] = unit(to[0] - p[0], to[1] - p[1]), s = vel(broke);
+        if (s < 1 || (broke.b.vx * ux + broke.b.vy * uy) / s > 0.85) follow(broke, Wd.t, plan(broke, [p, to], { v0: s, T: tCatch - Wd.t + 0.02, v1: 2 }));
+        else runFrom(broke, tB, [to], { T: tCatch - tB + 0.02, v1: 2 });
+      }
       Wd.run(tCatch);
       // "Broken up" only with a defender really at the ball: when the cover man could not get there in time (he
       // started too far off), it was a bad ball, and it says so (players saw "Broken up" with nobody near)
@@ -1978,29 +2119,38 @@
       const q0 = here(qb), drop = [q0[0] + jit(0.3), fwd(L0, -7.3)];
       follow(qb, T_SNAP, plan(qb, [q0, drop], { eff: 0.5, v1: 0 }));
       const nRush = e.rushers || (e.look && e.look.blitz ? 5 : 4);
-      const rushers = rushersOf(nRush);
-      lineplay('pass', sc.s * dir, rushers.filter((d) => K.rush.includes(d)));
-      const side = sc.s * dir || 1;
-      passShape({ kind: 'deep', tgt: null, catchPt: [BX, fwd(L0, 10)], tThrow: tS + 1, tCatch: tS + 2, rushers, shell: shellOf(), side, qbSpot: (t) => Wd.posAt(qb.b, Math.min(t, Wd.t)) });
-      rushers.filter((d) => !K.rush.includes(d)).forEach((d, i) => leg(d, REACT_DEF + 0.1, 'chase', { who: qb.b, gap: 1.8 + i * 0.6, eff: 0.95 }));
+      const rushers = rushersOf(nRush), front = rushers.filter((d) => K.rush.includes(d));
       const Lend = inL(fwd(L0, e.yards)), spot = [inX(drop[0] + jit(1.5)), Lend];
       // he feels it and moves, then goes down where the play ended (a long sack: he flees sooner, and goes down
       // only once he can have got there)
       const flee = Motion.minTime([drop, spot], qb.b.g, { spd: qb.b.spd }) / 0.9;
       const tMove = Math.max(T_SNAP + 0.9, Math.min(Math.max(T_SNAP + 1.4, tS - 0.7), tS - flee));
       tS = Math.max(tS, tMove + flee);
+      // who gets home: a blitzer when they bring one, else the man best placed for where he goes down (off the edge
+      // when that is deep in the backfield, through the middle when the passer stepped up into it); his win shows from
+      // the snap (round the tackle, or through his man's shoulder), free a second before the sack
+      const blitz = rushers.filter((d) => !front.includes(d)), deepSack = fwd(0, L0 - Lend) > 6;
+      const cands = e.look && e.look.blitz && blitz.length ? blitz : front.length ? front : rushers;
+      const rusher = cands.map((d) => ({ d, s: dist(here(d), spot) - (deepSack && d.label === 'EDGE' ? 2.5 : 0) + R() * 2.5 })).sort((a, b) => a.s - b.s).map((x) => x.d)[0] || K.def[0];
+      const tBeat = clip(tS - 1.1, REACT_DEF + 0.8, tS - 0.5);
+      lineplay('pass', sc.s * dir, front, { q: drop, win: front.includes(rusher) ? new Map([[rusher, tBeat]]) : null });
+      const side = sc.s * dir || 1;
+      passShape({ kind: 'deep', tgt: null, catchPt: [BX, fwd(L0, 10)], tThrow: tS + 1, tCatch: tS + 2, rushers, shell: shellOf(), side, qbSpot: (t) => Wd.posAt(qb.b, Math.min(t, Wd.t)) });
+      blitz.forEach((d, i) => leg(d, REACT_DEF + 0.1, 'chase', { who: qb.b, gap: d === rusher ? 1.2 : 1.8 + i * 0.6, eff: 0.95 }));
       Wd.run(tMove);
       runFrom(qb, tMove, [spot], { T: tS - tMove, v1: 0 });
-      const rusher = nearest(e.look && e.look.blitz ? rushers : K.rush.length ? K.rush : rushers, here(qb)) || K.def[0];
       busy.add(rusher);
       // he sheds his block when he has to, to get to the passer as he goes down (at 85% of flat out)
+      Wd.run(Math.max(tMove, Math.min(tBeat, tS - 0.5)));
       const rp0 = here(rusher), need = Motion.minTime([rp0, spot], rusher.b.g, { spd: rusher.b.spd });
-      const tGo = clip(tS - need / 0.85, tMove, tS - 0.3);
+      const tGo = clip(tS - need / 0.85, Wd.t, tS - 0.3);
       Wd.run(tGo);
       const rp = here(rusher), [ux, uy] = unit(spot[0] - rp[0], spot[1] - rp[1]);
-      runFrom(rusher, tGo, [[spot[0] - ux * 0.8, spot[1] - uy * 0.8]], { T: tS + 0.05 - tGo });
+      // (late, coming round from where his win left him: the passer is down when he gets there, not before)
+      const hit = runFrom(rusher, tGo, [[spot[0] - ux * 0.8, spot[1] - uy * 0.8]], { T: tS + 0.05 - tGo });
+      tS += hit.late;
+      // (on him until the whistle: a passer who got there late, still moving, takes the man who hit him with him)
       leg(rusher, tS + 0.05, 'stick', { who: qb.b, dx: -ux * 0.8, dy: -uy * 0.8, ease: 0.15 });
-      leg(rusher, tS + 0.5, 'stand');
       leg(qb, tS + 0.4, 'stand');
       say(tS, e.evt === 'strip_sack' ? 'Strip-sack!' : 'Sacked!', 'hit', { follow: qb });
       down(tS + 0.35, qb);
@@ -2034,8 +2184,10 @@
       const side = R() < 0.5 ? -1 : 1, tE = 2.3 + R() * 0.8;
       const q0 = here(qb);
       follow(qb, T_SNAP, plan(qb, [q0, [q0[0], fwd(L0, -7.2)]], { eff: 0.5, v1: 0 }));
-      const rushers = rushersOf(e.rushers || 4);
-      lineplay('pass', side, rushers.filter((d) => K.rush.includes(d)));
+      const rushers = rushersOf(e.rushers || 4), front = rushers.filter((d) => K.rush.includes(d));
+      // the pocket breaks on the other side: that rusher wins and flushes him out the way he runs
+      const flusher = front.slice().sort((a, b) => side * (a.b.x - b.b.x))[0];
+      lineplay('pass', side, front, { q: [q0[0], fwd(L0, -7.2)], win: flusher ? new Map([[flusher, tE - 0.45]]) : null });
       passShape({ kind: 'deep', tgt: null, catchPt: [BX, fwd(L0, 10)], tThrow: tE + 1.5, tCatch: tE + 2.5, rushers, shell: shellOf(), side, qbSpot: (t) => Wd.posAt(qb.b, Math.min(t, Wd.t)) });
       Wd.run(tE);
       const Lend = e.td ? tdL() : inL(fwd(L0, e.yards));
@@ -2253,6 +2405,9 @@
       const line = K.off.filter((a) => a !== punter && a !== upback && !gunners.includes(a));
       const lineX = [0, -15, 15, -30, 30, -45, 45, -60, 60];
       const go = (a, t, x, y, eff) => leg(a, t, 'go', { x: yx(x), y, eff: eff ?? 0.7 });
+      // (both lines are cover men and return blockers, the linebackers, tight ends and backs who play on the punt
+      // units: they run like the bigger of those, not like the linemen whose places they take in the lineup)
+      K.off.concat(K.def).forEach((a) => { if (a.b.g === 'OL' || a.b.g === 'DL') { a.b.g = 'LB'; a.b.spd *= 0.9; } });
       line.forEach((a, i) => go(a, 0, clampX(bx + lineX[i % lineX.length]), fwd(L0, -0.4)));
       gunners.forEach((a, i) => go(a, 0, i ? SX1 - 20 : SX0 + 20, fwd(L0, -0.4), 0.8));
       go(punter, 0, bx, pL, 0.8);
@@ -2305,7 +2460,8 @@
       const LX = yx(lx);
       gunners.forEach((a, i) => leg(a, T0 + 0.1, 'go', { x: LX + (i ? 2.5 : -2.5), y: land - dir * 5, eff: 0.97, stop: false }));
       jam.forEach((a, i) => leg(a, T0 + 0.2, 'mirror', { who: gunners[i] ? gunners[i].b : a.b, lag: 0.25, dx: 0, dy: -dir * 1.0, eff: 0.95 }));
-      line.forEach((a, i) => { leg(a, T0 + 0.1, 'go', { x: a.b.x, y: fwd(L0, -1), eff: 0.5 }); leg(a, T0 + 1.5, 'go', { x: LX + (i - 3) * 2.2, y: lerp(L0, land, 0.6), eff: 0.85 }); });
+      // (in lanes, flat out: at the catch the first of them are 10 yards or so off the returner, not jogging at midfield)
+      line.forEach((a, i) => { leg(a, T0 + 0.1, 'go', { x: a.b.x, y: fwd(L0, -1), eff: 0.5 }); leg(a, T0 + 1.2, 'go', { x: LX + (i - 3) * 3.2, y: lerp(L0, land, 0.85), eff: 0.95 }); });
       box.forEach((a) => { leg(a, T0 + 0.2, 'go', { x: a.b.x, y: fwd(L0, -0.4), eff: 0.6 }); leg(a, T0 + 1.6, 'go', { x: a.b.x * 0.5 + LX * 0.5, y: lerp(L0, land, 0.7), eff: 0.75 }); });
       leg(punter, tK + 0.3, 'go', { x: yx(bx), y: fwd(pL, 6), eff: 0.4 });
       const retSpot = [LX, land];
