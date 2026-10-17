@@ -1063,10 +1063,12 @@
   // a drawn line ([x across, L along the field] in yards, as the finger went) as a route for receiver a: its legs in
   // his (out, up) yards from where he lines up (motion.js route), the route it is read as, its depth, where the catch
   // is made on it and where across the field that is (cx); null for a line too short to be one
-  function shapeDrawn(sc, a, field) {
+  // the line in his (out, up) yards from where he lines up, as the finger went (past the sideline too: a corner from
+  // a man near the sideline is still a corner), cut at DRAW_MAX yards; run: its length
+  function rawDrawn(sc, a, field) {
     const ox = (a.x0 - SX0) / XYD, out = outOf(sc, a), d0 = Math.abs(a.L0 - sc.losL);
-    // (read as the finger went, past the sideline too: a corner from a man near the sideline is still a corner)
-    const loc = (q) => [out * (q[0] - ox), clip(sc.dir * (clip(q[1], -9.5, 109.5) - sc.losL), -8, 70)];
+    // (kept to the field's ends: a back lined up five deep who runs ten more back is read as that, then refused)
+    const loc = (q) => [out * (q[0] - ox), sc.dir * (clip(q[1], -9.5, 109.5) - sc.losL)];
     const raw = [[0, -d0]];
     let run = 0;
     for (const q of field.map(loc)) {
@@ -1075,28 +1077,82 @@
       if (run + l > DRAW_MAX) { const w = (DRAW_MAX - run) / l; raw.push([p[0] + (q[0] - p[0]) * w, p[1] + (q[1] - p[1]) * w]); run = DRAW_MAX; break; }
       raw.push(q); run += l;
     }
+    return { raw, run, d0 };
+  }
+  // What a drawn line may not be. A real route is a stem and at most two cuts, so a line may not cross itself or
+  // curl round (turn more than DRAW_TURN degrees in all), have more than two cuts, double back on itself (a comeback
+  // at the end, back toward the ball by DRAW_BACK yards or less, is a route), or run back more than DRAW_BACK yards
+  // from where he lines up (a screen sits a few yards behind the line). The finger's wobble (under a yard) is not
+  // a cut or a turn. null: a route
+  const DRAW_TURN = 300, DRAW_BACK = 4;
+  const DRAW_FAULT = {
+    loop: 'No loops: draw one line, with up to two cuts',
+    cuts: 'Too many cuts: a real route has two at most',
+    back: 'He can’t double back on his route',
+    behind: 'Too far backward: routes go downfield (a screen sits a few yards behind the line)',
+  };
+  const turnOf = (a, b, c) => {
+    const u = [b[0] - a[0], b[1] - a[1]], v = [c[0] - b[0], c[1] - b[1]], lu = Math.hypot(...u), lv = Math.hypot(...v);
+    return lu && lv ? (Math.acos(clip((u[0] * v[0] + u[1] * v[1]) / (lu * lv), -1, 1)) * 180) / Math.PI : 0;
+  };
+  function drawFault(raw, d0) {
+    const fine = simplify(raw, 0.8), main = simplify(raw, DRAW_TOL), legs = simplify(raw, 1.8);
+    const crosses = (p, q, r, t) => {
+      const d = (q[0] - p[0]) * (t[1] - r[1]) - (q[1] - p[1]) * (t[0] - r[0]);
+      if (Math.abs(d) < 1e-9) return false;
+      const a = ((r[0] - p[0]) * (t[1] - r[1]) - (r[1] - p[1]) * (t[0] - r[0])) / d, b = ((r[0] - p[0]) * (q[1] - p[1]) - (r[1] - p[1]) * (q[0] - p[0])) / d;
+      return a > 0 && a < 1 && b > 0 && b < 1;
+    };
+    for (let i = 0; i < fine.length - 1; i++) for (let j = i + 2; j < fine.length - 1; j++) if (crosses(fine[i], fine[i + 1], fine[j], fine[j + 1])) return 'loop';
+    let turn = 0;
+    for (let k = 1; k < main.length - 1; k++) turn += turnOf(main[k - 1], main[k], main[k + 1]);
+    if (turn > DRAW_TURN) return 'loop';
+    if (legs.length > 4 && simplify(raw, 2.6).length > 4) return 'cuts';
+    for (let k = 1; k < legs.length - 1; k++) {
+      const last = k === legs.length - 2, len = Math.hypot(legs[k + 1][0] - legs[k][0], legs[k + 1][1] - legs[k][1]);
+      if (turnOf(legs[k - 1], legs[k], legs[k + 1]) > 150 && !(last && len <= DRAW_BACK + 1)) return 'back';
+    }
+    let top = -Infinity, low = Infinity;
+    raw.forEach((p) => { top = Math.max(top, p[1]); low = Math.min(low, p[1]); });
+    if (top >= 1 && top - raw[raw.length - 1][1] > DRAW_BACK + 1) return 'back';
+    if (low < -d0 - DRAW_BACK) return 'behind';
+    return null;
+  }
+  function shapeDrawn(sc, a, field) {
+    const ox = (a.x0 - SX0) / XYD, out = outOf(sc, a), { raw, run, d0 } = rawDrawn(sc, a, field);
     if (run < DRAW_MIN) return null;
-    let pts = simplify(raw, DRAW_TOL);
-    for (let tol = DRAW_TOL * 1.5; pts.length > 6; tol *= 1.5) pts = simplify(raw, tol);       // a scribble: its main legs
-    // a leg under a yard and a half (a wobble as the finger lands or lifts) folds into the next
-    for (let k = pts.length - 2; k >= 1; k--) if (Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]) < 1.5) pts.splice(k, 1);
+    const fault = drawFault(raw, d0);
+    if (fault) return { fault };
+    // a comeback (back toward the ball at the end, a yard and a half or more): the top of it kept, where he turns
+    let ti = 0;
+    raw.forEach((p, k) => { if (p[1] > raw[ti][1]) ti = k; });
+    const back = raw[ti][1] >= 3 && raw[ti][1] - raw[raw.length - 1][1] >= 1.5;
+    const tidy = (tol) => (back ? simplify(raw.slice(0, ti + 1), tol).concat(simplify(raw.slice(ti), tol).slice(1)) : simplify(raw, tol));
+    let pts = tidy(DRAW_TOL);
+    for (let tol = DRAW_TOL * 1.5; pts.length > 6; tol *= 1.5) pts = tidy(tol);       // a scribble: its main legs
+    // a leg under a yard and a half (a wobble as the finger lands, turns or lifts) folds away: of its two ends, the
+    // one he turns less at goes (the top of a comeback stays)
+    for (let k = pts.length - 2; k >= 1; k--) {
+      if (k >= pts.length - 1 || Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]) >= 1.5) continue;
+      pts.splice(k > 1 && turnOf(pts[k - 2], pts[k - 1], pts[k]) < turnOf(pts[k - 1], pts[k], pts[k + 1]) ? k - 1 : k, 1);
+    }
     if (pts.length > 2 && Math.hypot(pts[pts.length - 1][0] - pts[pts.length - 2][0], pts[pts.length - 1][1] - pts[pts.length - 2][1]) < 1.5) pts.splice(pts.length - 2, 1);
     let rd = readDrawn(pts, a.label), deeper = false;
     // a break route drawn deeper than real ones are run (a dig at 45 yards): brought up to the deepest real one
-    const top = DRAWN_RANGE[rd.name][1] + 2, at = rd.atDepth;
+    const top = DRAWN_RANGE[rd.name][1] + 1, at = rd.atDepth;
     if (!DEEP_ROUTES.has(rd.name) && rd.name !== 'slant' && at > top) {
       const f = top / at;
       pts = pts.map((p) => [p[0], p[1] > 0 ? p[1] * f : p[1]]);
       rd = readDrawn(pts, a.label); deeper = true;
     }
     // what he runs: the line, kept on the field
-    const inField = (p) => [out * (clip(ox + out * p[0], 0.7, 52.6) - ox), p[1]];
+    const inField = (p) => [out * (clip(ox + out * p[0], 0.7, 52.6) - ox), clip(p[1], -8, 70)];
     const run_ = pts.map(inField).filter((p, k, A) => !k || Math.hypot(p[0] - A[k - 1][0], p[1] - A[k - 1][1]) > 0.3);
     if (run_.length < 2) return null;
     const d = { pts: run_.map((p) => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10]), name: rd.name, depth: rd.depth, at: rd.at, minD: rd.minD, deeper };
     if (typeof d.at === 'number') d.at = Math.round(d.at * 10) / 10;
     if (d.minD != null) d.minD = Math.round(d.minD * 10) / 10; else delete d.minD;
-    d.cx = Math.round(Motion.routeOnField(d, d.depth, ox, out, sc.dir, sc.losL, d0, 0.5).catchAt[0] * 10) / 10;
+    d.cx = Math.round(clip(Motion.routeOnField(d, d.depth, ox, out, sc.dir, sc.losL, d0, 0.5).catchAt[0], 0, 53.3) * 10) / 10;
     return d;
   }
   // which real route a drawn one is (by its last leg: up the field, back to the ball, on a slant, or across, and
@@ -1109,7 +1165,7 @@
     let name;
     if (maxD < 0.5) name = b[0] - pts[0][0] > 2.5 ? 'flat' : 'screen';
     else if (th > 58) name = n === 2 && b[1] < 8 ? 'hitch' : n > 2 && wide >= 3.5 && brk <= 3 ? 'wheel' : 'go';
-    else if (th < -25) name = 'hitch';
+    else if (th < -20) name = 'hitch';
     else if (th >= 20) name = dx < 0 ? (brk <= 3.5 ? 'slant' : 'post') : b[1] <= 4 ? 'flat' : brk <= 3.5 ? 'go' : 'corner';
     else if (dx >= 0) name = legD <= 1 ? 'flat' : legD < 8 ? 'out' : 'deep_out';
     else name = label === 'RB' && wide >= 2 && legD < 5 ? 'angle' : legD < 5 ? 'cross' : 'in';
@@ -1156,6 +1212,9 @@
       D.pts.push([q.x, q.y]);
       const a = eligibles(scene)[D.i], Y = camY(scene);
       if (!D.el) { D.el = S('path', { class: 'route drawing' }); svg.append(D.el); }
+      // a line that can't be a route turns red as it goes wrong
+      const { raw, d0 } = rawDrawn(scene, a, lineYards(scene, a, D.pts));
+      D.el.classList.toggle('bad', !!drawFault(raw, d0));
       D.el.setAttribute('d', `M${a.x0.toFixed(1)} ${(Y(a.L0) + dotOff(a)).toFixed(1)}${D.pts.map((v) => `L${v[0].toFixed(1)} ${v[1].toFixed(1)}`).join('')}`);
     });
     const end = (ev, cancel) => {
@@ -1178,11 +1237,20 @@
     svg.addEventListener('pointerup', (ev) => end(ev, false));
     svg.addEventListener('pointercancel', (ev) => end(ev, true));
   }
+  // a line on the field (SVG units) in field yards, from his dot as drawn (a step off the line of scrimmage before the
+  // snap, GAP)
+  function lineYards(sc, a, line) {
+    const k = (sc.H - 6) / (sc.cam.hi - sc.cam.lo);
+    return line.map(([x, y]) => [(x - SX0) / XYD, sc.cam.lo + (sc.H - 3 - y + dotOff(a)) / k]);
+  }
   function commitDraw(i, line) {
-    const sc = scene, a = eligibles(sc)[i], P = ui.pass, k = (sc.H - 6) / (sc.cam.hi - sc.cam.lo);
-    // (from his dot as drawn: a step off the line of scrimmage before the snap, GAP)
-    const d = shapeDrawn(sc, a, line.map(([x, y]) => [(x - SX0) / XYD, sc.cam.lo + (sc.H - 3 - y + dotOff(a)) / k]));
-    if (!d) { P.sel = i; redrawPass(); return; }
+    const sc = scene, a = eligibles(sc)[i], P = ui.pass;
+    const d = shapeDrawn(sc, a, lineYards(sc, a, line));
+    if (!d || d.fault) {
+      P.sel = i; redrawPass();                // he stays picked: draw it again
+      if (d) { toast(`${DRAW_FAULT[d.fault]}. Try again.`); track('route_refused', { why: d.fault }); }
+      return;
+    }
     P.drawn = P.drawn || [];
     (P.hist = P.hist || []).push([i, P.routes[i], P.drawn[i] || null]);
     P.drawn[i] = d;
@@ -1199,6 +1267,11 @@
     save(DRAW_KEY, on);
     redrawPass();
     track('draw_mode', { on });
+  }
+  // (browser tests only, window.__sepLog: the drawing and the play, for bots that draw thousands of lines and plays)
+  if (window.__sepLog) {
+    window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
+      DRAWN_RANGE, CALL, ROUTE_DEPTH, SX0, XYD, Motion, get: () => ({ G, ui, scene }) };
   }
   // who gets the ball, by his place in the list (the field may be redrawn under the buttons: a resize, the phone's
   // address bar)
@@ -3297,7 +3370,7 @@
   function toast(msg) {
     const t = $('toast');
     t.textContent = msg; t.hidden = false;
-    clearTimeout(toast.h); toast.h = setTimeout(() => { t.hidden = true; }, 1800);
+    clearTimeout(toast.h); toast.h = setTimeout(() => { t.hidden = true; }, Math.max(1800, msg.length * 45));
   }
 
   // ------------------------------------------------------------ narration ---

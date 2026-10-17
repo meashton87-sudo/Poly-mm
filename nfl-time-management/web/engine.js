@@ -167,7 +167,7 @@
   const WHO_CODE = { RB: 2, WR: 3, TE: 4 };            // the target's position in the playbook's carry codes
   // the route an action asks for: the receiver's route, at the depth it was drawn to when it was drawn (act.depth)
   const routeOfAct = (act) => (act.route && Number.isFinite(act.depth) ? `${act.route}@${Math.round(act.depth)}` : act.route);
-  const DRAWN_WIN = 3;                // a drawn route: real throws on it within 3 yards (a quarter deep) of the drawn depth
+  const DRAWN_WIN = 3;                // a drawn route: real throws on it within 3 yards (15% of it, deeper) of the drawn depth
   const PB_LOOK_MIN = 15;             // daily game: a call's plays against one defensive look are used when at least this many
                                       // (playbook.py LOOK_MIN)
   // daily game: a defensive look as a bucket: 0 light box (6 or fewer), 1 light with a blitz, 2 loaded box (7 or more),
@@ -710,7 +710,7 @@
       if (P.ngs.route[r] !== (ri & 15)) return false;
       if (ri < 16) return true;
       const a = P.air ? P.air[r] : -128, d = (ri >> 4) - 32;
-      return a !== -128 && Math.abs(a - d) <= Math.max(DRAWN_WIN, Math.abs(d) * 0.25);
+      return a !== -128 && Math.abs(a - d) <= Math.max(DRAWN_WIN, Math.abs(d) * 0.15);
     }
     // the real plays a pick (a receiver's route) draws from, with their weights: the route always; then the position,
     // then the look the defense showed, before the situation: the situation's pool, the call's coarser pools, every
