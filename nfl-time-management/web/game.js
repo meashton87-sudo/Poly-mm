@@ -1882,7 +1882,7 @@
       const endX = e.oob ? sidelineX(catchPt[0] + out * 6) : inX(catchPt[0] + clip(jit(5) + out * Math.min(Math.abs(yac), 12) * 0.25, -9, 9));
       if (Math.abs(yac) > 4 && !e.bt) say(tCatch, 'Caught', 'boom', { follow: tgt });
       if (shadow) busy.delete(shadow);       // the man on him at the catch is the first who can tackle him
-      const ep = [endX, endY], tEnd = runDown(tgt, tCatch + 0.05, ep, { td: e.td, oob: e.oob, bt: e.bt, from: tCatch });
+      const ep = [endX, endY], tEnd = runDown(tgt, tCatch, ep, { td: e.td, oob: e.oob, bt: e.bt, from: tCatch });
       finish(tgt, tEnd, ep);
     }
 
