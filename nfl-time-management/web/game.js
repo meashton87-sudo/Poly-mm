@@ -3037,7 +3037,7 @@
     box.append(el('div', 'who', VS ? `You're the ${teamName(me)}. Your opponent has the ${teamName(op)}: they call their side, you call yours.`
       : `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
     if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
-    if (PRACTICE) box.append(el('div', 'who surv', 'Practice: graded like the daily, but it doesn’t count toward your stats, streak or the leaderboard.'));
+    if (PRACTICE) box.append(el('div', 'who prac', 'Practice: graded like the daily, but it doesn’t count toward your stats, streak or the leaderboard.'));
     const go = el('button', 'btn', 'Next');
     go.type = 'button';
     go.addEventListener('click', () => {
@@ -5288,9 +5288,10 @@
   const practiceNext = () => { const st = load(PRACTICE_KEY, null); if (st && st.done) save(PRACTICE_KEY, { ...st, stale: true }); };
   function practiceNodes() {
     const w = el('div', 'keepplay');
-    const a = el('a', 'btn', 'Keep playing: practice drive');
-    a.href = '#practice';                         // (the hash change reloads the page into practice)
-    a.addEventListener('click', () => { practiceNext(); track('practice_start', { from: 'daily' }); scrollTo(0, 0); });     // (the reload keeps the scroll: the drive opens at the top)
+    const a = el('button', 'btn', 'Keep playing: practice drive');
+    a.type = 'button';
+    // (the hash change reloads the page into practice; scrolled up first, as the reload keeps the scroll)
+    a.addEventListener('click', () => { practiceNext(); track('practice_start', { from: 'daily' }); scrollTo(0, 0); location.hash = '#practice'; });
     w.append(a, el('p', 'note', 'A random real drive, graded the same way. It doesn’t touch today’s score, your streak or the leaderboard.'));
     return w;
   }
@@ -5315,12 +5316,11 @@
     const again = el('button', 'btn', 'Another practice drive');
     again.type = 'button';
     again.addEventListener('click', () => { practiceNext(); track('practice_start', { from: 'practice' }); scrollTo(0, 0); location.reload(); });
-    const back = el('a', 'btn ghostbtn', 'Back to today');
-    back.href = '#daily';
-    back.addEventListener('click', () => scrollTo(0, 0));
+    const back = el('button', 'btn ghostbtn', 'Back to today');
+    back.type = 'button';
+    back.addEventListener('click', () => { scrollTo(0, 0); location.hash = '#daily'; });     // (the hash change reloads the page into the day)
     row.append(again, back);
     box.append(row, disclaimer());
-    again.focus({ preventScroll: true });
   }
   // ---- the daily habit: the streak in the top bar, and a reminder in the player's own calendar (a daily event at the
   // hour they pick: Google Calendar's own page, or a .ics file site.py writes for Apple and Outlook calendars)
@@ -7585,6 +7585,10 @@
       // practice comes after the day's drive: before it, #practice is the day's drive (no reload: replaceState fires no hashchange)
       if (PRACTICE && !dayDone(dayN)) { PRACTICE = false; history.replaceState(null, '', location.pathname + location.search); }
       if (PRACTICE) {
+        // (coming from the long end card, a reload would land halfway down the page: practice opens at the top)
+        try { history.scrollRestoration = 'manual'; } catch (e) { /* older browsers: the click handlers scroll up */ }
+        const top = () => scrollTo(0, 0);       // (and after the load, when a browser restores the old position)
+        if (document.readyState === 'complete') top(); else addEventListener('load', () => setTimeout(top, 0), { once: true });
         state = practiceState();
         const teams = await loadTeams([state.pick]);
         today = [buildScen(idx.spots[state.pick], teams[state.pick])];
