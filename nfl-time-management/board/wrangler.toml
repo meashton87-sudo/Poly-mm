@@ -21,6 +21,7 @@ GOOGLE_CLIENT_ID = "1079340119845-i8p0d0c57dmoa1hluqkm15ofi33oe9ms.apps.googleus
 # The Gauntlet (worker.js /race*), optional, set in the dashboard (keep_vars keeps them): RACE_FROM (its start, ISO),
 # RACE_TO (its end, ISO: no pass counts after it, and the page shows the final results) and NEXT_CONTEST (a line about
 # the next contest, shown with the results; empty: hidden). The admin page (/admin.html) needs the ADMIN_TOKEN secret.
+RACE_TO = "2026-10-17T00:45:00Z"           # the first Gauntlet ended 8:45 pm Eastern, Oct 16 2026 (the owner called it)
 STRIPE_PRICE = "prod_VRryrvDrQxpAC7"      # the live product (Two-Minute Drill Pro; its category carries the tax code Managed Payments needs), charged $4.99
 # The daily email (worker.js reminders: accounts that ask for it) goes out by Resend too, so it needs the same RESEND_KEY
 # and MAIL_FROM. Optional: API_URL, this worker's own address (https://...workers.dev, or its custom domain), adds the
