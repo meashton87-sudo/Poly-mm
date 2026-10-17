@@ -763,9 +763,126 @@
     }
     const span = clip((H - 6) / (360 / 53.333), 50, 120), back = clip(span * 0.22, 12, 20);
     let lo = dir > 0 ? L - back : L + back - span, hi = lo + span;
-    if (lo < FULL.lo) { hi += FULL.lo - lo; lo = FULL.lo; }
-    if (hi > FULL.hi) { lo -= hi - FULL.hi; hi = FULL.hi; }
-    return { lo: Math.max(lo, FULL.lo), hi: Math.min(hi, FULL.hi) };
+    const elo = FULL.lo - EDGE, ehi = FULL.hi + EDGE;
+    if (lo < elo) { hi += elo - lo; lo = elo; }
+    if (hi > ehi) { lo -= hi - ehi; hi = ehi; }
+    return { lo: Math.max(lo, elo), hi: Math.min(hi, ehi) };
+  }
+  // Behind each end line, as on TV: a few yards of turf, that team's cheerleaders and its mascot, the padded wall and
+  // the stands packed in its colors (they show when the camera is near a goal line). TRIM: each team's second color
+  const TRIM = { ARI: '#111111', ATL: '#111111', BAL: '#9E7C0C', BUF: '#C60C30', CAR: '#101820', CHI: '#C83803', CIN: '#111111',
+    CLE: '#311D00', DAL: '#869397', DEN: '#002244', DET: '#B0B7BC', GB: '#FFB612', HOU: '#A71930', IND: '#A2AAAD', JAX: '#D7A22A',
+    KC: '#FFB81C', LV: '#111111', LAC: '#FFC20E', LA: '#FFA300', MIA: '#FC4C02', MIN: '#FFC62F', NE: '#C60C30', NO: '#101820',
+    NYG: '#A71930', NYJ: '#FFFFFF', PHI: '#A5ACAF', PIT: '#101820', SF: '#B3995D', SEA: '#002244', TB: '#34302B', TEN: '#0C2340',
+    WAS: '#FFB612', OSU: '#666666', IU: '#EEEDEB', ALA: '#828A8F', TENN: '#FFFFFF' };
+  const trim = (c) => TRIM[c] || '#ffffff';
+  const EDGE = 6;            // yards a snap's camera may show past the end line: the cheerleaders and the wall
+  const SKIN = ['#f3d0b4', '#e3b48c', '#c98e5f', '#a26a3f', '#7a4b2b', '#5a3620'];
+  const HAIR = ['#24160d', '#5a3825', '#d9b45e', '#121212', '#8a4b2a', '#3b2416'];
+  const CHEER_X = [24, 52, 80, 110, 250, 280, 308, 336];
+  let crowdN = 0;
+  function cheerleader(c, i) {
+    const tc = color(c), tr = trim(c), sk = SKIN[(i * 5 + 1) % SKIN.length], hr = HAIR[(i * 7 + 2) % HAIR.length];
+    const pom = i % 2 ? tr : '#ffffff', pom2 = i % 2 ? '#ffffff' : tr;
+    return `<g class="bod"><path d="M-2 -9L-2.5 -.6M2 -9L2.5 -.6" stroke="${sk}" stroke-width="1.7" stroke-linecap="round"/>`
+      + `<path d="M-2.6 -2.1V0M2.6 -2.1V0" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>`
+      + `<path d="M-3.3 -12.2H3.3L5 -8.2H-5Z" fill="${tc}"/><path d="M-4.8 -8.9H4.8" stroke="${tr}" stroke-width=".9"/>`
+      + `<path d="M-3.1 -17.6H3.1L2.8 -13.4H-2.8Z" fill="${tc}"/><path d="M-2.8 -13.4H2.8V-12.2H-2.8Z" fill="${sk}"/>`
+      + `<path d="M-3 -17.4L0 -14.9L3 -17.4" fill="none" stroke="${tr}" stroke-width=".8"/>`
+      + `<path d="M-.7 -18.4H.7V-17.4H-.7Z" fill="${sk}"/><circle cy="-20.4" r="2.5" fill="${sk}"/>`
+      + `<path d="M-2.7 -20.2A2.7 2.7 0 0 1 2.7 -20.2Q1 -22 -2.7 -20.2Z" fill="${hr}"/>`
+      + `<path d="M2.2 -22.2Q5 -21.6 4.4 -17.6" fill="none" stroke="${hr}" stroke-width="1.5" stroke-linecap="round"/></g>`
+      + [[-1, pom], [1, pom2]].map(([s, pc]) => `<g class="arm ${s < 0 ? 'l' : 'r'}" style="transform-origin:${2.9 * s}px -17px">`
+        + `<path d="M${2.9 * s} -17L${6.4 * s} -22.4" stroke="${sk}" stroke-width="1.4" stroke-linecap="round"/>`
+        + `<circle class="pom" cx="${6.8 * s}" cy="-23.1" r="2.6" fill="${pc}" stroke="${pc}"/></g>`).join('');
+  }
+  function mascot(c) {
+    const tc = color(c), tr = trim(c);
+    return `<g class="bod"><path d="M-2.6 -10V-2M2.6 -10V-2" stroke="${tc}" stroke-width="3.6" stroke-linecap="round"/>`
+      + `<ellipse cx="-3.2" cy="-1.3" rx="3" ry="1.5" fill="#fff" stroke="${tr}" stroke-width=".7"/>`
+      + `<ellipse cx="3.2" cy="-1.3" rx="3" ry="1.5" fill="#fff" stroke="${tr}" stroke-width=".7"/>`
+      + `<rect x="-6" y="-20" width="12" height="11" rx="3.5" fill="${tr}"/>`
+      + `<text y="-13.4" text-anchor="middle" dominant-baseline="central" class="mjn" fill="${tc}">${c}</text>`
+      + `<path d="M-5.5 -18L-8.6 -12.5" stroke="${tc}" stroke-width="3.2" stroke-linecap="round"/></g>`
+      + `<g class="arm wave" style="transform-origin:5.5px -18px"><path d="M5.5 -18L9.6 -24.5" stroke="${tc}" stroke-width="3.2" stroke-linecap="round"/>`
+      + `<circle cx="9.9" cy="-25.2" r="1.9" fill="#fff"/></g>`
+      + `<g class="head"><path d="M-5.6 -27.6L-6.4 -33.4L-2.4 -30.6ZM5.6 -27.6L6.4 -33.4L2.4 -30.6Z" fill="${tc}" stroke="${tr}" stroke-width=".6"/>`
+      + `<circle cy="-25.6" r="6.6" fill="${tc}" stroke="${tr}" stroke-width=".8"/>`
+      + `<ellipse cy="-23.2" rx="4" ry="2.8" fill="#fff" opacity=".9"/>`
+      + `<circle cx="-2.4" cy="-27" r="1.7" fill="#fff"/><circle cx="2.4" cy="-27" r="1.7" fill="#fff"/>`
+      + `<circle cx="-2.1" cy="-26.8" r=".85" fill="#111"/><circle cx="2.1" cy="-26.8" r=".85" fill="#111"/>`
+      + `<ellipse cy="-24.2" rx="1.2" ry=".8" fill="#222"/><path d="M-1.8 -22.5Q0 -21 1.8 -22.5" fill="none" stroke="#222" stroke-width=".6" stroke-linecap="round"/></g>`;
+  }
+  // the stands: rows of fans seen from the field, most in the home colors, no two alike (a pattern wide enough not to
+  // look tiled, shifted with the camera)
+  function crowdPattern(svg, c) {
+    const id = `crowd${++crowdN}`, cols = [color(c), color(c), color(c), trim(c), trim(c), '#f2f2f2', '#3a4150', '#6b7380'];
+    let seed = [...c].reduce((a, ch) => a * 31 + ch.charCodeAt(0), 7) >>> 0;
+    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    let dots = '';
+    for (let row = 0; row < 6; row++) {
+      const y = row * 5 + 2.4;
+      for (let x = 1.5 + (row % 2) * 2; x < 180; x += 3.6 + rnd() * 1.6) {
+        if (rnd() < 0.06) continue;          // an empty seat
+        const xx = x + (rnd() - 0.5) * 0.8, yy = y + (rnd() - 0.5) * 0.7, up = rnd() < 0.12;
+        dots += `<path d="M${(xx - 1.8).toFixed(2)} ${(yy + 3.3).toFixed(2)}q0 -2.2 1.8 -2.2t1.8 2.2z" fill="${cols[Math.floor(rnd() * cols.length)]}"/>`
+          + `<circle cx="${xx.toFixed(2)}" cy="${yy.toFixed(2)}" r="1.15" fill="${SKIN[Math.floor(rnd() * SKIN.length)]}"/>`
+          + (up ? `<path d="M${(xx - 1.4).toFixed(2)} ${(yy + 1.2).toFixed(2)}l-.6 -2.6M${(xx + 1.4).toFixed(2)} ${(yy + 1.2).toFixed(2)}l.6 -2.6" stroke="${SKIN[Math.floor(rnd() * SKIN.length)]}" stroke-width=".7" stroke-linecap="round"/>` : '');
+      }
+    }
+    const defs = S('defs', {});
+    defs.innerHTML = `<pattern id="${id}" patternUnits="userSpaceOnUse" width="180" height="30">`
+      + `<rect width="180" height="30" fill="#1b2029"/><path d="M0 4.9H180M0 9.9H180M0 14.9H180M0 19.9H180M0 24.9H180M0 29.9H180" stroke="#2f3541" stroke-width="1.1"/>${dots}</pattern>`
+      + `<linearGradient id="${id}s" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".55"/></linearGradient>`;
+    svg.append(defs);
+    return id;
+  }
+  function drawEnds(svg, put, c, far) {
+    const base = far ? 110 : -10, Lo = (o) => base + (far ? o : -o);
+    const band = (o1, o2, attrs) => {
+      const e = put(S('rect', { x: 0, width: 360, ...attrs }), (Y) => {
+        const a = Y(Lo(o1)), b = Y(Lo(o2));
+        e.setAttribute('y', Math.min(a, b).toFixed(1)); e.setAttribute('height', Math.abs(a - b).toFixed(1));
+      });
+      return e;
+    };
+    band(0, 4.2, { fill: 'rgba(0,0,0,.14)', class: 'apron' });
+    band(0, 0.65, { fill: 'rgba(255,255,255,.82)' });        // the white border past the end line
+    const id = crowdPattern(svg, c), pat = svg.querySelector(`#${id}`);
+    const st = put(S('rect', { x: 0, width: 360, fill: `url(#${id})` }), (Y) => {
+      const a = Y(Lo(5.6)), b = Y(Lo(90));
+      st.setAttribute('y', Math.min(a, b).toFixed(1)); st.setAttribute('height', Math.abs(a - b).toFixed(1));
+      pat.setAttribute('patternTransform', `translate(0 ${a.toFixed(1)})`);     // the rows ride with the camera
+    });
+    // (deeper in the stands, the upper rows in the shade of the deck above)
+    const sh = put(S('rect', { x: 0, width: 360, fill: `url(#${id}s)` }), (Y) => {
+      const a = Y(Lo(5.6)), b = Y(Lo(30));
+      sh.setAttribute('y', Math.min(a, b).toFixed(1)); sh.setAttribute('height', Math.abs(a - b).toFixed(1));
+      sh.setAttribute('transform', far ? `rotate(180 180 ${((a + b) / 2).toFixed(1)})` : '');
+    });
+    const deck = put(S('rect', { x: 0, width: 360, fill: 'rgba(0,0,0,.55)' }), (Y) => {
+      const a = Y(Lo(30)), b = Y(Lo(90));
+      deck.setAttribute('y', Math.min(a, b).toFixed(1)); deck.setAttribute('height', Math.abs(a - b).toFixed(1));
+    });
+    band(4.2, 5.6, { fill: color(c), class: 'wall' });
+    const lip = put(S('line', { x1: 0, x2: 360, stroke: trim(c), 'stroke-width': 1.2 }), (Y) => { const y = Y(Lo(far ? 5.6 : 4.2)); lip.setAttribute('y1', y); lip.setAttribute('y2', y); });
+    [60, 180, 300].forEach((x) => {
+      const t = put(S('text', { x, class: 'wallname', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, teamName(c).toUpperCase()),
+        (Y) => { const a = Y(Lo(4.2)), b = Y(Lo(5.6)); t.setAttribute('y', ((a + b) / 2).toFixed(1)); t.style.fontSize = `${clip(Math.abs(a - b) * 0.62, 3.5, 7).toFixed(1)}px`; });
+    });
+    // the squad on the turf in front of the wall, the mascot between them behind the goalpost
+    const feet = far ? 1.6 : 3.9;
+    const fig = (x, html, cls, big, i) => {
+      const g = put(S('g', { class: cls }), (Y) => {
+        const k = Math.abs(Y(0) - Y(1)), s = (clip(k * 2.5, 13, 30) / 24) * big;
+        g.setAttribute('transform', `translate(${x} ${Y(Lo(feet)).toFixed(1)}) scale(${s.toFixed(3)})`);
+      });
+      g.innerHTML = `<ellipse class="shadow" cx="1.5" cy="0" rx="${big > 1 ? 7 : 5.2}" ry="1.4" fill="rgba(0,0,0,.28)"/>${html}`;
+      g.style.setProperty('--d', `${((i * 0.37) % 0.9).toFixed(2)}s`);
+      return g;
+    };
+    CHEER_X.forEach((x, i) => fig(far ? x : 360 - x, cheerleader(c, i + (far ? 0 : 3)), 'cheer', 1, i));
+    fig(far ? 214 : 146, mascot(c), 'cheer mascot', 1.25, 2);
   }
   const camY = (sc) => { const { lo, hi } = sc.cam, k = (sc.H - 6) / (hi - lo); return (L) => sc.H - 3 - (L - lo) * k; };
 
@@ -787,6 +904,8 @@
       const e = put(S('rect', { x: 0, width: 360, fill: color(c), opacity: 0.92 }), (Y) => { e.setAttribute('y', Y(b)); e.setAttribute('height', Math.max(0, Y(a) - Y(b))); });
       const t = put(S('text', { x: 180, class: 'ez', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, teamName(c).toUpperCase()), (Y) => t.setAttribute('y', (Y(a) + Y(b)) / 2));
     });
+    drawEnds(svg, put, code(1 - G.me), true);
+    drawEnds(svg, put, code(G.me), false);
     const hline = (L, attrs) => {
       const e = put(S('line', { x1: SX0, x2: SX1, ...attrs }), (Y) => { const y = Y(L); e.setAttribute('y1', y); e.setAttribute('y2', y); });
       return e;
@@ -804,8 +923,9 @@
     [-10, 110].forEach((L) => {     // the goalposts on each end line, seen from above
       const e = put(S('path', { class: 'posts' }), (Y) => { const y = Y(L), k = L < 0 ? -1 : 1; e.setAttribute('d', `M160 ${y + k * 5}V${y}H200V${y + k * 5}`); });
     });
-    put(S('line', { x1: SX0, y1: 0, x2: SX0, y2: H, stroke: 'var(--chalk)', 'stroke-width': 1.6 }));
-    put(S('line', { x1: SX1, y1: 0, x2: SX1, y2: H, stroke: 'var(--chalk)', 'stroke-width': 1.6 }));
+    [SX0, SX1].forEach((x) => {      // the sidelines, end line to end line
+      const e = put(S('line', { x1: x, x2: x, stroke: 'var(--chalk)', 'stroke-width': 1.6 }), (Y) => { e.setAttribute('y1', Y(110)); e.setAttribute('y2', Y(-10)); });
+    });
     for (let L = 10; L <= 90; L += 10) {
       const n = String(L <= 50 ? L : 100 - L);
       [[SX0 + 9, -90], [SX1 - 9, 90]].forEach(([x, rot]) => {
@@ -3201,9 +3321,10 @@
       let lo = Math.min(...Ls) - 5, hi = Math.max(...Ls) + 5;
       const span = clip(hi - lo, 36, 120), mid = (lo + hi) / 2;
       lo = mid - span / 2; hi = mid + span / 2;
-      if (lo < -10) { hi += -10 - lo; lo = -10; }
-      if (hi > 110) { lo -= hi - 110; hi = 110; }
-      lo = Math.max(lo, -10); hi = Math.min(hi, 110);
+      const elo = FULL.lo - EDGE, ehi = FULL.hi + EDGE;
+      if (lo < elo) { hi += elo - lo; lo = elo; }
+      if (hi > ehi) { lo -= hi - ehi; hi = ehi; }
+      lo = Math.max(lo, elo); hi = Math.min(hi, ehi);
       // (the broadcast view: the calls' sheet is away for the play, so the whole play is framed in what shows,
       // under the scoreboard and above the skip note: the quarterback's drop and throw included)
       if (bcast()) {

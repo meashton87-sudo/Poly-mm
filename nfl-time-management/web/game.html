@@ -511,6 +511,20 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .howlost .t { display: grid; font-size: 13px; } .howlost .t b { font-size: 12px; color: var(--muted); font-weight: 700; }
 .rcv.on .pos, .rcv.on .rt { color: var(--ink); }
 .key:disabled { opacity: .45; cursor: default; }
+#field .cheer { pointer-events: none; }
+#field .cheer .arm { animation: cheerArm .55s ease-in-out infinite alternate; animation-delay: var(--d, 0s); }
+#field .cheer .arm.r { animation-name: cheerArmR; }
+#field .cheer .bod { animation: cheerHop .55s ease-in-out infinite alternate; animation-delay: var(--d, 0s); }
+#field .cheer .pom { stroke-width: 1.3; stroke-dasharray: .7 .55; }
+#field .mascot .arm.wave { animation: mascotWave .8s ease-in-out infinite alternate; }
+#field .mascot .bod, #field .mascot .head { animation: cheerHop 1.1s ease-in-out infinite alternate; }
+#field .mascot .mjn { font: 900 4.2px var(--display); }
+#field .wallname { font: 800 6px var(--display); letter-spacing: .3em; fill: rgba(255, 255, 255, .85); }
+@keyframes cheerArm { from { transform: rotate(8deg); } to { transform: rotate(-34deg); } }
+@keyframes cheerArmR { from { transform: rotate(-8deg); } to { transform: rotate(34deg); } }
+@keyframes cheerHop { from { transform: translateY(0); } to { transform: translateY(-1.2px); } }
+@keyframes mascotWave { from { transform: rotate(-12deg); } to { transform: rotate(28deg); } }
+@media (prefers-reduced-motion: reduce) { #field .cheer .arm, #field .cheer .bod, #field .mascot .head { animation: none; } }
 #field .posts { fill: none; stroke: var(--chain); stroke-width: 2.6; stroke-linecap: round; }
 #field .call text { font: 900 14px var(--display); letter-spacing: .07em; text-transform: uppercase; fill: var(--sq-ink); }
 #field .call text.big { font-size: 20px; }
