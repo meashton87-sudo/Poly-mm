@@ -1431,7 +1431,16 @@
   // the ball flies about 24 yards a second (deep balls are lofted, a little slower); handoffs at 0.8-1.2 s.
   const T_SNAP = 0.25;
   const RELEASE = { quick: 2.3, screen: 1.6, deep: 2.8, pa: 3.0, roll: 3.0, hail: 4.3, rpo: 1.35, flea: 3.7, tpass: 3.3 };
-  const flight = (air) => (Math.abs(air) + 7) / (25 - 0.09 * clip(air, 0, 60));              // seconds the ball is in the air
+  // The ball's average speed over its flight, yards a second, by how far downfield it goes: a quarterback lets it go
+  // at 50 to 60 mph (24 to 29 yards a second) and drag slows it. Short and intermediate throws are on a line (25-26
+  // yd/s on average), deep balls are lofted and hang (a 50-yard throw is in the air about 2.7 s, 19 yd/s), and a
+  // screen or a dump-off behind the line is a soft toss (about 18). arm: the passer's (0.93 to 1.07, by his rating)
+  const ballSpeed = (air, arm) => (air <= 0 ? 18 + (clip(air, -5, 0) + 5) * 1.6 : 26 - 0.17 * clip(air, 0, 45)) * (arm || 1);
+  const armOf = (p) => clip(0.93 + (0.14 * ((p && p.ovr) || 75) - 0.14 * 50) / 45, 0.93, 1.07);
+  // how far through its flight the ball is at u (0 to 1) of the time: it slows as it goes (drag; d: how much, a deep
+  // ball's more), leaving the hand d above its average speed and getting there d below
+  const dragU = (u, d) => u * (1 + d) - d * u * u;
+  const flight = (air, arm) => (Math.abs(air) + 7) / ballSpeed(air, arm);              // seconds the ball is in the air
   const PLAY_SPEED = 1;        // real time, your snaps and theirs
   // the player's own speed-up (1x, 1.5x, 2x: the button on the field), kept on the device; a tap on the field skips
   const SPEEDS = [1, 1.5, 2], SPEED_KEY = `${STORE}:speed`;
@@ -1479,7 +1488,8 @@
     if (seg.kind === 'hold') { const p = at(seg.a, t); return { x: p.x + 5, L: p.L, z: 0, show: true }; }
     if (seg.kind === 'fly') {
       const u = clip((t - seg.t0) / Math.max(seg.t1 - seg.t0, 1e-6), 0, 1);
-      return { x: lerp(seg.x0, seg.x1, u), L: lerp(seg.L0, seg.L1, u), z: seg.h * 4 * u * (1 - u), show: true };
+      const w = seg.d ? dragU(u, seg.d) : u;
+      return { x: lerp(seg.x0, seg.x1, w), L: lerp(seg.L0, seg.L1, w), z: seg.h * 4 * u * (1 - u), show: true };
     }
     return { x: seg.x, L: seg.L, z: 0, show: !seg.hide };
   }
@@ -1500,7 +1510,7 @@
     const jit = (n) => (R() * 2 - 1) * n;
     const pickOf = (arr) => arr[Math.min(arr.length - 1, Math.floor(R() * arr.length))];
     const say = (t, text, kind, o) => P.calls.push({ t, text, kind, slot: 0, x: bx, L: L0, ...(o || {}) });
-    const fly = (t0, t1, x0, La, x1, Lb, h) => P.segs.push({ t0, t1, kind: 'fly', x0, L0: La, x1, L1: Lb, h: h || 0 });
+    const fly = (t0, t1, x0, La, x1, Lb, h, d) => P.segs.push({ t0, t1, kind: 'fly', x0, L0: La, x1, L1: Lb, h: h || 0, d: d || 0 });
     const hold = (t0, a) => { if (a) P.segs.push({ t0, kind: 'hold', a }); };
     const rest = (t0, x, L, hide) => P.segs.push({ t0, kind: 'rest', x, L, hide });
     const fxAt = (t, f) => P.fx.push({ t, f });
@@ -2331,9 +2341,10 @@
       let rpts = r.toCatch.slice(0, -1).map((p) => [inX(p[0]), inL(p[1])]).concat([catchPt]);
       const tStart = tgt === qb ? T_SNAP + 0.6 : tgt === K.rb && kind !== 'screen' ? 0.5 : REACT_OFF;
       // the ball's flight: the length of the throw, from where the quarterback lets it go (on his drop), at the
-      // ball's speed (flight: about 24 yards a second, deep balls lofted a little slower)
+      // ball's speed for a throw that deep from his arm (ballSpeed)
       const qRel = passer === qb && !philly && kind !== 'flea' ? qPlan.at(Math.max(0, tThrow - T_SNAP)) : null;
-      const flightTo = (c) => (qRel ? Math.hypot(c[0] - qRel[0], c[1] - qRel[1]) / (25 - 0.09 * clip(deep, 0, 60)) : flight(deep));
+      const arm = armOf(passer.p);
+      const flightTo = (c) => (qRel ? Math.hypot(c[0] - qRel[0], c[1] - qRel[1]) / ballSpeed(deep, arm) : flight(deep, arm));
       let tCatch = tThrow + flightTo(catchPt), v1 = routeName === 'hitch' || routeName === 'screen' ? 0 : undefined, timed = true;
       // a timing route (a hitch, an out, a dig, a deep out): the throw (when it was charted) is thrown on time, before
       // he turns, and the ball meets him coming out of his break: caught where he is, running flat out, when it gets
@@ -2495,7 +2506,8 @@
       Wd.run(tThrow);
       const qT = here(passer);
       if (thrownAway) catchPt = [sidelineX(qT[0] + side * 10) + Math.sign(qT[0] - FW / 2 || side) * 2.5, inL(fwd(L0, Math.max(3, air)))];
-      fly(tThrow, tCatch, px(qT[0]) + 4, qT[1], px(catchPt[0]), catchPt[1], Math.min(2.4, 0.35 + Math.abs(air) * 0.05));
+      // (a lofted ball, higher and slowing more; a line drive, flatter)
+      fly(tThrow, tCatch, px(qT[0]) + 4, qT[1], px(catchPt[0]), catchPt[1], Math.min(2.4, 0.3 + Math.max(0, air) * 0.055), air >= 20 ? 0.22 : air > 0 ? 0.14 : 0.08);
       ring(tThrow, passer, false);
       leg(passer, tThrow + 0.15, 'go', { x: qT[0] + jit(1), y: qT[1] + dir * 1.2, eff: 0.25 });
       // the defense breaks on the ball a beat after it is out: the nearest two to where it is going
