@@ -5480,7 +5480,8 @@
   // streak. It is worked out from the days played alone (the same answer on every phone; a missed day played later from
   // the archive gives its freeze back); a day a freeze covered is kept in the stats (frozen: { day: when }, synced) so
   // it shows as ❄️, is told about once and counts on a league board. Until the next day is played, the freezes a gap
-  // would take are pending: the streak is still alive, and the top bar says so.
+  // would take are pending: the streak is still alive, and the top bar says so. A league board works it out the same
+  // way from the synced days (board/worker.js streakOf: change both together).
   const FREEZE_EVERY = 7, FREEZE_MAX = 2;
   function streakOf(st, d) {
     const fz = st.frozen || {}, ks = Object.keys(st.days || {}).map(Number).filter((k) => k > 0 && k <= d).sort((a, b) => a - b);
