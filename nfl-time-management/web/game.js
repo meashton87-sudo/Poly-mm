@@ -1723,6 +1723,18 @@
           leg(d, REACT_DEF, 'mirror', { who: r.b, lag: 0.28 + R() * 0.12, dir, los: L0, floor: 0.8, tau: 1.0, y0: d.b.y,
             pedal: db ? 1.5 : 0.4, pedalMax: db ? 3 : 1.5, cush: r.label === 'WR' ? 1.4 : 0.9, dx0: d.b.x - r.b.x, dx: inside * 0.7, eff: 0.97 });
         });
+        // a receiver with no man on him (more of them than cover men: a blitz) who goes deep: the deep safety comes off
+        // his spot and runs with him, the spare man sinks with him if there is no safety (players saw men running free
+        // deep while the ball went short)
+        const manned = new Set(assigned.values()), freeD = new Set();
+        runners.filter(([a]) => !manned.has(a) && a !== tgt).map(([a, pl]) => ({ a, end: pl.at(pl.T) })).filter((x) => Math.abs(x.end[1] - L0) > 12)
+          .forEach(({ a, end }) => {
+            const d = nearest(deepers.filter((x) => !freeD.has(x)), [end[0], end[1]])
+              || nearest(pool.filter((x) => !assigned.has(x) && !freeD.has(x) && x.label !== 'DL' && x.label !== 'EDGE'), here(a));
+            if (!d) return;
+            freeD.add(d); assigned.set(d, a);
+            leg(d, REACT_DEF + (deepers.includes(d) ? 0.7 : 0.2), 'chase', { who: a.b, gap: Math.abs(catchPt[1] - L0) <= 6 ? 1.3 : 2.2, eff: 0.92, lead: 0.5 });
+          });
         pool.filter((d) => !assigned.has(d)).forEach((d) => {       // the spare: a robber in the middle; a lineman sits short
           if (d.label === 'DL' || d.label === 'EDGE') { leg(d, REACT_DEF, 'go', { x: d.b.x + (BX - d.b.x) * 0.3, y: fwd(L0, 3.5), eff: 0.6 }); return; }
           const m = S_.under[0] ? mark(S_.under[0]) : [BX, fwd(L0, 7)];
@@ -3888,7 +3900,9 @@
       const fs = calls.reduce((a, id) => a + (freq[id] || 0), 0) || 1;
       calls.forEach((id) => { q[id] = goShare * (freq[id] || 0) / fs; });
       const specs = [];
-      if (r.try2) opts.forEach((o) => { const a = o.action; o.action = { pat: 'two', call: a.call, looks: a.looks, route: a.route, who: a.who, philly: a.philly }; });
+      // a two-point try: the same call, played as the try. All of it: the receiver you picked, his route and the rest
+      // (a player's pass on a try went to someone else: the target was dropped here), and the personnel
+      if (r.try2) opts.forEach((o) => { o.action = { ...o.action, pat: 'two' }; });
       if (r.clock_running) specs.push(clockSpec(r, tempo, seq));
       specs.push({ kind: 'call', family: r.down === 4 ? 'fourth_down' : 'play_select', r: r.try2 || r, opts, chosen, q, situation: situation(r),
         seed: hash('call', seedKey(), G.si, seq) });
