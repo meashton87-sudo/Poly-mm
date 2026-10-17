@@ -485,6 +485,14 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .fov .ghost { background: rgba(10, 16, 12, .72); color: #fff; border-color: rgba(255, 255, 255, .28); padding: 5px 9px; font-size: 12px; gap: 4px; }
 .fov .ghost:hover { border-color: #fff; }
 .fov .ghost svg { width: 13px; height: 13px; }
+.tobtn { position: absolute; right: 8px; bottom: 8px; z-index: 2; display: inline-flex; align-items: center; gap: 6px; line-height: 1.1;
+  padding: 9px 13px; border-radius: 999px; border: 2px solid var(--gold); background: rgba(10, 16, 12, .82); color: #ffd36b;
+  font: 800 14px var(--body); letter-spacing: .02em; cursor: pointer; box-shadow: 0 2px 8px rgba(0, 0, 0, .35); }
+.tobtn:hover { background: rgba(10, 16, 12, .95); }
+.tobtn.on { background: var(--gold); color: #1a1405; }
+.tobtn small { font-weight: 700; opacity: .8; }
+.fieldbox.chipsdown .tobtn { bottom: auto; top: 8px; }
+.fieldbox:has(#field.playing) .tobtn { display: none; }
 .ghost { border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 6px 12px; font-weight: 700; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .ghost:hover { border-color: var(--muted); }
 /* playing on a phone: a slimmer header and mode switch, so the field and the calls fill the screen */
@@ -886,6 +894,8 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
     <div class="playgrid">
       <button id="bar" class="bar" type="button" aria-label="Game details"></button>
       <div class="fieldbox"><svg id="field" role="group" aria-label="The whole field, every player shown red to green by his rating"></svg>
+        <!-- the timeout: its own button in a corner, away from the others (the bottom one, or the top when they sit at the bottom) -->
+        <button id="toBtn" class="tobtn" type="button" hidden></button>
         <!-- on the field, out of the way of the calls below it: the down, the color key, personnel and the ratings -->
         <div class="fov">
           <div class="fovl"><div id="dd" class="dd"></div><span class="ramp" aria-label="Player dots: red is worse, green is better">worse <i></i> better</span></div>

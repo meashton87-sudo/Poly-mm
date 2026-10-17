@@ -3258,6 +3258,7 @@
     return late && (lead <= 0 || (lead <= 3 && r.yl <= 45));
   }
   async function stepWith(action) {
+    if ($('toBtn')) $('toBtn').hidden = true;          // (no timeout button while a snap plays)
     await cutReplay();                // a replay's last redraw must not show this play's result before it animates
     const seed = hash('step', seedKey(), G.si, G.seq++);
     const before = G.root, side = G.side;
@@ -3660,7 +3661,30 @@
     21: ['2 RB (a fullback) · 1 TE · 2 WR', 'Power: a lead blocker for the run, and play action off it.'],
     13: ['1 RB · 3 TE · 1 WR', 'Heavy: short yardage and the goal line.'],
   };
+  // the timeout on the field, by the other buttons there (players asked): yours to call with the clock running, or,
+  // on defense, the "timeout first" before their snap (the same switch as in the calls below)
+  function toButton() {
+    const b = $('toBtn'), r = G && G.root;
+    if (!b) return;
+    const off = !!(r && ui.step === 'family' && r.phase === SNAP && r.pos === G.me && r.clock_running && !G.over && clockOptions(r).includes('timeout'));
+    const def = !!(r && !VS && (ui.step === 'vdef' || ui.step === 'defense') && defTimeoutOk(r));
+    b.hidden = !(off || def) || busy;
+    if (b.hidden) return;
+    b.classList.toggle('on', def && !!ui.to);
+    b.textContent = off ? '⏱ Timeout' : `⏱ Timeout first${ui.to ? ' ✓' : ''}`;
+    if (off) b.append(el('small', '', `${r.to[G.me]} left`));
+    b.setAttribute('aria-pressed', String(def && !!ui.to));
+    b.onclick = () => {
+      if (busy) return;
+      if (off) { b.hidden = true; decideTimeout(); return; }
+      ui.to = !ui.to;
+      const sw = $('toSwitch');
+      if (sw) sw.setAttribute('aria-checked', String(ui.to));
+      toButton();
+    };
+  }
   function persButton() {
+    toButton();
     const b = $('persBtn'), r = G && G.root;
     if (!b) return;
     const show = !!(r && r.phase === SNAP && r.pos === G.me && !r.try2 && !G.over);
@@ -4046,10 +4070,11 @@
       const sw = el('button', 'sw2');
       sw.type = 'button'; sw.id = 'toSwitch';
       sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(!!ui.to)); sw.setAttribute('aria-label', 'Timeout first');
-      sw.addEventListener('click', () => { ui.to = !ui.to; sw.setAttribute('aria-checked', String(ui.to)); });
+      sw.addEventListener('click', () => { ui.to = !ui.to; sw.setAttribute('aria-checked', String(ui.to)); toButton(); });
       tg.append(lab, sw);
       d.append(tg);
     }
+    toButton();
     const keys = el('div', 'keys');
     keys.style.setProperty('--cols', 1);
     const go = key('Call it', null, 'big', 0);
@@ -4108,10 +4133,11 @@
       const sw = el('button', 'sw2');
       sw.type = 'button'; sw.id = 'toSwitch';
       sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(ui.to)); sw.setAttribute('aria-label', 'Timeout first');
-      sw.addEventListener('click', () => { ui.to = !ui.to; sw.setAttribute('aria-checked', String(ui.to)); });
+      sw.addEventListener('click', () => { ui.to = !ui.to; sw.setAttribute('aria-checked', String(ui.to)); toButton(); });
       tg.append(lab, sw);
       d.append(tg);
     }
+    toButton();
     if (VS) return;
     if (FULLDEF) d.append(defModeChip(false));
     const auto = el('button', 'chip', 'Let the coordinator call this drive');
