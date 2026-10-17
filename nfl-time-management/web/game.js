@@ -370,7 +370,8 @@
       if (p.pos !== 'TE' || !OL_NUM(p)) return p;
       return spare.length ? spare.shift() : { ...p, xol: true };
     });
-    const out = { ...L, off, bench: bench.filter((p) => !off.includes(p)) };
+    const tidy = (p) => (p && /\s{2,}|^\s|\s$/.test(p.name || '') ? { ...p, name: p.name.replace(/\s+/g, ' ').trim() } : p);   // (some names in the data carry a double space)
+    const out = { ...L, off: off.map(tidy), def: (L.def || []).map(tidy), bench: bench.filter((p) => !off.includes(p)).map(tidy) };
     LINEUP_FIX.set(L, out);
     return out;
   };
@@ -580,6 +581,7 @@
     m.classes.forEach((c, i) => { out[c] = p[i]; });
     return out;
   }
+  const PLAUSIBLE = 0.02;
   function normalize(q, keys) {
     const out = {};
     let s = 0;
@@ -590,9 +592,12 @@
   }
   function decisionFrom(kind, family, options, vals, chosen, q, situation, snap = G.snapN) {
     const wps = options.map((o) => ({ key: o.key, label: o.label, wp: vals[o.key], call: (o.action && o.action.call) || null, ...(o.action && o.action.dc ? { dc: o.action.dc } : {}) }));
-    const best = wps.reduce((a, b) => (b.wp > a.wp ? b : a));
     const mine = wps.find((w) => w.key === chosen);
     const qq = normalize(q, wps.map((w) => w.key));
+    // the best call is one a real play-caller would make here (2% of the time or more), or yours: never a flea-flicker,
+    // a 66-yard kick or a spike nobody makes, however the numbers come out (players saw them suggested)
+    const real = wps.filter((w) => w === mine || qq[w.key] >= PLAUSIBLE);
+    const best = (real.length ? real : wps).reduce((a, b) => (b.wp > a.wp ? b : a));
     const typical = wps.reduce((a, w) => a + qq[w.key] * w.wp, 0);
     const cost = Math.max(0, best.wp - mine.wp);
     return { kind, family, situation, wps, chosen, chosenCall: mine.call, chosenLabel: mine.label, best: best.key, bestLabel: best.label,
@@ -4330,13 +4335,21 @@
   const outcomeMark = (dw) => (dw >= 0.02 ? 'g' : dw > -0.02 ? 'y' : dw > -0.08 ? 'o' : 'r');
   const signed = (dw) => `${dw >= 0 ? '+' : '−'}${Math.abs(Math.round(dw * 100))}`;
   // the win chance after a play: the end of the game is a result, the end of the half its halftime value
+  // a state's win chance, kept: one card's "after" is the next card's "before", the same number (players saw the
+  // two differ by a point: the before was the value of the call made, not of where the drive stood)
+  const WC = new Map();
+  const wcKey = (r, done) => [G.si, r.t, r.yl, r.down, r.ytg, r.pos, r.score, r.to, r.phase, r.clock_running, !!done].join('|');
   async function winChanceAfter(root, done) {
+    const k = wcKey(root, done);
+    if (WC.has(k)) return WC.get(k);
     const r = done && root.t >= 1800 ? { ...root, t: 1800.01 } : root;
     const v = await evaluate(r, [{ key: 'now', action: {} }], hash('after', seedKey(), G.si, G.seq));
+    if (WC.size > 400) WC.clear();
+    WC.set(k, v.now);
     return v.now;
   }
   // the matchup behind a snap (engine.js MATCH): your call against their look, or their call against your defense
-  const LOOK_NAME = ['the light box (extra men back in coverage)', 'the blitz', 'the loaded box', 'the blitz'];
+  const LOOK_NAME = ['the light box (six or fewer up front)', 'the blitz', 'the loaded box', 'the blitz'];
   const DEF_NAME = { blitz: 'blitz', load: 'loaded box', soft: 'soft coverage' };
   function matchupLine(e, action) {
     if (e && e.dc) return defenseLine(e, e.team !== G.me);
@@ -4382,8 +4395,8 @@
     const mu = matchupLine(main, res.action);
     if (mu) wrap.append(el('div', `mline ${mu.good ? 'won' : 'lost'}`, mu.text));
     if (played) {
-      const before = decisions[decisions.length - 1].wp;
-      winChanceAfter(res.root, res.done).then((after) => {
+      const b0 = G.lastPlay && G.lastPlay.res === res && !G.lastPlay.before.try2 ? G.lastPlay.before : null;
+      Promise.all([b0 ? winChanceAfter(b0) : decisions[decisions.length - 1].wp, winChanceAfter(res.root, res.done)]).then(([before, after]) => {
         const dw = after - before, om = outcomeMark(dw);
         const shown = Math.round(after * 100) - Math.round(before * 100);     // what the two percentages say
         sq.className = `sq swing ${om}`;
@@ -4595,7 +4608,7 @@
   // The draw is the leaderboard server's (board/worker.js: about one first daily finish in 50,000, from a secret the page
   // never sees, so it can't be faked here); it answers the day's result with a claim code, shown on the card and kept
   // on its public list (/madden) with the time
-  let onMadden = null;
+  let onMadden = null, onRank = null;
   function maddenCard(code) {
     const box = el('div', 'coach madden');
     box.append(el('div', 'rare', '★ Rare'), el('div', 'k', 'Today you coached like'), el('div', 'name', 'John Madden'),
@@ -5397,6 +5410,7 @@
     else {
       box.append(el('div', 'note', RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · your run` : `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
         el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers${resultScored() ? ', the calls and the result' : ''}`),
+        Object.assign(el('div', 'pct-lab brag'), { hidden: true }),
         el('div', 'streak', RUN_N ? 'Playoff run' : ARCH_DAY ? 'From the archive' : streakLine(sk)));
       if (!RUN_N && state.froze && state.froze.length) box.append(el('div', 'frz', `❄️ Streak saved by a freeze${state.froze.length > 1 ? ` (${state.froze.length} days)` : ''}: ${state.froze.length > 1 ? 'the days you missed count' : 'the day you missed counts'}`));
     }
@@ -5409,7 +5423,7 @@
       box.append(v);
     }
     if (cc) box.append(cc.el);
-    box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller ${today.length > 1 ? 'across today’s spots' : 'on today’s drive'}.`));
+    box.append(el('p', 'verdict', `Your calls: ${pts(wpa)} points of win chance against a typical NFL play-caller ${today.length > 1 ? 'across today’s spots' : 'on today’s drive'}.`));
     const dbox = dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0)));
     box.append(dbox);
     if (!DRIVE && !RUN_N && !ARCH_DAY) box.append(practiceNodes());
@@ -5454,6 +5468,13 @@
     btn.type = 'button';
     btn.addEventListener('click', () => shareText(share.text, pre, 'daily'));
     box.insertBefore(pre, dbox);
+    // today's players, once their results are in: the brag under the big number, in the share text and the picture
+    onRank = (beat, n) => {
+      const line = `Outcalled ${beat}% of today’s players`, b = box.querySelector('.pct-lab.brag');
+      if (b) { b.textContent = `You outcalled ${beat}% of today’s ${n.toLocaleString()} players`; b.hidden = false; }
+      if (!share.brag) { share.text = share.text.replace(/(Better than \d+% of NFL play-callers)/, `$1\n${line}`); pre.textContent = share.text; }
+      share.brag = line;
+    };
     // the server drew John Madden for this result: his card in place of the match, his line in the share text
     onMadden = (code) => {
       const m = maddenCard(code), old = box.querySelector('.coach');
@@ -5476,7 +5497,7 @@
     img.addEventListener('click', () => shareImage({
       title: DRIVE ? PRO.drives[DRIVE - 1].title : RUN_N ? `The ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Daily #${dayN}`,
       score: Math.round(p * 100), grade: DRIVE ? gradeOf(Math.round(p * 100)).L : null,
-      line: `Better than ${Math.round(p * 100)}% of NFL play-callers`,
+      line: `Better than ${Math.round(p * 100)}% of NFL play-callers`, brag: share.brag || null,
       coach: () => (share.text.match(/Coached like ([^\n]+)/) || [])[1] || null,
       vs: met ? (one || `Vs the real coaches: ${recTxt}`) : null, beat: rec[0] > rec[1] ? 1 : rec[1] > rec[0] ? -1 : 0,
       streak: !DRIVE && !RUN_N && !ARCH_DAY ? streak : 0,
@@ -5856,6 +5877,7 @@
     x.font = `700 34px ${BODY}`; x.fillStyle = 'rgba(255,255,255,.75)'; x.fillText(o.title.toUpperCase(), W / 2, 185);
     x.fillStyle = '#fff'; x.font = `900 300px ${DISP}`; x.fillText(o.grade || String(o.score), W / 2, 470);
     x.font = `600 38px ${BODY}`; x.fillText(o.grade ? `${o.score} \u00b7 ${o.line}` : o.line, W / 2, 545);
+    if (o.brag) { x.font = `800 36px ${BODY}`; x.fillStyle = '#ffb547'; x.fillText(o.brag, W / 2, 595, W - 80); x.fillStyle = '#fff'; }
     const coach = typeof o.coach === 'function' ? o.coach() : o.coach;
     // (the lines below the score, centred in the room above the footer)
     const nRows = Math.min(4, o.rows.length), blockH = (o.vs ? 90 : 0) + (coach ? 70 : 0) + nRows * 100 + (o.streak >= 2 ? 110 : 0);
@@ -6091,8 +6113,11 @@
     let above = 0, ties = -1;
     d.hist.forEach((c, k) => { if (k > pt) above += c; else if (k === pt) ties += c; });
     box.append(el('div', 'k', 'Everyone today'));
+    // the brag: how many of today's other players you outcalled (the rank's own number, so the card has one)
+    const beat = others > 0 ? Math.round((100 * Math.max(0, others - above - Math.max(ties, 0))) / others) : null;
     box.append(el('p', 'daily-head', others <= 0 ? 'You’re the first to finish today. Check back later to see how you stack up.'
-      : `#${(above + 1).toLocaleString()} of ${d.n.toLocaleString()} today${ties > 0 ? ` (tied with ${ties.toLocaleString()})` : ''}`));
+      : `You outcalled ${beat}% of today’s players · #${(above + 1).toLocaleString()} of ${d.n.toLocaleString()}${ties > 0 ? ` (tied with ${ties.toLocaleString()})` : ''}`));
+    if (beat != null && others >= 4 && onRank) onRank(beat, d.n);
     if (d.counted === false && d.you && Math.abs(d.you.p - p) > 0.005) box.append(el('p', 'note', `Your first finish today counts: ${Math.round(d.you.p * 100)}.`));
     // the day's scores, in the buckets your own stats use; yours highlighted
     const dist = el('div', 'dist');
