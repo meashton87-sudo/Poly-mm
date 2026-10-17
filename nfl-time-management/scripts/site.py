@@ -20,7 +20,7 @@ import re
 import json
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -237,7 +237,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         raise SystemExit(f"--google-client-id wants an OAuth client id like 1234-abc.apps.googleusercontent.com, not {google_client_id!r}")
     if ad_slot and not re.fullmatch(r"\d{6,12}", ad_slot):
         raise SystemExit(f"--ad-slot wants an ad unit's slot number, not {ad_slot!r}")
-    missing = [f for f in FILES + ["stats.html", "privacy.html", "about.html", "how-it-works.html"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
+    missing = [f for f in FILES + ["stats.html", "privacy.html", "about.html", "how-it-works.html", "admin.html"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
     if missing:
         raise SystemExit(f"build the game data first; missing in web/: {', '.join(missing)}")
     if out.exists():
@@ -292,6 +292,10 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         fill(name, (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, title, d, path), path)
     # the privacy page (AdSense wants one): the analytics tag only, no ads on it
     fill("privacy.html", (GA_TAG.format(id=ga) if ga else "") + ICONS, "privacy", ads=False)
+    # the Gauntlet's audit (admin.html, the check before a prize): not linked anywhere, not in the sitemap, noindex; no
+    # analytics, no ads, no site chrome; only the backend's address (the admin token is pasted on the page)
+    (out / "admin.html").write_text((WEB / "admin.html").read_text().replace("<!--SITE-HEAD-->",
+        f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else ""))
     (out / "site.webmanifest").write_text(json.dumps({"name": "Two-Minute Drill", "short_name": "2MD", "start_url": "/",
         "display": "standalone", "background_color": "#0c1d42", "theme_color": "#0c1d42", "icons": [
             {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
@@ -324,6 +328,16 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         shutil.copy2(f, out / "spots" / f.name)
     # The Pro data (web/pro, nflclock.pro.build) is never copied here: the board worker serves it (POST /pro/data)
     # only to a valid Pro code, so it cannot be fetched from the site without the purchase.
+    # the daily reminder (game.js reminderNodes): a calendar event every day at the hour the player picks, for Apple and
+    # Outlook calendars (Google's gets its own link); a floating time, so it is that hour wherever the phone is
+    start = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y%m%d")
+    for h in (8, 12, 19):
+        (out / f"remind-{h}.ics").write_text("\r\n".join([
+            "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//nfl2mindrill//Two-Minute Drill//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+            "BEGIN:VEVENT", f"UID:tmd-daily-{h}@nfl2mindrill.com", f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+            f"DTSTART:{start}T{h:02d}0000", "DURATION:PT10M", "RRULE:FREQ=DAILY", "SUMMARY:Two-Minute Drill: today's drive",
+            f"DESCRIPTION:Keep your streak going: {base}", f"URL:{base}", "BEGIN:VALARM", "ACTION:DISPLAY",
+            "DESCRIPTION:Two-Minute Drill: today's drive", "TRIGGER:PT0M", "END:VALARM", "END:VEVENT", "END:VCALENDAR"]) + "\r\n", newline="")
     if domain:
         (out / "CNAME").write_text(domain.strip() + "\n")
     (out / ".nojekyll").write_text("")          # serve the files as they are
