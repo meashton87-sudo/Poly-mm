@@ -364,12 +364,49 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 /* the field */
 .fieldbox { position: relative; border-radius: 12px; overflow: hidden; background: var(--turf); line-height: 0; }
 .playgrid { display: grid; gap: 6px; }
+/* the calls' sheet and the menu button: a phone's broadcast view only (below); elsewhere the dock sits in the page */
+.sheet { display: contents; }
+.grip, .menubtn, .bmenu { display: none; }
+/* A phone, playing: the broadcast view. The field fills the screen, the scoreboard floats over its top, and the calls
+   are a sheet over its bottom, under the thumbs, that drags down to a bar to show the whole field. Nothing scrolls
+   but the sheet itself, when a call has more on it than fits. */
+@media (max-width: 999px) {
+  body.bcast { overflow: hidden; overscroll-behavior: none; }
+  body.bcast .top, body.bcast .modes, body.bcast #tiles, body.bcast .siteinfo, body.bcast .sitefoot, body.bcast #pbpBox { display: none !important; }
+  body.bcast #play { position: fixed; inset: 0; z-index: 6; background: var(--turf); }
+  body.bcast .playgrid { display: block; height: 100%; }
+  body.bcast .fieldbox { position: absolute; inset: 0; border-radius: 0; }
+  body.bcast #bar { position: absolute; z-index: 3; top: calc(env(safe-area-inset-top, 0px) + 8px); left: 62px; right: 10px; width: auto;
+    background: rgba(9, 15, 11, .88); color: #fff; border: 0; border-radius: 14px; box-shadow: 0 4px 14px rgba(0, 0, 0, .25); }
+  body.bcast #bar .ab small, body.bcast #bar .q { color: rgba(255, 255, 255, .7); }
+  body.bcast #bar .tos i.used { background: rgba(255, 255, 255, .25); }
+  body.bcast .menubtn { display: grid; place-items: center; position: absolute; z-index: 3; top: calc(env(safe-area-inset-top, 0px) + 8px); left: 10px;
+    width: 46px; height: 46px; border: 0; border-radius: 14px; background: rgba(9, 15, 11, .88); color: #fff; cursor: pointer; }
+  body.bcast .menubtn svg { width: 22px; height: 22px; }
+  body.bcast .bmenu:not([hidden]) { display: grid; position: absolute; z-index: 7; top: calc(env(safe-area-inset-top, 0px) + 60px); left: 10px; min-width: 200px;
+    background: var(--card); border-radius: 14px; box-shadow: 0 10px 30px rgba(0, 0, 0, .35); padding: 6px; }
+  body.bcast .bmenu > * { display: block; padding: 12px 14px; border: 0; background: none; text-align: left; font: 700 15px var(--body); color: var(--ink); text-decoration: none; border-radius: 10px; cursor: pointer; }
+  body.bcast .bmenu > *:hover, body.bcast .bmenu > *:focus-visible { background: var(--paper); }
+  body.bcast .bmenu > [data-mode] { font-weight: 600; color: var(--muted); }
+  body.bcast .fieldbox .fov { top: calc(env(safe-area-inset-top, 0px) + 66px); bottom: auto; align-items: flex-start; }
+  body.bcast .fieldbox .fovl .ramp { display: none; }      /* (the color key: in the ratings) */
+  body.bcast .fieldbox .tobtn { top: calc(env(safe-area-inset-top, 0px) + 112px); bottom: auto; }
+  body.bcast .sheet { display: flex; flex-direction: column; position: absolute; z-index: 4; left: 0; right: 0; bottom: 0; max-height: 52%;
+    background: var(--paper); border-radius: 20px 20px 0 0; box-shadow: 0 -8px 28px rgba(0, 0, 0, .3); transition: transform .24s ease; }
+  body.bcast .sheet.dragging { transition: none; }
+  body.bcast .sheet.down { transform: translateY(calc(100% - 66px - env(safe-area-inset-bottom, 0px))); }
+  body.bcast .grip { display: flex; align-items: center; justify-content: center; flex: none; height: 26px; border: 0; background: none; cursor: grab; touch-action: none; }
+  body.bcast .grip i { width: 44px; height: 5px; border-radius: 3px; background: var(--line); }
+  body.bcast #dock { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 14px calc(env(safe-area-inset-bottom, 0px) + 14px); }
+  body.bcast .sheet.down #dock { overflow: hidden; }
+  body.bcast .tip, body.bcast .tipring { z-index: 8; }
+}
 /* wide screens: the calls beside the field, both on screen at once (no scrolling down to call the play) */
 @media (min-width: 1000px) { @supports selector(:has(*)) {    /* browsers without :has() keep the one-column layout */
   .wrap:has(> #play:not([hidden])) { max-width: 1120px; }
   .playgrid { grid-template-columns: minmax(0, 1.2fr) minmax(340px, 1fr); column-gap: 24px; align-items: start; }
   .playgrid > * { grid-column: 1; }
-  .playgrid > #dock { grid-column: 2; grid-row: 1 / span 5; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; }
+  .playgrid > .sheet > #dock { grid-column: 2; grid-row: 1 / span 5; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; }
   .playgrid { grid-template-rows: auto auto auto auto 1fr; }
 } }
 #field { width: 100%; display: block; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
@@ -908,6 +945,15 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
   <section id="intro" class="intro" hidden></section>
   <section id="play" hidden>
     <div class="playgrid">
+      <button id="menuBtn" class="menubtn" type="button" aria-label="Menu" aria-expanded="false" aria-controls="bmenu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <div id="bmenu" class="bmenu" hidden>
+        <button type="button" data-go="helpBtn">How to play</button>
+        <button type="button" data-go="statsBtn">Your stats</button>
+        <button type="button" data-go="acctBtn" data-acct>Account</button>
+        <a href="#daily" data-mode>Daily</a><a href="#survivor" data-mode>Survivor</a><a href="#archive" data-mode>Pro</a>
+      </div>
       <button id="bar" class="bar" type="button" aria-label="Game details"></button>
       <div class="fieldbox"><svg id="field" role="group" aria-label="The whole field, every player shown red to green by his rating"></svg>
         <!-- the timeout: its own button in a corner, away from the others (the bottom one, or the top when they sit at the bottom) -->
@@ -923,7 +969,11 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
           </span>
         </div>
       </div>
-      <section id="dock" class="dock" aria-live="polite"></section>
+      <!-- on a phone the calls are a sheet over the bottom of the field: drag it down to see the whole field -->
+      <div id="sheet" class="sheet">
+        <button id="grip" class="grip" type="button" aria-expanded="true" aria-label="Drag down to see the whole field, up for the calls"><i></i></button>
+        <section id="dock" class="dock" aria-live="polite"></section>
+      </div>
       <details id="pbpBox" class="pbp"><summary>Play-by-play</summary><ol id="pbp"></ol></details>
     </div>
   </section>
