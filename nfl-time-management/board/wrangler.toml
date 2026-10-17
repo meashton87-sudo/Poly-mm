@@ -26,10 +26,11 @@ STRIPE_PRICE = "prod_VRryrvDrQxpAC7"      # the live product (Two-Minute Drill P
 # The daily email (worker.js reminders: accounts that ask for it) goes out by Resend too, so it needs the same RESEND_KEY
 # and MAIL_FROM. Optional: API_URL, this worker's own address (https://...workers.dev, or its custom domain), adds the
 # one-click unsubscribe header mail apps show; MAIL_SECRET (a secret) fixes the key behind the unsubscribe links (else
-# one is made and kept in storage).
+# one is made and kept in storage); REMIND_CAP, the most emails a run sends (1000 when unset).
 
 # The daily email's runs: the new daily goes live at local midnight (game.js dayOf), and 08:05 UTC is past midnight in
-# every mainland US time zone, summer or winter; the two later runs send what a refused batch left (one a day each)
+# every mainland US time zone, summer or winter; the two later runs send what a refused batch or a run's cap left (one a
+# day each)
 [triggers]
 crons = ["5 8-10 * * *"]
 

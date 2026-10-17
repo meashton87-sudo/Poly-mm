@@ -72,7 +72,8 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   The first to pass all RACE_N (24) wins. `DELETE /race?id=` (or `?name=`) with the admin token takes a run off the board.
   The check before a prize: web/admin.html (site.py copies it to /admin.html with only the board-api meta: noindex, not
   linked, no analytics; the token is pasted and kept in sessionStorage) reads GET /race/admin (every entry, each pass's
-  grade, try length and a hash of its calls) and /race/admin?id= (the calls), flags short tries, The Miami Miracle before
+  grade, try length and a hash of its calls; 50 entries a page, ?after= the page's next, the page's Load more) and
+  /race/admin?id= (the calls), flags short tries, The Miami Miracle before
   its fix (MIAMI_FIX in the page) and the same calls from two entries, and voids one pass (POST /race/admin/void: n, nAt
   and the winner worked out again, the audit kept under race:void:) or takes a run off. Optional worker vars: RACE_TO (an
   end time: no try or pass after it) and NEXT_CONTEST (a line shown with the results). The panel shows the results
@@ -93,11 +94,14 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   survivor board and the day's list from any phone (a { session } with the post: acctNameKey; a name set on the device
   still wins on the page, myName); friend leagues (/league/*, #league-<code> join links: 50 members, 10 leagues an
   account; a board shows usernames and daily numbers only, to members only); the daily email (/auth/remind, the cron in
-  wrangler.toml [triggers], `scheduled` -> the Board's reminders: one a day an account, 1000 a run, an HMAC unsubscribe
-  link; only with RESEND_KEY + MAIL_FROM). Never put an address or account id in anything another account can read.
+  wrangler.toml [triggers], `scheduled` -> the Board's reminders: one a day an account, REMIND_CAP a run (an optional
+  worker var, 1000 by default; a capped run keeps where it stopped, remind:from, and the next run goes on from there,
+  round to the first), an HMAC unsubscribe link; only with RESEND_KEY + MAIL_FROM). Never put an address or account id
+  in anything another account can read.
 - Streaks and badges (game.js streakOf, BADGES): the streak is worked out from the days played (the same on every phone); every 7 days in a
   row earn a freeze (2 held at most), spent on a missed day once the next day is played (stats.frozen keeps the day: the
-  ❄️, the one note and event, a league board's streak). A badge is earned once (stats.badges: { id: time }); most are
+  ❄️, the one note and event). A league board's streak is worked out the same way (worker.js streakOf, the same
+  constants: change both together), pending freezes included. A badge is earned once (stats.badges: { id: time }); most are
   tests on the record so a new phone signed in earns the same ones. A new badge needs no worker change (its id is only
   checked for shape there).
 - The day's and week's lists (board/worker.js /daily, /week; game.js leaders): a name's first result of a day goes on the
