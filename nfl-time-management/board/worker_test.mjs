@@ -433,12 +433,80 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.ok(!JSON.stringify(v.rows).includes(idb) && !('id' in v.winner), 'no ids on the board');
   v = await (await rc('/race/me', { code: cc, key: kc })).json();
   assert.strictEqual(v.me, null, 'a code not entered');
+  // the check before a prize (web/admin.html): admin only, every entrant with its passes, one entry's whole audit
+  const AD = { auth: 'Bearer commish-secret-123' }, ida = (await sha256hex('race:' + ca)).slice(0, 24);
+  for (const [path, method, body] of [['/race/admin', 'GET'], [`/race/admin?id=${idb}`, 'GET'], ['/race/admin/void', 'POST', { id: idb, drive: 5, note: 'x' }]]) {
+    assert.strictEqual((await call(method, body, { path })).status, 403, `${path}: no token, no audit`);
+    assert.strictEqual((await call(method, body, { path, auth: 'Bearer commish-secret-12X' })).status, 403, `${path}: a wrong token`);
+    assert.strictEqual((await call(method, body, { path, auth: 'commish-secret-123' })).status, 403, `${path}: not a bearer`);
+  }
+  const offAdmin = { ...env, ADMIN_TOKEN: undefined };
+  assert.strictEqual((await worker.fetch(new Request('https://w.example/race/admin', { headers: { Authorization: 'Bearer ' } }), { ...offAdmin, BOARD: { idFromName: (n) => n, get: () => ({ fetch: (req) => new Board({ storage }, offAdmin).fetch(req) }) } })).status, 403, 'off without a token');
+  // the drives' titles come from the Pro data the worker serves
+  const titles = Array.from({ length: 24 }, (_, i) => (i === 15 ? 'The Miami Miracle' : `Drive ${i + 1}`));
+  env.ASSETS = board.env.ASSETS = { fetch: async (req) => (new URL(req.url).pathname === '/pro/drives.json' ? new Response(JSON.stringify({ drives: titles.map((title) => ({ title })) })) : new Response('', { status: 404 })) };
+  let ad = await (await call('GET', undefined, { path: '/race/admin', ...AD })).json();
+  delete env.ASSETS; delete board.env.ASSETS;
+  assert.deepStrictEqual([ad.n, ad.drives[15], ad.entries.map((x) => [x.name, x.n, x.passes.length, x.out])], [24, 'The Miami Miracle', [['Eli Manning', 1, 1, false], ['Tom', 24, 24, false]]], 'every entrant, joined first first');
+  const p3 = ad.entries[0].passes[0];
+  assert.deepStrictEqual([p3.drive, p3.p, p3.calls, Object.keys(p3).sort().join()], [3, 0.935, 1, 'at,calls,drive,ms,p,sig'], 'a pass: its drive, grade, calls (counted)');
+  assert.ok(p3.ms >= 60e3 && p3.ms < 70e3, 'the try\'s length by the server\'s clock');
+  assert.strictEqual(ad.entries[1].passes.find((x) => x.drive === 3).sig, p3.sig, 'the same calls: the same signature');
+  assert.ok(ad.entries.every((x) => /^[0-9a-f]{24}$/.test(x.id) && x.joined && !('kh' in x)), 'ids for the admin, joined');
+  let one = await (await call('GET', undefined, { path: `/race/admin?id=${ida}`, ...AD })).json();
+  assert.deepStrictEqual([one.entry.name, one.passes.length, one.passes[0].decs, one.passes[0].res, one.passes[0].tryAt, one.voids], ['Eli Manning', 1, decs, WON, new Date(5).toISOString(), []], 'one entry: every call kept');
+  assert.strictEqual((await call('GET', undefined, { path: '/race/admin?id=' + 'f'.repeat(24), ...AD })).status, 404, 'no such entry');
+  // a pass voided: the count and the time it got there worked out again, the winner with it; the audit kept aside
+  const vd = (body) => call('POST', body, { path: '/race/admin/void', ...AD });
+  assert.strictEqual((await vd({ id: idb, drive: 5 })).status, 400, 'a note (why) is needed');
+  assert.strictEqual((await vd({ id: ida, drive: 5, note: 'x' })).status, 404, 'Eli never passed 5');
+  assert.strictEqual((await vd({ id: 'nope', drive: 5, note: 'x' })).status, 404, 'no such entry');
+  const tomAt = store.get(`race:e:${idb}`).passes;
+  r = await vd({ id: idb, drive: 24, note: 'the last pass: checked, not a real drive' });
+  let vo = await r.json();
+  assert.deepStrictEqual([r.status, vo.entry.n, vo.entry.done, vo.entry.voids.map((x) => [x.drive, x.p, x.note])], [200, 23, null, [[24, 0.91, 'the last pass: checked, not a real drive']]], 'voided');
+  assert.strictEqual(vo.entry.nAt, new Date(tomAt[23]).toISOString(), 'nAt: the last pass left');
+  v = await (await rc('/race')).json();
+  assert.deepStrictEqual([v.winner, v.rows.map((x) => [x.name, x.n, !!x.done])], [null, [['Tom', 23, false], ['Eli Manning', 1, false]]], 'no winner now, 23');
+  assert.ok(!store.has(`race:audit:${idb}:24`) && store.get(`race:void:${idb}:24:${tomAt[24]}`).decs, 'the audit kept aside');
+  assert.strictEqual((await vd({ id: idb, drive: 24, note: 'again' })).status, 404, 'voided once');
+  one = await (await call('GET', undefined, { path: `/race/admin?id=${idb}`, ...AD })).json();
+  assert.deepStrictEqual([one.passes.length, one.voids.length, one.voids[0].drive, one.voids[0].decs], [23, 1, 24, decs], 'the void in the audit, its calls too');
+  // the old try's token no longer counts; a new try does, and Tom wins again
+  { const e = store.get(`race:e:${idb}`); e.last = 0; store.set(`race:e:${idb}`, e); }
+  assert.strictEqual((await rc('/race/pass', { code: cb, key: kb, drive: 24, p: 0.92, decs, res: WON, tok: 'f'.repeat(24) })).status, 409, 'a new try is needed');
+  r = await rc('/race/pass', { code: cb, key: kb, drive: 24, p: 0.92, decs, res: WON, tok: await tryOf(cb, kb, 24) });
+  v = await r.json();
+  assert.deepStrictEqual([v.me.n, !!v.me.done, v.winner && v.winner.name], [24, true, 'Tom'], 'passed again, the winner again');
+  // the end time and the next contest: shown with the view; nothing counts after the end
+  assert.deepStrictEqual([v.to, v.over, 'next' in v], [null, false, false], 'no end time, no next contest');
+  env.NEXT_CONTEST = board.env.NEXT_CONTEST = '  The Playoff Gauntlet: starts in January.  ';
+  env.RACE_TO = board.env.RACE_TO = new Date(Date.now() - 1000).toISOString();
+  v = await (await rc('/race')).json();
+  assert.deepStrictEqual([v.over, v.to, v.next], [true, env.RACE_TO, 'The Playoff Gauntlet: starts in January.'], 'over, and the next one');
+  assert.deepStrictEqual(Object.keys(v.rows[0]).sort(), ['at', 'done', 'n', 'name'], 'the standings: name, count, when');
+  { const e = store.get(`race:e:${ida}`); e.last = 0; store.set(`race:e:${ida}`, e); }
+  const late = await tryOf(ca, ka, 9);
+  assert.strictEqual(late, undefined, 'no try starts after the end');
+  r = await rc('/race/pass', { code: ca, key: ka, drive: 3, p: 0.95, decs, res: WON, tok });
+  assert.deepStrictEqual([r.status, (await r.json()).error], [409, 'the Gauntlet is over'], 'no pass counts after the end');
+  env.NEXT_CONTEST = board.env.NEXT_CONTEST = '   ';
+  delete env.RACE_TO; delete board.env.RACE_TO;
+  v = await (await rc('/race')).json();
+  assert.deepStrictEqual([v.over, 'next' in v], [false, false], 'a blank next contest is left out');
+  delete env.NEXT_CONTEST; delete board.env.NEXT_CONTEST;
   // the check finds Tom's run wrong: off the board for good, and the winner goes to the next finisher (none)
   assert.strictEqual((await call('DELETE', undefined, { path: '/race?name=tom' })).status, 403, 'admin only');
   assert.strictEqual((await call('DELETE', undefined, { path: '/race?name=tom', auth: 'Bearer commish-secret-123' })).status, 200);
   v = await (await rc('/race')).json();
   assert.deepStrictEqual([v.rows.map((x) => x.name), v.winner, v.entrants], [['Eli Manning'], null, 1], 'out, the winner with him');
   assert.strictEqual((await rc('/race/join', { code: cb, key: kb, name: 'Tom Again' })).status, 403, 'and out for good');
+  ad = await (await call('GET', undefined, { path: '/race/admin', auth: 'Bearer commish-secret-123' })).json();
+  assert.deepStrictEqual(ad.entries.map((x) => [x.name, x.out]), [['Eli Manning', false], ['Tom', true]], 'the admin still sees a run taken off');
+  // by id too (the admin page's button); an id never entered is 404
+  assert.strictEqual((await call('DELETE', undefined, { path: '/race?id=' + 'e'.repeat(24), auth: 'Bearer commish-secret-123' })).status, 404);
+  assert.strictEqual((await call('DELETE', undefined, { path: `/race?id=${ida}`, auth: 'Bearer commish-secret-123' })).status, 200);
+  assert.deepStrictEqual((await (await rc('/race')).json()).rows, [], 'off by id');
 }
 // Accounts: Sign in with Google (an ID token checked against Google's keys), or a one-use emailed link; Pro on the
 // account (a linked code, or a purchase made signed in), used by session on any device; codes work as before
@@ -618,6 +686,200 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual((await au('/restore', { session: e1.session })).status, 401, 'accounts off: a session is no use');
   assert.strictEqual((await au('/restore', { code: bought, key: 'acct-device-key-00000009' })).status, 200, 'the code still works');
   unset('STRIPE_SECRET', 'STRIPE_WEBHOOK_SECRET', 'ASSETS', 'SITE');
+  globalThis.fetch = realFetch;
+}
+// Accounts, continued: stats that follow the account, usernames on the boards, friend leagues, the daily email
+{
+  const realFetch = globalThis.fetch;
+  const envs = [env, board.env];
+  const set = (o) => { for (const e of envs) Object.assign(e, o); };
+  const unset = (...ks) => { for (const e of envs) for (const k of ks) delete e[k]; };
+  const au = (path, body, o = {}) => call(body === undefined ? 'GET' : 'POST', body, { path, ...o });
+  set({ GOOGLE_CLIENT_ID: '1234-test.apps.googleusercontent.com' });
+  // signed in as if by Google: a session row made here (its hash, as the worker keeps it)
+  const signIn = async (acct, email, name) => {
+    const tok = (await sha256hex(`tok:${acct}`)).slice(0, 64);
+    store.set(`auth:sess:${await sha256hex(tok)}`, { acct, at: Date.now() });
+    store.set(`acct:${acct}`, { email, at: '2026-10-16', ...(name ? { name } : {}) });
+    if (name) store.set(`auth:name:${name.toLowerCase()}`, acct);
+    return tok;
+  };
+  const sa = await signIn('g:700001', 'amy@example.com', 'Amy Hawk'), sb = await signIn('g:700002', 'ben@example.com', 'Ben Bolt'), sc = await signIn('g:700003', 'cal@example.com');
+  const ok = async (r, what) => { const d = await r.json(); assert.strictEqual(r.status, 200, `${what}: ${JSON.stringify(d).slice(0, 200)}`); return d; };
+
+  // stats: merged into the account, the best of each kept, cleaned; a read without stats; never another account's
+  assert.strictEqual((await au('/auth/stats', { session: 'f'.repeat(64), stats: {} })).status, 401, 'signed out');
+  assert.deepStrictEqual(await ok(await au('/auth/stats', { session: sa }), 'read'), { stats: { days: {}, drives: {}, runs: {} } }, 'nothing yet');
+  for (const [why, stats] of [['an array', []], ['days an array', { days: [1, 2] }], ['a string', 'x'], ['too many days', { days: Object.fromEntries(Array.from({ length: 2001 }, (_, i) => [i + 1, { p: 0.5 }])) }],
+    ['too many drives', { drives: Object.fromEntries(Array.from({ length: 501 }, (_, i) => [i + 1, { p: 0.5 }])) }]]) {
+    assert.strictEqual((await au('/auth/stats', { session: sa, stats })).status, 400, why);
+  }
+  assert.strictEqual((await au('/auth/stats', { session: sa, stats: { days: { 1: { p: 0.5, coach: 'x'.repeat(600 * 1024) } } } })).status, 413, 'a body over 512 KB');
+  let d = await ok(await au('/auth/stats', { session: sa, stats: {
+    days: { 5: { p: 0.5, wpa: 0.1, coach: 'Andy Reid', junk: 'x' }, 6: { p: 0.8, wpa: 0.2, coach: null }, 7: { p: 2 }, 8: { p: '0.5' }, abc: { p: 0.5 }, 0: { p: 0.5 }, '-3': { p: 0.5 }, 9: { p: NaN } },
+    drives: { 3: { p: 0.7, wpa: 0.05, tries: 2, won: false, at: 1790000000000, last: 0.6, prev: { p: 0.4, tries: 1 } }, 1000: { p: 0.5 } },
+    runs: { 2: { p: 0.66, wpa: 0.3, w: 3, l: 1, n: 4, x: 'y' } } } }), 'first phone');
+  assert.deepStrictEqual(d.stats, { days: { 5: { p: 0.5, wpa: 0.1, coach: 'Andy Reid' }, 6: { p: 0.8, wpa: 0.2, coach: null } },
+    drives: { 3: { p: 0.7, wpa: 0.05, tries: 2, won: false, last: 0.6, at: 1790000000000 } }, runs: { 2: { p: 0.66, wpa: 0.3, w: 3, l: 1, n: 4 } } }, 'cleaned: junk entries and fields dropped');
+  d = await ok(await au('/auth/stats', { session: sa, stats: { days: { 5: { p: 0.4, wpa: 0.9, coach: 'Other' }, 6: { p: 0.9, wpa: 0.3, coach: 'Sean McVay', madden: 'zz' }, 10: { p: 0.3, wpa: 0, coach: 'John Madden', madden: 'ABCD1234' } },
+    drives: { 3: { p: 0.6, wpa: 0, tries: 5, won: true }, 4: { p: 0.95, wpa: 0.2, tries: 1, won: true } }, runs: { 2: { p: 0.5, wpa: 0, w: 1, l: 3, n: 4 } } } }), 'second phone');
+  assert.deepStrictEqual(d.stats.days, { 5: { p: 0.5, wpa: 0.1, coach: 'Andy Reid' }, 6: { p: 0.9, wpa: 0.3, coach: 'Sean McVay' }, 10: { p: 0.3, wpa: 0, coach: 'John Madden', madden: 'ABCD1234' } }, 'days: the higher score of each, a bad Madden code dropped');
+  assert.deepStrictEqual(d.stats.drives, { 3: { p: 0.7, wpa: 0.05, tries: 5, won: true, last: 0.6, at: 1790000000000 }, 4: { p: 0.95, wpa: 0.2, tries: 1, won: true } }, 'drives: best score, most tries, won if either');
+  assert.strictEqual(d.stats.runs[2].p, 0.66, 'runs: the best');
+  d = await ok(await au('/auth/stats', { session: sa, stats: { days: { 10: { p: 0.6, wpa: 0, coach: 'Bill Belichick' } } } }), 'a better score on a Madden day');
+  assert.deepStrictEqual(d.stats.days[10], { p: 0.6, wpa: 0, coach: 'John Madden', madden: 'ABCD1234' }, 'the Madden find kept');
+  assert.deepStrictEqual((await ok(await au('/auth/stats', { session: sb }), 'other')).stats, { days: {}, drives: {}, runs: {} }, 'never another account\'s');
+  // the newest 2000 days stand when a merge goes over
+  store.set('stats:d:g:700003', Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [i + 1, { p: 0.5, wpa: 0, coach: null }])));
+  d = await ok(await au('/auth/stats', { session: sc, stats: { days: { 2001: { p: 0.7 } } } }), 'over the cap');
+  assert.deepStrictEqual([Object.keys(d.stats.days).length, d.stats.days[1], d.stats.days[2001].p], [2000, undefined, 0.7], 'the oldest day goes');
+  store.delete('stats:d:g:700003');
+
+  // a username on the boards: the account's own name from any phone (the survivor board and the day's list); anyone
+  // else, or the account under another name, as before
+  const kA = 'amy-phone-key-0000000001', kB = 'amy-other-phone-key-0002', kX = 'stranger-key-000000000003';
+  assert.strictEqual((await call('POST', { name: 'Amy Hawk', best: 4, key: kA, session: sa })).status, 200, 'first phone');
+  assert.strictEqual((await call('POST', { name: 'amy hawk', best: 6, key: kB, session: sa })).status, 200, 'a new phone, signed in: her name');
+  assert.strictEqual((await call('POST', { name: 'Amy Hawk', best: 9, key: kX })).status, 409, 'a stranger: taken');
+  assert.strictEqual((await call('POST', { name: 'Amy Hawk', best: 9, key: kX, session: sb })).status, 409, 'another account: taken');
+  assert.ok((await (await call('GET')).json()).rows.some((x) => x.name.toLowerCase() === 'amy hawk' && x.best === 6), 'her best, from either phone');
+  store.set('claim:ben bolt', 'f'.repeat(64));                         // a device took "Ben Bolt" before the account did
+  assert.strictEqual((await call('POST', { name: 'Ben Bolt', best: 2, key: kX, session: sb })).status, 200, 'the account\'s username is the account\'s');
+  r = await call('POST', { name: 'Not Amy', best: 1, key: kB, session: sa });
+  assert.strictEqual(r.status, 200, 'another name: claimed by the device, as ever');
+  assert.strictEqual(store.get('claim:not amy'), await sha256hex(kB));
+  b = await (await day({ date: today, key: kB, p: 0.77, spots: [0.1], name: 'Amy Hawk', session: sa })).json();
+  assert.ok(!b.taken && b.top.some((x) => x.name === 'Amy Hawk'), 'the day\'s list: her name from the new phone');
+  b = await (await day({ date: today, key: 'stranger-key-000000000004', p: 0.9, spots: [0.1], name: 'Amy Hawk' })).json();
+  assert.strictEqual(b.taken, true, 'and nobody else\'s');
+
+  // leagues: made and joined with a username, a board of usernames and daily numbers only, limits, leaving
+  const lg = (path, body) => au(`/league/${path}`, body);
+  assert.strictEqual((await lg('create', { session: 'f'.repeat(64), name: 'Sunday Crew' })).status, 401, 'signed out');
+  r = await lg('create', { session: sc, name: 'Sunday Crew' });
+  assert.deepStrictEqual([r.status, (await r.json()).noName], [409, true], 'a username first');
+  for (const bad of ['', 'ab', 'x'.repeat(31), '   a  ']) assert.strictEqual((await lg('create', { session: sa, name: bad })).status, 400, `league name ${JSON.stringify(bad)}`);
+  r = await lg('create', { session: sa, name: 'Sh1t Show' });
+  assert.deepStrictEqual([r.status, (await r.json()).refused], [409, true], 'no slurs or obscenities');
+  d = await ok(await lg('create', { session: sa, name: '  Sunday   Crew ' }), 'create');
+  const code = d.league.code;
+  assert.match(code, /^[A-HJ-KMNP-Z2-9]{8}$/, code);
+  assert.deepStrictEqual([d.league.name, d.league.n, d.league.owner, d.leagues], ['Sunday Crew', 1, true, [{ code, name: 'Sunday Crew', n: 1 }]]);
+  assert.deepStrictEqual((await ok(await au('/auth/me', { session: sa }), 'me')).leagues, [{ code, name: 'Sunday Crew', n: 1 }], 'the account lists it');
+  assert.deepStrictEqual(await ok(await lg('peek', { code: code.toLowerCase() }), 'peek'), { code, name: 'Sunday Crew', n: 1 }, 'what a join link shows (any case)');
+  assert.strictEqual((await lg('peek', { code: 'AAAAAAAA' })).status, 404);
+  assert.strictEqual((await lg('peek', { code: 'nope' })).status, 400);
+  assert.strictEqual((await lg('board', { session: sb, code, day: 10 })).status, 404, 'not a member: no board');
+  assert.strictEqual((await lg('join', { session: sb, code: 'AAAAAAAA' })).status, 404, 'no such league');
+  d = await ok(await lg('join', { session: sb, code }), 'join');
+  assert.deepStrictEqual([d.league.n, d.league.owner], [2, false]);
+  assert.strictEqual((await ok(await lg('join', { session: sb, code }), 'again')).league.n, 2, 'joining again: the same');
+  // Ben's days 4-10 (all but 7), Amy's from her stats above (5, 6, 10)
+  await ok(await au('/auth/stats', { session: sb, stats: { days: Object.fromEntries([4, 5, 6, 8, 9, 10].map((k) => [k, { p: k / 20, wpa: 0, coach: null }])) } }), 'ben');
+  assert.strictEqual((await lg('board', { session: sa, code })).status, 400, 'a day wanted');
+  d = await ok(await lg('board', { session: sa, code, day: 10 }), 'board');
+  assert.deepStrictEqual([d.name, d.n, d.day, d.owner], ['Sunday Crew', 2, 10, true]);
+  const near = (x, y) => Math.abs(x - y) < 1e-9;
+  assert.deepStrictEqual(d.rows.map((x) => [x.name, x.today, x.streak, x.n7, !!x.you]), [['Amy Hawk', 0.6, 1, 3, true], ['Ben Bolt', 0.5, 3, 6, false]], 'sorted by the day\'s score');
+  assert.ok(near(d.rows[0].avg7, (0.5 + 0.9 + 0.6) / 3) && near(d.rows[1].avg7, (0.2 + 0.25 + 0.3 + 0.4 + 0.45 + 0.5) / 6), 'the last 7 days\' average');
+  const txt = JSON.stringify(d);
+  assert.ok(!/@|g:7000/.test(txt), 'no addresses or account ids on a league board');
+  d = await ok(await lg('board', { session: sb, code, day: 11 }), 'the next day');
+  assert.deepStrictEqual(d.rows.map((x) => [x.name, x.today, x.streak]), [['Ben Bolt', null, 3], ['Amy Hawk', null, 1]], 'not played yet: a streak still alive, longest first');
+  // limits: 10 leagues an account, 50 members a league
+  for (let i = 0; i < 9; i++) await ok(await lg('create', { session: sa, name: `League ${i}` }), `league ${i}`);
+  r = await lg('create', { session: sa, name: 'One Too Many' });
+  assert.strictEqual(r.status, 409, '10 leagues an account');
+  const full = store.get(`league:${code}`);
+  store.set(`league:${code}`, { ...full, members: [...full.members, ...Array.from({ length: 48 }, (_, i) => `g:fill${i}`)] });
+  await signIn('g:700004', 'dee@example.com', 'Dee Dash');
+  const sd = (await sha256hex('tok:g:700004')).slice(0, 64);
+  r = await lg('join', { session: sd, code });
+  assert.deepStrictEqual([r.status, (await r.json()).full], [409, true], '50 a league');
+  d = await ok(await lg('board', { session: sa, code, day: 10 }), 'a full board');
+  assert.strictEqual(d.rows.length, 50);
+  assert.ok(d.rows.filter((x) => x.name === 'Player').length === 48 && !JSON.stringify(d).includes('fill'), 'a member without a row: "Player", never an id');
+  store.set(`league:${code}`, full);
+  assert.strictEqual((await lg('join', { session: sa, code })).status, 200, 'in it already: no limit in the way');
+  // leaving: the owner's place passes on; the last one out ends it
+  d = await ok(await lg('leave', { session: sa, code }), 'leave');
+  assert.ok(!d.leagues.some((x) => x.code === code), 'off her list');
+  assert.deepStrictEqual([store.get(`league:${code}`).owner, store.get(`league:${code}`).members], ['g:700002', ['g:700002']], 'Ben owns it now');
+  assert.strictEqual((await lg('board', { session: sa, code, day: 10 })).status, 404, 'no board after leaving');
+  await ok(await lg('leave', { session: sb, code }), 'the last one');
+  assert.ok(!store.has(`league:${code}`), 'gone');
+  assert.strictEqual((await lg('join', { session: sb, code })).status, 404);
+  assert.ok((await ok(await lg('create', { session: sa, name: 'Room Again' }), 'room again')).league, 'a place free again');
+
+  // the daily email: opt-in (only with Resend set up), one a day by the cron, an unsubscribe link in each
+  assert.strictEqual((await au('/auth/remind', { session: sa, on: true })).status, 503, 'no Resend: off');
+  set({ RESEND_KEY: 're_test_key', MAIL_FROM: 'Two-Minute Drill <daily@nfl2mindrill.com>', SITE: 'https://nfl2mindrill.com' });
+  assert.strictEqual((await au('/auth/remind', { session: 'f'.repeat(64), on: true })).status, 401);
+  assert.strictEqual((await ok(await au('/auth/remind', { session: sa, on: true }), 'on')).remind, true, 'on');
+  assert.strictEqual((await ok(await au('/auth/me', { session: sa }), 'me')).remind, true, 'kept');
+  await ok(await au('/auth/remind', { session: sb, on: true }), 'ben on');
+  await ok(await au('/auth/remind', { session: sb, on: false }), 'ben off');
+  assert.strictEqual((await ok(await au('/auth/me', { session: sb }), 'me')).remind, undefined, 'off');
+  const batches = [];
+  let resendDown = false;
+  globalThis.fetch = async (u, init) => {
+    if (u === 'https://api.resend.com/emails/batch') {
+      if (resendDown) return new Response('{"message":"down"}', { status: 500 });
+      batches.push({ headers: init.headers, mails: JSON.parse(init.body) });
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    }
+    return new Response('{}', { status: 404 });
+  };
+  const cron = (iso) => worker.scheduled({ scheduledTime: Date.parse(iso) }, env, { waitUntil() {} });
+  const errs = [], realErr = console.error, realLog = console.log;
+  console.error = (...a) => errs.push(a.join(' ')); console.log = () => {};
+  await cron('2026-10-17T08:05:00Z');
+  assert.strictEqual(batches.length, 1);
+  const [mail] = batches[0].mails;
+  assert.deepStrictEqual([batches[0].mails.length, mail.to, mail.from], [1, ['amy@example.com'], 'Two-Minute Drill <daily@nfl2mindrill.com>'], 'only the account that asked');
+  assert.strictEqual(batches[0].headers.Authorization, 'Bearer re_test_key');
+  assert.match(batches[0].headers['Idempotency-Key'], /^remind-2026-10-17-[0-9a-f]{24}$/);
+  assert.ok(mail.text.includes('https://nfl2mindrill.com/') && !mail.headers, 'the site; no one-click header without API_URL');
+  const link = mail.text.match(/\?unsub=(a_[0-9a-f]{40})\.([0-9a-f]{32})/);
+  assert.ok(link && mail.html.includes(link[0]), 'an unsubscribe link');
+  await cron('2026-10-17T09:05:00Z');
+  assert.strictEqual(batches.length, 1, 'once a day, however many runs');
+  set({ API_URL: 'https://board.example.workers.dev/' });
+  await cron('2026-10-18T08:05:00Z');
+  assert.strictEqual(batches.length, 2, 'the next day');
+  assert.deepStrictEqual(batches[1].mails[0].headers, { 'List-Unsubscribe': `<https://board.example.workers.dev/auth/unsub?r=${link[1]}&t=${link[2]}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' }, 'the one-click header');
+  resendDown = true;
+  await cron('2026-10-19T08:05:00Z');
+  assert.ok(errs.some((x) => /resend refused the daily reminders 500/.test(x)), 'a refusal is logged');
+  resendDown = false;
+  await cron('2026-10-19T09:05:00Z');
+  assert.strictEqual(batches.length, 3, 'and sent in the next run');
+  // unsubscribing: the link's token (any other refused), and the mail app's one-click post
+  assert.strictEqual((await au('/auth/unsub', { r: link[1], t: '0'.repeat(32) })).status, 403, 'a wrong token');
+  assert.strictEqual((await au('/auth/unsub', { r: 'a_' + '0'.repeat(40), t: link[2] })).status, 403, 'another reference');
+  assert.strictEqual((await au('/auth/unsub', { r: 'x', t: 'y' })).status, 400);
+  assert.strictEqual((await au('/auth/unsub', { r: link[1], t: link[2] })).status, 200, 'the link');
+  assert.strictEqual((await ok(await au('/auth/me', { session: sa }), 'me')).remind, undefined, 'off');
+  await cron('2026-10-20T08:05:00Z');
+  assert.strictEqual(batches.length, 3, 'no more email');
+  await ok(await au('/auth/remind', { session: sa, on: true }), 'on again');
+  r = await worker.fetch(new Request(`https://w.example/auth/unsub?r=${link[1]}&t=${link[2]}`, { method: 'POST', body: 'List-Unsubscribe=One-Click', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }), env);
+  assert.strictEqual(r.status, 200, 'one-click');
+  assert.strictEqual((await ok(await au('/auth/me', { session: sa }), 'me')).remind, undefined, 'off by one-click');
+  assert.strictEqual((await call('POST', {}, { path: '/_cron/remind' })).status, 404, 'the cron\'s path is not reachable from outside');
+  // a cap a run: 1000 (in batches of 100), the rest the next run
+  for (let i = 0; i < 1005; i++) { store.set(`acct:e:p${i}@example.com`, { email: `p${i}@example.com` }); store.set(`rmd:e:p${i}@example.com`, { on: true }); }
+  await cron('2026-10-21T08:05:00Z');
+  assert.deepStrictEqual(batches.slice(3).map((x) => x.mails.length), new Array(10).fill(100), '1000 in batches of 100');
+  await cron('2026-10-21T09:05:00Z');
+  assert.deepStrictEqual(batches.slice(13).map((x) => x.mails.length), [5], 'the rest the next run');
+  assert.ok(batches.every((x) => x.mails.every((m) => m.to.length === 1)), 'one address an email');
+  for (let i = 0; i < 1005; i++) { store.delete(`acct:e:p${i}@example.com`); store.delete(`rmd:e:p${i}@example.com`); }
+  unset('RESEND_KEY', 'MAIL_FROM');
+  await cron('2026-10-22T08:05:00Z');
+  assert.strictEqual(batches.length, 14, 'Resend off: nothing sent');
+  console.error = realErr; console.log = realLog;
+  unset('GOOGLE_CLIENT_ID', 'SITE', 'API_URL');
   globalThis.fetch = realFetch;
 }
 console.log('board worker ok');

@@ -76,6 +76,32 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .acctsheet .who .em { display: block; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .acctsheet .acts { display: flex; gap: 8px; flex-wrap: wrap; }
 .acctsheet .acts .btn { width: auto; flex: 1 1 auto; }
+/* the account sheet's sections (leagues), and a league's board: rank, username (the streak and week under it), today */
+.acctsheet .sec { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.acctsheet .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.llist { display: grid; gap: 6px; }
+.lrow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; width: 100%; min-height: 46px; padding: 8px 12px; text-align: left; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); cursor: pointer; }
+.lrow:hover { border-color: var(--muted); }
+.lrow .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.lrow .n { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.lrow .go { color: var(--muted); font-size: 20px; line-height: 1; }
+.lboard .lbody { display: grid; gap: 12px; }
+.lrows { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.lrows li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); }
+.lrows li:first-child { border-top: 0; }
+.lrows li.me { background: color-mix(in srgb, var(--sq-g) 12%, transparent); }
+.lrows .n { color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 700; text-align: center; }
+.lrows .lwho { min-width: 0; display: grid; gap: 1px; }
+.lrows .lwho .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.lrows li.me .nm { color: var(--sq-g); }
+.lrows .lwho small { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.lrows b { font: 900 24px/1 var(--display); font-variant-numeric: tabular-nums; }
+.lrows .not { color: var(--muted); font-size: 12px; font-weight: 600; }
+.lboard .invite { display: grid; gap: 6px; }
+.lboard .lnk { font-size: 12.5px; color: var(--muted); text-align: center; overflow-wrap: anywhere; user-select: all; }
+.lboard .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.linkbtn { border: 0; background: none; padding: 4px 0; color: var(--sq-g); font: 700 14px var(--body); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.lglink { margin: 2px 0 0; text-align: center; }
 .top h1 { margin: 0; min-width: 0; text-align: center; white-space: nowrap; font: 900 28px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
 .top h1 small { display: block; font: 600 10.5px/1.3 var(--body); letter-spacing: .14em; color: var(--muted); margin-top: 2px; }
 /* phones: the title shrinks with the screen so Log in (or your username) fits beside it; the narrowest show only the badge */
@@ -168,7 +194,22 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 @keyframes rpulse { 50% { opacity: .35; } }
 .race .rtitle { margin: 0; font: 900 34px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; color: var(--ink); }
 .race .rlead { margin: 0; font-size: 14.5px; line-height: 1.45; }
-.race .rwin { margin: 0; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--sq-y) 22%, var(--card)); font-weight: 700; }
+/* the results (a winner, or past the end): the champion across the top, 2nd and 3rd under it, then what's next */
+.race .rpod { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.race .rpod li { display: grid; gap: 2px; align-content: start; min-width: 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); }
+.race .rpod li.rp1 { grid-column: 1 / -1; padding: 14px; border: 2px solid var(--sq-y); background: color-mix(in srgb, var(--sq-y) 20%, var(--card)); }
+.race .rpod li.open { border-style: dashed; background: transparent; }
+.race .rpod .rpk { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.race .rpod .rpn { font: 900 20px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; overflow-wrap: anywhere; }
+.race .rpod li.rp1 .rpn { font-size: 30px; }
+.race .rpod li.open .rpn { color: var(--muted); }
+.race .rpod .rps { font: 700 12.5px var(--body); color: var(--muted); font-variant-numeric: tabular-nums; }
+.race .rpod .rpz { font-size: 12.5px; }
+.race .rmefin { margin: 0; font-weight: 700; }
+.race .rnext { display: grid; gap: 4px; padding: 12px; border-radius: 10px; border: 2px solid var(--ink); background: var(--card); }
+.race .rnext p { margin: 0; font-size: 14.5px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.race .rsharetxt { margin: 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; user-select: all; }
+.arch .gtodrives { display: flex; align-items: center; justify-content: center; text-decoration: none; margin-top: 12px; }
 .race .rstats { display: flex; flex-wrap: wrap; gap: 6px 14px; font: 700 12.5px var(--body); color: var(--muted); font-variant-numeric: tabular-nums; }
 .race .ryou { display: grid; gap: 6px; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); }
 .race .rme { font: 900 20px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; }
@@ -607,6 +648,25 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 .result.banner > .res-acts, .result.banner > .mline, .result.banner > .btn { display: none; }
 /* you against the real coach */
 .h2h-day { display: grid; justify-items: center; gap: 2px; }
+/* the grade's reason, under the call; the drive's calls explained on the final card */
+.verdict .why { display: block; margin-top: 3px; font-size: 13px; color: var(--muted); }
+.explain { text-align: left; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.explain summary { cursor: pointer; padding: 10px 12px; font-weight: 700; }
+.explain .in { display: grid; gap: 10px; padding: 0 12px 12px; }
+.explain .xrow { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; }
+.explain .xs { font-size: 12px; color: var(--muted); letter-spacing: .02em; }
+.explain .xc { font-weight: 700; }
+.explain .xw { font-size: 13px; color: var(--muted); }
+/* the daily reminder */
+.remind { display: grid; gap: 8px; justify-items: center; }
+.remind .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.remind .rtimes, .remind .rlinks { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.remind .chip[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.remind .btn { width: auto; }
+.provalue { text-align: left; }
+.provalue .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.provalue .row .btn { width: auto; flex: 1 1 auto; }
+.provalue a.btn, .remind a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
 .h2h-day .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
 .h2h-day b { font: 900 40px/1 var(--display); letter-spacing: .04em; }
 .h2h-day .sub { font-size: 13px; color: var(--muted); }
@@ -733,6 +793,7 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
         <div class="fov">
           <div class="fovl"><div id="dd" class="dd"></div><span class="ramp" aria-label="Player dots: red is worse, green is better">worse <i></i> better</span></div>
           <span class="btns">
+          <button id="speedBtn" class="ghost" type="button" hidden aria-label="Play speed">1×</button>
           <button id="persBtn" class="ghost" type="button" hidden aria-label="Edit personnel"></button>
           <button id="deepBtn" class="ghost" type="button" aria-label="Player ratings">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><span class="lb">Ratings</span></button>

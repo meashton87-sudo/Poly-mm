@@ -210,6 +210,8 @@
   const DRIVE = PRO_ON ? Number((location.hash.match(/^#drive-(\d+)$/) || [])[1] || 0) : 0;
   // a playoff run (Pro, pro/runs.json): #run-N plays the Nth one, its games in order, like a day of several spots
   const RUN_N = PRO_ON ? Number((location.hash.match(/^#run-(\d+)$/) || [])[1] || 0) : 0;
+  // the Gauntlet on its own (#gauntlet, or #gauntlet-results: the link the results share), for everyone, Pro or not
+  const GAUNTLET = PRO_ON && /^#gauntlet(-results)?$/.test(location.hash);
   let PRO = null, PRO_RUNS = null;        // pro/drives.json and pro/runs.json, once loaded
   // Pro grades: a drive's score (better than this many % of NFL play-callers) as a letter. 90 and up is an A, green:
   // the drive is passed. The best grade on each drive is kept; the ranks count the drives passed
@@ -1020,6 +1022,22 @@
   const RELEASE = { quick: 2.3, screen: 1.6, deep: 2.8, pa: 3.0, roll: 3.0, hail: 4.3, rpo: 1.35, flea: 3.7, tpass: 3.3 };
   const flight = (air) => (Math.abs(air) + 7) / (25 - 0.09 * clip(air, 0, 60));              // seconds the ball is in the air
   const PLAY_SPEED = 1;        // real time, your snaps and theirs
+  // the player's own speed-up (1x, 1.5x, 2x: the button on the field), kept on the device; a tap on the field skips
+  const SPEEDS = [1, 1.5, 2], SPEED_KEY = `${STORE}:speed`;
+  const playSpeed = () => { const v = Number(load(SPEED_KEY, 1)); return SPEEDS.includes(v) ? v : 1; };
+  function speedBtn() {
+    const b = $('speedBtn');
+    if (!b) return;
+    const show = () => { b.textContent = `${playSpeed()}\u00d7`; b.setAttribute('aria-label', `Play speed ${playSpeed()} times. Tap to change`); };
+    show();
+    b.hidden = false;
+    b.addEventListener('click', () => {
+      const v = SPEEDS[(SPEEDS.indexOf(playSpeed()) + 1) % SPEEDS.length];
+      save(SPEED_KEY, v); show();
+      toast(v === 1 ? 'Plays at real speed' : `Plays at ${v}\u00d7 speed. Tap the field to skip one`);
+      track('play_speed', { speed: v });
+    });
+  }
   // the routes a call's target runs when the real play was not charted, and the routes the rest run
   const CALL_ROUTE = { quick: ['slant', 'out', 'hitch'], quick_middle: ['slant', 'cross', 'in'], screen: ['screen'],
     deep: ['go', 'post', 'corner', 'deep_out', 'in'], deep_middle: ['post', 'in', 'go'], pa: ['in', 'post', 'cross', 'deep_out'],
@@ -2488,7 +2506,7 @@
     const pre = k0 < 0 ? res.log : res.log.slice(0, k0), ro = pre.find((x) => x.ev === 'runoff');
     const tos = pre.filter((x) => x.ev === 'timeout'), snapT = ro ? ro.t : tos.length ? tos[tos.length - 1].t : before.t;
     const clk = { t0: before.t, snap: snapT, end: Math.min(res.root.t, snapT) };
-    await runPlan(sc, P, PLAY_SPEED, clk);
+    await runPlan(sc, P, PLAY_SPEED * playSpeed(), clk);
     fadeNext = true;
     lastBall = null;
     return true;
@@ -3885,6 +3903,67 @@
   }
 
   // ------------------------------------------------------- after the snap ---
+  // why the better call was better, in one line: what it does for you in this kind of decision, and how often NFL
+  // play-callers make it here (the grade itself is the simulation's: thousands of games from this spot each way)
+  function whyLine(x) {
+    if (!x || x.cost < 0.0005 || x.best === x.chosen) return '';
+    const b = x.best, c = x.chosen, nfl = Math.round(((x.q && x.q[b]) || 0) * 100);
+    let why = '';
+    if (x.kind === 'clock') {
+      why = { timeout: 'Stopping the clock now keeps the seconds you need for more snaps.',
+        spike: 'A spike stops the clock and saves your timeout for when you need it more.',
+        kneel: 'Ahead with the ball: a kneel runs the clock with no chance of a turnover.',
+        rundown: 'In range: run it down to 0:03, then kick. They never get the ball back.',
+        milk: 'Ahead: every second you take off the clock is one they don\u2019t get.',
+        nohuddle: 'Behind with the clock running: the no-huddle gets the next snap off sooner.',
+        huddle: 'No need to rush here: the huddle uses clock you can afford.' }[b] || '';
+      if (!why && c === 'timeout') why = 'That timeout was worth more later in the drive.';
+      if (!why && c === 'spike') why = 'The spike wasted a down you could use.';
+    } else if (x.kind === 'deftime') {
+      why = b === 'timeout' ? 'Stop the clock now: every second they run off is one you won\u2019t have with the ball.'
+        : 'Hold the timeout: it buys more later than it saves now.';
+    } else if (x.kind === 'defcall') why = `${x.bestLabel} matches up better with what the offense likes to do here.`;
+    else if (x.kind === 'pat') why = `${x.bestLabel} is worth more from here, given the score and the time left.`;
+    else if (x.kind === 'kick' || x.kind === 'freekick') why = `${x.bestLabel} leaves them worse field position for the time left.`;
+    else {
+      // a play call: what the better one does that yours didn't, from the down, the clock and the kind of call
+      const dn = +((x.situation || '').match(/\b([1-4])(?:st|nd|rd|th) &/) || [])[1] || 0;
+      const sec = ((m) => (m ? +m[1] * 60 + +m[2] : 999))((x.situation || '').match(/^(\d+):(\d\d)/));
+      const kick = (l) => /field goal|kick/i.test(l), punt = (l) => /punt/i.test(l), pass = (l) => /pass|deep|screen|quick|throw|hail|shot/i.test(l);
+      const run = (l) => /run|RB |inside|outside|off tackle|sneak|keeper|draw/i.test(l) && !pass(l);
+      const BL = x.bestLabel, CL = x.chosenLabel;
+      if (kick(CL) && dn && dn < 4) why = `Kicking on ${['', '1st', '2nd', '3rd'][dn]} down gives up downs you could use to get closer, or score six.`;
+      else if (kick(BL)) why = 'Take the points: the kick is a good bet from here, and the clock is short.';
+      else if (punt(BL)) why = 'Punt it: pinning them deep is worth more than the chance of converting here.';
+      else if (dn === 4 && (punt(CL) || kick(CL))) why = `Go for it: with ${sec < 180 ? 'this little time' : 'this much at stake'}, keeping the ball is worth the risk.`;
+      else if (pass(BL) && run(CL) && sec < 150) why = 'With the clock running down, a pass can stop the clock and gain more than a run.';
+      else if (run(BL) && pass(CL)) why = sec < 150 ? 'A run keeps it simple: fewer ways to lose the ball, and the yards come.' : 'A run fits this down and distance better than a throw.';
+      else why = `${BL} wins more of the simulated games from this down, distance and clock than ${CL}.`;
+    }
+    return `${why}${nfl >= 1 ? ` NFL play-callers make that call ${nfl}% of the time here.` : ''}`;
+  }
+  // the drive's calls, explained: each one that cost something, worst first, with the better call and why
+  function callsExplained(decs) {
+    const bad = decs.filter((x) => markOf(x.cost) !== 'g').sort((a, b) => b.cost - a.cost);
+    const det = el('details', 'explain');
+    det.append(el('summary', '', bad.length ? `Your calls, explained (${bad.length} to learn from)` : 'Your calls, explained'));
+    const inn = el('div', 'in');
+    if (!bad.length) inn.append(el('p', 'note', `Every one of your ${decs.length} calls was the best call or close to it. Coach of the year.`));
+    bad.slice(0, 8).forEach((x) => {
+      const m = markOf(x.cost), row = el('div', 'xrow');
+      const chip = el('span', `chip-g sq ${m}`, GLYPH[m]);
+      chip.setAttribute('aria-hidden', 'true');
+      const t = el('div', 'xt');
+      t.append(el('div', 'xs', x.situation || KIND_NAME[x.kind] || 'Call'),
+        el('div', 'xc', `${x.chosenLabel} \u2192 ${x.bestLabel} (${pts(x.cost)}% win chance)`), el('div', 'xw', whyLine(x)));
+      row.append(chip, t);
+      inn.append(row);
+    });
+    const good = decs.length - bad.length;
+    if (bad.length && good) inn.append(el('p', 'note', `The other ${good} call${good === 1 ? ' was' : 's were'} the best or close to it.`));
+    det.append(inn);
+    return det;
+  }
   const KIND_NAME = { clock: 'Before the snap', call: 'Play call', deftime: 'Timeout', defcall: 'Defense', pat: 'Try', kick: 'Kickoff', freekick: 'Free kick',
     fgdef: 'Field goal defense', puntdef: 'Punt defense' };
   function optionTable(x) {
@@ -3976,6 +4055,7 @@
       if (x.cost < 0.0005 || x.best === x.chosen) v.append(el('b', '', 'the best one.'));
       else if (xm === 'g') v.append(el('b', '', 'as good as any'), document.createTextNode(` (${x.bestLabel} ${pts(x.cost)}%).`));
       else v.append(document.createTextNode(`${GRADE_WORD[xm]}; `), el('b', '', x.bestLabel), document.createTextNode(` was better (${pts(x.cost)}% win chance).`));
+      if (xm !== 'g' && whyLine(x)) v.append(el('span', 'why', ` ${whyLine(x)}`));
     });
     wrap.append(v);
     const acts = el('div', 'res-acts');
@@ -4476,7 +4556,10 @@
     }
     return BOARD.key || (BOARD.key = k);                    // storage off: one key for this visit
   }
-  const myName = () => String(load(NAME_KEY, '') || '').slice(0, 24);
+  // the name this device plays under: the one set here, else (signed in) the account's username (kept here as
+  // UNAME_KEY, so it is there before the account is asked again); the board takes it as the account's from any phone
+  const myName = () => String(load(NAME_KEY, '') || (authSession() && load(UNAME_KEY, '')) || '').slice(0, 24);
+  const withSession = () => (signedIn() ? { session: authSession() } : {});
   const slugOf = (name) => `p-${String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'player'}`;
   const redrawBoards = () => document.querySelectorAll('.board').forEach(fillBoard);
   // posts go as text/plain, a "simple" cross-origin request: no OPTIONS preflight, half the backend requests (the
@@ -4521,7 +4604,7 @@
     if (!BOARD.mode || !BOARD.canWrite || !name || !(best >= 0 && best < 1000)) return false;
     if (BOARD.mode === 'api') {
       try {
-        const res = await apiBoard('POST', { name, best, key: deviceKey(), ...(life ? { life: true } : {}) });
+        const res = await apiBoard('POST', { name, best, key: deviceKey(), ...(life ? { life: true } : {}), ...withSession() });
         BOARD.rows = res.rows || BOARD.rows;
         BOARD.taken = res.taken ? name : '';
         BOARD.refused = res.refused ? name : '';
@@ -4921,6 +5004,7 @@
     const firstFinish = !state.done;
     state.done = true;
     saveState();
+    if (firstFinish) statsSync(true);              // signed in: the record goes to the account (another phone sees it)
     drawTiles();
     const box = $('done');
     box.textContent = '';
@@ -4952,12 +5036,7 @@
     const dbox = dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0)));
     box.append(dbox);
     if (ARCH_DAY || RUN_N) { const a = el('a', 'btn', RUN_N ? 'More runs' : 'Back to the archive'); a.href = '#archive'; box.append(a); }
-    else if (PRO_ON && !isPro() && dayN > 1 && BOARD.api) {       // the website: the archive is a Pro purchase there
-      const a = el('a', '', 'the Archive'), nudge = el('p', 'note');
-      a.href = '#archive';
-      nudge.append('Missed a day? Every past daily is in ', a, ' (Pro).');
-      box.append(nudge);
-    }
+    else if (PRO_ON && !isPro() && BOARD.api) box.append(proValueCard());       // the website: what Pro adds, after the free drive
     const rec = [0, 0, 0];             // against the real coaches: better, worse, the same (a W-L-T record)
     const rows = today.map((_, i) => {
       const s = state.spots[i]; if (!s) return '';
@@ -4971,9 +5050,12 @@
     if (firstFinish) track('daily_finish', { day: dayN, kind: today[0] && today[0].category, score: Math.round(p * 100),
       vs_coach: rec[0] ? 'better' : rec[1] ? 'worse' : met ? 'same' : 'none', snaps: decs.length });
     // one drive: a sentence, not a record
-    const one = today.length === 1 ? (rec[0] ? 'Beat the real coach' : rec[1] ? 'Lost to the real coach' : 'Matched the real coach') : null;
+    const hh0 = today.length === 1 && state.spots[0] ? headToHead(0, state.spots[0].result) : null;
+    const one = today.length === 1 ? (hh0 ? (rec[0] ? `Beat ${hh0.coach}` : rec[1] ? `${hh0.coach} did better` : `Matched ${hh0.coach}`)
+      : rec[0] ? 'Beat the real coach' : rec[1] ? 'Lost to the real coach' : 'Matched the real coach') : null;
     const vs = met ? (one ? `\n${one}` : `\nVs the real coaches: ${recTxt}`) : '';
-    if (met && one) {
+    if (met && one && hh0) box.insertBefore(hhCard(hh0), box.children[3] || null);      // beating the real coach is the hook: say who
+    else if (met && one) {
       const v = el('div', 'h2h-day');
       v.append(el('span', 'k', 'Vs the real coach'), el('b', '', rec[0] ? 'Better' : rec[1] ? 'Worse' : 'Same'));
       box.insertBefore(v, box.children[3] || null);
@@ -5000,14 +5082,161 @@
       share.text = cc ? share.text.replace(`Coached like ${cc.name}`, line) : share.text.replace(/\n/, `\n${line}\n`);
       pre.textContent = share.text;
       const stt = load(`${STORE}:stats`, { days: {} });
-      if (stt.days[dayN]) { stt.days[dayN].coach = 'John Madden'; stt.days[dayN].madden = code; save(`${STORE}:stats`, stt); }
+      if (stt.days[dayN] && stt.days[dayN].madden !== code) { stt.days[dayN].coach = 'John Madden'; stt.days[dayN].madden = code; save(`${STORE}:stats`, stt); statsSync(true); }
       if (!state.madden) { state.madden = code; saveState(); track('madden', { day: dayN }); }
     };
     box.insertBefore(btn, dbox);
+    const img = el('button', 'btn ghostbtn', 'Share as a picture');
+    img.type = 'button';
+    img.addEventListener('click', () => shareImage({
+      title: DRIVE ? PRO.drives[DRIVE - 1].title : RUN_N ? `The ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Daily #${dayN}`,
+      score: Math.round(p * 100), grade: DRIVE ? gradeOf(Math.round(p * 100)).L : null,
+      line: `Better than ${Math.round(p * 100)}% of NFL play-callers`,
+      coach: () => (share.text.match(/Coached like ([^\n]+)/) || [])[1] || null,
+      vs: met ? (one || `Vs the real coaches: ${recTxt}`) : null, beat: rec[0] > rec[1] ? 1 : rec[1] > rec[0] ? -1 : 0,
+      streak: !DRIVE && !RUN_N && !ARCH_DAY ? streak : 0,
+      rows: today.map((sp, i) => ({ team: sp.player, res: (rows[i] || '').split(' ')[1] || '', marks: squeeze((state.spots[i] && state.spots[i].decisions) || []) })) }));
+    box.insertBefore(img, dbox);
+    box.insertBefore(callsExplained(decs), dbox);
+    if (!DRIVE && !RUN_N && !ARCH_DAY) { const lg = el('p', 'lglink'); lg.hidden = true; box.insertBefore(lg, dbox); leagueNudge(); }
     box.append(countdown(streak >= 1 ? 'Keep the streak: next drive in ' : null));
+    if (!DRIVE && !RUN_N && !ARCH_DAY) box.append(reminderNodes());
     const ad = adBox();
     if (ad) box.append(ad);
     box.append(disclaimer());
+  }
+  // ---- the daily habit: the streak in the top bar, and a reminder in the player's own calendar (a daily event at the
+  // hour they pick: Google Calendar's own page, or a .ics file site.py writes for Apple and Outlook calendars)
+  function curStreak() {
+    const st = load(`${STORE}:stats`, { days: {} }), d = dayOf(new Date());
+    let n = 0; for (let k = st.days[d] ? d : d - 1; st.days[k]; k--) n++;
+    return n;
+  }
+  const REMIND_HOURS = [[8, 'Morning, 8 am'], [12, 'Lunch, noon'], [19, 'Evening, 7 pm']];
+  function reminderNodes() {
+    const box = el('div', 'remind');
+    const open = el('button', 'btn ghostbtn', '\u23f0 Remind me every day');
+    open.type = 'button';
+    open.addEventListener('click', () => {
+      box.textContent = '';
+      box.append(el('div', 'k', 'A daily reminder in your calendar'));
+      const times = el('div', 'rtimes'), links = el('div', 'rlinks');
+      let h = 8;
+      const draw = () => {
+        times.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.h === h)));
+        const t = new Date(); t.setDate(t.getDate() + 1);
+        const ymd = `${t.getFullYear()}${String(t.getMonth() + 1).padStart(2, '0')}${String(t.getDate()).padStart(2, '0')}`, hh = String(h).padStart(2, '0');
+        const g = el('a', 'btn', 'Google Calendar');
+        g.href = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent('Two-Minute Drill: today\u2019s drive')}`
+          + `&details=${encodeURIComponent(`Keep your streak going: https://${SITE}`)}&recur=${encodeURIComponent('RRULE:FREQ=DAILY')}&dates=${ymd}T${hh}0000/${ymd}T${hh}1000`;
+        g.target = '_blank'; g.rel = 'noopener';
+        const a = el('a', 'btn ghostbtn', 'Apple / Outlook');
+        a.href = `remind-${h}.ics`;
+        [g, a].forEach((x) => x.addEventListener('click', () => { track('reminder', { hour: h, cal: x === g ? 'google' : 'ics' }); save(`${STORE}:remind`, h); }));
+        links.textContent = '';
+        links.append(g, a);
+      };
+      REMIND_HOURS.forEach(([hr, lab]) => {
+        const b = el('button', 'chip', lab);
+        b.type = 'button'; b.dataset.h = hr;
+        b.addEventListener('click', () => { h = hr; draw(); });
+        times.append(b);
+      });
+      draw();
+      box.append(times, links, el('p', 'note', 'A new drive is up every day at midnight, your time.'));
+    });
+    box.append(open);
+    if (load(`${STORE}:remind`, null) != null) open.textContent = '\u23f0 Reminder set \u00b7 change it';
+    return box;
+  }
+  // ---- your result as a picture (for Instagram, X, the group chat): drawn on a canvas, the phone's share sheet when it
+  // takes files, else saved as a file
+  async function shareImage(o) {
+    const W = 1080, H = 1350, cv = document.createElement('canvas'), x = cv.getContext('2d');
+    cv.width = W; cv.height = H;
+    try { await document.fonts.ready; } catch (e) { /* no font API */ }
+    const css = getComputedStyle(document.documentElement), col = (v, d) => (css.getPropertyValue(v) || '').trim() || d;
+    const DISP = '"Big Shoulders Display", "Arial Narrow", sans-serif', BODY = '"Libre Franklin", Arial, sans-serif';
+    const MK = { g: col('--sq-g', '#3d9a56'), y: col('--sq-y', '#d2ad2e'), o: col('--sq-o', '#e27c37'), r: col('--sq-r', '#d0463f') };
+    // the field: dark green, yard lines
+    const bg = x.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, '#0f2a18'); bg.addColorStop(1, '#173d24');
+    x.fillStyle = bg; x.fillRect(0, 0, W, H);
+    x.strokeStyle = 'rgba(255,255,255,.07)'; x.lineWidth = 3;
+    for (let y = 90; y < H; y += 110) { x.beginPath(); x.moveTo(0, y); x.lineTo(W, y); x.stroke(); }
+    x.textAlign = 'center'; x.fillStyle = '#fff';
+    x.font = `900 64px ${DISP}`; x.fillText('TWO-MINUTE DRILL', W / 2, 130);
+    x.font = `700 34px ${BODY}`; x.fillStyle = 'rgba(255,255,255,.75)'; x.fillText(o.title.toUpperCase(), W / 2, 185);
+    x.fillStyle = '#fff'; x.font = `900 300px ${DISP}`; x.fillText(o.grade || String(o.score), W / 2, 470);
+    x.font = `600 38px ${BODY}`; x.fillText(o.grade ? `${o.score} \u00b7 ${o.line}` : o.line, W / 2, 545);
+    const coach = typeof o.coach === 'function' ? o.coach() : o.coach;
+    // (the lines below the score, centred in the room above the footer)
+    const nRows = Math.min(4, o.rows.length), blockH = (o.vs ? 90 : 0) + (coach ? 70 : 0) + nRows * 100 + (o.streak >= 2 ? 110 : 0);
+    let y = Math.max(630, 600 + (H - 160 - 600 - blockH) / 2);
+    if (o.vs) {
+      x.font = `900 66px ${DISP}`; x.fillStyle = o.beat > 0 ? MK.g : o.beat < 0 ? MK.r : '#fff';
+      x.fillText(o.vs.toUpperCase(), W / 2, y + 10, W - 80); y += 90;
+    }
+    if (coach) { x.font = `600 36px ${BODY}`; x.fillStyle = 'rgba(255,255,255,.85)'; x.fillText(`Coached like ${coach}`, W / 2, y, W - 80); y += 70; }
+    // the calls, one row of squares per spot
+    const SQ = 74, GAP = 14;
+    o.rows.slice(0, 4).forEach((r) => {
+      const n = Math.max(1, r.marks.length), w = n * SQ + (n - 1) * GAP, lab = `${r.team} ${r.res}`.trim();
+      x.font = `800 40px ${DISP}`; x.textAlign = 'right'; x.fillStyle = '#fff';
+      const x0 = (W - w) / 2 + 60;
+      x.fillText(lab, x0 - 24, y + SQ * 0.68);
+      r.marks.forEach((m, i) => {
+        x.fillStyle = MK[m] || '#666';
+        const xx = x0 + i * (SQ + GAP);
+        x.beginPath(); x.roundRect ? x.roundRect(xx, y, SQ, SQ, 12) : x.rect(xx, y, SQ, SQ); x.fill();
+      });
+      x.textAlign = 'center'; y += SQ + 26;
+    });
+    if (o.streak >= 2) { x.font = `900 60px ${DISP}`; x.fillStyle = '#ffb547'; x.fillText(`\ud83d\udd25 ${o.streak}-DAY STREAK`, W / 2, y + 60); }
+    x.font = `700 40px ${BODY}`; x.fillStyle = '#fff'; x.fillText(`Can you beat me? ${SITE}`, W / 2, H - 70);
+    const blob = await new Promise((res) => cv.toBlob(res, 'image/png'));
+    if (!blob) { toast('Could not make the picture'); return; }
+    const file = new File([blob], `two-minute-drill-${o.title.replace(/\W+/g, '-').toLowerCase()}.png`, { type: 'image/png' });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], text: `Can you beat me? https://${SITE}` });
+        track('share', { what: 'image', method: 'sheet' });
+        return;
+      }
+    } catch (e) { if (e && e.name === 'AbortError') return; }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = file.name;
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast('Picture saved');
+    track('share', { what: 'image', method: 'download' });
+  }
+  // ---- what Pro adds, shown to a free player right after the free daily (the moment they want more)
+  function startPurchase(buy) {
+    buy.disabled = true;
+    (async () => {
+      try { track('pro_pay'); const d = await proApi('/pay', authSession() ? { session: authSession() } : {}); location.href = d.url; } catch (e) {
+        if (/sign-in has expired/.test(e.message)) authClear();
+        toast(/not set up/.test(e.message) ? 'Payments open soon' : 'Could not start the purchase: ' + e.message);
+        buy.disabled = false;
+      }
+    })();
+  }
+  function proValueCard() {
+    const box = el('div', 'pro provalue'), days = Math.max(0, dayOf(new Date()) - 1);
+    box.append(el('div', 'k', 'Want more? Two-Minute Drill Pro'), el('div', 'price', '$4.99 \u00b7 once, yours for good'));
+    const ul = el('ul');
+    ['The Gauntlet: race everyone through the historic drives. $50 and the Champion title to the first to pass them all',
+      'The historic drives: Mahomes\u2019 13 seconds, the Minneapolis Miracle, the Philly Special, 28\u20133 and more, from their real spots',
+      'Playoff runs: coach a team through its whole postseason, every late-game spot in order',
+      `The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed`].forEach((t) => ul.append(el('li', '', t)));
+    const row = el('div', 'row'), buy = el('button', 'btn', 'Unlock Pro \u00b7 $4.99'), more = el('a', 'btn ghostbtn', 'See what\u2019s inside');
+    buy.type = 'button';
+    buy.addEventListener('click', () => { track('pro_value_buy'); startPurchase(buy); });
+    more.href = '#archive';
+    row.append(buy, more);
+    box.append(ul, row, el('p', 'note', 'Apple Pay, Google Pay or a card on Stripe\u2019s secure page. Signed in, it goes on your account for every device.'));
+    track('pro_value_seen');
+    return box;
   }
   // An ad unit (Google AdSense, the website only: site.py --adsense --ad-slot), only on screens between games, never
   // while a drive is on, labeled as an ad. Nothing without both metas (claude.ai, local copies, the test builds).
@@ -5085,7 +5314,7 @@
     box.hidden = true;
     if (ARCH_DAY || DRIVE || RUN_N) return box;        // the archive, a historic drive, a run: nothing to post
     const post = async () => {
-      const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: driveDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)), ...(myName() ? { name: myName() } : {}) }));
+      const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: driveDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)), ...(myName() ? { name: myName(), ...withSession() } : {}) }));
       if (!res.ok) throw new Error(`daily ${res.status}`);
       return res.json();
     };
@@ -5358,12 +5587,12 @@
   // ---- Accounts (board/worker.js /auth*): Pro on an account, Sign in with Google or an emailed link. The session the
   // board gives is kept here (SESS_KEY); signed in, Pro comes from the account (on any device, no device limit) and the
   // board is asked with { session } in place of { code, key }. A code on the device works as before, signed in or not.
-  const SESS_KEY = `${STORE}:session`;
+  const SESS_KEY = `${STORE}:session`, UNAME_KEY = `${STORE}:username`;
   const GOOGLE_ID = ((document.querySelector('meta[name="google-client-id"]') || {}).content || '').trim();
   const ACCT = { cfg: null, me: null };           // cfg: { google, email } (GET /auth); me: { email, pro, code? } (signed in)
   const authSession = () => { const s = String(load(SESS_KEY, '') || ''); return /^[0-9a-f]{64}$/.test(s) ? s : ''; };
   const acctPro = () => !!(ACCT.me && ACCT.me.pro && authSession());
-  function authClear() { ACCT.me = null; try { localStorage.removeItem(SESS_KEY); } catch (e) { /* no storage */ } }
+  function authClear() { ACCT.me = null; try { localStorage.removeItem(SESS_KEY); localStorage.removeItem(UNAME_KEY); } catch (e) { /* no storage */ } }
   // what proves Pro to the board: the session when the account has Pro, else this device's code and key
   const proCred = () => (acctPro() ? { session: authSession() } : { code: proCode(), key: deviceKey() });
   const proHave = () => acctPro() || !!proCode();
@@ -5419,14 +5648,18 @@
   // signed in (Google, or an emailed link): keep the session; on to the Pro tab, where it shows
   // signed in (Google, or an emailed link): keep the session and show who in the top bar. An account without a username
   // picks one first. On the Pro tab the page reloads after, so the tab shows the account's Pro.
-  const acctOf = (d) => ({ email: d.email, name: d.name || '', pro: !!d.pro, ...(d.code ? { code: d.code } : {}) });
+  const acctOf = (d) => {
+    save(UNAME_KEY, d.name || '');
+    return { email: d.email, name: d.name || '', pro: !!d.pro, ...(d.code ? { code: d.code } : {}), leagues: Array.isArray(d.leagues) ? d.leagues : [], remind: !!d.remind };
+  };
   function authSignedIn(d) {
     save(SESS_KEY, d.session);
     ACCT.me = acctOf(d);
     if (d.pro) PRO_LIVE = true;
     track('login');
     acctBar();
-    const then = () => { if (ARCH) location.reload(); };
+    statsSync(true);
+    const then = () => { if (ARCH) location.reload(); else leaguePending(); };
     if (!ACCT.me.name) { nameSheet(true, then); return; }
     closeModal();
     toast(`Signed in as ${ACCT.me.name}`);
@@ -5590,11 +5823,11 @@
     if (!ACCT.me.name) nameSheet(false);
     else acctSheet();
   }
-  function signInSheet() {
+  function signInSheet(lead) {
     const box = el('div', 'acctsheet'), perks = el('ul', 'perks');
-    ['Your username at the top of every page', 'Pro on any phone or computer you sign in on, no code to keep',
-      'New here? The same button makes your account'].forEach((t) => perks.append(el('li', '', t)));
-    box.append(perks, ...signInWays(), el('p', 'note', 'We only keep your email address to know it is you. No posts, no spam.'));
+    ['Your username, streak and stats on any phone or computer', 'Friend leagues: a board of the daily for your group',
+      'Pro on any device you sign in on, no code to keep', 'New here? The same button makes your account'].forEach((t) => perks.append(el('li', '', t)));
+    box.append(...(lead ? [lead] : []), perks, ...signInWays(), el('p', 'note', 'We only keep your email address to know it is you. No posts, no spam.'));
     openModal('Log in or sign up', [box]);
   }
   // pick (first: just signed up) or change the username: 3-20 characters, one account each, shown at the top
@@ -5644,6 +5877,8 @@
       p.append(a, ' and it stays with the account.');
       box.append(p);
     }
+    box.append(leaguesEl());
+    if (ACCT.cfg && ACCT.cfg.email) box.append(remindToggle());
     const acts = el('div', 'acts'), ch = el('button', 'btn ghostbtn', 'Change username'), out = el('button', 'btn ghostbtn', 'Sign out');
     ch.type = 'button'; out.type = 'button';
     ch.addEventListener('click', () => nameSheet(false));
@@ -5651,6 +5886,258 @@
     acts.append(ch, out);
     box.append(acts);
     openModal('Your account', [box]);
+  }
+  // the daily email (board /auth/remind; only where the board can send email): one a day when the new daily is up
+  function remindToggle() {
+    const tg = el('div', 'toggle'), lab = el('div', 'lab', 'Email me when the new daily is up'), sw = el('button', 'sw2');
+    lab.append(el('small', '', 'One short email a day. Every one has an unsubscribe link.'));
+    sw.type = 'button';
+    sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(!!ACCT.me.remind)); sw.setAttribute('aria-label', 'Email me when the new daily is up');
+    sw.addEventListener('click', async () => {
+      const on = sw.getAttribute('aria-checked') !== 'true';
+      sw.disabled = true;
+      sw.setAttribute('aria-checked', String(on));
+      try {
+        ACCT.me = acctOf(await proApi('/auth/remind', { session: authSession(), on }));
+        track(on ? 'remind_on' : 'remind_off');
+        toast(ACCT.me.remind ? 'You’ll get an email when each new daily is up' : 'No more daily emails');
+      } catch (e) {
+        if (/signed out/i.test(e.message)) { authLost(); acctBar(); closeModal(); return; }
+        toast(e.message);
+      }
+      sw.setAttribute('aria-checked', String(!!(ACCT.me && ACCT.me.remind)));
+      sw.disabled = false;
+    });
+    tg.append(lab, sw);
+    return tg;
+  }
+  // the daily email's unsubscribe link: ?unsub=<ref>.<token> (no sign-in needed; the address is tidied either way)
+  async function unsubFromUrl() {
+    const q = new URLSearchParams(location.search), u = q.get('unsub');
+    if (!u) return;
+    q.delete('unsub');
+    history.replaceState(null, '', location.pathname + (q.toString() ? `?${q}` : '') + location.hash);
+    const [r, t] = u.split('.');
+    try {
+      await proApi('/auth/unsub', { r, t });
+      if (ACCT.me) ACCT.me.remind = false;
+      track('remind_unsub');
+      toast('Unsubscribed: no more daily emails');
+    } catch (e) { toast(`That unsubscribe link did not work (${e.message}). Turn the email off in your account instead.`); }
+  }
+
+  // ---- Stats that follow the account (board /auth/stats): signed in, this browser's record (the stats days, the
+  // historic drives, the playoff runs) and the account's are merged, the best of each kept on both sides, so a streak
+  // and the drives passed come along to a new phone. On sign-in, on a page load (at most every SYNC_MS: switching
+  // modes reloads the page) and after each finished daily, drive or run. Drives only from the Gauntlet's start on
+  // (gauntletFresh moved the ones before aside).
+  const SYNC_KEY = `${STORE}:synced`, SYNC_MS = 10 * 60e3, SYNC_CAP = { days: 2000, drives: 500, runs: 500 };
+  // the better of this browser's record of a day, drive or run and the account's (the board's rules, worker.js
+  // statBetter); a drive keeps this browser's own try stamp and last result (renderSummary's: the try counted once)
+  function statBest(kind, mine, theirs) {
+    if (!mine || !theirs) return mine || theirs;
+    const w = theirs.p > mine.p ? theirs : mine;
+    if (kind === 'drives') return { ...w, tries: Math.max(mine.tries || 0, theirs.tries || 0), won: !!(mine.won || theirs.won), ...(mine.at ? { at: mine.at } : {}), ...(mine.prev ? { prev: mine.prev } : {}) };
+    if (kind === 'days' && !w.madden && (mine.madden || theirs.madden)) return { ...w, coach: 'John Madden', madden: mine.madden || theirs.madden };
+    return w;
+  }
+  const newest = (o, n) => Object.fromEntries(Object.keys(o || {}).map(Number).filter((k) => k > 0).sort((a, b) => a - b).slice(-n).map((k) => [k, o[k]]));
+  const gauntletDrives = (o) => Object.fromEntries(Object.entries(o || {}).filter(([, r]) => r && r.at >= GAUNTLET_FROM));
+  // the account's record into this browser's, read fresh (a drive may have finished while the board answered); true
+  // when anything here changed
+  function statsTake(acc) {
+    if (!acc) return false;
+    const st = load(`${STORE}:stats`, { days: {} }), here = { days: st.days || (st.days = {}), drives: load(`${STORE}:drives`, {}), runs: load(`${STORE}:runs`, {}) };
+    let changed = false;
+    for (const kind of ['days', 'drives', 'runs']) {
+      for (const [k, v] of Object.entries(kind === 'drives' ? gauntletDrives(acc.drives) : acc[kind] || {})) {
+        const b = statBest(kind, here[kind][k], v);
+        if (JSON.stringify(b) !== JSON.stringify(here[kind][k])) { here[kind][k] = b; changed = true; }
+      }
+    }
+    if (changed) { save(`${STORE}:stats`, st); save(`${STORE}:drives`, here.drives); save(`${STORE}:runs`, here.runs); }
+    return changed;
+  }
+  let syncQ = Promise.resolve(false);        // one sync at a time, in order (a finish while one is out goes after it)
+  function statsSync(force) {
+    syncQ = syncQ.catch(() => false).then(async () => {
+      if (!signedIn() || !BOARD.api) return false;
+      if (!force && Date.now() - Number(load(SYNC_KEY, 0) || 0) < SYNC_MS) return false;
+      const st = load(`${STORE}:stats`, { days: {} });
+      const stats = { days: newest(st.days, SYNC_CAP.days), drives: newest(gauntletDrives(load(`${STORE}:drives`, {})), SYNC_CAP.drives), runs: newest(load(`${STORE}:runs`, {}), SYNC_CAP.runs) };
+      let d;
+      try { d = await proApi('/auth/stats', { session: authSession(), stats }); } catch (e) {
+        if (/signed out/i.test(e.message)) { authLost(); acctBar(); }
+        return false;
+      }
+      save(SYNC_KEY, Date.now());
+      const changed = statsTake(d.stats);
+      if (changed) streakRedraw();
+      return changed;
+    });
+    return syncQ;
+  }
+  // a day finished on another phone: the end card's streak line, if it is up, counts it
+  function streakRedraw() {
+    const line = document.querySelector('#done .streak');
+    if (!line || !state || !state.done || SURV || DRIVE || RUN_N || ARCH_DAY) return;
+    const st = load(`${STORE}:stats`, { days: {} });
+    let streak = 0; for (let k = dayN; st.days[k]; k--) streak++;
+    line.textContent = streak >= 2 ? `🔥 ${streak}-day streak` : 'Day 1 of your streak · come back tomorrow';
+  }
+
+  // ---- Friend leagues (board /league/*): a private board of the daily for a group of friends: each member's
+  // username, the day's score, the streak and the last 7 days' average, best score first. Made in the account sheet;
+  // joined by the link a member shares (#league-<code>; opened signed out, the join waits for the sign-in: LEAGUE_KEY).
+  const LEAGUE_HASH = ((location.hash.match(/^#league-([A-Za-z0-9]{8})$/) || [])[1] || '').toUpperCase();
+  const LEAGUE_KEY = `${STORE}:leaguejoin`, LEAGUES_MAX = 10;
+  const leagueLink = (code) => `${location.origin}${location.pathname}#league-${code}`;
+  const myLeagues = () => (signedIn() && ACCT.me.leagues) || [];
+  const leagueApi = (path, body) => proApi(`/league/${path}`, { session: authSession(), ...body });
+  const lgFail = (e) => { if (/signed out/i.test(e.message)) { authLost(); acctBar(); closeModal(); toast('You are signed out. Log in again.'); return true; } return false; };
+  // the account sheet's section: your leagues (each opens its board) and a new one
+  function leaguesEl() {
+    const sec = el('div', 'sec'), ls = myLeagues();
+    sec.append(el('div', 'k', 'Leagues'));
+    if (ls.length) {
+      const list = el('div', 'llist');
+      ls.forEach((l) => {
+        const b = el('button', 'lrow');
+        b.type = 'button';
+        b.append(el('span', 'nm', l.name), el('span', 'n', `${l.n} player${l.n === 1 ? '' : 's'}`), el('span', 'go', '›'));
+        b.addEventListener('click', () => leagueBoard(l.code));
+        list.append(b);
+      });
+      sec.append(list);
+    } else sec.append(el('p', 'note', 'Play the daily against your friends: make a league and send them the link. Everyone’s score, streak and week, on one board.'));
+    if (ls.length < LEAGUES_MAX) {
+      const form = el('form'), inp = el('input'), go = el('button', 'btn', 'Create');
+      inp.maxLength = 30; inp.minLength = 3; inp.required = true; inp.placeholder = ls.length ? 'Start another league' : 'League name, e.g. Sunday Crew'; inp.setAttribute('aria-label', 'League name');
+      go.type = 'submit';
+      form.append(inp, go);
+      form.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const name = inp.value.replace(/\s+/g, ' ').trim();
+        if (name.length < 3) { toast('A league name is at least 3 characters'); inp.focus(); return; }
+        go.disabled = true;
+        try {
+          const d = await leagueApi('create', { name });
+          ACCT.me.leagues = d.leagues;
+          track('league_create');
+          leagueNudge();
+          leagueBoard(d.league.code, true);
+        } catch (e) { if (!lgFail(e)) toast(e.message); go.disabled = false; }
+      });
+      sec.append(form);
+    }
+    return sec;
+  }
+  // a league's board (a modal): the day's standings, the invite link, the other leagues, leaving. fresh: just made
+  async function leagueBoard(code, fresh) {
+    const box = el('div', 'acctsheet lboard'), body = el('div', 'lbody');
+    body.append(el('p', 'note', 'Loading the league…'));
+    box.append(body);
+    openModal('League', [box]);
+    await syncQ.catch(() => {});                    // (today's finish goes up first)
+    let d;
+    try { d = await leagueApi('board', { code, day: dayOf(new Date()) }); } catch (e) {
+      if (lgFail(e)) return;
+      body.textContent = '';
+      body.append(el('p', 'err', /no such league/i.test(e.message) ? 'You are not in that league any more.' : `The league did not load: ${e.message}`));
+      return;
+    }
+    if (!box.isConnected) return;                    // (closed while it loaded)
+    $('mTitle').textContent = d.name;
+    body.textContent = '';
+    const played = d.rows.filter((x) => x.today != null).length;
+    body.append(el('p', 'note', `No. ${d.day} · ${played} of ${d.n} played today`));
+    const ol = el('ol', 'lrows');
+    d.rows.forEach((x, i) => {
+      const li = el('li', x.you ? 'me' : ''), who = el('div', 'lwho'), meta = [];
+      if (x.streak >= 2) meta.push(`🔥 ${x.streak}`);
+      if (x.avg7 != null) meta.push(`7-day avg ${Math.round(x.avg7 * 100)}`);
+      who.append(el('span', 'nm', x.you ? `${x.name} (you)` : x.name), el('small', '', meta.join(' · ') || 'No days this week'));
+      li.append(el('span', 'n', x.today != null ? String(i + 1) : '–'), who, x.today != null ? el('b', '', String(Math.round(x.today * 100))) : el('span', 'not', 'not yet'));
+      ol.append(li);
+    });
+    body.append(ol, el('p', 'note', 'Today’s score: better than that % of NFL play-callers. 🔥 days in a row.'));
+    // the invite: the join link, to share (a group chat) or copy
+    const inv = el('div', 'invite'), link = leagueLink(d.code), share = el('button', 'btn alt', fresh ? 'Invite your friends' : 'Invite friends'), pre = el('div', 'lnk', link);
+    share.type = 'button';
+    share.addEventListener('click', () => shareText(`Join my Two-Minute Drill league, ${d.name}: one real NFL drive a day, who calls it best?\n${link}`, pre, 'league'));
+    inv.append(share, pre);
+    body.append(inv);
+    const others = myLeagues().filter((l) => l.code !== d.code);
+    if (others.length) {
+      const row = el('div', 'chips');
+      others.forEach((l) => { const c = el('button', 'chip', l.name); c.type = 'button'; c.addEventListener('click', () => leagueBoard(l.code)); row.append(c); });
+      body.append(el('div', 'k', 'Your other leagues'), row);
+    }
+    const leave = el('button', 'btn ghostbtn', 'Leave this league');
+    leave.type = 'button';
+    leave.addEventListener('click', async () => {
+      if (leave.dataset.sure !== '1') { leave.dataset.sure = '1'; leave.textContent = d.n > 1 ? 'Tap again to leave' : 'Tap again: you are the last one, the league ends'; return; }
+      leave.disabled = true;
+      try {
+        const r = await leagueApi('leave', { code: d.code });
+        ACCT.me.leagues = r.leagues;
+        track('league_leave');
+        leagueNudge();
+        closeModal();
+        toast(`You left ${d.name}`);
+      } catch (e) { if (!lgFail(e)) toast(e.message); leave.disabled = false; }
+    });
+    body.append(leave);
+    track('league_board', { n: d.n });
+  }
+  // a join link: signed out, sign in first (the join waits); without a username, pick one; then join, and the board
+  async function leagueJoin(code) {
+    let peek = null;
+    try { peek = await proApi('/league/peek', { code }); } catch (e) { toast(/no such league/i.test(e.message) ? 'That league link is not valid (any more).' : e.message); return; }
+    if (!signedIn()) {
+      save(LEAGUE_KEY, code);
+      signInSheet(el('p', 'lead', `Log in to join ${peek.name} (${peek.n} player${peek.n === 1 ? '' : 's'}).`));
+      return;
+    }
+    if (!ACCT.me.name) { save(LEAGUE_KEY, code); nameSheet(true, leaguePending); return; }
+    if (myLeagues().some((l) => l.code === peek.code)) { leagueBoard(peek.code); return; }
+    const box = el('div', 'acctsheet'), acts = el('div', 'acts'), yes = el('button', 'btn alt', 'Join'), no = el('button', 'btn ghostbtn', 'Not now');
+    yes.type = 'button'; no.type = 'button';
+    no.addEventListener('click', closeModal);
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      try {
+        const d = await leagueApi('join', { code: peek.code });
+        ACCT.me.leagues = d.leagues;
+        track('league_join', { n: d.league.n });
+        leagueNudge();
+        toast(`You’re in ${d.league.name}`);
+        leagueBoard(peek.code);
+      } catch (e) { if (!lgFail(e)) toast(e.message); yes.disabled = false; }
+    });
+    acts.append(yes, no);
+    box.append(el('p', 'lead', `${peek.n} player${peek.n === 1 ? ' plays' : 's play'} the daily in this league. Join, and your score, streak and week show on its board, under your username ${ACCT.me.name}.`), acts);
+    openModal(`Join ${peek.name}?`, [box]);
+  }
+  function leaguePending() {
+    const code = load(LEAGUE_KEY, '');
+    if (!code || !signedIn() || !ACCT.me.name) return;
+    try { localStorage.removeItem(LEAGUE_KEY); } catch (e) { /* no storage */ }
+    leagueJoin(code);
+  }
+  // the end card's "See how your league did" (when the account is in a league; the account may be asked after the
+  // card is drawn, so it is filled in then too)
+  function leagueNudge() {
+    document.querySelectorAll('.lglink').forEach((p) => {
+      const ls = myLeagues();
+      p.textContent = '';
+      p.hidden = !ls.length;
+      if (!ls.length) return;
+      const b = el('button', 'linkbtn', ls.length === 1 ? `See how ${ls[0].name} did` : 'See how your league did');
+      b.type = 'button';
+      b.addEventListener('click', () => { track('league_nudge'); leagueBoard(ls[0].code); });
+      p.append(b);
+    });
   }
   // the top bar, once the page is up: the ways in (for Log in), who is signed in (asked when Pro did not ask already)
   async function acctInit() {
@@ -5664,8 +6151,14 @@
       } catch (e) { /* offline: Log in shows; the session is kept */ }
     }
     acctBar();
-    if (ACCT.fresh && signedIn() && !ACCT.me.name && $('modal').hidden) nameSheet(true);
+    const fresh = ACCT.fresh;
     ACCT.fresh = false;
+    if (fresh && signedIn() && !ACCT.me.name && $('modal').hidden) nameSheet(true, leaguePending);
+    if (signedIn()) { statsSync(fresh); leagueNudge(); }
+    if (LEAGUE_HASH) {                          // a join link: the address tidied (no reload: replaceState fires no hashchange)
+      history.replaceState(null, '', location.pathname + location.search);
+      leagueJoin(LEAGUE_HASH);
+    } else leaguePending();
   }
   // ---- The Gauntlet: the contest across the historic drives (board/worker.js /race). Pass all of them (an A each)
   // first and win. A Pro code enters under a public name; only passes made after entering count, each drive once; the
@@ -5687,28 +6180,35 @@
   // the board's clock (a phone's own can be minutes off): the countdown and the Live chip go by it
   const raceSkew = (d) => { const t = Date.parse(d && d.now); if (Number.isFinite(t)) RACE.skew = t - Date.now(); };
   const raceNow = () => Date.now() + (RACE.skew || 0);
+  const raceOver = (v) => !!v && (v.over || (!!v.to && raceNow() >= Date.parse(v.to)));     // past the end (the board's clock)
   // the contest's panel: what it is, live status, your entry (or how to enter), the board, the rules
   function racePanel() {
     const box = el('div', 'race');
     box.setAttribute('aria-live', 'polite');
     const draw = () => {
-      const v = RACE.view, me = v && v.me, n = (v && v.n) || (PRO ? PRO.drives.length : 24);
+      const v = RACE.view, n = (v && v.n) || (PRO ? PRO.drives.length : 24);
       box.textContent = '';
       const head = el('div', 'rhead');
-      const live = v && raceNow() >= Date.parse(v.from);
-      const chip = el('span', `rchip${v && v.winner ? ' won' : live ? ' live' : ''}`, v && v.winner ? 'Won' : live ? 'Live' : v ? `Starts in ${hms(Date.parse(v.from) - raceNow())}` : '…');
+      const live = v && raceNow() >= Date.parse(v.from), over = raceOver(v);
+      const chip = el('span', `rchip${v && (v.winner || over) ? ' won' : live ? ' live' : ''}`, over ? 'Final' : v && v.winner ? 'Won' : live ? 'Live' : v ? `Starts in ${hms(Date.parse(v.from) - raceNow())}` : '…');
       chipEl = chip;
       head.append(el('span', 'rk', 'The contest'), chip);
-      box.append(head, el('h3', 'rtitle', RACE_NAME),
-        el('p', 'rlead', `${n} historic drives. Pass every one, an A (${PASS_AT} or better) on each. The first to do it wins ${racePrize()}.`));
+      box.append(head, el('h3', 'rtitle', RACE_NAME));
+      // a winner, or past the end: the results take the panel (the board stays open for 2nd and 3rd until the end)
+      if (v && (v.winner || over)) { raceFinal(v, n, over); return; }
+      box.append(el('p', 'rlead', `${n} historic drives. Pass every one, an A (${PASS_AT} or better) on each. The first to do it wins ${racePrize()}.`));
       if (!v) { box.append(el('p', 'note', BOARD.api ? 'Loading the leaderboard…' : 'The leaderboard is on nfl2mindrill.com.')); return; }
-      if (v.winner) box.append(el('p', 'rwin', `🏆 ${v.winner.name} passed all ${n} first, ${new Date(v.winner.at).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}. The board is still open: climb it.`));
       const stats = el('div', 'rstats');
       stats.append(el('span', '', `${v.entrants} in the race`), el('span', '', `${v.passes} drive${v.passes === 1 ? '' : 's'} passed`));
       if (v.rows[0] && v.rows[0].n) stats.append(el('span', '', `Leader: ${v.rows[0].name}, ${v.rows[0].n}/${n}`));
       box.append(stats);
-      // you
-      const you = el('div', 'ryou');
+      box.append(youBox(v, n, live));
+      raceBoard(v, n, RACE.full ? v.rows.length : 10);
+      box.append(raceRules(n));
+    };
+    // you: your entry and where you stand, or how to enter
+    const youBox = (v, n, live) => {
+      const me = v.me, you = el('div', 'ryou');
       if (me) {
         const bar = el('div', 'rbar'), fill = el('i');
         fill.style.width = `${(100 * me.n) / n}%`;
@@ -5767,12 +6267,14 @@
       } else {
         const a = el('a', 'btn', 'Get Pro to enter');
         a.href = '#proBuy';
-        a.addEventListener('click', (ev) => { ev.preventDefault(); const t = document.querySelector('.arch .pro'); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+        a.addEventListener('click', (ev) => { ev.preventDefault(); const t = document.querySelector('.arch .pro'); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); else location.hash = '#archive'; });
         you.append(el('div', 'rme', 'Want in?'), el('p', 'note', `Pro opens the ${n} historic drives and your entry. One code, one entry.`), a);
       }
-      box.append(you);
-      // the board
-      const rows = v.rows.slice(0, RACE.full ? v.rows.length : 10);
+      return you;
+    };
+    // the board: the top `top` rows (and the button for the rest)
+    const raceBoard = (v, n, top) => {
+      const me = v.me, rows = v.rows.slice(0, top);
       if (rows.length) {
         const ol = el('ol', 'rboard');
         rows.forEach((x, i) => {
@@ -5784,13 +6286,15 @@
           ol.append(li);
         });
         box.append(ol);
-        if (v.rows.length > 10) {
+        if (v.rows.length > 10 && top < Infinity) {
           const more = el('button', 'btn ghostbtn', RACE.full ? 'Top 10' : `Full board (${v.rows.length})`);
           more.type = 'button';
           more.addEventListener('click', () => { RACE.full = !RACE.full; draw(); });
           box.append(more);
         }
       } else box.append(el('p', 'note', 'Nobody on the board yet. The first pass takes the lead.'));
+    };
+    const raceRules = (n) => {
       const rules = el('details', 'rrules');
       rules.append(el('summary', '', 'Rules'));
       const ul = el('ul');
@@ -5801,7 +6305,39 @@
         '2nd and 3rd to pass all 24: 2nd picks a future daily too, 3rd gets a shout-out on the site and our socials.',
         'One drive at a time: passes come in at most one every 30 seconds.'].forEach((t) => ul.append(el('li', '', t)));
       rules.append(ul);
-      box.append(rules);
+      return rules;
+    };
+    // the results: the champion, 2nd and 3rd (the first three to pass all of them, in order; once it is over, the top
+    // of the standings for a place nobody finished), what's next, the full standings, a link to share
+    const raceFinal = (v, n, over) => {
+      const me = v.me, fin = v.rows.filter((x) => x.done), when = (t) => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      const champ = v.winner || fin[0];
+      box.append(el('p', 'rlead', champ ? `${champ.name} passed all ${n} historic drives first and is the Gauntlet Champion.` : `The Gauntlet is over. Nobody passed all ${n}: the standings are final.`));
+      const pod = el('ol', 'rpod'), prize = [racePrize(), 'Picks a future daily', 'A shout-out on the site and our socials'];
+      ['Champion', '2nd', '3rd'].forEach((label, i) => {
+        const x = fin[i] || (over ? v.rows.filter((r) => !r.done)[i - fin.length] : null), li = el('li', `rp${i + 1}${x ? '' : ' open'}`);
+        li.append(el('span', 'rpk', x && !x.done ? ordinal(i + 1) : label), el('b', 'rpn', x ? `${i ? '' : '🏆 '}${x.name}` : 'Open'),
+          el('span', 'rps', x ? (x.done ? `All ${n} · ${when(x.done)}` : `${x.n}/${n} passed`) : `The next to pass all ${n} takes it`));
+        if (x && x.done) li.append(el('span', 'rpz', prize[i]));
+        pod.append(li);
+      });
+      box.append(pod);
+      if (!over) box.append(el('p', 'note', `The board stays open for 2nd and 3rd: pass all ${n} to take a place.`));
+      if (me && over) box.append(el('p', 'rmefin', `You: ${me.name}, ${me.n}/${n} passed${me.rank ? `, ${ordinal(me.rank)} place` : ''}.`));
+      else if (!over && (me || isPro())) box.append(youBox(v, n, true));
+      if (v.next) {                                   // the next contest (the board's NEXT_CONTEST): only when it is set
+        const nx = el('div', 'rnext');
+        nx.append(el('span', 'rk', 'Next contest'), el('p', '', v.next));
+        box.append(nx);
+      }
+      box.append(el('div', 'rk', over ? 'Final standings' : 'Standings'));
+      raceBoard(v, n, Infinity);
+      const share = el('button', 'btn ghostbtn', 'Share the results'), txt = el('p', 'rsharetxt');
+      share.type = 'button';
+      txt.textContent = `${RACE_NAME} results: ${champ ? `${champ.name} is the Gauntlet Champion, all ${n} historic drives passed.` : 'the final standings.'} ${location.origin}${location.pathname}#gauntlet-results`;
+      txt.hidden = true;
+      share.addEventListener('click', () => { txt.hidden = false; shareText(txt.textContent, txt, 'gauntlet'); });
+      box.append(share, txt, raceRules(n));
     };
     let shown = false, chipEl = null;                     // the panel is built before it is on the page: the first fetch goes anyway
     // someone typing a name: the panel is not redrawn under them (a redraw rebuilds the form and loses what was typed)
@@ -5818,7 +6354,7 @@
     // the countdown: only the chip's text each second; the whole panel once, when it goes live
     RACE.timer = setInterval(() => {
       const v = RACE.view;
-      if (!v || v.winner) return;
+      if (!v || v.winner || raceOver(v)) return;
       const left = Date.parse(v.from) - raceNow();
       if (left > 0) { if (chipEl) chipEl.textContent = `Starts in ${hms(left)}`; } else if (left > -1500 && !typing()) draw();
     }, 1000);
@@ -5874,7 +6410,7 @@
   }
   // on the Daily and Survivor tabs, once it is on: a bar to the race
   function raceBar() {
-    if (!PRO_ON || !BOARD.api || ARCH || ARCH_DAY || DRIVE || RUN_N || VS || document.querySelector('.racebar')) return;
+    if (!PRO_ON || !BOARD.api || ARCH || ARCH_DAY || DRIVE || RUN_N || VS || GAUNTLET || document.querySelector('.racebar')) return;
     const a = el('a', 'racebar');
     a.href = '#archive';
     a.append(el('b', '', `🏁 ${RACE_NAME}`), el('span', '', 'First to pass all 24 historic drives wins. Leaderboard →'));
@@ -5909,14 +6445,7 @@
     }
     const row = el('div', 'row'), buy = el('button', 'btn', 'Unlock · $4.99');
     buy.type = 'button';
-    buy.addEventListener('click', async () => {
-      buy.disabled = true;
-      try { track('pro_pay'); const d = await proApi('/pay', authSession() ? { session: authSession() } : {}); location.href = d.url; } catch (e) {
-        if (/sign-in has expired/.test(e.message)) authClear();
-        toast(/not set up/.test(e.message) ? 'Payments open soon' : 'Could not start the purchase: ' + e.message);
-        buy.disabled = false;
-      }
-    });
+    buy.addEventListener('click', () => startPurchase(buy));
     row.append(buy);
     box.append(row, el('p', 'note', acctPro() || !authSession() ? 'Apple Pay, Google Pay or a card, on Stripe’s secure page. One code, up to 3 of your devices.'
       : `Apple Pay, Google Pay or a card, on Stripe’s secure page. Signed in as ${(ACCT.me && ACCT.me.email) || 'you'}: Pro goes on your account, for any device you sign in on.`));
@@ -5979,6 +6508,17 @@
     if (ago === 0) return 'TONIGHT';
     if (ago === 1) return 'LAST NIGHT';
     return `${day.toLocaleDateString(undefined, { weekday: 'short' }).toUpperCase()} NIGHT`;
+  }
+  // #gauntlet: the contest's panel alone (the link the results share), then the way to the drives
+  function renderGauntlet() {
+    track('gauntlet_open', { pro: isPro() });
+    show('arch');
+    const box = $('arch');
+    box.textContent = '';
+    if (!BOARD.api) { box.append(el('p', 'note', 'The Gauntlet is on nfl2mindrill.com.')); return; }
+    const a = el('a', 'btn ghostbtn gtodrives', isPro() ? 'Play the historic drives' : 'Pro: the historic drives');
+    a.href = '#archive';
+    box.append(racePanel(), a);
   }
   // the Pro screen: the historic drives and every past day, newest first, with your score where you played; the
   // pitch when Pro is not on
@@ -6705,7 +7245,7 @@
     fieldTaps();
     boardInit();
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
-    $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
+    $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE || GAUNTLET ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
     $('modeArch').hidden = !PRO_ON;
     raceBar();
     if (PRO_BUILT && !PRO_ON) {
@@ -6720,6 +7260,7 @@
     $('bar').addEventListener('click', () => { if (G) spotInfo(); });
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
     $('persBtn').addEventListener('click', openPers);
+    speedBtn();
     $('deepClose').addEventListener('click', closeDeep);
     $('mClose').addEventListener('click', closeModal);
     $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeModal(); });
@@ -6738,6 +7279,7 @@
       const now = new Date();
       dayN = ARCH_DAY || dayOf(now);
       await authLoginFromUrl();
+      await unsubFromUrl();
       await proClaimFromUrl();
       await proVerify();
       acctInit();
@@ -6749,6 +7291,7 @@
         vsConnect();
         return;
       }
+      if (GAUNTLET) { renderGauntlet(); return; }
       if (ARCH || (ARCH_DAY && (!isPro() || ARCH_DAY >= dayOf(now))) || ((DRIVE || RUN_N) && !isPro())) { await renderArchive(now); return; }
       if (SURV) {
         state = load(stateKey(), null) || newRun();
@@ -6780,7 +7323,8 @@
         const ids = dayIds(dayN);
         const teams = await loadTeams(ids);
         today = ids.map((i) => buildScen(idx.spots[i], teams[i]));
-        $('dayLabel').textContent = `No. ${dayN} · ${dayDate(dayN).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${ARCH_DAY ? ' · archive' : ''}`;
+        const stk = ARCH_DAY ? 0 : curStreak();
+        $('dayLabel').textContent = `No. ${dayN} · ${dayDate(dayN).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${ARCH_DAY ? ' · archive' : ''}${stk >= 2 ? ` · \ud83d\udd25${stk}` : ''}`;
       }
     } catch (e) { $('boot').textContent = 'Today\'s spots did not load (' + e.message + '). Check your connection and reload.'; return; }
     // a try saved on a spot's data since corrected (the Miami Miracle began with the touchdown on the board until the fix
