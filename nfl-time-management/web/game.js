@@ -39,7 +39,8 @@
   });
   // every share ends with the address, so a posted score brings its readers to the game (the website's own host;
   // on claude.ai, where the page has no build stamp, the site's name)
-  const SITE = BUILD && location.host ? location.host.replace(/^www\./, '') : 'nfl2mindrill.com';
+  const HOME = (document.querySelector('meta[name="home"]') || {}).content || 'nfl2mindrill.com';      // (site.py --domain)
+  const SITE = BUILD && location.host ? location.host.replace(/^www\./, '') : HOME;
   // Share: the phone's share sheet where there is one (a group chat in a tap), else the clipboard, else select it
   async function shareText(text, pre, what) {
     if (navigator.share && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
@@ -7255,7 +7256,7 @@
       // a winner, or past the end: the results take the panel (the board stays open for 2nd and 3rd until the end)
       if (v && (v.winner || over)) { raceFinal(v, n, over); return; }
       box.append(el('p', 'rlead', `${n} historic drives. Pass every one, an A (${PASS_AT} or better) on each. The first to do it wins ${racePrize()}.`));
-      if (!v) { box.append(el('p', 'note', BOARD.api ? 'Loading the leaderboard…' : 'The leaderboard is on nfl2mindrill.com.')); return; }
+      if (!v) { box.append(el('p', 'note', BOARD.api ? 'Loading the leaderboard…' : `The leaderboard is on ${HOME}.`)); return; }
       const stats = el('div', 'rstats');
       stats.append(el('span', '', `${v.entrants} in the race`), el('span', '', `${v.passes} drive${v.passes === 1 ? '' : 's'} passed`));
       if (v.rows[0] && v.rows[0].n) stats.append(el('span', '', `Leader: ${v.rows[0].name}, ${v.rows[0].n}/${n}`));
@@ -7573,7 +7574,7 @@
     show('arch');
     const box = $('arch');
     box.textContent = '';
-    if (!BOARD.api) { box.append(el('p', 'note', 'The Gauntlet is on nfl2mindrill.com.')); return; }
+    if (!BOARD.api) { box.append(el('p', 'note', `The Gauntlet is on ${HOME}.`)); return; }
     const a = el('a', 'btn ghostbtn gtodrives', isPro() ? 'Play the historic drives' : 'Pro: the historic drives');
     a.href = '#archive';
     box.append(racePanel(), a);
