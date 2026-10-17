@@ -6660,12 +6660,21 @@
     q.delete('unsub');
     history.replaceState(null, '', location.pathname + (q.toString() ? `?${q}` : '') + location.hash);
     const [r, t] = u.split('.');
-    try {
-      await proApi('/auth/unsub', { r, t });
-      if (ACCT.me) ACCT.me.remind = false;
-      track('remind_unsub');
-      toast('Unsubscribed: no more daily emails');
-    } catch (e) { toast(`That unsubscribe link did not work (${e.message}). Turn the email off in your account instead.`); }
+    // asked, not done on load: mail scanners open every link in an email, and would unsubscribe everyone
+    const go = el('button', 'btn', 'Unsubscribe');
+    go.type = 'button';
+    go.addEventListener('click', async () => {
+      if (go.disabled) return;
+      go.disabled = true;
+      try {
+        await proApi('/auth/unsub', { r, t });
+        if (ACCT.me) ACCT.me.remind = false;
+        track('remind_unsub');
+        closeModal();
+        toast('Unsubscribed: no more daily emails');
+      } catch (e) { closeModal(); toast(`That unsubscribe link did not work (${e.message}). Turn the email off in your account instead.`); }
+    });
+    openModal('Daily email', [el('p', 'note', 'Stop the daily “new drive is up” email? You can turn it back on in your account.'), go]);
   }
 
   // ---- Stats that follow the account (board /auth/stats): signed in, this browser's record (the stats days, the
@@ -8047,7 +8056,8 @@
       if (ARCH || (ARCH_DAY && (!isPro() || ARCH_DAY >= dayOf(now))) || ((DRIVE || RUN_N) && !isPro())) { await renderArchive(now); return; }
       if (SURV) {
         state = load(stateKey(), null) || newRun();
-        if (!load(`${STORE}:seen`, false)) { if (TOUR_OK) tourStart(true); else openHelp(true); save(`${STORE}:seen`, true); } else tourStart(false);
+        if (!$('modal').hidden) { /* a question already up (the unsubscribe link's): the welcome waits for the next visit */ }
+        else if (!load(`${STORE}:seen`, false)) { if (TOUR_OK) tourStart(true); else openHelp(true); save(`${STORE}:seen`, true); } else tourStart(false);
         startWorkers();
         if (state.out) renderSurvSummary(); else await survOpen();
         return;
@@ -8096,7 +8106,8 @@
     const fresh = !load(stateKey(), null);
     state = load(stateKey(), null) || { spots: [], current: 0, done: false, tryAt: Date.now() };     // tryAt: this try (a drive's record)
     if (fresh && DRIVE) raceStart();      // a new try of a historic drive: the Gauntlet's token for it
-    if (!load(`${STORE}:seen`, false)) { if (TOUR_OK) tourStart(true); else openHelp(true); save(`${STORE}:seen`, true); } else tourStart(false);
+    if (!$('modal').hidden) { /* a question already up (the unsubscribe link's): the welcome waits for the next visit */ }
+    else if (!load(`${STORE}:seen`, false)) { if (TOUR_OK) tourStart(true); else openHelp(true); save(`${STORE}:seen`, true); } else tourStart(false);
     drawTiles();
     startWorkers();
     if (state.done) renderSummary();
