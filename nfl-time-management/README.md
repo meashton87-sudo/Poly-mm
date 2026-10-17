@@ -364,6 +364,19 @@ your score and each spot's win chance post once (your first finish of the day co
 the summary shows how you compare with everyone who played that day: the share of players you beat, the day's
 scores in the same buckets as your own stats, each spot against the day's average, and the day's top ten named
 players (a name is claimed the same way as on the survivor board). The day is the player's local date.
+Under it, two tabs: **Today's top 10** (name and score) and **This week** (`/week`: each name's best 5 daily scores of
+the last 7 days, added up, out of 500; the page says so), each with your own line under the list when you're not on it
+("You: #142 of 1,380": the day's rank among everyone who played, named or not; the week's among the names in it). A
+name is listed by its first result of a day; a blocked name never. The worker keeps both lists as results come
+(a day's 25 best, each week's 100 best and a histogram of its points; a name's last two weeks), never scanning the
+day lists. Scores are the page's own, as before (not checked against the calls behind them): a fake score can reach
+both lists, so `DELETE /week?name=...` with the `ADMIN_TOKEN` takes a name off every day and week list it is on, for good.
+
+**Practice** (`#practice`, the daily end card's "Keep playing: practice drive"; free): once the day's drive is done, one
+random real drive at a time from survivor's pool (none of today's, none twice until the pool is used up), graded like
+the daily (score, calls explained, the real coach), with "Another practice drive" and "Back to today". It never touches
+the day's score, the stats, the streak, tendencies or the lists. Its progress is saved on its own (`tmd:v3:practice`):
+a refresh mid-drive picks it up where it was. Before the day's drive is done, `#practice` opens the day's drive.
 
 **Analytics events** (the website's Google tag only; `track()` in `game.js`), for deciding what to improve:
 `drive_start` (mode, kind of spot, day), `play_call` (mode, family, call, routes changed, out of bounds),
@@ -375,7 +388,8 @@ select), `help_open` (a tap on ?; auto: the three-line help a first visit to a P
 `install_accepted` (via launch: first opened from the home screen) and `install_dismissed` (close or the
 browser's prompt), `sim_ready` (packed data or JSON, ms since load, ms a player
 sat waiting on it), `drive_leave` (the page went to the background mid-drive: calls made, seconds in, still
-loading), `stats_open`, `stats_page_link`, `replay`, `name_set`. Share opens the phone's share sheet
+loading), `stats_open`, `stats_page_link`, `replay`, `name_set`, `leaderboard_tab` (day or week), `practice_start` (from the
+daily card or a practice card), `practice_finish` (practice drive number, kind, score, snaps). Share opens the phone's share sheet
 where there is one. In Google Analytics: Reports, Engagement, Events (custom fields need registering as custom
 dimensions under Admin, Custom definitions, to show in reports).
 

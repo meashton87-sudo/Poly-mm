@@ -8,7 +8,10 @@
 //   GET    /days                                           -> every day played: { days: [{ date, n, avg, best }] }
 //   GET    /madden                                         -> every John Madden found: { odds, finds: [{ date, at, code }] }
 //   POST   /daily  { date, key, p, spots: [w, ...], name? }  -> the same, after counting your result (1-3 spots: the
-//                                                             day's drive, or the three spots days had before)
+//                                                             day's drive, or the three spots days had before), and
+//                                                             week: the week to that date with your own line
+//   GET    /week?date=2026-10-17                          -> the week to that date: { from, to, best, n, top: [{ name, pts, days }] }
+//   DELETE /week?name=Eli  (Authorization: Bearer <ADMIN_TOKEN>)          a name off the day and week lists, for good
 // The daily game: every device's first result of a day counts once (a replay of the day changes nothing). p is the
 // day's score (0-1, better than that share of NFL play-callers), spots each spot's win chance against a typical
 // play-caller (-1 to 1). The day keeps a histogram of scores in whole points (hist[0..100]), each spot's histogram
@@ -132,7 +135,7 @@ async function ownerOf(storage, lower) {
 const claim = (storage, lower, kh) => storage.put(`claim:${lower}`, kh);
 const emptyDay = () => ({ n: 0, hist: new Array(101).fill(0), spots: [0, 1, 2].map(() => ({ n: 0, sum: 0, hist: new Array(101).fill(0) })), top: [] });
 const dayView = (d) => ({ n: d.n, hist: d.hist, spots: d.spots.map((x) => ({ n: x.n, avg: x.n ? x.sum / x.n : 0, hist: x.hist })),
-  top: shown(d.top).map(({ name, p }) => ({ name, p })) });
+  top: shown(d.top).slice(0, DAY_TOP).map(({ name, p }) => ({ name, p })) });
 function dateOk(date, now = Date.now()) {
   if (!DATE_RE.test(date)) return false;
   const t = Date.parse(date + 'T12:00:00Z');
@@ -151,6 +154,95 @@ async function days(storage, h) {
   }
   out.sort((a, b) => a.date.localeCompare(b.date));
   return json({ days: out }, 200, h);
+}
+
+// The day's list and the week's (the end card's "Today's top 10" and "This week"). A named result goes on both
+// once: a name's first result of a day (an account playing on two phones is listed by the first). The week to a date E
+// (E and the 6 days before it): each name's best WEEK_BEST daily scores in it, added up (0-500), so a player who
+// plays 5 of the 7 days can reach the top and one bad day costs nothing; every name with a day in it is ranked, by
+// points, then by who got there first. Kept as it happens, never worked out from the day lists: wn:<name> is the
+// name's last two weeks of scores ({ name, d: { date: points } }), wk:<E> each week's { n, hist (points 0-500), top
+// (the WEEK_KEEP best) }. A result on day D changes the weeks D..D+6 (7 small values); a name's points in a week
+// only go up, so a name that falls off a top list never belongs back on it until its own next result puts it there.
+// Your rank (the poster's own) comes from the histogram: 1 + the names with more points.
+const WEEK_DAYS = 7, WEEK_BEST = 5, WEEK_KEEP = 100, WEEK_TOP = 10, DAY_KEEP = 25;    // DAY_KEEP: kept past the 10 shown, so a name taken off leaves the next in line
+const addDays = (date, k) => new Date(Date.parse(date + 'T12:00:00Z') + k * 864e5).toISOString().slice(0, 10);
+function weekOf(d, end) {
+  const from = addDays(end, 1 - WEEK_DAYS), s = Object.entries(d || {}).filter(([k]) => k >= from && k <= end).map(([, v]) => v).sort((a, b) => b - a);
+  return { pts: s.slice(0, WEEK_BEST).reduce((a, x) => a + x, 0), days: s.length };
+}
+const emptyWeek = () => ({ n: 0, hist: new Array(WEEK_BEST * 100 + 1).fill(0), top: [] });
+const sameName = (lower) => (r) => String(r.name).toLowerCase() === lower;
+async function weekAdd(storage, wn, date, name, pt) {
+  const lower = name.toLowerCase(), ends = Array.from({ length: WEEK_DAYS }, (_, k) => addDays(date, k)), was = ends.map((e) => weekOf(wn.d, e)), at = Date.now();
+  wn.d[date] = pt; wn.name = name;
+  const old = addDays(date, -2 * WEEK_DAYS);        // no week still written reaches back this far (a post's date is within a day of today)
+  for (const k of Object.keys(wn.d)) if (k < old) delete wn.d[k];
+  for (let i = 0; i < ends.length; i++) {
+    const k = `wk:${ends[i]}`, w = (await storage.get(k)) || emptyWeek(), now = weekOf(wn.d, ends[i]), prev = w.top.find(sameName(lower));
+    if (was[i].days) w.hist[was[i].pts] -= 1; else w.n += 1;
+    w.hist[now.pts] += 1;
+    w.top = w.top.filter((r) => !sameName(lower)(r));
+    w.top.push({ name, pts: now.pts, days: now.days, at: prev && prev.pts === now.pts ? prev.at : at });     // (a day that adds no points keeps its place in a tie)
+    w.top.sort((a, b) => b.pts - a.pts || a.at - b.at);
+    w.top = w.top.slice(0, WEEK_KEEP);
+    await storage.put(k, w);
+  }
+  await storage.put(`wn:${lower}`, wn);
+}
+// a named result on the day's list and in the name's weeks: once a name a day; never a name taken off (DELETE /week)
+async function listed(storage, day, date, name, nk, p) {
+  const lower = name.toLowerCase(), wn = (await storage.get(`wn:${lower}`)) || { name, d: {} };
+  if (wn.out || date in wn.d) return;
+  if (!day.top.some(sameName(lower))) {
+    day.top.push({ name, p, kh: nk });
+    day.top.sort((a, b) => b.p - a.p);
+    day.top = day.top.slice(0, DAY_KEEP);
+  }
+  await weekAdd(storage, wn, date, name, Math.round(p * 100));
+}
+// the week to `end` as shown: the top WEEK_TOP (never a blocked() name, never a key hash), and with a name, its own line
+async function weekFor(storage, end, name) {
+  const w = (await storage.get(`wk:${end}`)) || emptyWeek();
+  const v = { from: addDays(end, 1 - WEEK_DAYS), to: end, best: WEEK_BEST, n: w.n, top: shown(w.top).slice(0, WEEK_TOP).map(({ name: nm, pts, days: dd }) => ({ name: nm, pts, days: dd })) };
+  const wn = name ? await storage.get(`wn:${name.toLowerCase()}`) : null;
+  const m = wn && !wn.out ? weekOf(wn.d, end) : null;
+  if (m && m.days) v.you = { pts: m.pts, days: m.days, rank: 1 + w.hist.slice(m.pts + 1).reduce((a, c) => a + c, 0) };
+  return v;
+}
+// the commissioner takes a name off the lists (a score that can't be real): off every week and day list it is on, out
+// of the weeks' counts, and kept off (wn.out); its results stay in the days' histograms
+async function weekRemove(storage, lower) {
+  const wn = (await storage.get(`wn:${lower}`)) || { name: lower, d: {} };
+  let removed = 0;
+  const ends = new Set(Object.keys(wn.d).flatMap((d) => Array.from({ length: WEEK_DAYS }, (_, k) => addDays(d, k))));
+  for (const e of ends) {
+    const w = await storage.get(`wk:${e}`), m = weekOf(wn.d, e);
+    if (!w || !m.days) continue;
+    w.hist[m.pts] -= 1; w.n -= 1;
+    const n0 = w.top.length;
+    w.top = w.top.filter((r) => !sameName(lower)(r));
+    removed += n0 - w.top.length;
+    await storage.put(`wk:${e}`, w);
+  }
+  for (const d of Object.keys(wn.d)) {
+    const day = await storage.get(`day:${d}`);
+    if (day && day.top.some(sameName(lower))) { day.top = day.top.filter((r) => !sameName(lower)(r)); await storage.put(`day:${d}`, day); removed += 1; }
+  }
+  await storage.put(`wn:${lower}`, { name: wn.name, d: {}, out: true });
+  return removed;
+}
+async function week(req, env, storage, h, url) {
+  if (req.method === 'DELETE') {
+    if (!isAdmin(req, env)) return json({ error: 'forbidden' }, 403, h);
+    const lower = clean(url.searchParams.get('name')).toLowerCase();
+    if (!lower) return json({ error: 'name wanted' }, 400, h);
+    return json({ removed: await weekRemove(storage, lower) }, 200, h);
+  }
+  if (req.method !== 'GET') return json({ error: 'method' }, 405, h);
+  const date = String(url.searchParams.get('date') || '');
+  if (!DATE_RE.test(date) || !Number.isFinite(Date.parse(date + 'T12:00:00Z'))) return json({ error: 'date (YYYY-MM-DD) wanted' }, 400, h);
+  return json(await weekFor(storage, date, ''), 200, h);
 }
 
 async function daily(req, env, storage, hits, h, url) {
@@ -182,28 +274,23 @@ async function daily(req, env, storage, hits, h, url) {
     taken = !!(owner && owner !== nk);
     unclaimed = !owner;
   }
+  const weekOut = async () => weekFor(storage, date, (prev && prev.name) || (name && !taken ? name : ''));
   if (prev) {           // the day's first result stands; a name given afterwards puts that result on the list
     if (name && !prev.name && !taken) {
       prev.name = name;
-      day.top.push({ name, p: prev.p, kh: nk });
-      day.top.sort((a, b) => b.p - a.p);
-      day.top = day.top.slice(0, DAY_TOP);
+      await listed(storage, day, date, name, nk, prev.p);
       await storage.put(mine, prev);
       await storage.put(`day:${date}`, day);
       if (unclaimed) await claim(storage, name.toLowerCase(), nk);
     }
-    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots }, ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}),
+    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots }, week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}),
       ...(prev.madden ? { madden: prev.madden } : {}) }, 200, h);
   }
   const pt = Math.round(p * 100);
   day.n += 1;
   day.hist[pt] += 1;
   spots.forEach((w, i) => { const x = day.spots[i]; x.n += 1; x.sum += w; x.hist[Math.max(0, Math.min(100, Math.round(w * 100) + 50))] += 1; });
-  if (name && !taken) {
-    day.top.push({ name, p, kh: nk });
-    day.top.sort((a, b) => b.p - a.p);
-    day.top = day.top.slice(0, DAY_TOP);
-  }
+  if (name && !taken) await listed(storage, day, date, name, nk, p);
   const you = { p, spots };
   const madden = await maddenDraw(env, storage, kh, date);
   if (madden) {
@@ -214,7 +301,7 @@ async function daily(req, env, storage, hits, h, url) {
   await storage.put(mine, { ...you, ...(name && !taken ? { name } : {}), ...(madden ? { madden } : {}) });
   await storage.put(`day:${date}`, day);
   if (unclaimed && name) await claim(storage, name.toLowerCase(), nk);
-  return json({ ...dayView(day), counted: true, you, ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}), ...(madden ? { madden } : {}) }, 200, h);
+  return json({ ...dayView(day), counted: true, you, week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}), ...(madden ? { madden } : {}) }, 200, h);
 }
 
 // ---- Pro
@@ -917,6 +1004,7 @@ export async function handle(req, env, storage, hits) {
   if (LEAGUE_PATHS.includes(url.pathname)) return league(req, env, storage, hits, h, url);
   if (url.pathname === '/race' || url.pathname.startsWith('/race/')) return race(req, env, storage, hits, h, url);
   if (url.pathname === '/daily') return daily(req, env, storage, hits, h, url);
+  if (url.pathname === '/week') return week(req, env, storage, h, url);
   if (url.pathname === '/days') return req.method === 'GET' ? days(storage, h) : json({ error: 'method' }, 405, h);
   if (url.pathname === '/madden') return req.method === 'GET' ? json({ odds: MADDEN_ODDS, finds: (await storage.get('madden:list')) || [] }, 200, h)
     : json({ error: 'method' }, 405, h);
@@ -1212,7 +1300,7 @@ export default {
   fetch(req, env) {
     const url = new URL(req.url);
     if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me'].includes(url.pathname)) return versus(req, env, url);
-    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, '/board', '/daily', '/days', '/madden'].includes(url.pathname)) return handle(req, env, null, null);
+    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, '/board', '/daily', '/week', '/days', '/madden'].includes(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },
   // the cron trigger (wrangler.toml): the day's reminder emails, sent by the Board (its storage); the day is the run's
