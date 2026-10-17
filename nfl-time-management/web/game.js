@@ -3038,6 +3038,8 @@
       : `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
     if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
     if (PRACTICE) box.append(el('div', 'who prac', 'Practice: graded like the daily, but it doesn’t count toward your stats, streak or the leaderboard.'));
+    const chl = challengeLine();
+    if (chl) box.append(chl);
     box.append(todaySoFar());
     const go = el('button', 'btn', 'Next');
     go.type = 'button';
@@ -5257,8 +5259,10 @@
       box.insertBefore(v, box.children[3] || null);
     }
     const text = `${DRIVE ? `Two-Minute Drill · ${PRO.drives[DRIVE - 1].title}\nGrade ${gradeOf(Math.round(p * 100)).L}${p * 100 >= PASS_AT - 0.5 ? ' ✅ passed' : ''}` : RUN_N ? `Two-Minute Drill · the ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Two-Minute Drill #${dayN}`}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
-      `${streak >= 2 ? `\n🔥 ${streak}-day streak` : ''}\n${rows.join('\n')}\nCan you beat me? ${SITE}`;
+      `${streak >= 2 ? `\n🔥 ${streak}-day streak` : ''}\n${rows.join('\n')}\nCan you beat me? ${!DRIVE && !RUN_N && !ARCH_DAY ? chLink(p) : SITE}`;
     // sharing is how new players find the game: the button sits right under the result, not below the standings
+    const chc = challengeCard(p);
+    if (chc) box.insertBefore(chc, box.children[3] || null);
     const share = { text };
     const pre = el('div', 'grid-share', text);
     const btn = el('button', 'btn', 'Share your score');
@@ -6465,6 +6469,35 @@
     try { authSignedIn(await proApi('/auth/google', { credential })); } catch (e) { toast('Google sign-in did not work: ' + e.message); }
   }
   // back from the sign-in email: ?login=<token> (used once; the address is tidied either way)
+  // A friend's challenge: the daily's share link carries the day, the score and the sharer's name (?ch=7-72-Mike). Kept
+  // here for that day: its intro says the score to beat, its end card who won. Nothing is checked: it's between friends.
+  const CH_RE = /^(\d{1,4})-(\d{1,3})(?:-(.{1,24}))?$/;
+  const chLink = (p) => `${SITE}/?ch=${encodeURIComponent(`${dayN}-${Math.round(p * 100)}${myName() ? `-${myName()}` : ''}`)}`;
+  const chFor = (n) => { const c = load(`${STORE}:ch:${n}`, null); return c && c.s >= 0 && c.s <= 100 ? c : null; };
+  function challengeFromUrl() {
+    const q = new URLSearchParams(location.search), raw = q.get('ch');
+    if (raw == null) return;
+    q.delete('ch');
+    history.replaceState(null, '', location.pathname + (q.toString() ? `?${q}` : '') + location.hash);
+    const m = CH_RE.exec(raw.trim());
+    if (!m || +m[2] > 100) return;
+    const name = String(m[3] || '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
+    save(`${STORE}:ch:${+m[1]}`, { s: +m[2], name });
+    track('challenge_open', { day: +m[1] });
+  }
+  const chName = (c) => c.name || 'Your friend';
+  function challengeLine() {
+    const c = !SURV && !PRACTICE && !VS && !DRIVE && !RUN_N && !G.si && !state.done ? chFor(dayN) : null;
+    return c ? el('div', 'who chal', `\ud83c\udfaf ${chName(c)} scored ${c.s} on this drive. Beat it.`) : null;
+  }
+  function challengeCard(p) {
+    const c = chFor(dayN);
+    if (!c || DRIVE || RUN_N) return null;
+    const me = Math.round(p * 100), v = el('div', 'h2h-day chal');
+    v.append(el('span', 'k', `You vs ${chName(c)}`), el('b', '', me > c.s ? 'You win' : me < c.s ? `${chName(c)} wins` : 'Tied'),
+      el('span', 'sub', `${me}\u2013${c.s}. Send it back: your share link challenges them.`));
+    return v;
+  }
   async function authLoginFromUrl() {
     const q = new URLSearchParams(location.search), tok = q.get('login');
     if (!tok) return;
@@ -8095,6 +8128,7 @@
       dayN = ARCH_DAY || dayOf(now);
       await authLoginFromUrl();
       await unsubFromUrl();
+      challengeFromUrl();
       await proClaimFromUrl();
       await proVerify();
       acctInit();
