@@ -132,10 +132,12 @@ details.cl > summary { cursor: pointer; font: 700 12px var(--body); color: var(-
   <label class="chk"><input id="showOut" type="checkbox" checked> Show runs taken off</label>
 </div>
 <div class="entries" id="entries"></div>
+<div class="row"><button id="more" type="button" hidden>Load more</button></div>
 <p class="note">Flags: a try shorter than the threshold (the server's clock, start to pass); The Miami Miracle passed before the
   fix (the spot started with Miami ahead, so any call won); the same calls on the same drive from two entries (the whole
   decision list, win chances included, so only a copied or shared run matches; lists of fewer than three calls are skipped,
-  since the first call of a drive is the same for everyone).</p>
+  since the first call of a drive is the same for everyone). The board sends the entries a page at a time: the counts and
+  the same-calls flag cover the entries loaded, so load them all before a prize.</p>
 </div>
 <script>
 (() => {
@@ -194,13 +196,27 @@ details.cl > summary { cursor: pointer; font: 700 12px var(--body); color: var(-
     say('Loading…');
     $('load').disabled = true;
     try {
+      // the first page, then as many more as were loaded before (an action's reload keeps the list as long)
+      const want = S.data ? S.data.entries.length : 0;
       S.data = await call('/race/admin');
+      while (S.data.next && S.data.entries.length < want) await addPage();
       S.detail.clear();
-      say(`${done ? `${done} ` : ''}Loaded ${S.data.entries.length} entr${S.data.entries.length === 1 ? 'y' : 'ies'} at ${when(S.data.now)}.${S.data.drives ? '' : ' (No drive titles from the board: drive numbers only.)'}`);
+      say(`${done ? `${done} ` : ''}${loaded()} at ${when(S.data.now)}.${S.data.drives ? '' : ' (No drive titles from the board: drive numbers only.)'}`);
       draw();
       await Promise.all([...S.open].map((id) => openEntry(id, true)));
     } catch (e) { say(e.message, true); }
     $('load').disabled = false;
+  }
+  // the board sends the entries a page at a time (next: where the following page starts; null: the last one)
+  async function addPage() {
+    const d = await call(`/race/admin?after=${encodeURIComponent(S.data.next)}`);
+    S.data = { ...d, entries: [...S.data.entries, ...d.entries] };
+  }
+  const loaded = () => `Loaded ${S.data.entries.length}${S.data.next ? ` of ${S.data.total}` : ''} entr${(S.data.total ?? S.data.entries.length) === 1 ? 'y' : 'ies'}`;
+  async function loadMore() {
+    $('more').disabled = true;
+    try { await addPage(); say(`${loaded()}.`); draw(); } catch (e) { say(e.message, true); }
+    $('more').disabled = false;
   }
   function draw() {
     const d = S.data;
@@ -246,6 +262,9 @@ details.cl > summary { cursor: pointer; font: 700 12px var(--body); color: var(-
       if (det.open) fillEntry(e.id);
     }
     if (!shown) box.append(el('p', 'empty', d.entries.length ? 'No entry matches.' : 'Nobody has entered yet.'));
+    // (the tiles, the filters and the same-calls flag see only the entries loaded so far)
+    $('more').hidden = !d.next;
+    $('more').textContent = `Load more (${d.total - d.entries.length} left)`;
   }
   async function openEntry(id, quiet) {
     if (!S.detail.has(id) || quiet) {
@@ -355,7 +374,8 @@ details.cl > summary { cursor: pointer; font: 700 12px var(--body); color: var(-
     return det;
   }
   $('cfg').addEventListener('submit', (ev) => { ev.preventDefault(); loadAll(); });
-  $('forget').addEventListener('click', () => { ss.set('gadm:tok', ''); $('tok').value = ''; S.data = null; $('entries').textContent = ''; $('tiles').hidden = $('filters').hidden = true; say('Token forgotten.'); });
+  $('more').addEventListener('click', loadMore);
+  $('forget').addEventListener('click', () => { ss.set('gadm:tok', ''); $('tok').value = ''; S.data = null; $('entries').textContent = ''; $('tiles').hidden = $('filters').hidden = $('more').hidden = true; say('Token forgotten.'); });
   ['q', 'onlyFlag', 'showOut', 'short', 'fix'].forEach((k) => $(k).addEventListener('input', () => { if (S.data) draw(); }));
   setInterval(() => { $('clock').textContent = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC'; }, 1000);
   if ($('tok').value && api()) loadAll();

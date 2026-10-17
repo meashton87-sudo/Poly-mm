@@ -6,7 +6,7 @@ const sha256hex = async (x) => createHash('sha256').update(x).digest('hex');
 
 const store = new Map();
 const storage = { get: async (k) => structuredClone(store.get(k)), put: async (k, v) => { store.set(k, structuredClone(v)); }, delete: async (k) => store.delete(k),
-  list: async ({ prefix }) => new Map([...store].filter(([k]) => k.startsWith(prefix)).map(([k, v]) => [k, structuredClone(v)])) };
+  list: async ({ prefix }) => new Map([...store].filter(([k]) => k.startsWith(prefix)).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => [k, structuredClone(v)])) };   // (in key order, as the storage lists)
 const env = { ALLOWED_ORIGINS: 'https://nfl2mindrill.com', ADMIN_TOKEN: 'commish-secret-123' };
 let board = new Board({ storage }, env);
 env.BOARD = { idFromName: (n) => n, get: () => ({ fetch: (req) => board.fetch(req) }) };
@@ -453,6 +453,23 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.ok(p3.ms >= 60e3 && p3.ms < 70e3, 'the try\'s length by the server\'s clock');
   assert.strictEqual(ad.entries[1].passes.find((x) => x.drive === 3).sig, p3.sig, 'the same calls: the same signature');
   assert.ok(ad.entries.every((x) => /^[0-9a-f]{24}$/.test(x.id) && x.joined && !('kh' in x)), 'ids for the admin, joined');
+  assert.deepStrictEqual([ad.total, ad.next], [2, null], 'one page: no next');
+  // a page at a time: limit, and after (the page before's next) for the rest; the same entries either way
+  let pg = await (await call('GET', undefined, { path: '/race/admin?limit=1', ...AD })).json();
+  assert.deepStrictEqual([pg.total, pg.entries.map((x) => x.name), pg.next], [2, ['Eli Manning'], ida], 'the first page, its last id the next');
+  pg = await (await call('GET', undefined, { path: `/race/admin?limit=1&after=${pg.next}`, ...AD })).json();
+  assert.deepStrictEqual([pg.entries.map((x) => x.name), pg.next, pg.entries[0].passes.length], [['Tom'], null, 24], 'the last page');
+  assert.deepStrictEqual(pg.entries[0], ad.entries[1], 'an entry the same on its page');
+  assert.strictEqual((await call('GET', undefined, { path: `/race/admin?after=${'e'.repeat(24)}`, ...AD })).status, 400, 'a cursor that is no entry');
+  assert.strictEqual((await call('GET', undefined, { path: `/race/admin?limit=1&after=${ida}` })).status, 403, 'paging takes the token too');
+  assert.strictEqual((await (await call('GET', undefined, { path: '/race/admin?limit=x', ...AD })).json()).entries.length, 2, 'a bad limit: the default');
+  const realList = store.get('race:list');
+  store.set('race:list', { ...realList, ...Object.fromEntries(Array.from({ length: 60 }, (_, i) => { const id = i.toString(16).padStart(24, 'c'); return [id, { id, name: `Fill ${i}`, joined: Date.now() + i, n: 0, nAt: 0 }]; })) });
+  pg = await (await call('GET', undefined, { path: '/race/admin', ...AD })).json();
+  assert.deepStrictEqual([pg.total, pg.entries.length, pg.entries[49].name], [62, 50, 'Fill 47'], '50 a page by default');
+  pg = await (await call('GET', undefined, { path: `/race/admin?after=${pg.next}`, ...AD })).json();
+  assert.deepStrictEqual([pg.entries.length, pg.entries[0].name, pg.next], [12, 'Fill 48', null], 'and the rest');
+  store.set('race:list', realList);
   let one = await (await call('GET', undefined, { path: `/race/admin?id=${ida}`, ...AD })).json();
   assert.deepStrictEqual([one.entry.name, one.passes.length, one.passes[0].decs, one.passes[0].res, one.passes[0].tryAt, one.voids], ['Eli Manning', 1, decs, WON, new Date(5).toISOString(), []], 'one entry: every call kept');
   assert.strictEqual((await call('GET', undefined, { path: '/race/admin?id=' + 'f'.repeat(24), ...AD })).status, 404, 'no such entry');
@@ -918,6 +935,15 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   d = await ok(await lg('board', { session: sa, code, day: 11 }), 'with freezes');
   assert.deepStrictEqual(d.rows.map((x) => [x.name, x.streak]), [['Ben Bolt', 7], ['Amy Hawk', 1]], 'the freeze keeps Ben\'s streak');
   store.delete('stats:m:g:700001'); store.delete('stats:m:g:700002');
+  // a freeze held and not spent yet (game.js streakOf's pending): Ben's 7 days in a row (1-7) earned one; day 8 missed
+  // and day 9 not played yet, his streak is alive on his page and the board alike; two missed days are one too many
+  const benDays = store.get('stats:d:g:700002');
+  store.set('stats:d:g:700002', Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map((k) => [k, { p: 0.5, wpa: 0, coach: null }])));
+  d = await ok(await lg('board', { session: sa, code, day: 9 }), 'a pending freeze');
+  assert.strictEqual(d.rows.find((x) => x.name === 'Ben Bolt').streak, 8, 'the freeze held covers day 8');
+  d = await ok(await lg('board', { session: sa, code, day: 10 }), 'two missed');
+  assert.strictEqual(d.rows.find((x) => x.name === 'Ben Bolt').streak, 0, 'one freeze, two days missed: over');
+  store.set('stats:d:g:700002', benDays);
   // limits: 10 leagues an account, 50 members a league
   for (let i = 0; i < 9; i++) await ok(await lg('create', { session: sa, name: `League ${i}` }), `league ${i}`);
   r = await lg('create', { session: sa, name: 'One Too Many' });
@@ -1007,9 +1033,35 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.deepStrictEqual(batches.slice(13).map((x) => x.mails.length), [5], 'the rest the next run');
   assert.ok(batches.every((x) => x.mails.every((m) => m.to.length === 1)), 'one address an email');
   for (let i = 0; i < 1005; i++) { store.delete(`acct:e:p${i}@example.com`); store.delete(`rmd:e:p${i}@example.com`); }
-  unset('RESEND_KEY', 'MAIL_FROM');
+  assert.ok(!store.has('remind:from'), 'a run under the cap: nothing to go on from');
+  // the cap from the var REMIND_CAP; a capped run's rest go on in the next run, and past a morning's runs the ones left
+  // go first the next day (never the same accounts left out every day)
+  set({ REMIND_CAP: '250' });
+  for (let i = 0; i < 600; i++) { store.set(`acct:e:q${i}@example.com`, { email: `q${i}@example.com` }); store.set(`rmd:e:q${i}@example.com`, { on: true }); }
+  const to = (from) => batches.slice(from).flatMap((x) => x.mails.map((m) => m.to[0]));
+  let b0 = batches.length;
   await cron('2026-10-22T08:05:00Z');
-  assert.strictEqual(batches.length, 14, 'Resend off: nothing sent');
+  assert.deepStrictEqual(batches.slice(b0).map((x) => x.mails.length), [100, 100, 50], '250 a run, in batches of 100');
+  const run1 = to(b0);
+  b0 = batches.length;
+  await cron('2026-10-22T09:05:00Z');
+  const run2 = to(b0);
+  assert.ok(run2.length === 250 && !run2.some((x) => run1.includes(x)), 'the next run: the next 250');
+  assert.ok(run2[0] > run1[run1.length - 1], 'from where the last stopped');
+  const left = Array.from({ length: 600 }, (_, i) => `q${i}@example.com`).filter((x) => !run1.includes(x) && !run2.includes(x));
+  assert.strictEqual(left.length, 100);
+  b0 = batches.length;
+  await cron('2026-10-23T08:05:00Z');
+  const run3 = to(b0);
+  assert.deepStrictEqual([run3.length, run3.slice(0, 100).sort()], [250, left.slice().sort()], 'the next day: the ones left first');
+  assert.deepStrictEqual(new Set(batches.slice(b0).map((x) => x.headers['Idempotency-Key'])).size, 3, 'a key a batch');
+  for (let i = 0; i < 600; i++) { store.delete(`acct:e:q${i}@example.com`); store.delete(`rmd:e:q${i}@example.com`); }
+  unset('REMIND_CAP');
+  store.delete('remind:from');
+  b0 = batches.length;
+  unset('RESEND_KEY', 'MAIL_FROM');
+  await cron('2026-10-24T08:05:00Z');
+  assert.strictEqual(batches.length, b0, 'Resend off: nothing sent');
   console.error = realErr; console.log = realLog;
   unset('GOOGLE_CLIENT_ID', 'SITE', 'API_URL');
   globalThis.fetch = realFetch;

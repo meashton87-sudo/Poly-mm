@@ -658,6 +658,29 @@
       up.forEach((o, i) => { o.d = 1.9; o.x = clampX(bx + (i ? -1 : 1) * s * (18 + 22 * i)); });
     }
   }
+  // your defense as you call it, before the snap (players asked to see it): the safeties as deep as the coverage has
+  // them, the linebackers as the front has them, the extra rushers walked up to the line
+  const DEEP_OF = { c0: 0, c1: 1, c3: 1, c2: 2, c4: 2, '2man': 2, c6: 2, prevent: 3 };
+  function showDc(def, dc, s, bx) {
+    const lbs = def.filter((o) => o.label === 'LB'), sf = def.filter((o) => o.label === 'S'), cbs = def.filter((o) => o.label === 'CB');
+    const deep = DEEP_OF[dc.cover] ?? 1;
+    const spots = deep === 1 ? [[bx + s * 8, 14]] : deep === 2 ? [[bx - s * 62, 13.5], [bx + s * 62, 13.5]] : deep === 3 ? [[bx - s * 85, 16], [bx, 19], [bx + s * 85, 16]] : [];
+    const backs = sf.concat(cbs.slice(3));                      // (the deep men: safeties, then any extra DB)
+    backs.forEach((o, i) => {
+      if (i < spots.length) { o.x = clampX(spots[i][0]); o.d = spots[i][1]; }
+      else { o.d = dc.cover === 'c0' ? 5 : 7.5; o.x = clampX(bx + (o.x - bx) * 0.7); }       // down low: in the box or on a man
+    });
+    cbs.slice(0, 2).forEach((o) => { o.d = dc.cover === 'c3' || dc.cover === 'c4' || dc.cover === 'prevent' ? 8.5 : dc.cover === 'c2' ? 4.5 : 6.5; });
+    lbs.forEach((o) => {
+      if (dc.front === 'loaded') { o.d = 3.8; o.x = clampX(bx + (o.x - bx) * 0.8); }
+      else if (dc.front === 'light') { o.d = 6.5; o.x = clampX(bx + (o.x - bx) * 1.25); }
+      if (dc.cover === 'prevent') o.d += 4;
+    });
+    // the rush: the line, then linebackers walked up to make the count
+    const line = def.filter((o) => o.label === 'DL' || o.label === 'EDGE').length;
+    const up = lbs.concat(sf.slice(spots.length)).slice(0, Math.max(0, (+dc.rush || 4) - line));
+    up.forEach((o, i) => { o.d = 1.9; o.x = clampX(bx + (i % 2 ? -1 : 1) * s * (60 + 18 * Math.floor(i / 2))); });
+  }
   // ------------------------------------------------------------ the field ---
   // The whole field, your end zone at the bottom of the screen. L counts yards from your goal line (0) to
   // theirs (100); a camera shows yards lo..hi: the whole field, or close up while a play runs.
@@ -772,6 +795,7 @@
     if (mode === 'snap' || mode === 'pat') {
       const offI = r.pos, f = formation(offLineup(offI).slice(), lineup(1 - offI).def.slice(), s, fxBall);
       if (mode === 'snap' && look != null) showLook(f.def, LOOKS[look], s, fxBall);
+      else if (mode === 'snap' && r.pos !== G.me && ui.step === 'vdef' && ui.dc) showDc(f.def, ui.dc, s, fxBall);
       const add = (o, teamI, off) => {
         const team = code(teamI), mine = teamI === G.me;
         const num = o.p.num != null ? String(o.p.num) : '';
@@ -1727,6 +1751,18 @@
           leg(d, REACT_DEF, 'mirror', { who: r.b, lag: 0.28 + R() * 0.12, dir, los: L0, floor: 0.8, tau: 1.0, y0: d.b.y,
             pedal: db ? 1.5 : 0.4, pedalMax: db ? 3 : 1.5, cush: r.label === 'WR' ? 1.4 : 0.9, dx0: d.b.x - r.b.x, dx: inside * 0.7, eff: 0.97 });
         });
+        // a receiver with no man on him (more of them than cover men: a blitz) who goes deep: the deep safety comes off
+        // his spot and runs with him, the spare man sinks with him if there is no safety (players saw men running free
+        // deep while the ball went short)
+        const manned = new Set(assigned.values()), freeD = new Set();
+        runners.filter(([a]) => !manned.has(a) && a !== tgt).map(([a, pl]) => ({ a, end: pl.at(pl.T) })).filter((x) => Math.abs(x.end[1] - L0) > 12)
+          .forEach(({ a, end }) => {
+            const d = nearest(deepers.filter((x) => !freeD.has(x)), [end[0], end[1]])
+              || nearest(pool.filter((x) => !assigned.has(x) && !freeD.has(x) && x.label !== 'DL' && x.label !== 'EDGE'), here(a));
+            if (!d) return;
+            freeD.add(d); assigned.set(d, a);
+            leg(d, REACT_DEF + (deepers.includes(d) ? 0.7 : 0.2), 'chase', { who: a.b, gap: Math.abs(catchPt[1] - L0) <= 6 ? 1.3 : 2.2, eff: 0.92, lead: 0.5 });
+          });
         pool.filter((d) => !assigned.has(d)).forEach((d) => {       // the spare: a robber in the middle; a lineman sits short
           if (d.label === 'DL' || d.label === 'EDGE') { leg(d, REACT_DEF, 'go', { x: d.b.x + (BX - d.b.x) * 0.3, y: fwd(L0, 3.5), eff: 0.6 }); return; }
           const m = S_.under[0] ? mark(S_.under[0]) : [BX, fwd(L0, 7)];
@@ -3090,17 +3126,8 @@
     [`${r.pos === G.me ? 'Your' : `${teamName(op)}`} ball, ${ddText(r)} ${onSpot(r)}`, `You: ${tos(r.to[G.me])}`,
       `${teamName(op)}: ${tos(r.to[1 - G.me])}`].forEach((f) => facts.append(el('span', '', f)));
     box.append(facts);
-    const rc = (sc.real || {}).coach, feat = !SURV && idx.featured && idx.featured[dayN];
-    if (feat && feat.note && idx.spots[feat.spot] && idx.spots[feat.spot].id === sc.id) box.append(el('p', 'story', feat.note));
-    else if (sc.story) box.append(el('p', 'story', sc.story));
-    box.append(el('div', 'who', VS ? `You're the ${teamName(me)}. Your opponent has the ${teamName(op)}: they call their side, you call yours.`
-      : `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
-    if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
-    if (PRACTICE) box.append(el('div', 'who prac', 'Practice: graded like the daily, but it doesn’t count toward your stats, streak or the leaderboard.'));
-    const chl = challengeLine();
-    if (chl) box.append(chl);
-    box.append(todaySoFar());
-    const go = el('button', 'btn', 'Next');
+    // Play right under the spot, on the first screen without scrolling (players asked); the story and the rest below
+    const go = el('button', 'btn play', G.started ? 'Back to the drive' : 'Play');
     go.type = 'button';
     go.addEventListener('click', () => {
       if (!G.started) {
@@ -3110,6 +3137,26 @@
       G.started = true; persist(); enterField();
     });
     box.append(go);
+    const rc = (sc.real || {}).coach, feat = !SURV && idx.featured && idx.featured[dayN];
+    const tale = feat && feat.note && idx.spots[feat.spot] && idx.spots[feat.spot].id === sc.id ? feat.note : sc.story;
+    if (tale) {
+      // a long story folds to a few lines (a tap opens it)
+      const st = el('p', `story${tale.length > 240 ? ' fold' : ''}`, tale);
+      box.append(st);
+      if (tale.length > 240) {
+        const more = el('button', 'more-story', 'Read more');
+        more.type = 'button';
+        more.addEventListener('click', () => { st.classList.remove('fold'); more.remove(); });
+        box.append(more);
+      }
+    }
+    box.append(el('div', 'who', VS ? `You're the ${teamName(me)}. Your opponent has the ${teamName(op)}: they call their side, you call yours.`
+      : `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
+    if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
+    if (PRACTICE) box.append(el('div', 'who prac', 'Practice: graded like the daily, but it doesn’t count toward your stats, streak or the leaderboard.'));
+    const chl = challengeLine();
+    if (chl) box.append(chl);
+    box.append(todaySoFar());
     const rl = sc.real || {};
     box.append(el('div', 'from', `The real score, clock, ball and timeouts from that game, with the players who were on the field and how good they were that week.`));
     box.append(el('div', 'from legal', 'Fan-made. Not affiliated with or endorsed by the NFL or its teams.'));
@@ -3892,7 +3939,9 @@
       const fs = calls.reduce((a, id) => a + (freq[id] || 0), 0) || 1;
       calls.forEach((id) => { q[id] = goShare * (freq[id] || 0) / fs; });
       const specs = [];
-      if (r.try2) opts.forEach((o) => { const a = o.action; o.action = { pat: 'two', call: a.call, looks: a.looks, route: a.route, who: a.who, philly: a.philly }; });
+      // a two-point try: the same call, played as the try. All of it: the receiver you picked, his route and the rest
+      // (a player's pass on a try went to someone else: the target was dropped here), and the personnel
+      if (r.try2) opts.forEach((o) => { o.action = { ...o.action, pat: 'two' }; });
       if (r.clock_running) specs.push(clockSpec(r, tempo, seq));
       specs.push({ kind: 'call', family: r.down === 4 ? 'fourth_down' : 'play_select', r: r.try2 || r, opts, chosen, q, situation: situation(r),
         seed: hash('call', seedKey(), G.si, seq) });
@@ -3943,6 +3992,7 @@
       const pk = presetsFor(G.root).find((k) => sameDc(PRESET[k].dc, ui.dc));
       sum.textContent = vdefText(ui.dc);
       tip.textContent = `${pk && PRESET[pk].sub ? `${PRESET[pk].sub}. ` : ''}${COVER_TIP[ui.dc.cover] || ''}`;
+      drawField();                          // (the field lines up the defense as called)
     };
     presetsFor(r).forEach((k) => {
       const b = el('button', 'chip opt', PRESET[k].label);
@@ -5508,7 +5558,8 @@
   // streak. It is worked out from the days played alone (the same answer on every phone; a missed day played later from
   // the archive gives its freeze back); a day a freeze covered is kept in the stats (frozen: { day: when }, synced) so
   // it shows as ❄️, is told about once and counts on a league board. Until the next day is played, the freezes a gap
-  // would take are pending: the streak is still alive, and the top bar says so.
+  // would take are pending: the streak is still alive, and the top bar says so. A league board works it out the same
+  // way from the synced days (board/worker.js streakOf: change both together).
   const FREEZE_EVERY = 7, FREEZE_MAX = 2;
   function streakOf(st, d) {
     const fz = st.frozen || {}, ks = Object.keys(st.days || {}).map(Number).filter((k) => k > 0 && k <= d).sort((a, b) => a - b);
@@ -6252,7 +6303,7 @@
   const qs = (s) => document.querySelector(s);
   const TOUR = [
     { id: 'spot', at: () => qs('#intro .chips'), side: 'below', title: 'Your spot',
-      text: () => `A real NFL ending: the real score, clock, ball and timeouts. ${SURV ? 'Win it to stay alive.' : 'Tap Next to take over.'}` },
+      text: () => `A real NFL ending: the real score, clock, ball and timeouts. ${SURV ? 'Win it to stay alive.' : 'Tap Play to take over.'}` },
     { id: 'bar', at: () => $('bar'), side: 'below', title: 'The scoreboard',
       text: () => 'Score, quarter and clock. The dashes under each team are its timeouts left. Tap it for the game details.' },
     { id: 'call', at: () => qs('#dock .keys.fam'), side: 'below', title: 'Your call',
@@ -7393,9 +7444,9 @@
   // on the Daily and Survivor tabs, once it is on: a bar to the race
   function raceBar() {
     if (!PRO_ON || !BOARD.api || ARCH || ARCH_DAY || DRIVE || RUN_N || VS || GAUNTLET || document.querySelector('.racebar')) return;
-    const a = el('a', 'racebar'), over = gauntletOver();
+    const over = gauntletOver(), a = el('a', `racebar${over ? ' slim' : ''}`);       // (over: one line, out of Play's way)
     a.href = over ? '#gauntlet-results' : '#archive';
-    a.append(el('b', '', `🏁 ${RACE_NAME}`), el('span', '', over ? 'It’s over: the champion and the final standings →' : 'First to pass all 24 historic drives wins. Leaderboard →'));
+    a.append(el('b', '', `🏁 ${RACE_NAME}`), el('span', '', over ? 'Final results →' : 'First to pass all 24 historic drives wins. Leaderboard →'));
     a.addEventListener('click', () => track('race_bar'));
     $('modeArch').closest('nav').after(a);
   }

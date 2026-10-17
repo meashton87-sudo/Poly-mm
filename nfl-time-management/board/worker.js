@@ -44,6 +44,8 @@
 // A code is 12 letters and digits (no 0/O, 1/I/L) drawn at random: about 60 bits, posted at RATE_PER_MIN an IP.
 // Nothing about the buyer is kept here (Stripe has the receipt); only the session id behind each code (and, for a
 // purchase made signed in, the account it belongs to: see Accounts below).
+// The daily email (reminders, below) takes an optional var REMIND_CAP: the most emails one cron run sends (1000 by
+// default; three runs a morning, wrangler.toml [triggers]); the accounts past it go in the next run.
 const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
 const RACE_PATHS = ['/race', '/race/me', '/race/join', '/race/start', '/race/pass', '/race/admin', '/race/admin/void'];
 const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook', '/pro/data', '/pro/reset', '/pro/gift'];
@@ -753,13 +755,34 @@ async function leaguesOf(storage, a) {
   }
   return out;
 }
-// one member's line: the day's score (null: not played yet), the streak (days in a row to the day, or to the day
-// before while the day is not played yet: a streak still alive; a day a streak freeze covered counts, as on the page)
+// the streak to day d as the member's own page works it out (game.js streakOf, the same rule and constants: keep them
+// together): every FREEZE_EVERY days in a row earn a freeze (FREEZE_MAX held), a missed day is covered by a freeze
+// held or one already spent (frozen), and a gap before a day not played yet is pending (the streak still alive)
+const FREEZE_EVERY = 7, FREEZE_MAX = 2;
+function streakOf(days, frozen, d) {
+  const ks = Object.keys(days).map(Number).filter((k) => k > 0 && k <= d).sort((a, b) => a - b);
+  let run = 0, held = 0, last = 0;
+  // the missed days after the last one played and before day b: covered, or the streak over
+  const bridge = (b) => {
+    const gap = Array.from({ length: Math.max(0, b - last - 1) }, (_, j) => last + 1 + j);
+    if (!gap.length) return true;
+    if (run > 0 && (gap.length <= held || gap.every((j) => frozen[j]))) { held = Math.max(0, held - gap.length); run += gap.length; return true; }
+    run = 0;
+    return false;
+  };
+  for (const k of ks) {
+    const from = last ? run : 0, ok = last ? bridge(k) : true;
+    run += 1;
+    held = Math.min(FREEZE_MAX, held + Math.floor(run / FREEZE_EVERY) - Math.floor((ok ? from : 0) / FREEZE_EVERY));
+    last = k;
+  }
+  return last && (last >= d || bridge(d)) ? run : 0;      // (the day not played yet: not missed yet)
+}
+// one member's line: the day's score (null: not played yet), the streak (streakOf: the one on the member's own page)
 // and the average of the days played in the last 7
 function leagueLine(days, day, frozen = {}) {
   const p = (k) => (days[k] && typeof days[k].p === 'number' ? days[k].p : null);
-  let streak = 0;
-  for (let k = p(day) !== null ? day : day - 1; k > 0 && (p(k) !== null || (frozen[k] && streak)); k--) streak++;
+  const streak = streakOf(days, frozen, day);
   const week = [0, 1, 2, 3, 4, 5, 6].map((i) => p(day - i)).filter((x) => x !== null);
   return { today: p(day), streak, avg7: week.length ? week.reduce((a, x) => a + x, 0) / week.length : null, n7: week.length };
 }
@@ -826,12 +849,16 @@ async function league(req, env, storage, hits, h, url) {
 
 // ---- The daily email (opt-in, /auth/remind): once a day, when the new daily is up, a short note to every account
 // that asked, by Resend (only with RESEND_KEY and MAIL_FROM). The cron trigger (wrangler.toml [triggers]) wakes the
-// worker; `scheduled` hands the run to the Board (its storage), at most REMIND_CAP emails a run in batches of
-// REMIND_BATCH (Resend's batch call; its Idempotency-Key means a retried batch is not sent twice). Each account's last
-// day sent (rmd:<acct>.last, the UTC date) keeps it to one a day: the cron runs three times a morning, so a batch Resend
-// refused (logged) goes again in the next. Every email carries its unsubscribe link: the site's ?unsub=<ref>.<hmac>
-// (the page posts it to /auth/unsub), and, with API_URL (this worker's own address) set, the one-click header too.
+// worker; `scheduled` hands the run to the Board (its storage), at most REMIND_CAP emails a run (the var REMIND_CAP, else
+// 1000) in batches of REMIND_BATCH (Resend's batch call; its Idempotency-Key means a retried batch is not sent twice).
+// Each account's last day sent (rmd:<acct>.last, the UTC date) keeps it to one a day: the cron runs three times a
+// morning, so a batch Resend refused (logged) goes again in the next, and so do the accounts past a run's cap: a capped
+// run keeps where it stopped (remind:from) and the next starts after it, round to the first, so with more due than a
+// morning's runs send, the ones left go first the next day (never the same accounts every day). Every email carries
+// its unsubscribe link: the site's ?unsub=<ref>.<hmac> (the page posts it to /auth/unsub), and, with API_URL (this
+// worker's own address) set, the one-click header too.
 const REMIND_CAP = 1000, REMIND_BATCH = 100, CRON_PATH = '/_cron/remind';     // (no outside request reaches CRON_PATH: the default fetch never routes it here)
+const remindCap = (env) => { const n = Math.floor(Number(env.REMIND_CAP)); return n > 0 ? n : REMIND_CAP; };
 // the key behind the unsubscribe links: env.MAIL_SECRET, else one made at random on first use and kept in storage
 async function mailSecret(env, storage) {
   if (env.MAIL_SECRET) return String(env.MAIL_SECRET);
@@ -858,11 +885,15 @@ async function unsub(req, env, storage, h, url) {
 async function reminders(env, storage, date) {
   if (!emailOn(env)) return { off: true, sent: 0 };
   if (!DATE_RE.test(date)) return { error: 'date', sent: 0 };
-  const due = [];
-  for (const [k, r] of await storage.list({ prefix: 'rmd:' })) {
+  // from after where the last capped run stopped, round to the first (key order)
+  const cap = remindCap(env), from = (await storage.get('remind:from')) || '', due = [];
+  const all = [...(await storage.list({ prefix: 'rmd:' }))];
+  for (const [k, r] of [...all.filter(([k]) => k > from), ...all.filter(([k]) => k <= from)]) {
+    if (due.length >= cap) break;
     if (r && r.on && r.last !== date) due.push(k.slice(4));
-    if (due.length >= REMIND_CAP) break;
   }
+  if (due.length >= cap) await storage.put('remind:from', `rmd:${due[due.length - 1]}`);
+  else if (from) await storage.delete('remind:from');      // (every account due is in this run)
   const site = String(env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, ''), api = String(env.API_URL || '').replace(/\/+$/, '');
   let sent = 0, failed = 0;
   for (let i = 0; i < due.length; i += REMIND_BATCH) {
@@ -1072,16 +1103,19 @@ export async function handle(req, env, storage, hits) {
 // starts and no pass counts after it) and next (NEXT_CONTEST, a line about the next contest; only when it is set). The
 // page shows the final results once there is a winner or it is over.
 // The check before a prize (web/admin.html; every call with Authorization: Bearer <ADMIN_TOKEN>, off without it):
-//   GET    /race/admin                    -> { n, from, to, now, drives, entries: [{ id, name, joined, n, nAt, done, out,
-//                                         passes: [{ drive, at, p, ms, calls, sig }], voids }] }   every entrant, out ones too
-//                                         (ms: the try's length by the server's clock; sig: a hash of its calls, so the
-//                                         same calls sent by two entries show; drives: the drives' titles, from the Pro data)
+//   GET    /race/admin?limit=50&after=X   -> { n, from, to, now, drives, total, entries: [{ id, name, joined, n, nAt, done, out,
+//                                         passes: [{ drive, at, p, ms, calls, sig }], voids }], next }   every entrant, out
+//                                         ones too, a page at a time (limit: 50 by default, 200 at most; after: the next of
+//                                         the page before; next null: the last page; total: every entrant) (ms: the try's
+//                                         length by the server's clock; sig: a hash of its calls, so the same calls sent by
+//                                         two entries show; drives: the drives' titles, from the Pro data)
 //   GET    /race/admin?id=X               -> { entry, passes: [{ drive, at, p, ms, tryAt, started, decs, res }], voids }
 //                                         one entry's full audit (a voided pass's audit too, kept under race:void:)
 //   POST   /race/admin/void { id, drive, note } -> { ok, entry }: one drive's pass off an entry (n, nAt and the winner
 //                                         worked out again; the drive can be passed again, from a new try), with a note
 //                                         kept on the entry (voids) and its audit kept aside
 const RACE_N = 24, RACE_TOP = 100, RACE_GAP = 30e3, RACE_DECS_MAX = 80, RACE_BYTES_MAX = 60000, RACE_MIN_TRY = 20e3, RACE_NOTE_MAX = 200;
+const RACE_ADMIN_PAGE = 50, RACE_ADMIN_MAX = 200;      // the admin list's entries a page: by default, at most
 const raceFrom = (env) => Date.parse(env.RACE_FROM || '2026-10-16T20:00:00Z');
 const raceTo = (env) => (env.RACE_TO ? Date.parse(env.RACE_TO) : NaN);        // no end time (NaN): it runs until it is called
 const raceOver = (env, now = Date.now()) => now >= raceTo(env);
@@ -1252,10 +1286,15 @@ async function raceAdmin(req, env, storage, h, url) {
     for (const v of e.voids || []) { const a = (await storage.get(`race:void:${id}:${v.drive}:${v.at}`)) || {}; voids.push({ ...v, at: iso(v.at), voided: iso(v.voided), ms: a.started ? a.at - a.started : null, decs: a.decs || [], res: a.res || null }); }
     return json({ entry: entryOf(e), passes, voids }, 200, h);
   }
-  // every audit in one read (one entry at a time would be a read a pass)
-  const audits = await storage.list({ prefix: 'race:audit:' }), entries = [];
-  for (const x of Object.values(list).sort((a, b) => a.joined - b.joined)) {
-    const e = (await storage.get(`race:e:${x.id}`)) || { ...x, passes: {} }, passes = [];
+  // a page of entries, joined first first (limit, RACE_ADMIN_PAGE by default; after: the last id of the page before,
+  // next: this page's last id while more follow), each entry's audits in one read (not every audit at once: that grows with the whole Gauntlet)
+  const all = Object.values(list).sort((a, b) => a.joined - b.joined || (a.id < b.id ? -1 : 1));
+  const after = String(url.searchParams.get('after') || ''), limit = Math.min(RACE_ADMIN_MAX, Math.max(1, Math.floor(Number(url.searchParams.get('limit'))) || RACE_ADMIN_PAGE));
+  const i0 = after ? all.findIndex((x) => x.id === after) + 1 : 0;
+  if (after && !i0) return json({ error: 'no such cursor' }, 400, h);
+  const page = all.slice(i0, i0 + limit), entries = [];
+  for (const x of page) {
+    const e = (await storage.get(`race:e:${x.id}`)) || { ...x, passes: {} }, passes = [], audits = await storage.list({ prefix: `race:audit:${x.id}:` });
     for (const d of Object.keys(e.passes || {}).map(Number).sort((a, b) => a - b)) {
       const a = audits.get(`race:audit:${x.id}:${d}`) || {};
       passes.push({ drive: d, at: iso(e.passes[d]), p: a.p ?? null, ms: a.started ? a.at - a.started : null, calls: (a.decs || []).length, sig: a.decs ? await sig(a.decs) : null });
@@ -1268,7 +1307,8 @@ async function raceAdmin(req, env, storage, h, url) {
     try { const r = await env.ASSETS.fetch(new Request(new URL('/pro/drives.json', req.url), { method: 'GET' })); if (r.ok) drives = ((await r.json()).drives || []).map((d) => d.title); } catch (e) { /* titles left out */ }
   }
   const to = raceTo(env);
-  return json({ n: RACE_N, from: iso(raceFrom(env)), to: Number.isFinite(to) ? iso(to) : null, now: iso(Date.now()), drives, entries }, 200, h);
+  return json({ n: RACE_N, from: iso(raceFrom(env)), to: Number.isFinite(to) ? iso(to) : null, now: iso(Date.now()), drives, total: all.length, entries,
+    next: i0 + limit < all.length ? page[page.length - 1].id : null }, 200, h);
 }
 
 // Versus (match.js): the room for a code, or the lobby for a quick match; only from the site's own pages
