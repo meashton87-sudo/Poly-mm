@@ -100,3 +100,9 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   ❄️, the one note and event, a league board's streak). A badge is earned once (stats.badges: { id: time }); most are
   tests on the record so a new phone signed in earns the same ones. A new badge needs no worker change (its id is only
   checked for shape there).
+- The day's and week's lists (board/worker.js /daily, /week; game.js leaders): a name's first result of a day goes on the
+  day's list (25 kept, 10 shown) and into its weeks (wk:<end date>: each name's best WEEK_BEST of 7 days added up, a
+  histogram for ranks, 100 kept); kept as results come (a result touches 7 week values), never rebuilt by scanning.
+  Never a blocked() name; `DELETE /week?name=` (admin token) takes a name off for good. Practice (#practice, game.js
+  practiceState/renderPractice): only after the day's drive is done; its own saved state; it must never write a stats
+  day, the streak, tendencies or post to /daily.
