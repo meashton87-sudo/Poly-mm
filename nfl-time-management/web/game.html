@@ -366,7 +366,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .playgrid { display: grid; gap: 6px; }
 /* the calls' sheet and the menu button: a phone's broadcast view only (below); elsewhere the dock sits in the page */
 .sheet { display: contents; }
-.grip, .menubtn, .bmenu { display: none; }
+.grip, .menubtn, .bmenu, .skiphint { display: none; }
 /* A phone, playing: the broadcast view. The field fills the screen, the scoreboard floats over its top, and the calls
    are a sheet over its bottom, under the thumbs, that drags down to a bar to show the whole field. Nothing scrolls
    but the sheet itself, when a call has more on it than fits. */
@@ -395,6 +395,13 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
   body.bcast .sheet { display: flex; flex-direction: column; position: absolute; z-index: 4; left: 0; right: 0; bottom: 0; max-height: 52%;
     background: var(--paper); border-radius: 20px 20px 0 0; box-shadow: 0 -8px 28px rgba(0, 0, 0, .3); transition: transform .24s ease; }
   body.bcast .sheet.dragging { transition: none; }
+  /* the snap: the sheet slides away and the play has the whole screen (a note says a tap skips it); back up with
+     what happened */
+  body.bcast .playgrid:has(#field.playing) .sheet { transform: translateY(calc(100% + 12px)); box-shadow: none; }
+  body.bcast .skiphint { display: block; position: absolute; z-index: 3; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+    transform: translateX(-50%); padding: 7px 14px; border-radius: 999px; background: rgba(9, 15, 11, .78); color: #fff;
+    font: 700 13px var(--body); pointer-events: none; opacity: 0; transition: opacity .3s ease; white-space: nowrap; }
+  body.bcast .fieldbox:has(#field.playing) .skiphint { opacity: 1; transition-delay: .4s; }
   body.bcast .sheet.down { transform: translateY(calc(100% - 66px - env(safe-area-inset-bottom, 0px))); }
   body.bcast .grip { display: flex; align-items: center; justify-content: center; flex: none; height: 26px; border: 0; background: none; cursor: grab; touch-action: none; }
   body.bcast .grip i { width: 44px; height: 5px; border-radius: 3px; background: var(--line); }
@@ -959,6 +966,7 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
       <div class="fieldbox"><svg id="field" role="group" aria-label="The whole field, every player shown red to green by his rating"></svg>
         <!-- the timeout: its own button in a corner, away from the others (the bottom one, or the top when they sit at the bottom) -->
         <button id="toBtn" class="tobtn" type="button" hidden></button>
+        <div class="skiphint" aria-hidden="true">Tap to skip</div>
         <!-- on the field, out of the way of the calls below it: the down, the color key, personnel and the ratings -->
         <div class="fov">
           <div class="fovl"><div id="dd" class="dd"></div><span class="ramp" aria-label="Player dots: red is worse, green is better">worse <i></i> better</span></div>
