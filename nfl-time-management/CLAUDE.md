@@ -110,3 +110,18 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   Never a blocked() name; `DELETE /week?name=` (admin token) takes a name off for good. Practice (#practice, game.js
   practiceState/renderPractice): only after the day's drive is done; its own saved state; it must never write a stats
   day, the streak, tendencies or post to /daily.
+
+## Moving the site to a new address
+The site moves with two GitHub variables; nothing else in the code names the address.
+1. Add the new domain to the Cloudflare Pages project `nfl2mindrill` (Custom domains) and keep the old one on it too:
+   the same build answers on both.
+2. Set `SITE_DOMAIN` to the new domain and `OLD_DOMAIN` to the old one (comma-separated if several), then deploy.
+   On the old address every page hands the visitor over (scripts/site.py MOVE_JS): their saved progress (stats, Pro
+   code, name, device key, sign-in, settings, today's drive) goes along in the link's # and is unpacked on the new
+   address before the game starts. The worker's SITE (email links) and ALLOWED_ORIGINS follow the two variables.
+3. Outside the code: the Google OAuth client's authorized origins (add the new one), Resend's sending domain if the
+   emails should come from the new one (MAIL_FROM), Stripe's business website, Search Console (add the new property;
+   the change-of-address tool once the old address redirects with a 301), the X bio, and og.png (the link preview
+   image prints the address: redraw web/og_card.html).
+4. After a few weeks, when the regulars have been handed over, the old domain can switch to a plain 301 redirect
+   (a Cloudflare redirect rule): keep the domain registered for at least a year.

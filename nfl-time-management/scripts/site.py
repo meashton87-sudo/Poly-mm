@@ -237,6 +237,36 @@ GA_TAG = ("<script async src=\"https://www.googletagmanager.com/gtag/js?id={id}\
           "gtag('config','{id}',{{page_location:location.origin+location.pathname+(h&&/^[a-z]+$/.test(h)?(location.pathname.slice(-1)==='/'?'':'/')+h:'')}});</script>")
 
 
+# Moving to a new address (--old-domain): the same build answers on both. On the old one the first thing in every page
+# packs the player's saved progress (local storage, which belongs to one address) into the link's # (never sent to a
+# server) and goes to the same page on the new one, which unpacks it before the game starts, keeping what is already
+# there (a day already in the new address's stats stays). Essentials first (stats, Pro code, name, sign-in, device key,
+# settings), then today's drive in progress, then the rest while the link stays under 150 KB.
+MOVE_JS = """<script>(function(){var OLD=%(old)s,NEW=%(new)s,P='tmd:',H='#tmd-move=';
+function e(s){return btoa(unescape(encodeURIComponent(s))).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'')}
+function d(s){s=s.replace(/-/g,'+').replace(/_/g,'/');return decodeURIComponent(escape(atob(s)))}
+var host=location.hostname.replace(/^www\\./,'');
+try{if(OLD.indexOf(host)>=0&&NEW&&host!==NEW){window.__tmdMoving=1;
+var ks=[],day=-1,i,k,m,o={},n=0,keep=location.hash||'';
+for(i=0;i<localStorage.length;i++){k=localStorage.key(i);if(k&&k.indexOf(P)===0){ks.push(k);m=/:day:(\\d+)$/.exec(k);if(m&&+m[1]>day)day=+m[1]}}
+var big=/:(day|drive|run|surv|practice)(:|$)|:tend$/,rank=function(k){return !big.test(k)?0:k.slice(-(':day:'+day).length)===':day:'+day?1:2};
+ks.sort(function(a,b){return rank(a)-rank(b)});
+for(i=0;i<ks.length;i++){k=ks[i];var v=localStorage.getItem(k);if(rank(k)===2&&/:day:\\d+$/.test(k))continue;if(n+k.length+v.length>110000)continue;o[k]=v;n+=k.length+v.length}
+location.replace(location.protocol+'//'+NEW+location.pathname+location.search+(ks.length?H+e(JSON.stringify(o))+(keep?'&h='+encodeURIComponent(keep.slice(1)):''):keep));return}
+if(location.hash.indexOf(H)===0){var raw=location.hash.slice(H.length),at=raw.indexOf('&h='),h=at>=0?decodeURIComponent(raw.slice(at+3)):'',got=JSON.parse(d(at>=0?raw.slice(0,at):raw));
+for(var key in got){if(key.indexOf(P)!==0)continue;var cur=localStorage.getItem(key);
+if(cur===null)localStorage.setItem(key,got[key]);
+else if(/:stats$/.test(key)){var a=JSON.parse(cur),b=JSON.parse(got[key]);a.days=a.days||{};for(var dk in (b.days||{}))if(!a.days[dk])a.days[dk]=b.days[dk];localStorage.setItem(key,JSON.stringify(a))}}
+history.replaceState(null,'',location.pathname+location.search+(h?'#'+h:''))}}catch(x){}})();</script>"""
+
+
+def move_js(new: str | None, old: list[str]) -> str:
+    """The handoff from the old address(es) to the new one; nothing when there is no move."""
+    if not new or not old:
+        return ""
+    return MOVE_JS % {"old": json.dumps([o.strip().lower().removeprefix("www.") for o in old if o.strip()]), "new": json.dumps(new.strip().lower())}
+
+
 # Every page: the same footer (the site's pages, the contact, the disclaimer and the data credit), its style, and the
 # canonical address of the page
 PAGES = [("", "Play", 1.0), ("how-it-works", "How it works", 0.8), ("about", "About", 0.6), ("stats", "Stats", 0.6),
@@ -284,7 +314,7 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
           site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, pro_at: str | None = None, no_ads: bool = False,
-          fulldef: bool = False, google_client_id: str | None = None) -> Path:
+          fulldef: bool = False, google_client_id: str | None = None, old_domain: str | None = None) -> Path:
     global NO_ADS
     NO_ADS = no_ads
     adsense, ad_slot = (adsense or "").strip() or None, (ad_slot or "").strip() or None     # "" (an unset variable): off
@@ -304,6 +334,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         shutil.rmtree(out)
     (out / "spots").mkdir(parents=True)
     site_url = site_url or f"https://{(domain or 'nfl2mindrill.com').strip()}"
+    home = (domain or "").strip() or "nfl2mindrill.com"          # the site's own address, wherever the pages name it
+    moving = move_js(domain, (old_domain or "").split(","))      # first in every page: the old address hands over
     desc = "Call the plays in real NFL endings. One drive a day: beat the real coach and see how you rank."
     extra = f"<meta name=\"description\" content=\"{desc}\">" + share_tags(site_url, "Two-Minute Drill: call the plays in real NFL endings", desc)
     if ga:                                   # Google Analytics (gtag.js), as Google gives it, at the top of <head>
@@ -329,7 +361,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         commit = ""
     stamp = (commit[:12] or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"))
     # every file the page loads carries the build stamp (game.js reads the meta), so phones never mix two builds
-    extra += f"<meta name=\"build\" content=\"{stamp}\">" + canonical(site_url, "") + FOOT_CSS
+    extra += f"<meta name=\"build\" content=\"{stamp}\"><meta name=\"home\" content=\"{html.escape(home, quote=True)}\">" + canonical(site_url, "") + FOOT_CSS
     # game.json (the intro needs it) downloads alongside game.js instead of after it: the same request game.js makes
     # (fetch: cors, same-origin credentials), so the browser hands that one over
     extra = f"<link rel=\"preload\" href=\"game.json?v={stamp}\" as=\"fetch\" crossorigin>" + extra
@@ -345,13 +377,13 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     page = (WEB / "game.html").read_text()
     for js in ("motion.js", "vs_core.js", "game.js"):     # vs_core.js: college overtime's rules (Versus, a college game)
         page = page.replace(f'<script src="{js}"></script>', f'<script src="{js}?v={stamp}"></script>')
-    (out / "index.html").write_text(HEAD.format(extra=extra + AD_CSS) + page.replace("<!--SITE-FOOT-->", foot_ads() + FOOT) + "</body></html>\n")
+    (out / "index.html").write_text(HEAD.format(extra=moving + extra + AD_CSS) + page.replace("<!--SITE-FOOT-->", foot_ads() + FOOT) + "</body></html>\n")
     # the stats page (/stats): its own document; the same analytics tag and backend address
     stats_head = (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Two-Minute Drill stats",
         "How everyone did on the daily drive: players per day, the score spread and the top ten.", "stats") + (
         f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else "")
-    fill = lambda name, head, path, ads=True: (out / name).write_text((WEB / name).read_text().replace("<!--SITE-HEAD-->",
-        head + canonical(site_url, path) + FOOT_CSS + AD_CSS).replace("<!--AD-MID-->", ad_frame("banner") if ads else "")
+    fill = lambda name, head, path, ads=True: (out / name).write_text((WEB / name).read_text().replace("nfl2mindrill.com", home).replace("<!--SITE-HEAD-->",
+        moving + head + canonical(site_url, path) + FOOT_CSS + AD_CSS).replace("<!--AD-MID-->", ad_frame("banner") if ads else "")
         .replace("<!--SITE-FOOT-->", (foot_ads() if ads else "") + FOOT))
     fill("stats.html", stats_head, "stats")
     # the guide and the about page (content: the same analytics and ad tags as the game)
@@ -428,6 +460,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("out", nargs="?", default="_site")
     ap.add_argument("--domain")
+    ap.add_argument("--old-domain", help="the address(es) the site is moving from, comma-separated: their visitors are handed over, saved progress and all")
     ap.add_argument("--board-api")
     ap.add_argument("--ga", help="Google Analytics measurement id (G-...)")
     ap.add_argument("--site-url", help="the site's address for link previews (default https://<domain>, else nfl2mindrill.com)")
@@ -441,7 +474,7 @@ if __name__ == "__main__":
     ap.add_argument("--pro", action="store_true", help="turn on the Pro tab (the archive, the historic drives, the purchase); off until approved")
     a = ap.parse_args()
     o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, vs=a.vs, fulldef=a.fulldef, no_ads=a.no_ads,
-              google_client_id=a.google_client_id)
+              google_client_id=a.google_client_id, old_domain=a.old_domain)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6
     print(f"site in {o}: {n} files, {size:.1f} MB")
