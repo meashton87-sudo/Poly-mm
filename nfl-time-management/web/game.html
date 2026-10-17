@@ -570,6 +570,12 @@ a.chip { color: var(--ink); text-decoration: none; display: inline-block; }
 .toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; background: var(--card); }
 .toggle .lab { font-weight: 600; font-size: 14px; }
 .toggle .lab small { display: block; color: var(--muted); font-weight: 500; font-size: 12px; }
+.toggle.urgent { border-color: var(--gold); background: var(--gold-soft); }      /* late: getting out stops the clock */
+.hintonce { display: flex; align-items: flex-start; gap: 8px; border: 1px dashed var(--gold); border-radius: 8px; padding: 8px 10px; font-size: 13px; background: var(--gold-soft); }
+.hintonce .k { font-weight: 800; letter-spacing: .08em; text-transform: uppercase; font-size: 11px; color: var(--gold); padding-top: 1px; }
+.hintonce .t { flex: 1; min-width: 0; }
+.hintonce .x { border: 0; background: none; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; }
+.chip.auto.on { border-color: var(--sq-g); color: var(--sq-g); }
 .sw2 { width: 46px; height: 28px; border-radius: 999px; border: 0; background: var(--line); position: relative; cursor: pointer; flex: none; }
 .sw2::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--card); transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
 .sw2[aria-checked="true"] { background: var(--sq-g); }
