@@ -770,7 +770,8 @@
     svg.setAttribute('viewBox', `0 0 360 ${H}`);
     svg.textContent = '';
     svg.classList.remove('playing');
-    svg.classList.toggle('drawing', !!(passing() && ui.pass && ui.pass.draw));
+    // (passing: the field takes the finger, so a drag from a receiver draws instead of scrolling)
+    svg.classList.toggle('drawing', !!(passing() && ui.pass));
     const sc = { svg, H, r, cam: { ...FULL }, parts: [], actors: [], calls: [] };
     const put = (el, upd) => { svg.append(el); if (upd) sc.parts.push(upd); return el; };
     put(S('rect', { x: 0, y: 0, width: 360, height: H, fill: 'var(--turf)' }));
@@ -1266,18 +1267,23 @@
       return best;
     };
     svg.addEventListener('pointerdown', (ev) => {
-      if (busy || !passing() || !scene || !ui.pass.draw || (ev.pointerType === 'mouse' && ev.button !== 0)) return;
+      if (busy || !passing() || !scene || (ev.pointerType === 'mouse' && ev.button !== 0)) return;
       const q = at(ev);
       if (!q) return;
-      const hit = near(q), i = hit >= 0 ? hit : ui.pass.sel;
+      // without drawing on, a drag that starts on a receiver draws his route all the same (players dragged him and
+      // nothing happened); a tap is still a tap (his next route). Outside Pro games, the drag says where it is
+      const direct = !ui.pass.draw, hit = near(q);
+      if (direct && hit < 0) return;
+      const i = hit >= 0 ? hit : ui.pass.sel;
       ev.preventDefault();
-      drawing = { i: i == null ? -1 : i, hit, x: ev.clientX, y: ev.clientY, pts: [[q.x, q.y]], el: null, id: ev.pointerId };
+      drawing = { i: i == null ? -1 : i, hit, direct, locked: !drawOK(), x: ev.clientX, y: ev.clientY, pts: [[q.x, q.y]], el: null, id: ev.pointerId };
       try { svg.setPointerCapture(ev.pointerId); } catch (e) { /* the line still follows inside the field */ }
     });
     svg.addEventListener('pointermove', (ev) => {
       const D = drawing;
       if (!D || ev.pointerId !== D.id || D.i < 0 || !scene) return;
       const q = at(ev), p = D.pts[D.pts.length - 1];
+      if (D.locked) { if (q && Math.hypot(q.x - D.pts[0][0], q.y - D.pts[0][1]) > 14) D.dragged = true; return; }
       if (!q || Math.hypot(q.x - p[0], q.y - p[1]) < 2.5) return;
       D.pts.push([q.x, q.y]);
       const a = eligibles(scene)[D.i], Y = camY(scene);
@@ -1295,6 +1301,11 @@
       if (D.el) D.el.remove();
       if (cancel || busy || !passing() || !scene) return;
       const P = ui.pass;
+      if (D.locked) {
+        if (D.dragged && PRO_ON) { toast('Drawing your own routes is in Pro games for now: coming to every mode soon. Tap him to change his route'); track('draw_locked', { mode: modeName(), how: 'drag' }); }
+        return;
+      }
+      if (D.direct && Math.hypot(ev.clientX - D.x, ev.clientY - D.y) <= 10 && D.pts.length <= 3) return;     // (a tap: his next route)
       if (Math.hypot(ev.clientX - D.x, ev.clientY - D.y) <= 10 && D.pts.length <= 3) {
         // a tap: pick that receiver (him again: let him go); off them all, let go of whoever was picked
         P.sel = D.hit >= 0 && P.sel !== D.hit ? D.hit : null;
@@ -4059,7 +4070,7 @@
     }
     if (G.look != null) d.append(readLine(G.look));
     const E = eligibles(sc), selA = P.draw && P.sel != null ? E[P.sel] : null;
-    if (!P.draw) d.append(el('p', 'hint', `Tap a receiver on the field to change his route${drawOK() ? ', or ✏️ draw your own' : ''}. Tap a name below to throw it to him.`));
+    if (!P.draw) d.append(el('p', 'hint', `Tap a receiver on the field to change his route${drawOK() ? ', or drag him to draw your own' : ''}. Tap a name below to throw it to him.`));
     else {
       const h = el('p', 'hint draw', selA ? `Now drag from ${shortName(selA.p ? selA.p.name : '') || selA.label} to where he should go.`
         : 'Tap a receiver, then drag on the field where you want him to go. Each line plays as the real route it is closest to.');
