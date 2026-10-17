@@ -184,6 +184,7 @@
   const routeName = (lab, rt) => (lab === 'TE' && rt === 'go' ? 'Seam' : ROUTE_NAME[rt]);
   const routeSay = (lab, rt) => (lab === 'TE' && rt === 'go' ? 'a seam route' : ROUTE_SAY[rt]);
   const DEEP_ROUTES = new Set(['go', 'post', 'corner', 'wheel']);
+  const YAC_IN = new Set(['slant', 'in', 'cross', 'post', 'angle', 'drag']), YAC_OUT = new Set(['out', 'deep_out', 'corner', 'flat', 'wheel']);
   const DEEP = new Set(['deep_strong', 'deep_weak', 'deep_middle', 'pa_deep', 'hail_mary']);
   const SQ = { g: '🟩', y: '🟨', o: '🟧', r: '🟥' };
   const GLYPH = { g: '✓', y: '≈', o: '!', r: '✗' };
@@ -1360,7 +1361,7 @@
       // make the tackle at the same yard line (never a carrier going down alone in the open; players saw it)
       if (tackled && !o.oob && defs.length && dist(start, endPt) < 4) {
         const near_ = defs.slice().sort((a, b) => dist(here(a), endPt) - dist(here(b), endPt))[0], q = here(near_);
-        if (dist(q, endPt) > 3) endPt[0] = inX(endPt[0] + clip((q[0] - endPt[0]) * 0.55, -7, 7));
+        if (dist(q, endPt) > 3) endPt[0] = inX(endPt[0] + clip((q[0] - endPt[0]) * 0.3, -2, 2));   // (a step his way; the man closes the rest, below)
       }
       // to daylight: the middle of the run bends away from where the defense is headed
       const pts = [];
@@ -1410,11 +1411,13 @@
       // stopped at or behind the line, and nobody can get there from where the defense is now: a defender beat his
       // block. Back at the handoff, the one who can best make it is sent through the line, timed to meet him there
       // (a stuff is penetration, not a back waiting in the backfield for someone to come)
-      if (tackled && o.from != null && o.from < t0 - 0.1 && reach.length && reach[0].T > tC - t0 + 0.1
-        && fd * (contact[1] - L0) < 1.5) {
-        const tf = Math.max(o.from, REACT_DEF + 0.2);
+      // The same on a short catch-and-run with nobody near (players saw backs at the sideline turn back to the hash to
+      // find a tackler): the nearest man breaks on the ball before it arrives and meets him where he is
+      const stuff = fd * (contact[1] - L0) < 1.5 && o.from < t0 - 0.1, closeIn = !stuff && dist(start, contact) < 8;
+      if (tackled && o.from != null && (stuff || closeIn) && reach.length && reach[0].T > tC - t0 + 0.1) {
+        const tf = stuff ? Math.max(o.from, REACT_DEF + 0.2) : Math.max(REACT_DEF + 0.2, t0 - 0.8);
         Wd.rewind(tf);
-        const pick = defs.filter((d) => d.b.g !== 'CB').map((d) => ({ d, T: Motion.minTime([here(d), contact], d.b.g, { v0: vel(d), spd: d.b.spd }) }))
+        const pick = defs.filter((d) => !stuff || d.b.g !== 'CB').map((d) => ({ d, T: Motion.minTime([here(d), contact], d.b.g, { v0: vel(d), spd: d.b.spd }) }))
           .sort((x, y) => x.T - y.T)[0];
         if (pick) {
           runFrom(pick.d, tf, [contact], { T: Math.max(pick.T, tC - tf - 0.15) });
@@ -1435,8 +1438,8 @@
       if (tackled && reach.length && reach[0].T > tC - t0 + 0.1 && !o.straight) {
         const lean = Math.sign(contact[0] - start[0]) || (contact[0] < FW / 2 ? -1 : 1);
         let done = false;
-        for (const sh of [3, 6, 9, 12, 16]) {
-          for (const side of [lean, -lean]) {
+        for (const side of [lean, -lean]) {             // (his own side first, all the way out: a cutback is the last resort)
+          for (const sh of [3, 6, 9, 12, 16]) {
             const c2 = [inX(contact[0] + side * sh), contact[1]];
             if (Math.abs(c2[0] - contact[0]) < sh - 0.5) continue;             // past the sideline that way
             const r2 = (pts.length ? [[inX(pts[0][0] + side * sh * 0.4), pts[0][1]]] : []).concat([c2]);
@@ -1587,8 +1590,15 @@
 
     // ---- the pass
     function pickTarget(id, sign) {
-      if (e.who === 'RB' || id === 'screen') return K.rb || K.recv[0];
       const side = (a) => (sign ? sign * (a.x0 - bx) > 0 : true);
+      // a screen goes to whoever caught the real one: a back, a receiver (bubble or tunnel) or a tight end
+      if (id === 'screen') {
+        const w = K.recv.filter((a) => a.label === 'WR' && side(a)), t = K.recv.find((a) => a.label === 'TE');
+        if (e.who === 'WR' && (w.length || K.recv.some((a) => a.label === 'WR'))) return pickOf(w.length ? w : K.recv.filter((a) => a.label === 'WR'));
+        if (e.who === 'TE' && t) return t;
+        return K.rb || K.recv[0];
+      }
+      if (e.who === 'RB') return K.rb || K.recv[0];
       const nearBall = (list) => list.slice().sort((a, b) => Math.abs(a.x0 - bx) - Math.abs(b.x0 - bx))[0];
       if (e.who === 'TE') return nearBall(K.recv.filter((a) => a.label === 'TE' && side(a))) || K.recv.find((a) => a.label === 'TE') || K.recv[0];
       const wr = K.recv.filter((a) => a.label === 'WR');
@@ -2043,7 +2053,9 @@
       ring(tCatch, tgt);
       const yac = e.td ? 99 : fwd(0, fwd(L0, e.yards) - catchPt[1]);
       const endY = e.td ? tdL() : inL(fwd(L0, e.yards));
-      const endX = e.oob ? sidelineX(catchPt[0] + out * 6) : inX(catchPt[0] + clip(jit(5) + out * Math.min(Math.abs(yac), 12) * 0.25, -9, 9));
+      // after the catch he keeps going the way the route took him: a slant or a dig inside, an out or a flat outside
+      const lat = YAC_IN.has(routeName) ? -out : YAC_OUT.has(routeName) ? out : 0;
+      const endX = e.oob ? sidelineX(catchPt[0] + out * 6) : inX(catchPt[0] + clip(jit(lat ? 2.5 : 5) + lat * Math.min(Math.abs(yac), 12) * 0.35, -9, 9));
       if (Math.abs(yac) > 4 && !e.bt) say(tCatch, 'Caught', 'boom', { follow: tgt });
       if (shadow) busy.delete(shadow);       // the man on him at the catch is the first who can tackle him
       const ep = [endX, endY], tEnd = runDown(tgt, tCatch, ep, { td: e.td, oob: e.oob, bt: e.bt, from: tCatch });
