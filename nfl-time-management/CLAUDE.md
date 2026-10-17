@@ -87,10 +87,16 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   account button (game.js acctBar) is Log in, then the account's username (/auth/name: 3-20 characters, one account each,
   never blocked()).
 - Signed in, more follows the account (worker.js, the tests in worker_test.mjs): the page's record (stats days, historic
-  drives from the Gauntlet's start, playoff runs) merges both ways with /auth/stats (the best of each kept; game.js
+  drives from the Gauntlet's start, playoff runs, badges and the days a streak freeze covered: a union, the earliest
+  time of each) merges both ways with /auth/stats (the best of each kept; game.js
   statsSync on sign-in, on load at most every 10 minutes, after each finish); the account's username is its name on the
   survivor board and the day's list from any phone (a { session } with the post: acctNameKey; a name set on the device
   still wins on the page, myName); friend leagues (/league/*, #league-<code> join links: 50 members, 10 leagues an
   account; a board shows usernames and daily numbers only, to members only); the daily email (/auth/remind, the cron in
   wrangler.toml [triggers], `scheduled` -> the Board's reminders: one a day an account, 1000 a run, an HMAC unsubscribe
   link; only with RESEND_KEY + MAIL_FROM). Never put an address or account id in anything another account can read.
+- Streaks and badges (game.js streakOf, BADGES): the streak is worked out from the days played (the same on every phone); every 7 days in a
+  row earn a freeze (2 held at most), spent on a missed day once the next day is played (stats.frozen keeps the day: the
+  ❄️, the one note and event, a league board's streak). A badge is earned once (stats.badges: { id: time }); most are
+  tests on the record so a new phone signed in earns the same ones. A new badge needs no worker change (its id is only
+  checked for shape there).

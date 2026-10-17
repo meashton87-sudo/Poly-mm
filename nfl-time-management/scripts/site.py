@@ -27,7 +27,9 @@ import numpy as np
 
 WEB = Path(__file__).resolve().parents[1] / "web"
 FILES = ["game.js", "motion.js", "engine.js", "game_worker.js", "vs_core.js", "game.json", "playbook.json", "engine_data.json",
-         "og.png", "icon.svg", "icon-180.png", "icon-48.png", "icon-192.png", "icon-512.png", "midlogo.png", "favicon.ico"]      # the link preview card (og_card.html, drawn at 1200x630) and the icons
+         "og.png", "icon.svg", "icon-180.png", "icon-48.png", "icon-192.png", "icon-512.png", "midlogo.png", "favicon.ico",
+         "icon-maskable-192.png", "icon-maskable-512.png"]      # the link preview card (og_card.html, drawn at 1200x630) and the icons
+# (the maskable icons: the logo inside the middle 72%, so a phone's round or squircle mask never cuts it)
 # the same skeleton the claude.ai artifact host wraps the page in: charset, a viewport that reaches the phone's
 # edges, the safe-area padding and a small reset
 HEAD = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
@@ -201,7 +203,8 @@ FOOT = ('<footer class="sitefoot"><nav aria-label="Site">'
 # The site's icon (the 2MD logo): what Google shows next to the site in search results (a square of 48 px or more,
 # linked from the page, /favicon.ico at the root too), the browser tab, a phone's home screen
 ICONS = ('<link rel="icon" href="/favicon.ico" sizes="48x48"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">'
-         '<link rel="apple-touch-icon" href="/icon-180.png"><link rel="manifest" href="/site.webmanifest">')
+         '<link rel="apple-touch-icon" href="/icon-180.png"><link rel="manifest" href="/site.webmanifest">'
+         '<meta name="apple-mobile-web-app-title" content="2MD">')      # the home screen's label on iOS (not the page title, cut off)
 
 
 def canonical(site_url: str, path: str) -> str:
@@ -237,7 +240,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         raise SystemExit(f"--google-client-id wants an OAuth client id like 1234-abc.apps.googleusercontent.com, not {google_client_id!r}")
     if ad_slot and not re.fullmatch(r"\d{6,12}", ad_slot):
         raise SystemExit(f"--ad-slot wants an ad unit's slot number, not {ad_slot!r}")
-    missing = [f for f in FILES + ["stats.html", "privacy.html", "about.html", "how-it-works.html", "admin.html"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
+    missing = [f for f in FILES + ["stats.html", "privacy.html", "about.html", "how-it-works.html", "admin.html", "sw.js"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
     if missing:
         raise SystemExit(f"build the game data first; missing in web/: {', '.join(missing)}")
     if out.exists():
@@ -296,10 +299,18 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     # analytics, no ads, no site chrome; only the backend's address (the admin token is pasted on the page)
     (out / "admin.html").write_text((WEB / "admin.html").read_text().replace("<!--SITE-HEAD-->",
         f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else ""))
-    (out / "site.webmanifest").write_text(json.dumps({"name": "Two-Minute Drill", "short_name": "2MD", "start_url": "/",
-        "display": "standalone", "background_color": "#0c1d42", "theme_color": "#0c1d42", "icons": [
-            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
-            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"}]}, indent=1) + "\n")
+    # the installed app (Add to Home Screen): opened from its icon, it says so to analytics (utm_source), and id keeps
+    # it the same app if start_url ever changes; the splash is the icon's navy, the bar the page's theme-color
+    (out / "site.webmanifest").write_text(json.dumps({"id": "/", "name": "Two-Minute Drill", "short_name": "2MD", "description": desc,
+        "start_url": "/?utm_source=homescreen&utm_medium=pwa", "scope": "/", "display": "standalone",
+        "background_color": "#051d43", "theme_color": "#2c7549", "categories": ["games", "sports"], "icons": [
+            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+            {"src": "/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
+            {"src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}]}, indent=1) + "\n")
+    # the service worker (web/sw.js: network first, its cache only offline), stamped with this build: a new build is a new
+    # worker, which drops the last build's cache
+    (out / "sw.js").write_text((WEB / "sw.js").read_text().replace("__BUILD__", stamp))
     # for crawlers: every page allowed, and the sitemap of the site's pages
     base = site_url.rstrip("/")
     (out / "robots.txt").write_text(f"User-agent: *\nAllow: /\n\nSitemap: {base}/sitemap.xml\n")
