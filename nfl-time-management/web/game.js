@@ -4726,7 +4726,9 @@
   // the name this device plays under: the one set here, else (signed in) the account's username (kept here as
   // UNAME_KEY, so it is there before the account is asked again); the board takes it as the account's from any phone
   const myName = () => String(load(NAME_KEY, '') || (authSession() && load(UNAME_KEY, '')) || '').slice(0, 24);
-  const withSession = () => (signedIn() ? { session: authSession() } : {});
+  // (the kept session, as myName goes by: not signedIn(), which waits on /auth/me. A post made before that answers, or
+  // when it never does, was the username without the session: the board called the player's own name taken)
+  const withSession = () => (authSession() ? { session: authSession() } : {});
   const slugOf = (name) => `p-${String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'player'}`;
   const redrawBoards = () => document.querySelectorAll('.board').forEach(fillBoard);
   // posts go as text/plain, a "simple" cross-origin request: no OPTIONS preflight, half the backend requests (the
@@ -5385,9 +5387,10 @@
     return { n: last && pending ? run : 0, best, held, frozen, pending: pending || [] };
   }
   // the daily's top bar: the day, and the streak (❄️: a missed day a freeze covers once today is played); drawn again
-  // when a finish or a sync changes the streak
+  // when a finish or a sync changes the streak (never over practice's own label: a sync landing mid-drive put the day's
+  // number and streak up there, as if it were the daily)
   function dayLabelSet() {
-    if (SURV || DRIVE || RUN_N || VS || ARCH || GAUNTLET || !idx || !today.length) return;
+    if (SURV || PRACTICE || DRIVE || RUN_N || VS || ARCH || GAUNTLET || !idx || !today.length) return;
     const sk = ARCH_DAY ? null : streakOf(load(`${STORE}:stats`, { days: {} }), dayOf(new Date())), stk = sk ? sk.n : 0;
     $('dayLabel').textContent = `No. ${dayN} · ${dayDate(dayN).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${ARCH_DAY ? ' · archive' : ''}${stk >= 2 ? ` · \ud83d\udd25${stk}${sk.pending.length ? '\u2744\ufe0f' : ''}` : ''}`;
   }
@@ -5709,7 +5712,7 @@
     const box = el('div', 'pro provalue'), days = Math.max(0, dayOf(new Date()) - 1);
     box.append(el('div', 'k', 'Want more? Two-Minute Drill Pro'), el('div', 'price', '$4.99 \u00b7 once, yours for good'));
     const ul = el('ul');
-    ['The Gauntlet: race everyone through the historic drives. $50 and the Champion title to the first to pass them all',
+    [...(gauntletOver() ? [] : ['The Gauntlet: race everyone through the historic drives. $50 and the Champion title to the first to pass them all']),
       'The historic drives: Mahomes\u2019 13 seconds, the Minneapolis Miracle, the Philly Special, 28\u20133 and more, from their real spots',
       'Playoff runs: coach a team through its whole postseason, every late-game spot in order',
       `The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed`].forEach((t) => ul.append(el('li', '', t)));
@@ -6237,9 +6240,11 @@
   function openStats(focus) {
     track('stats_open');
     const st = load(`${STORE}:stats`, { days: {} });
-    if (badgeAward(st, null).length) { save(`${STORE}:stats`, st); statsSync(true); }      // (a record from before the badges: earned now)
+    // (the day numbers need game.json: tapped while it loads, or after it failed, the record without the streak's
+    // calendar and the badges' check, not an exception and no sheet)
+    if (idx && badgeAward(st, null).length) { save(`${STORE}:stats`, st); statsSync(true); }      // (a record from before the badges: earned now)
     const days = Object.keys(st.days).map(Number).sort((a, b) => a - b);
-    const sk = streakOf(st, dayOf(new Date())), streak = sk.n;
+    const sk = idx ? streakOf(st, dayOf(new Date())) : null, streak = sk ? sk.n : 0;
     const avg = days.length ? days.reduce((a, k) => a + st.days[k].p, 0) / days.length : 0;
     const best = days.length ? Math.max(...days.map((k) => st.days[k].p)) : 0;
     const row = el('div', 'stats');
@@ -6257,7 +6262,7 @@
       r.append(el('span', '', lab), bar);
       dist.append(r);
     });
-    const nodes = [row, streakCal(st, sk), el('p', 'note', 'Daily percentile against NFL play-callers'), dist];
+    const nodes = [row, ...(sk ? [streakCal(st, sk)] : []), el('p', 'note', 'Daily percentile against NFL play-callers'), dist];
     const coaches = days.map((k) => st.days[k].coach).filter(Boolean);
     if (coaches.length) {
       const top = Object.entries(coaches.reduce((a, c) => ({ ...a, [c]: (a[c] || 0) + 1 }), {})).sort((a, b) => b[1] - a[1])[0];
@@ -7132,9 +7137,9 @@
   // on the Daily and Survivor tabs, once it is on: a bar to the race
   function raceBar() {
     if (!PRO_ON || !BOARD.api || ARCH || ARCH_DAY || DRIVE || RUN_N || VS || GAUNTLET || document.querySelector('.racebar')) return;
-    const a = el('a', 'racebar');
-    a.href = '#archive';
-    a.append(el('b', '', `🏁 ${RACE_NAME}`), el('span', '', 'First to pass all 24 historic drives wins. Leaderboard →'));
+    const a = el('a', 'racebar'), over = gauntletOver();
+    a.href = over ? '#gauntlet-results' : '#archive';
+    a.append(el('b', '', `🏁 ${RACE_NAME}`), el('span', '', over ? 'It’s over: the champion and the final standings →' : 'First to pass all 24 historic drives wins. Leaderboard →'));
     a.addEventListener('click', () => track('race_bar'));
     $('modeArch').closest('nav').after(a);
   }
@@ -7942,6 +7947,10 @@
   // The Gauntlet's start: every player's historic-drive record starts over then, like the board (the grades from before
   // move to drives_before_gauntlet, kept, not shown), and a try begun before it is dropped (it could never count)
   const GAUNTLET_FROM = Date.parse('2026-10-16T20:00:00Z');
+  // ... and its end (board/wrangler.toml RACE_TO): past it the bar on every daily and the Pro pitch after it stop
+  // promising the race and its prize (the panel itself goes by the board's own view: over)
+  const GAUNTLET_TO = Date.parse('2026-10-17T00:45:00Z');
+  const gauntletOver = () => Date.now() >= GAUNTLET_TO;
   function gauntletFresh() {
     if (Date.now() < GAUNTLET_FROM || load(`${STORE}:gauntlet_fresh`, false)) return;
     try {

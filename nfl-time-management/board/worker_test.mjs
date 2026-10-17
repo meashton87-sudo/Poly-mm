@@ -857,8 +857,17 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual((await call('POST', { name: 'Amy Hawk', best: 9, key: kX })).status, 409, 'a stranger: taken');
   assert.strictEqual((await call('POST', { name: 'Amy Hawk', best: 9, key: kX, session: sb })).status, 409, 'another account: taken');
   assert.ok((await (await call('GET')).json()).rows.some((x) => x.name.toLowerCase() === 'amy hawk' && x.best === 6), 'her best, from either phone');
-  store.set('claim:ben bolt', 'f'.repeat(64));                         // a device took "Ben Bolt" before the account did
-  assert.strictEqual((await call('POST', { name: 'Ben Bolt', best: 2, key: kX, session: sb })).status, 200, 'the account\'s username is the account\'s');
+  // a username is checked against other accounts' only: picking a name another phone plays under never takes it (its
+  // owner locked out of his own name, his survivor row the account's); the phone that holds it hands it over
+  store.set('claim:ben bolt', 'f'.repeat(64));                         // someone else's phone plays as "Ben Bolt"
+  assert.strictEqual((await call('POST', { name: 'Ben Bolt', best: 2, key: kX, session: sb })).status, 409, 'another phone\'s name: taken, username or not');
+  assert.strictEqual(store.get('claim:ben bolt'), 'f'.repeat(64), 'and still his');
+  b = await (await day({ date: today, key: kX, p: 0.5, spots: [0], name: 'Ben Bolt', session: sb })).json();
+  assert.ok(b.taken && !b.top.some((x) => x.name === 'Ben Bolt'), 'nor on the day\'s list');
+  const kBen = 'ben-own-phone-key-00000001';
+  store.set('claim:ben bolt', await sha256hex(kBen));                  // his own phone played as "Ben Bolt" before he signed in
+  assert.strictEqual((await call('POST', { name: 'Ben Bolt', best: 2, key: kBen, session: sb })).status, 200, 'that phone, signed in: the name goes to the account');
+  assert.strictEqual((await call('POST', { name: 'Ben Bolt', best: 3, key: kX, session: sb })).status, 200, 'then his on any phone');
   r = await call('POST', { name: 'Not Amy', best: 1, key: kB, session: sa });
   assert.strictEqual(r.status, 200, 'another name: claimed by the device, as ever');
   assert.strictEqual(store.get('claim:not amy'), await sha256hex(kB));

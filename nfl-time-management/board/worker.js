@@ -270,7 +270,7 @@ async function daily(req, env, storage, hits, h, url) {
   let taken = false, unclaimed = false;
   if (name && !(prev && prev.name)) {
     let owner = await ownerOf(storage, name.toLowerCase());
-    if (ak && owner !== ak) { await claim(storage, name.toLowerCase(), ak); owner = ak; }
+    if (acctTakes(owner, ak, kh)) { await claim(storage, name.toLowerCase(), ak); owner = ak; }
     taken = !!(owner && owner !== nk);
     unclaimed = !owner;
   }
@@ -482,6 +482,10 @@ async function acctNameKey(storage, env, session, lower) {
   const acct = await sessionAcct(storage, env, session), a = acct && await storage.get(`acct:${acct}`);
   return a && a.name && a.name.toLowerCase() === lower ? sha256(`acct:${acct}`) : null;
 }
+// the account takes the name's claim only when it is free or the device posting holds it (that phone played under the
+// name before signing in): never from another device. A username is checked against other accounts' only, so taking
+// any claim let anyone take a name off the boards (its owner locked out, its survivor row theirs) by picking it
+const acctTakes = (owner, ak, dk) => !!ak && owner !== ak && (!owner || owner === dk);
 async function newSession(storage, acct, email) {
   const a = (await storage.get(`acct:${acct}`)) || { at: new Date().toISOString() };
   if (a.email !== email) { a.email = email; await storage.put(`acct:${acct}`, a); }
@@ -1034,7 +1038,7 @@ export async function handle(req, env, storage, hits) {
   const ak = await acctNameKey(storage, env, body.session, lower), kh = ak || dk;   // a signed-in account's own username: its name on any device
   const all = await readAll(), i = all.findIndex((r) => String(r.name).toLowerCase() === lower);
   let owner = await ownerOf(storage, lower);
-  if (ak && owner !== ak) { await claim(storage, lower, ak); owner = ak; }
+  if (acctTakes(owner, ak, dk)) { await claim(storage, lower, ak); owner = ak; }
   if (owner && owner !== kh) return json({ error: 'name taken', rows: ranked(all) }, 409, h);
   if (!owner) await claim(storage, lower, kh);
   if (i >= 0 && all[i].best >= best) {

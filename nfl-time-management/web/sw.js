@@ -5,8 +5,9 @@
 // A copy is a pair: the page names its scripts and data with the build stamp (?v=...), so an offline page only ever
 // finds the files of its own build. site.py writes the build stamp below: each build is a new worker (the browser
 // checks sw.js on every visit: game.js registers it with updateViaCache 'none') that takes over at once and drops the
-// last build's cache. Only this site's own GETs are touched: the board API, fonts, analytics and ads are other origins
-// (the browser handles them as if there were no worker), and ad frames, the admin page and version.json are skipped.
+// last build's cache (keeping what this build can use: activate below). Only this site's own GETs are touched: the
+// board API, fonts, analytics and ads are other origins (the browser handles them as if there were no worker), and ad
+// frames, the admin page and version.json are skipped.
 // To turn it off: ship a sw.js that unregisters itself (self.registration.unregister()) and deletes its caches.
 const VERSION = '__BUILD__';
 const CACHE = `tmd-${VERSION}`;
@@ -14,8 +15,30 @@ const KEEP = /\.(?:js|json|pack|png|svg|ico|webmanifest)$/;          // what a p
 const SKIP = /^\/(?:ad-|admin|sw\.js|version\.json|remind-)/;
 
 self.addEventListener('install', () => self.skipWaiting());
+// what of the last build's cache this build's pages can use moves over before it is dropped: the visit that brings a
+// new worker is answered by the old one (into its own cache), and the new one takes over only after it, so without
+// this the first visit after every deploy left nothing for the app to open with offline. A file stamped with another
+// build is not this build's; nor is a page naming another build (a deploy between the page and the worker's check)
+const ours = async (req, res) => {
+  const v = new URL(req.url).searchParams.get('v');
+  if (v !== null) return v === VERSION;
+  if (!/html/.test(res.headers.get('content-type') || '')) return true;
+  const m = (await res.clone().text()).match(/<meta name="build" content="([^"]*)"/);
+  return !m || m[1] === VERSION;
+};
 self.addEventListener('activate', (e) => e.waitUntil((async () => {
-  for (const k of await caches.keys()) if (k.startsWith('tmd-') && k !== CACHE) await caches.delete(k);
+  const cur = await caches.open(CACHE);
+  for (const k of await caches.keys()) {
+    if (!k.startsWith('tmd-') || k === CACHE) continue;
+    try {
+      const old = await caches.open(k);
+      for (const req of await old.keys()) {
+        const res = await old.match(req);
+        if (res && !(await cur.match(req)) && await ours(req, res)) await cur.put(req, res);
+      }
+    } catch (err) { /* storage full or off: dropped, as before */ }
+    await caches.delete(k);
+  }
   await self.clients.claim();
 })()));
 
