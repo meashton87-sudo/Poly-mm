@@ -5293,6 +5293,12 @@
       streak: !DRIVE && !RUN_N && !ARCH_DAY ? streak : 0,
       rows: today.map((sp, i) => ({ team: sp.player, res: (rows[i] || '').split(' ')[1] || '', marks: squeeze((state.spots[i] && state.spots[i].decisions) || []) })) }));
     box.insertBefore(img, dbox);
+    if (!DRIVE && !RUN_N && !ARCH_DAY && weekDays(st, dayN).filter((w) => w.d).length >= 3) {
+      const wk = el('button', 'btn ghostbtn', 'Share my week');
+      wk.type = 'button';
+      wk.addEventListener('click', () => weekImage(load(`${STORE}:stats`, { days: {} }), dayN, streak));
+      box.insertBefore(wk, dbox);
+    }
     box.insertBefore(callsExplained(decs), dbox);
     if (!DRIVE && !RUN_N && !ARCH_DAY) { const lg = el('p', 'lglink'); lg.hidden = true; box.insertBefore(lg, dbox); leagueNudge(); }
     badgeShow(box, state.badges || [], firstFinish);
@@ -5682,13 +5688,17 @@
     });
     if (o.streak >= 2) { x.font = `900 60px ${DISP}`; x.fillStyle = '#ffb547'; x.fillText(`\ud83d\udd25 ${o.streak}-DAY STREAK`, W / 2, y + 60); }
     x.font = `700 40px ${BODY}`; x.fillStyle = '#fff'; x.fillText(`Can you beat me? ${SITE}`, W / 2, H - 70);
+    await sharePng(cv, o.title, 'image');
+  }
+  // the picture to the phone's share sheet, else a download
+  async function sharePng(cv, title, what) {
     const blob = await new Promise((res) => cv.toBlob(res, 'image/png'));
     if (!blob) { toast('Could not make the picture'); return; }
-    const file = new File([blob], `two-minute-drill-${o.title.replace(/\W+/g, '-').toLowerCase()}.png`, { type: 'image/png' });
+    const file = new File([blob], `two-minute-drill-${title.replace(/\W+/g, '-').toLowerCase()}.png`, { type: 'image/png' });
     try {
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], text: `Can you beat me? https://${SITE}` });
-        track('share', { what: 'image', method: 'sheet' });
+        track('share', { what, method: 'sheet' });
         return;
       }
     } catch (e) { if (e && e.name === 'AbortError') return; }
@@ -5697,7 +5707,51 @@
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
     toast('Picture saved');
-    track('share', { what: 'image', method: 'download' });
+    track('share', { what, method: 'download' });
+  }
+  // The week on one picture: the last seven dailies up to `end` (a bar each, its score; a gap for a day missed), the
+  // average of the days played, the best one and the streak. Offered once three of the seven are played.
+  const weekDays = (st, end) => Array.from({ length: 7 }, (_, i) => end - 6 + i).map((n) => ({ n, d: n >= 1 && st.days[n] ? st.days[n] : null }));
+  async function weekImage(st, end, streak) {
+    const W = 1080, H = 1350, cv = document.createElement('canvas'), x = cv.getContext('2d');
+    cv.width = W; cv.height = H;
+    try { await document.fonts.ready; } catch (e) { /* no font API */ }
+    const css = getComputedStyle(document.documentElement), col = (v, d) => (css.getPropertyValue(v) || '').trim() || d;
+    const DISP = '"Big Shoulders Display", "Arial Narrow", sans-serif', BODY = '"Libre Franklin", Arial, sans-serif';
+    const MK = { g: col('--sq-g', '#3d9a56'), y: col('--sq-y', '#d2ad2e'), o: col('--sq-o', '#e27c37'), r: col('--sq-r', '#d0463f') };
+    const days = weekDays(st, end), played = days.filter((w) => w.d), sc = (w) => Math.round(w.d.p * 100);
+    const avg = Math.round(played.reduce((a, w) => a + sc(w), 0) / played.length), best = played.reduce((a, w) => (sc(w) > sc(a) ? w : a));
+    const dateOf = (n) => { const d = new Date(idx.launch + 'T12:00:00'); d.setDate(d.getDate() + n - 1); return d; };
+    const bg = x.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, '#0f2a18'); bg.addColorStop(1, '#173d24');
+    x.fillStyle = bg; x.fillRect(0, 0, W, H);
+    x.strokeStyle = 'rgba(255,255,255,.07)'; x.lineWidth = 3;
+    for (let y = 90; y < H; y += 110) { x.beginPath(); x.moveTo(0, y); x.lineTo(W, y); x.stroke(); }
+    x.textAlign = 'center'; x.fillStyle = '#fff';
+    x.font = `900 64px ${DISP}`; x.fillText('TWO-MINUTE DRILL', W / 2, 130);
+    const fmt = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    x.font = `700 34px ${BODY}`; x.fillStyle = 'rgba(255,255,255,.75)';
+    x.fillText(`MY WEEK \u00b7 ${fmt(dateOf(Math.max(1, end - 6)))} \u2013 ${fmt(dateOf(end))}`.toUpperCase(), W / 2, 185);
+    x.fillStyle = '#fff'; x.font = `900 260px ${DISP}`; x.fillText(String(avg), W / 2, 430);
+    x.font = `600 38px ${BODY}`; x.fillText(`Average of ${played.length} drive${played.length === 1 ? '' : 's'} vs NFL play-callers`, W / 2, 500, W - 80);
+    // the bars: one a day, as tall as its score, colored like the call squares
+    const top = 580, base = 1000, bw = 104, gap = 30, x0 = (W - (7 * bw + 6 * gap)) / 2;
+    x.strokeStyle = 'rgba(255,255,255,.25)'; x.lineWidth = 2;
+    x.beginPath(); x.moveTo(x0 - 10, base + 1); x.lineTo(W - x0 + 10, base + 1); x.stroke();
+    days.forEach((w, i) => {
+      const xx = x0 + i * (bw + gap);
+      x.font = `800 34px ${DISP}`; x.fillStyle = 'rgba(255,255,255,.75)';
+      x.fillText(w.n >= 1 ? dateOf(w.n).toLocaleDateString(undefined, { weekday: 'short' }).toUpperCase() : '', xx + bw / 2, base + 52);
+      if (!w.d) { x.fillStyle = 'rgba(255,255,255,.18)'; x.fillRect(xx + bw / 2 - 18, base - 8, 36, 6); return; }
+      const v = sc(w), h = Math.max(14, ((base - top - 60) * v) / 100);
+      x.fillStyle = v >= 80 ? MK.g : v >= 60 ? MK.y : v >= 40 ? MK.o : MK.r;
+      x.beginPath(); x.roundRect ? x.roundRect(xx, base - h, bw, h, [12, 12, 0, 0]) : x.rect(xx, base - h, bw, h); x.fill();
+      x.font = `900 44px ${DISP}`; x.fillStyle = '#fff'; x.fillText(String(v), xx + bw / 2, base - h - 14);
+    });
+    x.font = `600 36px ${BODY}`; x.fillStyle = 'rgba(255,255,255,.85)';
+    x.fillText(`Best: ${sc(best)} on ${dateOf(best.n).toLocaleDateString(undefined, { weekday: 'long' })}${best.d.coach ? `, coached like ${best.d.coach}` : ''}`, W / 2, 1120, W - 80);
+    if (streak >= 2) { x.font = `900 56px ${DISP}`; x.fillStyle = '#ffb547'; x.fillText(`\ud83d\udd25 ${streak}-DAY STREAK`, W / 2, 1195); }
+    x.font = `700 40px ${BODY}`; x.fillStyle = '#fff'; x.fillText(`Can you beat my week? ${SITE}`, W / 2, H - 70);
+    await sharePng(cv, `week-${end}`, 'week');
   }
   // ---- what Pro adds, shown to a free player right after the free daily (the moment they want more)
   function startPurchase(buy) {
