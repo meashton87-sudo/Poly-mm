@@ -313,8 +313,9 @@ async function signedByStripe(req, body, secret) {
 //   POST /auth/logout  { session }      -> { ok }
 //   POST /auth/link    { session, code, key } -> { email, pro, code }   a valid Pro code (on this device: the device
 //                                          limit applies) joins the account; a code belongs to one account only
-//   POST /auth/stats   { session, stats? } -> { stats: { days, drives, runs } }   the page's record (its stats days, the
-//                                          historic drives, the playoff runs) merged into the account's, the best of
+//   POST /auth/stats   { session, stats? } -> { stats: { days, drives, runs, badges, frozen } }   the page's record
+//                                          (its stats days, the historic drives, the playoff runs, the badges earned,
+//                                          the days a streak freeze covered) merged into the account's, the best of
 //                                          each kept (statsMerge), and the merged record back; without stats, a read
 //   POST /auth/remind  { session, on }  -> the account, { remind }   the daily email (Resend; off: 503 without it)
 //   POST /auth/unsub?r=&t=  (or { r, t }) -> { ok }               the email's unsubscribe link (one click, no sign-in):
@@ -500,6 +501,7 @@ async function auth(req, env, storage, hits, h, url) {
     const merged = statsMerge(have, inc);
     if (JSON.stringify(merged.days) !== JSON.stringify(have.days)) await storage.put(`stats:d:${acct}`, merged.days);
     if (JSON.stringify([merged.drives, merged.runs]) !== JSON.stringify([have.drives, have.runs])) await storage.put(`stats:x:${acct}`, { drives: merged.drives, runs: merged.runs });
+    if (JSON.stringify([merged.badges, merged.frozen]) !== JSON.stringify([have.badges, have.frozen])) await storage.put(`stats:m:${acct}`, { badges: merged.badges, frozen: merged.frozen });
     return json({ stats: merged }, 200, h);
   }
   if (p === '/auth/remind') {
@@ -556,11 +558,15 @@ async function readBody(req) {
 
 // ---- Stats that follow the account (/auth/stats): the page keeps its record in the browser (game.js: the stats days,
 // the historic drives, the playoff runs); signed in, it is merged into the account's and back, so a streak and the
-// drives passed survive a new phone. Kept as stats:d:<acct> (the days: what a league board reads) and stats:x:<acct>
-// (drives and runs). Each entry is checked and rebuilt from its numbers (nothing else of a post is kept); a kind with
-// more entries than its cap, or not an object, refuses the post. Merged, the higher score of each day, drive or run
-// stands (a drive: the most tries, won if either was; a day: a Madden find kept from either); over a cap, the newest.
+// drives passed survive a new phone. Kept as stats:d:<acct> (the days: what a league board reads), stats:x:<acct>
+// (drives and runs) and stats:m:<acct> (badges and frozen days). Each entry is checked and rebuilt from its numbers
+// (nothing else of a post is kept); a kind with more entries than its cap, or not an object, refuses the post. Merged,
+// the higher score of each day, drive or run stands (a drive: the most tries, won if either was; a day: a Madden find
+// kept from either); over a cap, the newest. Badges ({ id: when earned }) and frozen days ({ day: when the freeze was
+// spent }) are a union, the earliest time of each kept: earned on either phone is earned (the page knows which ids
+// are real; the worker only checks their shape, so a new badge needs no deploy here).
 const STATS_CAP = { days: [99999, 2000], drives: [999, 500], runs: [999, 500] };      // [highest key, most entries]
+const BADGES_MAX = 64, FROZEN_MAX = 500, BADGE_RE = /^[a-z][a-z0-9]{0,15}$/;      // (about 20 badges today; a freeze a week at most)
 const num = (x, lo, hi) => (typeof x === 'number' && Number.isFinite(x) && x >= lo && x <= hi ? x : null);
 function statEntry(kind, v) {
   if (!v || typeof v !== 'object') return null;
@@ -568,7 +574,8 @@ function statEntry(kind, v) {
   if (p === null) return null;
   if (kind === 'days') {
     const coach = typeof v.coach === 'string' ? clean(v.coach, 40) : '', madden = typeof v.madden === 'string' && /^[0-9A-F]{8}$/.test(v.madden) ? v.madden : null;
-    return { p, wpa, coach: coach || null, ...(madden ? { madden } : {}) };
+    const vs = num(v.vs, -1, 1);           // against the real coach that day: better 1, the same 0, worse -1
+    return { p, wpa, coach: coach || null, ...(madden ? { madden } : {}), ...(vs !== null ? { vs: Math.sign(vs) } : {}) };
   }
   if (kind === 'drives') {
     const last = num(v.last, 0, 1), at = num(v.at, 0, 1e14);
@@ -593,6 +600,15 @@ function cleanStats(s) {
       if (e) out[kind][k] = e;
     }
   }
+  // the badges and the frozen days: { key: a time (ms) }, the key a badge id or a day number
+  for (const [kind, max, ok] of [['badges', BADGES_MAX, (k) => BADGE_RE.test(k)], ['frozen', FROZEN_MAX, (k) => /^[1-9]\d{0,4}$/.test(k) && +k <= STATS_CAP.days[0]]]) {
+    const o = s[kind] ?? {};
+    if (typeof o !== 'object' || Array.isArray(o)) return `stats.${kind}: an object wanted`;
+    const ks = Object.keys(o);
+    if (ks.length > max) return `stats.${kind}: at most ${max}`;
+    out[kind] = {};
+    for (const k of ks) { const at = num(o[k], 0, 1e14); if (ok(k) && at !== null) out[kind][k] = Math.round(at); }
+  }
   return out;
 }
 function statBetter(kind, a, b) {
@@ -610,11 +626,17 @@ function statsMerge(a, b) {
     const ks = Object.keys(m).map(Number).sort((x, y) => x - y).slice(-max);
     out[kind] = Object.fromEntries(ks.map((k) => [k, m[k]]));
   }
+  // a union, the earliest of each; over the cap the newest frozen days stand (a streak reads back from today) and
+  // the earliest badges
+  const union = (x, y) => { const m = { ...x }; for (const [k, t] of Object.entries(y || {})) m[k] = k in m ? Math.min(m[k], t) : t; return m; };
+  const fz = union(a.frozen, b.frozen), bd = union(a.badges, b.badges);
+  out.frozen = Object.fromEntries(Object.keys(fz).map(Number).sort((x, y) => x - y).slice(-FROZEN_MAX).map((k) => [k, fz[k]]));
+  out.badges = Object.fromEntries(Object.entries(bd).sort((x, y) => x[1] - y[1] || (x[0] < y[0] ? -1 : 1)).slice(0, BADGES_MAX));
   return out;
 }
 async function statsOf(storage, acct) {
-  const x = (await storage.get(`stats:x:${acct}`)) || {};
-  return { days: (await storage.get(`stats:d:${acct}`)) || {}, drives: x.drives || {}, runs: x.runs || {} };
+  const x = (await storage.get(`stats:x:${acct}`)) || {}, m = (await storage.get(`stats:m:${acct}`)) || {};
+  return { days: (await storage.get(`stats:d:${acct}`)) || {}, drives: x.drives || {}, runs: x.runs || {}, badges: m.badges || {}, frozen: m.frozen || {} };
 }
 
 // ---- Friend leagues: a private group of accounts (a name and a join link) with its own board of the daily: each
@@ -641,11 +663,12 @@ async function leaguesOf(storage, a) {
   return out;
 }
 // one member's line: the day's score (null: not played yet), the streak (days in a row to the day, or to the day
-// before while the day is not played yet: a streak still alive) and the average of the days played in the last 7
-function leagueLine(days, day) {
+// before while the day is not played yet: a streak still alive; a day a streak freeze covered counts, as on the page)
+// and the average of the days played in the last 7
+function leagueLine(days, day, frozen = {}) {
   const p = (k) => (days[k] && typeof days[k].p === 'number' ? days[k].p : null);
   let streak = 0;
-  for (let k = p(day) !== null ? day : day - 1; k > 0 && p(k) !== null; k--) streak++;
+  for (let k = p(day) !== null ? day : day - 1; k > 0 && (p(k) !== null || (frozen[k] && streak)); k--) streak++;
   const week = [0, 1, 2, 3, 4, 5, 6].map((i) => p(day - i)).filter((x) => x !== null);
   return { today: p(day), streak, avg7: week.length ? week.reduce((a, x) => a + x, 0) / week.length : null, n7: week.length };
 }
@@ -700,7 +723,8 @@ async function league(req, env, storage, hits, h, url) {
     const rows = [];
     for (const m of lg.members) {
       const ma = (await storage.get(`acct:${m}`)) || {};
-      rows.push({ name: ma.name || 'Player', ...leagueLine((await storage.get(`stats:d:${m}`)) || {}, day), ...(m === acct ? { you: true } : {}) });
+      const fz = ((await storage.get(`stats:m:${m}`)) || {}).frozen || {};
+      rows.push({ name: ma.name || 'Player', ...leagueLine((await storage.get(`stats:d:${m}`)) || {}, day, fz), ...(m === acct ? { you: true } : {}) });
     }
     // the day's scores first, best first; then who has not played yet, longest streak first
     rows.sort((x, y) => (y.today ?? -1) - (x.today ?? -1) || y.streak - x.streak || x.name.localeCompare(y.name));

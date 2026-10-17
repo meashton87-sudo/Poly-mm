@@ -709,7 +709,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
 
   // stats: merged into the account, the best of each kept, cleaned; a read without stats; never another account's
   assert.strictEqual((await au('/auth/stats', { session: 'f'.repeat(64), stats: {} })).status, 401, 'signed out');
-  assert.deepStrictEqual(await ok(await au('/auth/stats', { session: sa }), 'read'), { stats: { days: {}, drives: {}, runs: {} } }, 'nothing yet');
+  assert.deepStrictEqual(await ok(await au('/auth/stats', { session: sa }), 'read'), { stats: { days: {}, drives: {}, runs: {}, badges: {}, frozen: {} } }, 'nothing yet');
   for (const [why, stats] of [['an array', []], ['days an array', { days: [1, 2] }], ['a string', 'x'], ['too many days', { days: Object.fromEntries(Array.from({ length: 2001 }, (_, i) => [i + 1, { p: 0.5 }])) }],
     ['too many drives', { drives: Object.fromEntries(Array.from({ length: 501 }, (_, i) => [i + 1, { p: 0.5 }])) }]]) {
     assert.strictEqual((await au('/auth/stats', { session: sa, stats })).status, 400, why);
@@ -720,7 +720,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
     drives: { 3: { p: 0.7, wpa: 0.05, tries: 2, won: false, at: 1790000000000, last: 0.6, prev: { p: 0.4, tries: 1 } }, 1000: { p: 0.5 } },
     runs: { 2: { p: 0.66, wpa: 0.3, w: 3, l: 1, n: 4, x: 'y' } } } }), 'first phone');
   assert.deepStrictEqual(d.stats, { days: { 5: { p: 0.5, wpa: 0.1, coach: 'Andy Reid' }, 6: { p: 0.8, wpa: 0.2, coach: null } },
-    drives: { 3: { p: 0.7, wpa: 0.05, tries: 2, won: false, last: 0.6, at: 1790000000000 } }, runs: { 2: { p: 0.66, wpa: 0.3, w: 3, l: 1, n: 4 } } }, 'cleaned: junk entries and fields dropped');
+    drives: { 3: { p: 0.7, wpa: 0.05, tries: 2, won: false, last: 0.6, at: 1790000000000 } }, runs: { 2: { p: 0.66, wpa: 0.3, w: 3, l: 1, n: 4 } }, badges: {}, frozen: {} }, 'cleaned: junk entries and fields dropped');
   d = await ok(await au('/auth/stats', { session: sa, stats: { days: { 5: { p: 0.4, wpa: 0.9, coach: 'Other' }, 6: { p: 0.9, wpa: 0.3, coach: 'Sean McVay', madden: 'zz' }, 10: { p: 0.3, wpa: 0, coach: 'John Madden', madden: 'ABCD1234' } },
     drives: { 3: { p: 0.6, wpa: 0, tries: 5, won: true }, 4: { p: 0.95, wpa: 0.2, tries: 1, won: true } }, runs: { 2: { p: 0.5, wpa: 0, w: 1, l: 3, n: 4 } } } }), 'second phone');
   assert.deepStrictEqual(d.stats.days, { 5: { p: 0.5, wpa: 0.1, coach: 'Andy Reid' }, 6: { p: 0.9, wpa: 0.3, coach: 'Sean McVay' }, 10: { p: 0.3, wpa: 0, coach: 'John Madden', madden: 'ABCD1234' } }, 'days: the higher score of each, a bad Madden code dropped');
@@ -728,12 +728,35 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual(d.stats.runs[2].p, 0.66, 'runs: the best');
   d = await ok(await au('/auth/stats', { session: sa, stats: { days: { 10: { p: 0.6, wpa: 0, coach: 'Bill Belichick' } } } }), 'a better score on a Madden day');
   assert.deepStrictEqual(d.stats.days[10], { p: 0.6, wpa: 0, coach: 'John Madden', madden: 'ABCD1234' }, 'the Madden find kept');
-  assert.deepStrictEqual((await ok(await au('/auth/stats', { session: sb }), 'other')).stats, { days: {}, drives: {}, runs: {} }, 'never another account\'s');
+  assert.deepStrictEqual((await ok(await au('/auth/stats', { session: sb }), 'other')).stats, { days: {}, drives: {}, runs: {}, badges: {}, frozen: {} }, 'never another account\'s');
   // the newest 2000 days stand when a merge goes over
   store.set('stats:d:g:700003', Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [i + 1, { p: 0.5, wpa: 0, coach: null }])));
   d = await ok(await au('/auth/stats', { session: sc, stats: { days: { 2001: { p: 0.7 } } } }), 'over the cap');
   assert.deepStrictEqual([Object.keys(d.stats.days).length, d.stats.days[1], d.stats.days[2001].p], [2000, undefined, 0.7], 'the oldest day goes');
   store.delete('stats:d:g:700003');
+  // badges ({ id: when earned }) and the days a streak freeze covered ({ day: when }): checked, a union, the earliest
+  // time of each kept; a post without them (an older page) takes nothing away; the day's vs (the real coach) kept
+  for (const [why, stats] of [['badges an array', { badges: ['first'] }], ['frozen a string', { frozen: '7' }],
+    ['too many badges', { badges: Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`b${i}`, 1.79e12])) }],
+    ['too many frozen days', { frozen: Object.fromEntries(Array.from({ length: 501 }, (_, i) => [i + 1, 1.79e12])) }]]) {
+    assert.strictEqual((await au('/auth/stats', { session: sc, stats })).status, 400, why);
+  }
+  d = await ok(await au('/auth/stats', { session: sc, stats: { days: { 3: { p: 0.5, vs: 1 }, 4: { p: 0.5, vs: 5 }, 5: { p: 0.5, vs: -0.4 } },
+    badges: { first: 1790000002000, coach: 1790000001500, 'Bad-Id': 1, '1st': 1, ['x'.repeat(17)]: 1, win: 'soon', day90: -5 },
+    frozen: { 7: 1790000000100, 0: 1, abc: 1, 100000: 1, 8: null } } }), 'badges and frozen days');
+  assert.deepStrictEqual([d.stats.days[3].vs, 'vs' in d.stats.days[4], d.stats.days[5].vs], [1, false, -1], 'vs: better, the same or worse; anything else dropped');
+  assert.deepStrictEqual([d.stats.badges, d.stats.frozen], [{ coach: 1790000001500, first: 1790000002000 }, { 7: 1790000000100 }], 'cleaned');
+  assert.deepStrictEqual(store.get('stats:m:g:700003'), { badges: d.stats.badges, frozen: d.stats.frozen }, 'kept on their own key');
+  d = await ok(await au('/auth/stats', { session: sc, stats: { badges: { first: 1790000001000, win: 1790000003000, coach: 1790000009000 }, frozen: { 7: 1790000000050, 9: 1790000000200 } } }), 'the other phone');
+  assert.deepStrictEqual([d.stats.badges, d.stats.frozen], [{ first: 1790000001000, coach: 1790000001500, win: 1790000003000 }, { 7: 1790000000050, 9: 1790000000200 }], 'a union, the earliest of each');
+  d = await ok(await au('/auth/stats', { session: sc, stats: { days: { 3: { p: 0.6 } } } }), 'an older page');
+  assert.deepStrictEqual([Object.keys(d.stats.badges).length, Object.keys(d.stats.frozen).length], [3, 2], 'a post without them takes nothing away');
+  assert.deepStrictEqual((await ok(await au('/auth/stats', { session: sc }), 'read')).stats.badges, d.stats.badges, 'and a read has them');
+  store.set('stats:m:g:700003', { badges: Object.fromEntries(Array.from({ length: 64 }, (_, i) => [`b${i}`, 1790000000000 + i])), frozen: Object.fromEntries(Array.from({ length: 500 }, (_, i) => [i + 1, 1])) });
+  d = await ok(await au('/auth/stats', { session: sc, stats: { badges: { zz: 1 }, frozen: { 501: 2 } } }), 'over the caps');
+  assert.deepStrictEqual([Object.keys(d.stats.badges).length, d.stats.badges.zz, 'b63' in d.stats.badges, Object.keys(d.stats.frozen).length, d.stats.frozen[1], d.stats.frozen[501]],
+    [64, 1, false, 500, undefined, 2], 'over a cap: the earliest badges, the newest frozen days');
+  store.delete('stats:m:g:700003'); store.delete('stats:d:g:700003');
 
   // a username on the boards: the account's own name from any phone (the survivor board and the day's list); anyone
   // else, or the account under another name, as before
@@ -786,6 +809,12 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.ok(!/@|g:7000/.test(txt), 'no addresses or account ids on a league board');
   d = await ok(await lg('board', { session: sb, code, day: 11 }), 'the next day');
   assert.deepStrictEqual(d.rows.map((x) => [x.name, x.today, x.streak]), [['Ben Bolt', null, 3], ['Amy Hawk', null, 1]], 'not played yet: a streak still alive, longest first');
+  // a day a streak freeze covered counts in the streak (Ben missed day 7); a frozen day with nothing played after it never starts one
+  await ok(await au('/auth/stats', { session: sb, stats: { frozen: { 7: 1790000000000 } } }), 'ben\'s freeze');
+  await ok(await au('/auth/stats', { session: sa, stats: { frozen: { 11: 1790000000000 } } }), 'amy\'s (not yet earned out)');
+  d = await ok(await lg('board', { session: sa, code, day: 11 }), 'with freezes');
+  assert.deepStrictEqual(d.rows.map((x) => [x.name, x.streak]), [['Ben Bolt', 7], ['Amy Hawk', 1]], 'the freeze keeps Ben\'s streak');
+  store.delete('stats:m:g:700001'); store.delete('stats:m:g:700002');
   // limits: 10 leagues an account, 50 members a league
   for (let i = 0; i < 9; i++) await ok(await lg('create', { session: sa, name: `League ${i}` }), `league ${i}`);
   r = await lg('create', { session: sa, name: 'One Too Many' });
