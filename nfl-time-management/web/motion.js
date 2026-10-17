@@ -302,7 +302,11 @@
             let y = ry + L.dir * (L.cush || 0);
             if (L.y0 != null) {
               const back = L.y0 + L.dir * Math.min(L.pedalMax ?? 2.5, (L.pedal || 0) * age);
-              y = L.dir > 0 ? Math.max(y, back) : Math.min(y, back);
+              // (only while he is still coming upfield: when the route stops short, a hitch or an out, he drives on
+              // it instead of sitting at his depth with the man wide open underneath; eased in as the receiver slows)
+              const ry0 = this.posAt(L.who, Math.max(0, tt - (L.lag || 0) - 0.3))[1], up = ((ry - ry0) * L.dir) / 0.3;
+              const w = age < 0.8 ? 1 : clip((up - 1) / 3, 0, 1), held = L.dir > 0 ? Math.max(y, back) : Math.min(y, back);
+              y += (held - y) * w;
             }
             if (L.floor != null) y = L.dir > 0 ? Math.max(y, L.los + L.floor) : Math.min(y, L.los - L.floor);
             return [rx + dx, y];

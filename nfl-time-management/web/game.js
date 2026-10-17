@@ -639,7 +639,8 @@
     line.forEach((p, i) => put(def, p, bx + s * (i - (n - 1) / 2) * sp, 1.0));
     const nl = g.LB.length, lsp = nl >= 3 ? 40 : 46;
     g.LB.forEach((p, i) => put(def, p, bx + s * 8 + (i - (nl - 1) / 2) * lsp, 5.0));
-    const cbs = [[clampX(zX), 6.5], [clampX(xX), 6.5], [clampX(slotX), 5.5], [bx + s * 34, 9.0]];
+    // (the first corner over the first receiver out wide: with one, a corner on the empty side left him uncovered)
+    const cbs = [[clampX(xX), 6.5], [clampX(zX), 6.5], [clampX(slotX), 5.5], [bx + s * 34, 9.0]];
     g.CB.forEach((p, i) => { const c = cbs[Math.min(i, 3)]; put(def, p, c[0] + (i > 3 ? (i - 3) * 30 : 0), c[1]); });
     const ns = g.S.length, third = g.CB.length < 3 ? [clampX(slotX), 5.6] : [teX, 7.6];
     const ss = ns === 1 ? [[bx + s * 12, 13]] : [[bx - s * 62, 12.5], [bx + s * 62, 12.5], third, [bx, 10]];
@@ -1860,7 +1861,8 @@
       return 'cover3';
     }
     // a field landmark ([x from the offense's left, depth]) on the drawn field
-    const mark = (m) => [dir > 0 ? m[0] : FW - m[0], fwd(L0, m[1])];
+    // (inside the end line: a deep spot from near the goal is at the back of the end zone, not past it)
+    const mark = (m) => [dir > 0 ? m[0] : FW - m[0], clip(fwd(L0, m[1]), -9, 109)];
     // the rushers: as many as charted (default four; a blitz look sends five), linemen first
     function rushersOf(n) {
       const order = K.rush.concat(K.def.filter((d) => d.label === 'LB'), K.def.filter((d) => d.label === 'S'), K.def.filter((d) => d.label === 'CB'));
@@ -1924,17 +1926,54 @@
       const rbOut = K.rb && K.rb !== tgt && (rushers.length < 5 || drewFor(K.rb));
       const recvs = K.recv.concat(rbOut ? [K.rb] : []).concat(K.rb === tgt ? [K.rb] : []).concat(backs.filter((a) => a !== o.passer));
       const S_ = Motion.SHELLS[shell] || Motion.SHELLS.cover3;
-      const assigned = new Map();
+      const assigned = new Map(), carry = new Map();         // carry: a deep man running with a vertical
+      // the deep men and the verticals: each vertical to the deep man whose lane it runs in, by where it is across the
+      // field at his depth, all of them matched at once (one at a time, by straight distance, sent a safety across the
+      // field past the corner who had the man, or took the corner's lane for the man inside and left the outside one
+      // running free). One left unmatched costs the more the deeper he goes (an underneath man sinks with him instead:
+      // fine on a seam at 15, not on a post or a go)
+      const laneOf = new Map();
+      const xDeep = (pl, D) => { for (let s = 0; s <= pl.T; s += 0.1) { const q = pl.at(s); if (Math.abs(q[1] - L0) >= D) return q[0]; } return pl.at(pl.T)[0]; };
+      const laneMatch = (verts, deep) => {
+        const xs = verts.map((v) => xDeep(v.pl, 14)), lane = deep.map((d) => (laneOf.get(d) || here(d))[0]);
+        const none = verts.map((v) => (v.help ? 0.5 : 1) * (10 + Math.min(40, Math.abs(v.end[1] - L0))));
+        let best = null, bc = Infinity;
+        const go = (i, used, c, pick) => {
+          if (c >= bc) return;
+          if (i === verts.length) { bc = c; best = pick.slice(); return; }
+          deep.forEach((d, j) => { if (!used.has(j)) { used.add(j); pick.push(j); go(i + 1, used, c + Math.abs(lane[j] - xs[i]), pick); pick.pop(); used.delete(j); } });
+          pick.push(-1); go(i + 1, used, c + none[i], pick); pick.pop();
+        };
+        go(0, new Set(), 0, []);
+        return new Map(verts.map((v, i) => [v.a, best && best[i] >= 0 ? deep[best[i]] : null]));
+      };
+      // a deep man on a vertical: he keeps his depth (a step or two of backpedal) until the man gets to him, then runs
+      // with him a cushion over the top, sliding over from his spot (chasing him from the snap brought the safety
+      // downhill to meet him, and the receiver ran by him)
+      const carryOn = (d, a, t, cush) => {
+        const m = laneOf.get(d);
+        if (!m) { leg(d, t, 'chase', { who: a.b, gap: cush, eff: 0.92, lead: 0.5 }); return; }
+        const room = clip(dir > 0 ? 108 - m[1] : m[1] + 8, 0, 2);
+        leg(d, t, 'mirror', { who: a.b, lag: 0.2, dir, los: L0, floor: 0.8, tau: 0.8, y0: m[1], pedal: 0.8, pedalMax: room, cush,
+          dx0: m[0] - a.b.x, dx: (Math.sign(BX - a.b.x) || 1) * 0.6, eff: 0.95 });
+      };
       if (man) {
         const deepN = S_.deep.length, safeties = cover.filter((d) => d.label === 'S');
         const deepers = safeties.slice(0, deepN);
-        deepers.forEach((d, i) => { assigned.set(d, null); leg(d, REACT_DEF, 'go', { ...xy(mark(S_.deep[i])), eff: 0.8 }); });
+        deepers.forEach((d, i) => { assigned.set(d, null); laneOf.set(d, mark(S_.deep[i])); leg(d, REACT_DEF, 'go', { ...xy(mark(S_.deep[i])), eff: 0.8 }); });
         const pool = cover.filter((d) => !deepers.includes(d));
         const order = recvs.slice().sort((a, b) => Math.abs(b.b.x - BX) - Math.abs(a.b.x - BX));
         order.forEach((r) => {
           const pref = r.label === 'WR' ? ['CB', 'S', 'LB'] : r.label === 'TE' ? ['S', 'LB', 'CB'] : ['LB', 'S', 'CB'];
-          let d = null;
-          for (const lab of pref) { d = nearest(pool.filter((x) => x.label === lab && !assigned.has(x)), here(r)); if (d) break; }
+          // the best fit by position, but never a man from across the field when one of the next kind is over him (a
+          // corner sent 40 yards across to a lone receiver never got there: he ran free)
+          let d = null, bc = Infinity;
+          pool.forEach((x) => {
+            const k = pref.indexOf(x.label);
+            if (k < 0 || assigned.has(x)) return;
+            const c = dist(here(x), here(r)) + k * 8;
+            if (c < bc) { bc = c; d = x; }
+          });
           if (!d) return;
           assigned.set(d, r);
           // off coverage: he holds the depth he lined up at, backpedalling (corners and safeties bail at the snap:
@@ -1946,16 +1985,18 @@
         });
         // a receiver with no man on him (more of them than cover men: a blitz) who goes deep: the deep safety comes off
         // his spot and runs with him, the spare man sinks with him if there is no safety (players saw men running free
-        // deep while the ball went short)
+        // deep while the ball went short). A safety with nobody free in his half helps over the top of the deepest man
+        // there, his corner trailing underneath
         const manned = new Set(assigned.values()), freeD = new Set();
-        runners.filter(([a]) => !manned.has(a) && a !== tgt).map(([a, pl]) => ({ a, end: pl.at(pl.T) })).filter((x) => Math.abs(x.end[1] - L0) > 12)
-          .forEach(({ a, end }) => {
-            const d = nearest(deepers.filter((x) => !freeD.has(x)), [end[0], end[1]])
-              || nearest(pool.filter((x) => !assigned.has(x) && !freeD.has(x) && x.label !== 'DL' && x.label !== 'EDGE'), here(a));
-            if (!d) return;
-            freeD.add(d); assigned.set(d, a);
-            leg(d, REACT_DEF + (deepers.includes(d) ? 0.7 : 0.2), 'chase', { who: a.b, gap: Math.abs(catchPt[1] - L0) <= 6 ? 1.3 : 2.2, eff: 0.92, lead: 0.5 });
-          });
+        const verts = runners.filter(([a]) => a !== tgt).map(([a, pl]) => ({ a, pl, end: pl.at(pl.T), help: manned.has(a) })).filter((x) => Math.abs(x.end[1] - L0) > 12);
+        const lanes = laneMatch(verts, deepers);
+        verts.forEach(({ a, help }) => {
+          const d = lanes.get(a) || (help ? null
+            : nearest(pool.filter((x) => !assigned.has(x) && !freeD.has(x) && x.label !== 'DL' && x.label !== 'EDGE'), here(a)));
+          if (!d) return;
+          freeD.add(d); if (!help) assigned.set(d, a); carry.set(d, a);
+          carryOn(d, a, REACT_DEF + (deepers.includes(d) ? 0.7 : 0.2), help ? 3.5 : Math.abs(catchPt[1] - L0) <= 6 ? 1.3 : 2.2);
+        });
         pool.filter((d) => !assigned.has(d)).forEach((d) => {       // the spare: a robber in the middle; a lineman sits short
           if (d.label === 'DL' || d.label === 'EDGE') { leg(d, REACT_DEF, 'go', { x: d.b.x + (BX - d.b.x) * 0.3, y: fwd(L0, 3.5), eff: 0.6 }); return; }
           const m = S_.under[0] ? mark(S_.under[0]) : [BX, fwd(L0, 7)];
@@ -1964,14 +2005,31 @@
       } else {
         const deepPool = cover.filter((d) => d.label === 'S').concat(cover.filter((d) => d.label === 'CB'));
         const deepMarks = S_.deep.map(mark), underMarks = S_.under.map(mark);
+        const routesAt = runners.map(([, pl]) => (t) => pl.at(clip(t - REACT_OFF, 0, pl.T)));
         const used = new Set();
         deepMarks.forEach((m) => {
           const d = nearest(deepPool.filter((x) => !used.has(x)), m);
-          if (d) { used.add(d); leg(d, REACT_DEF, 'go', { x: m[0], y: m[1], eff: 0.85 }); }
+          if (d) { used.add(d); laneOf.set(d, m); leg(d, REACT_DEF, 'go', { x: m[0], y: m[1], eff: 0.85 }); }
         });
         underMarks.forEach((m) => {
           const d = nearest(cover.filter((x) => !used.has(x)), m);
-          if (d) { used.add(d); leg(d, REACT_DEF, 'go', { x: m[0] + jit(1.5), y: m[1] + jit(1), eff: 0.75 }); }
+          if (!d) return;
+          used.add(d);
+          const m0 = [m[0] + jit(1.5), m[1] + jit(1)];
+          leg(d, REACT_DEF, 'go', { x: m0[0], y: m0[1], eff: 0.75 });
+          // then he works to the routes coming into his area (the nearer the more), a few yards off his spot at most:
+          // a zone defender standing on his landmark while a man runs past him reads as nobody covering (players saw
+          // men wide open underneath)
+          if (routesAt.length) leg(d, REACT_DEF + 1.1, 'track', { gain: 2, eff: 0.8, fn: (t) => {
+            let wx = 0, wy = 0, ws = 0;
+            routesAt.forEach((f) => {
+              const q = f(t), dx = q[0] - m0[0], dy = q[1] - m0[1], w = Math.exp(-(dx * dx + dy * dy) / 72);
+              wx += w * dx; wy += w * dy; ws += w;
+            });
+            const ox = wx / (ws + 0.3), oy = wy / (ws + 0.3), k = Math.min(0.7, 3.5 / (Math.hypot(ox, oy) || 1));
+            const y = m0[1] + oy * k;
+            return [inX(m0[0] + ox * k), dir > 0 ? Math.max(y, L0 + 3) : Math.min(y, L0 - 3)];
+          } });
         });
         cover.filter((d) => !used.has(d)).forEach((d) => leg(d, REACT_DEF, 'go', { x: d.b.x + (BX - d.b.x) * 0.3, y: d.label === 'DL' || d.label === 'EDGE' ? fwd(L0, 3.5) : fwd(d.b.y, 3), eff: 0.6 }));
         // a deep defender carries the vertical in his area: after his drop he runs with the deepest route near him,
@@ -1980,18 +2038,18 @@
         const shortThrow = Math.abs(catchPt[1] - L0) <= 6;
         const deepers = deepMarks.length ? [...used].filter((d) => deepPool.includes(d)).slice(0, deepMarks.length) : [];
         const taken = new Set();
-        runners.map(([a, pl]) => ({ a, end: pl.at(pl.T) })).filter((x) => Math.abs(x.end[1] - L0) > 12)
-          .sort((x, y) => Math.abs(y.end[1] - L0) - Math.abs(x.end[1] - L0))
-          .forEach(({ a, end }) => {
-            // (more verticals than deep men: the nearest underneath defender sinks with the extra one)
-            const d = nearest(deepers.filter((x) => !taken.has(x)), [end[0], end[1]])
-              || nearest(cover.filter((x) => !taken.has(x) && x.label !== 'DL' && x.label !== 'EDGE'), here(a));
-            if (!d) return;
-            taken.add(d);
-            leg(d, REACT_DEF + 0.9, 'chase', { who: a.b, gap: shortThrow ? 1.3 : 2.2, eff: 0.92, lead: 0.5 });
-          });
+        const verts = runners.map(([a, pl]) => ({ a, pl, end: pl.at(pl.T) })).filter((x) => Math.abs(x.end[1] - L0) > 12)
+          .sort((x, y) => Math.abs(y.end[1] - L0) - Math.abs(x.end[1] - L0));
+        const lanes = laneMatch(verts, deepers), matched = new Set(lanes.values());
+        verts.forEach(({ a }) => {
+          // (more verticals than deep men: the nearest underneath defender sinks with the extra one)
+          const d = lanes.get(a) || nearest(cover.filter((x) => !taken.has(x) && !matched.has(x) && x.label !== 'DL' && x.label !== 'EDGE'), here(a));
+          if (!d) return;
+          taken.add(d); carry.set(d, a);
+          carryOn(d, a, REACT_DEF + 0.9, shortThrow ? 1.3 : 2.2);
+        });
       }
-      return { cover, man, assigned, shell };
+      return { cover, man, assigned, shell, carry };
     }
     const xy = (p) => ({ x: p[0], y: p[1] });
     // How open the target is when the ball gets there (yards to the nearest defender), drawn to fit what really
@@ -2015,7 +2073,8 @@
       // a catch with little after it: a man was right there to make the tackle (never one caught in space who then
       // stands waiting for a tackler; players saw it), but a step or two off, not on him (completions are mostly made
       // with a yard or more of room: Next Gen Stats has 2.5-3 yards on average at the catch)
-      return { sep: caught ? (yac < 3 ? Math.min(sep, 1.7 + yac * 0.5) : sep) : Math.min(sep, air >= 15 ? 3 : 3.5), bucket: i };
+      // (a catch is never made with the man right on him: the tightest window is a contested catch, most of a yard)
+      return { sep: caught ? Math.max(0.8, yac < 3 ? Math.min(sep, 1.7 + yac * 0.5) : sep) : Math.min(sep, air >= 15 ? 3 : 3.5), bucket: i };
     }
 
     function pass(c, id, sign) {
@@ -2171,6 +2230,8 @@
       }
       if (wP) leg(wP, tWin, 'chase', { who: passer.b, gap: 1.1, eff: 1, lead: 0.3 });
       const cov = passShape({ kind, tgt, catchPt, tThrow, tCatch, rushers, shell: shellOf(), side, qbSpot, passer });
+      // a man with a receiver of his own: running with a vertical, or on his man
+      const onMan = (d) => cov.carry.has(d) || !!(cov.man && cov.assigned.get(d) && cov.assigned.get(d) !== tgt);
       // the coverage on the target fits the outcome: one defender (his man, or the zone defender nearest where the
       // ball is going) closes to the separation drawn above by the time the ball arrives
       const intc = e.evt === 'interception' || e.evt === 'pick_six';
@@ -2186,23 +2247,102 @@
         const end = rAt(tCatch);
         let manOf = null;
         if (cov.man && cov.assigned) for (const [d, r] of cov.assigned) if (r === tgt) manOf = d;
-        shadow = manOf || cov.cover.filter((d) => d.label !== 'DL' && d.label !== 'EDGE').sort((a, b) => dist(here(a), end) - dist(here(b), end))[0] || null;
-        if (shadow) {
-          busy.add(shadow);
-          const r0 = rAt(tS), d0 = here(shadow);
+        const near = cov.cover.filter((d) => d.label !== 'DL' && d.label !== 'EDGE').sort((a, b) => dist(here(a), end) - dist(here(b), end));
+        // (a deep man running with another vertical stays on him unless he is clearly the one there: taking him off
+        // left that receiver running free downfield; when he is, the next man takes the vertical over)
+        const loose = near.find((d) => !cov.carry.has(d));
+        shadow = manOf || (near[0] && cov.carry.has(near[0]) && loose && dist(here(loose), end) < dist(here(near[0]), end) + 4 ? loose : near[0]) || null;
+        const ins = Math.sign(BX - end[0]) || 1, toBreak = (e.incomplete || e.evt === 'near_pick') && e.evt !== 'drop' && !thrownAway && kind !== 'hail' && sepd.sep < 2;
+        const span = Math.max(0.3, tCatch - tS), t0 = Wd.t;
+        const shadowOn = (d) => {
+          const r0 = rAt(tS), d0 = here(d);
           const rel0 = [d0[0] - r0[0], d0[1] - r0[1]];
           // where he ends up: trailing (between the receiver and the line) and to the inside in man; in zone, from
           // where he came, closing; at the drawn distance
           // (a ball he will break up: at the receiver's hip rather than trailing, so the step he takes to the ball as
           // it comes is across, not a chase from behind he cannot finish on a ball thrown downfield)
-          const ins = Math.sign(BX - end[0]) || 1, toBreak = (e.incomplete || e.evt === 'near_pick') && e.evt !== 'drop' && !thrownAway && kind !== 'hail' && sepd.sep < 2;
           const z = unit(rel0[0], rel0[1]);
           const u = cov.man ? (toBreak ? [ins * 0.89, -dir * 0.45] : [ins * 0.55, -dir * 0.83]) : toBreak ? unit((Math.sign(z[0]) || ins) * 0.9, z[1] * 0.5) : z;
-          const span = Math.max(0.3, tCatch - tS);
-          leg(shadow, tS, 'track', { gain: 3, eff: 1, fn: (t) => {
+          leg(d, tS, 'track', { gain: 3, eff: 1, fn: (t) => {
             const k = clip((t - tS) / span, 0, 1), q = rAt(Math.min(t, tCatch));
             return [q[0] + rel0[0] * (1 - k) + u[0] * sepd.sep * k, q[1] + rel0[1] * (1 - k) + u[1] * sepd.sep * k];
           } });
+        };
+        // the world run on to the catch and back: where everyone would be as the ball gets there
+        const probe = (tracks) => {
+          Wd.run(tCatch);
+          const at = new Map(sc.actors.map((d) => [d, tracks ? { p: here(d), hx: d.b.hx.slice(), hy: d.b.hy.slice() } : here(d)]));
+          Wd.rewind(t0);
+          return at;
+        };
+        if (shadow) {
+          // the man who closes is one who can get there: when the first choice cannot (he started too far off), the
+          // next nearest who can (the separation on the field then is the separation drawn for the outcome)
+          const cands = [shadow].concat(near.filter((d) => d !== shadow && !onMan(d)).slice(0, 3));
+          const saved = new Map(cands.map((d) => [d, d.b.legs.slice()]));
+          let best = null, bErr = Infinity, bD = 0;
+          for (const c of cands) {
+            shadowOn(c);
+            const dc = dist(probe().get(c), end), err = Math.abs(dc - sepd.sep);
+            c.b.legs = saved.get(c).slice();
+            if (err < bErr - 0.3) { bErr = err; best = c; bD = dc; }
+            if (err < 0.6) break;
+          }
+          shadow = best;
+          // (a catch nobody could get near in time, a quick throw out wide: as close as the nearest could get; one
+          // behind the line with a rusher already there, a screen: that close)
+          if (caught && !e.incomplete && bD > sepd.sep + 0.6) sepd.sep = bD;
+          if (caught && !e.incomplete) {
+            const at = probe(), rush = Math.min(99, ...K.def.filter((d) => !cov.cover.includes(d)).map((d) => dist(at.get(d), end)));
+            if (rush < sepd.sep - 0.4) sepd.sep = Math.max(0.8, rush);
+          }
+          shadowOn(shadow);
+          busy.add(shadow);
+          const left = cov.carry.get(shadow);
+          if (left && left !== tgt) {
+            const by = near.filter((d) => d !== shadow && !onMan(d))
+              .sort((a, b) => dist(here(a), here(left)) - dist(here(b), here(left)))[0];
+            if (by) { cov.carry.set(by, left); leg(by, tS, 'chase', { who: left.b, gap: 2.2, eff: 0.95, lead: 0.5 }); }
+          }
+          // a completion: the man on him is the nearest; anyone else who would be on top of him as the ball comes
+          // (a zone defender in the lane, a man on a crossing route) runs his own way a few yards off instead
+          // (players saw catches "in triple coverage" with a long run after them)
+          if (caught && !e.incomplete) {
+            const R_ = sepd.sep + 1.2, at = probe(true);
+            cov.cover.forEach((d) => {
+              const { p: pe, hx, hy } = at.get(d), dd = dist(pe, end);
+              // (a man on another receiver, deep or in man, stays on him unless he is right on top of this one: taken
+              // off, his own man ran free. The man on him, when he would close tighter than drawn, eases out to it)
+              if (d === shadow ? dd >= sepd.sep - 0.4 : dd >= sepd.sep + 0.5 || (onMan(d) && dd >= 2.5)) return;
+              const f = (t) => { const i = clip(Math.round(t / Wd.dt), 0, hx.length - 1); return [hx[i], hy[i]]; };
+              const [ux, uy] = dd > 0.2 ? unit(pe[0] - end[0], pe[1] - end[1]) : unit(here(d)[0] - end[0], here(d)[1] - end[1]);
+              const push = (d === shadow ? sepd.sep : R_) - dd;
+              leg(d, tS, 'track', { gain: 3, eff: 1, fn: (t) => {
+                const k = clip((t - tS) / span, 0, 1), q = f(Math.min(t, tCatch)), w = k * k * (3 - 2 * k);
+                return [inX(q[0] + ux * push * w), q[1] + uy * push * w];
+              } });
+            });
+          }
+          // and nobody left running free downfield as the ball arrives: a man 12 yards out with nobody within 4.5 has his
+          // own man (his deep man, his man in man, or the nearest one free of the play) drawn in to a few yards off him
+          // (players saw short throws with a receiver all alone deep: the quarterback missed him, or the defense forgot him)
+          const at = probe(true), took = new Set([shadow]);
+          K.recv.concat(K.rb ? [K.rb] : []).forEach((r) => {
+            if (r === tgt || r === passer) return;
+            const rp = at.get(r).p;
+            if (Math.abs(rp[1] - L0) <= 12 || Math.min(...K.def.map((d) => dist(at.get(d).p, rp))) <= 4.5) return;
+            let d = [...cov.carry].find(([, w]) => w === r)?.[0] || (cov.man ? [...cov.assigned].find(([, w]) => w === r)?.[0] : null);
+            if (!d || took.has(d)) d = cov.cover.filter((x) => !took.has(x) && !onMan(x) && dist(at.get(x).p, end) > sepd.sep + 2)
+              .sort((a, b) => dist(at.get(a).p, rp) - dist(at.get(b).p, rp))[0];
+            if (!d || dist(at.get(d).p, rp) > 20) return;
+            took.add(d);
+            const { p: pd, hx, hy } = at.get(d), dd = dist(pd, rp), [ux, uy] = unit(rp[0] - pd[0], rp[1] - pd[1]), pull = dd - 3;
+            const f = (t) => { const i = clip(Math.round(t / Wd.dt), 0, hx.length - 1); return [hx[i], hy[i]]; };
+            leg(d, tS, 'track', { gain: 3, eff: 1, fn: (t) => {
+              const k = clip((t - tS) / span, 0, 1), q = f(Math.min(t, tCatch)), w = k * k * (3 - 2 * k);
+              return [inX(q[0] + ux * pull * w), q[1] + uy * pull * w];
+            } });
+          });
         }
       }
       // the throw
@@ -2213,7 +2353,9 @@
       ring(tThrow, passer, false);
       leg(passer, tThrow + 0.15, 'go', { x: qT[0] + jit(1), y: qT[1] + dir * 1.2, eff: 0.25 });
       // the defense breaks on the ball a beat after it is out: the nearest two to where it is going
-      const breakers = cov.cover.slice().sort((a, b) => dist(here(a), catchPt) - dist(here(b), catchPt)).slice(0, 2);
+      // (not a man running with another receiver, deep or in man, unless he is right there: pulled off to the ball,
+      // his own man ran free downfield as it arrived)
+      const breakers = cov.cover.filter((d) => d === shadow || !onMan(d) || dist(here(d), catchPt) < 4).sort((a, b) => dist(here(a), catchPt) - dist(here(b), catchPt)).slice(0, 2);
       let picker = null;
       if (intc) {
         picker = shadow || breakers[0] || nearest(K.def, catchPt);
@@ -2755,7 +2897,18 @@
       jam.forEach((a, i) => leg(a, T0 + 0.2, 'mirror', { who: gunners[i] ? gunners[i].b : a.b, lag: 0.25, dx: 0, dy: -dir * 1.0, eff: 0.95 }));
       // (in lanes, flat out: at the catch the first of them are 10 yards or so off the returner, not jogging at midfield)
       line.forEach((a, i) => { leg(a, T0 + 0.1, 'go', { x: a.b.x, y: fwd(L0, -1), eff: 0.5 }); leg(a, T0 + 1.2, 'go', { x: LX + (i - 3) * 3.2, y: lerp(L0, land, 0.85), eff: 0.95 }); });
-      box.forEach((a) => { leg(a, T0 + 0.2, 'go', { x: a.b.x, y: fwd(L0, -0.4), eff: 0.6 }); leg(a, T0 + 1.6, 'go', { x: a.b.x * 0.5 + LX * 0.5, y: lerp(L0, land, 0.7), eff: 0.75 }); });
+      // (the return men bail right after the snap, ahead of the cover men: going late, they trailed them down the field)
+      box.forEach((a) => { leg(a, T0 + 0.2, 'go', { x: a.b.x, y: fwd(L0, -0.4), eff: 0.6 }); leg(a, T0 + 0.8, 'go', { x: a.b.x * 0.5 + LX * 0.5, y: lerp(L0, land, 0.7), eff: 0.85 }); });
+      // as the cover men come down on them, the return men turn and each takes one (a wall standing still while the
+      // coverage ran through it to the returner read as nobody blocking)
+      const taken = new Set();
+      box.forEach((a, i) => {
+        const tb = tL - 1.6 + i * 0.08, at = lerp(L0, land, 0.7);
+        const c = line.filter((b) => !taken.has(b)).sort((u, v) => Math.abs(u.b.x - a.b.x * 0.5 - LX * 0.5) - Math.abs(v.b.x - a.b.x * 0.5 - LX * 0.5))[0];
+        if (!c || Math.abs(at - L0) < 15) return;
+        taken.add(c);
+        leg(a, tb, 'chase', { who: c.b, gap: 0.9, eff: 0.85, lead: 0.4 });
+      });
       leg(punter, tK + 0.3, 'go', { x: yx(bx), y: fwd(pL, 6), eff: 0.4 });
       const retSpot = [LX, land];
       runFrom(ret, tL - 1.6, [retSpot], { T: 1.5, v1: 0, eff: 0.6 });
