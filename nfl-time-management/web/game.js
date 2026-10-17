@@ -630,6 +630,29 @@
       up.forEach((o, i) => { o.d = 1.9; o.x = clampX(bx + (i ? -1 : 1) * s * (18 + 22 * i)); });
     }
   }
+  // your defense as you call it, before the snap (players asked to see it): the safeties as deep as the coverage has
+  // them, the linebackers as the front has them, the extra rushers walked up to the line
+  const DEEP_OF = { c0: 0, c1: 1, c3: 1, c2: 2, c4: 2, '2man': 2, c6: 2, prevent: 3 };
+  function showDc(def, dc, s, bx) {
+    const lbs = def.filter((o) => o.label === 'LB'), sf = def.filter((o) => o.label === 'S'), cbs = def.filter((o) => o.label === 'CB');
+    const deep = DEEP_OF[dc.cover] ?? 1;
+    const spots = deep === 1 ? [[bx + s * 8, 14]] : deep === 2 ? [[bx - s * 62, 13.5], [bx + s * 62, 13.5]] : deep === 3 ? [[bx - s * 85, 16], [bx, 19], [bx + s * 85, 16]] : [];
+    const backs = sf.concat(cbs.slice(3));                      // (the deep men: safeties, then any extra DB)
+    backs.forEach((o, i) => {
+      if (i < spots.length) { o.x = clampX(spots[i][0]); o.d = spots[i][1]; }
+      else { o.d = dc.cover === 'c0' ? 5 : 7.5; o.x = clampX(bx + (o.x - bx) * 0.7); }       // down low: in the box or on a man
+    });
+    cbs.slice(0, 2).forEach((o) => { o.d = dc.cover === 'c3' || dc.cover === 'c4' || dc.cover === 'prevent' ? 8.5 : dc.cover === 'c2' ? 4.5 : 6.5; });
+    lbs.forEach((o) => {
+      if (dc.front === 'loaded') { o.d = 3.8; o.x = clampX(bx + (o.x - bx) * 0.8); }
+      else if (dc.front === 'light') { o.d = 6.5; o.x = clampX(bx + (o.x - bx) * 1.25); }
+      if (dc.cover === 'prevent') o.d += 4;
+    });
+    // the rush: the line, then linebackers walked up to make the count
+    const line = def.filter((o) => o.label === 'DL' || o.label === 'EDGE').length;
+    const up = lbs.concat(sf.slice(spots.length)).slice(0, Math.max(0, (+dc.rush || 4) - line));
+    up.forEach((o, i) => { o.d = 1.9; o.x = clampX(bx + (i % 2 ? -1 : 1) * s * (60 + 18 * Math.floor(i / 2))); });
+  }
   // ------------------------------------------------------------ the field ---
   // The whole field, your end zone at the bottom of the screen. L counts yards from your goal line (0) to
   // theirs (100); a camera shows yards lo..hi: the whole field, or close up while a play runs.
@@ -744,6 +767,7 @@
     if (mode === 'snap' || mode === 'pat') {
       const offI = r.pos, f = formation(offLineup(offI).slice(), lineup(1 - offI).def.slice(), s, fxBall);
       if (mode === 'snap' && look != null) showLook(f.def, LOOKS[look], s, fxBall);
+      else if (mode === 'snap' && r.pos !== G.me && ui.step === 'vdef' && ui.dc) showDc(f.def, ui.dc, s, fxBall);
       const add = (o, teamI, off) => {
         const team = code(teamI), mine = teamI === G.me;
         const num = o.p.num != null ? String(o.p.num) : '';
@@ -1699,6 +1723,18 @@
           leg(d, REACT_DEF, 'mirror', { who: r.b, lag: 0.28 + R() * 0.12, dir, los: L0, floor: 0.8, tau: 1.0, y0: d.b.y,
             pedal: db ? 1.5 : 0.4, pedalMax: db ? 3 : 1.5, cush: r.label === 'WR' ? 1.4 : 0.9, dx0: d.b.x - r.b.x, dx: inside * 0.7, eff: 0.97 });
         });
+        // a receiver with no man on him (more of them than cover men: a blitz) who goes deep: the deep safety comes off
+        // his spot and runs with him, the spare man sinks with him if there is no safety (players saw men running free
+        // deep while the ball went short)
+        const manned = new Set(assigned.values()), freeD = new Set();
+        runners.filter(([a]) => !manned.has(a) && a !== tgt).map(([a, pl]) => ({ a, end: pl.at(pl.T) })).filter((x) => Math.abs(x.end[1] - L0) > 12)
+          .forEach(({ a, end }) => {
+            const d = nearest(deepers.filter((x) => !freeD.has(x)), [end[0], end[1]])
+              || nearest(pool.filter((x) => !assigned.has(x) && !freeD.has(x) && x.label !== 'DL' && x.label !== 'EDGE'), here(a));
+            if (!d) return;
+            freeD.add(d); assigned.set(d, a);
+            leg(d, REACT_DEF + (deepers.includes(d) ? 0.7 : 0.2), 'chase', { who: a.b, gap: Math.abs(catchPt[1] - L0) <= 6 ? 1.3 : 2.2, eff: 0.92, lead: 0.5 });
+          });
         pool.filter((d) => !assigned.has(d)).forEach((d) => {       // the spare: a robber in the middle; a lineman sits short
           if (d.label === 'DL' || d.label === 'EDGE') { leg(d, REACT_DEF, 'go', { x: d.b.x + (BX - d.b.x) * 0.3, y: fwd(L0, 3.5), eff: 0.6 }); return; }
           const m = S_.under[0] ? mark(S_.under[0]) : [BX, fwd(L0, 7)];
@@ -3864,7 +3900,9 @@
       const fs = calls.reduce((a, id) => a + (freq[id] || 0), 0) || 1;
       calls.forEach((id) => { q[id] = goShare * (freq[id] || 0) / fs; });
       const specs = [];
-      if (r.try2) opts.forEach((o) => { const a = o.action; o.action = { pat: 'two', call: a.call, looks: a.looks, route: a.route, who: a.who, philly: a.philly }; });
+      // a two-point try: the same call, played as the try. All of it: the receiver you picked, his route and the rest
+      // (a player's pass on a try went to someone else: the target was dropped here), and the personnel
+      if (r.try2) opts.forEach((o) => { o.action = { ...o.action, pat: 'two' }; });
       if (r.clock_running) specs.push(clockSpec(r, tempo, seq));
       specs.push({ kind: 'call', family: r.down === 4 ? 'fourth_down' : 'play_select', r: r.try2 || r, opts, chosen, q, situation: situation(r),
         seed: hash('call', seedKey(), G.si, seq) });
@@ -3915,6 +3953,7 @@
       const pk = presetsFor(G.root).find((k) => sameDc(PRESET[k].dc, ui.dc));
       sum.textContent = vdefText(ui.dc);
       tip.textContent = `${pk && PRESET[pk].sub ? `${PRESET[pk].sub}. ` : ''}${COVER_TIP[ui.dc.cover] || ''}`;
+      drawField();                          // (the field lines up the defense as called)
     };
     presetsFor(r).forEach((k) => {
       const b = el('button', 'chip opt', PRESET[k].label);
