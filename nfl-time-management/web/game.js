@@ -152,7 +152,7 @@
     spike: { label: 'Spike', act: { to_off: false, play: 'spike' } },
     kneel: { label: 'Kneel', act: { to_off: false, play: 'kneel' } },
   };
-  const POS_NAME = { QB: 'Quarterback', RB: 'Running back', WR: 'Wide receiver', TE: 'Tight end', LT: 'Left tackle',
+  const POS_NAME = { XOL: 'Extra lineman (lined up as a tight end)', QB: 'Quarterback', RB: 'Running back', WR: 'Wide receiver', TE: 'Tight end', LT: 'Left tackle',
     LG: 'Left guard', C: 'Center', RG: 'Right guard', RT: 'Right tackle', EDGE: 'Edge rusher', DL: 'Defensive tackle',
     LB: 'Linebacker', CB: 'Cornerback', S: 'Safety', K: 'Kicker', P: 'Punter' };
   // our overall rating (40-99) is how he has played, on these measures, blended with how the league values him
@@ -245,6 +245,8 @@
   // build turns it on (scripts/site.py --fulldef: <meta name="fulldef">), off on the main site until it is approved;
   // off, the defense is the three looks (blitz, load the box, play it soft)
   const FULLDEF = VS || !!document.querySelector('meta[name="fulldef"]');
+  // a player can keep the defense to the three simple calls (asked for: the full one is a lot to take in)
+  const simpleDef = () => !VS && !!load(`${STORE}:simpledef`, false);
   const VS_DECIDE_MS = 30000;      // the play clock in Versus: 30 seconds a call (board/match.js DECIDE_MS)
   // spots whose data was corrected, and when the fix went live: a drive's try saved before it starts over
   const SPOT_FIXED = { '2018_14_NE_MIA#4172': Date.parse('2026-10-16T22:50:00Z') };
@@ -353,7 +355,24 @@
     return { ...sp, game };
   }
   const sideFor = (seq) => (hash('side', seedKey(), G.si, seq) % 2 ? 1 : -1);   // +1: strong side on the offense's right
-  const lineup = (i) => (teamOf(i).lineup || { off: [], def: [] });
+  // A jumbo snap: a sixth lineman reported as eligible sits in a tight end's slot (history.py _ol_slots). The drive
+  // isn't all goal-line snaps, so the team's own tight end from that game's backups takes the slot; with none, the
+  // lineman stays, called what he is (an extra lineman). Linemen wear 50-79; tight ends can't.
+  const OL_NUM = (p) => p && p.num >= 50 && p.num <= 79;
+  const LINEUP_FIX = new WeakMap();
+  const lineup = (i) => {
+    const L = teamOf(i).lineup || { off: [], def: [] };
+    if (LINEUP_FIX.has(L)) return LINEUP_FIX.get(L);
+    const bench = (L.bench || []).filter((p) => !(p.pos === 'TE' && OL_NUM(p)));
+    const spare = bench.filter((p) => p.pos === 'TE' && !L.off.some((q) => q.name === p.name)).sort((a, b) => (b.ovr || 0) - (a.ovr || 0));
+    const off = L.off.map((p) => {
+      if (p.pos !== 'TE' || !OL_NUM(p)) return p;
+      return spare.length ? spare.shift() : { ...p, xol: true };
+    });
+    const out = { ...L, off, bench: bench.filter((p) => !off.includes(p)) };
+    LINEUP_FIX.set(L, out);
+    return out;
+  };
   // personnel (backs then tight ends, as the NFL names it: 12 is one back, two tight ends): the groupings you can
   // pick on offense; the play is then drawn from real plays run with it (engine.js samplePlaybook)
   const PERS = [[11, '3 WR'], [12, '2 TE'], [21, 'FB'], [13, '3 TE']];
@@ -1051,7 +1070,7 @@
   const BREAK_OUT = { hitch: 99, out: 2.5, deep_out: 2.5, in: 2 };
   const OTHER_ROUTES = { short: ['hitch', 'out', 'slant', 'cross', 'in'], deep: ['go', 'post', 'in', 'corner', 'deep_out', 'hitch'],
     hail: ['go'] };
-  const GROUP = { QB: 'QB', RB: 'RB', WR: 'WR', TE: 'TE', LT: 'OL', LG: 'OL', C: 'OL', RG: 'OL', RT: 'OL', T: 'OL', G: 'OL',
+  const GROUP = { XOL: 'OL', QB: 'QB', RB: 'RB', WR: 'WR', TE: 'TE', LT: 'OL', LG: 'OL', C: 'OL', RG: 'OL', RT: 'OL', T: 'OL', G: 'OL',
     EDGE: 'DL', DL: 'DL', LB: 'LB', CB: 'CB', S: 'S', K: 'QB', KC: 'LB', SZ: 'LB', KR: 'RB' };
   // seconds after the snap before the first step: the offense knows the count, the defense reacts to the ball
   // (tracking: receivers are still within half a yard of their stance half a second after the snap)
@@ -3799,7 +3818,7 @@
     // defense with 5 seconds left and the other team kneeling)
     if (!VS && peek.log.some((e) => e.ev === 'play' && e.kind === KNEEL) && kneelsOut(r)) { G.autoDef = true; return advance(); }
     G.fast = false;
-    if (!FULLDEF) { ui = { step: 'defense', to: false }; drawDefDock(); toField(); return; }
+    if (!FULLDEF || simpleDef()) { ui = { step: 'defense', to: false }; drawDefDock(); toField(); return; }
     ui = { step: 'vdef', dc: VS ? vdefDefault(r) : nflDefault(r, G.dinfo && G.dinfo.dshare), to: false };
     drawFullDefDock();
     toField();
@@ -3822,8 +3841,9 @@
     const mark = () => {
       box.querySelectorAll('.segb').forEach((b) => { const on = ui.dc[b.dataset.part] === (b.dataset.part === 'rush' ? +b.dataset.k : b.dataset.k); b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
       presets.querySelectorAll('.chip').forEach((b) => b.setAttribute('aria-pressed', String(sameDc(PRESET[b.dataset.k].dc, ui.dc))));
+      const pk = presetsFor(G.root).find((k) => sameDc(PRESET[k].dc, ui.dc));
       sum.textContent = vdefText(ui.dc);
-      tip.textContent = COVER_TIP[ui.dc.cover];
+      tip.textContent = `${pk && PRESET[pk].sub ? `${PRESET[pk].sub}. ` : ''}${COVER_TIP[ui.dc.cover] || ''}`;
     };
     presetsFor(r).forEach((k) => {
       const b = el('button', 'chip opt', PRESET[k].label);
@@ -3887,6 +3907,7 @@
     });
     keys.append(go);
     d.append(keys);
+    if (!VS) d.append(defModeChip(true));
     if (!VS) {
       const auto = el('button', 'chip', 'Let the coordinator call this drive');
       auto.type = 'button';
@@ -3896,7 +3917,20 @@
     mark();
   }
   // the three-button defense (blitz, load the box, play it soft): the main site's until the full call is approved
-  // (FULLDEF off)
+  // between the full defense and the three simple calls, kept for the next visit
+  function defModeChip(full) {
+    const b = el('button', 'chip', full ? 'Simpler: just 3 defensive calls' : 'Full defense: personnel, front, coverage, rush');
+    b.type = 'button';
+    b.addEventListener('click', () => {
+      if (busy) return;
+      save(`${STORE}:simpledef`, full);
+      track('defense_mode', { simple: full });
+      if (full) { ui = { step: 'defense', to: !!ui.to }; drawDefDock(); }
+      else { const r = G.root; ui = { step: 'vdef', dc: nflDefault(r, G.dinfo && G.dinfo.dshare), to: !!ui.to }; drawFullDefDock(); }
+    });
+    return b;
+  }
+  // (FULLDEF off, or the player asked for the simple calls)
   function drawDefDock() {
     const r = G.root, d = $('dock');
     d.textContent = '';
@@ -3924,6 +3958,7 @@
       d.append(tg);
     }
     if (VS) return;
+    if (FULLDEF) d.append(defModeChip(false));
     const auto = el('button', 'chip', 'Let the coordinator call this drive');
     auto.type = 'button';
     auto.addEventListener('click', () => { if (busy) return; G.autoDef = true; advance(); });
@@ -6069,6 +6104,7 @@
     if (f) f();
   }
   function playerInfo(p, label, team) {
+    if (p.xol) { label = 'XOL'; p = { ...p, pct: null, kind: null }; }      // a jumbo snap's extra lineman: rated as a lineman isn't known here
     const ol = OL.includes(label) || label === 'T' || label === 'G';
     const top = el('div', 'pinfo');
     const ch = el('div', 'chip-big', String(p.ovr)); ch.style.background = rate(p.ovr);
