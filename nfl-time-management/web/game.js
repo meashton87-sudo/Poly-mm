@@ -3123,8 +3123,9 @@
         G.banner = null;
         btn.type = 'button';
         let went = false;                // once: the await below leaves room for a second tap
-        btn.addEventListener('click', async () => { if (went) return; went = true; await cutReplay(); if (!busy) advance(); else went = false; });
-        b.append(btn);
+        const go = async () => { if (went) return; went = true; await cutReplay(); if (!busy) advance(); else went = false; };
+        btn.addEventListener('click', go);
+        b.append(btn, autoNext(btn, go));
         d.textContent = '';
         d.append(b);
         return;
@@ -3137,6 +3138,37 @@
       const res = await stepWith(action);
       await sleep(G.fast ? 60 : res.animated ? 300 : 1000);
     }
+  }
+  // "Next play" before the other team's snaps: optional, kept per player, it goes on by itself after a few seconds
+  // (a tap anywhere on the result first holds it, to read the grade)
+  const AUTO_KEY = `${STORE}:autonext`;
+  function autoNext(btn, go) {
+    const on = !!load(AUTO_KEY, false), sw = el('button', `chip auto${on ? ' on' : ''}`, on ? 'Auto-continue: on' : 'Auto-continue: off');
+    sw.type = 'button';
+    sw.setAttribute('aria-pressed', String(on));
+    let left = 3, tick = null;
+    const stop = () => { if (tick) { clearInterval(tick); tick = null; btn.textContent = 'Next play'; } };
+    const start = () => {
+      if (reduced() || tick) return;
+      left = 3; btn.textContent = `Next play in ${left}`;
+      tick = setInterval(() => {
+        if (!btn.isConnected) return stop();
+        if (document.hidden || !$('modal').hidden || !$('deep').hidden) return;
+        left -= 1;
+        if (left > 0) btn.textContent = `Next play in ${left}`; else { stop(); go(); }
+      }, 1000);
+    };
+    sw.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const now = !load(AUTO_KEY, false);
+      save(AUTO_KEY, now);
+      track('autonext', { on: now });
+      sw.classList.toggle('on', now); sw.setAttribute('aria-pressed', String(now));
+      sw.textContent = now ? 'Auto-continue: on' : 'Auto-continue: off';
+      if (now) start(); else stop();
+    });
+    if (on) setTimeout(() => { if (btn.isConnected) { start(); btn.parentNode.addEventListener('click', (ev) => { if (ev.target !== btn && ev.target !== sw) stop(); }, true); } }, 0);
+    return sw;
   }
   function kickChoice(r) { return r.t <= 300 && r.score[G.me] < r.score[1 - G.me]; }
   function defChoice(r) {
@@ -3206,7 +3238,11 @@
     const ad = adaptLooks(G.info.looks);
     G.look = VS ? null : pickLook(ad.p, hash('look', seedKey(), G.si, G.seq));
     G.lookNote = G.look != null ? ad.note : null;
-    ui = { step: 'family', fam: null, oob: false, tempo: tempoKeyOf(G.info.tempo) };
+    // late and trailing (or ending the first half): getting out stops the clock, so it starts on (players didn't find
+    // the switch); once turned off it stays off for the drive
+    const oobOn = oobMatters(r) && (r.t > 1800 || r.score[G.me] < r.score[1 - G.me]) && !G.oobOff;      // (tied: shown, left to you)
+    ui = { step: 'family', fam: null, oob: oobOn, tempo: tempoKeyOf(G.info.tempo) };
+    if (!VS) save(`${STORE}:ncalls`, load(`${STORE}:ncalls`, 0) + 1);
     drawField();
     drawDock();
     toField();
@@ -3278,13 +3314,19 @@
         b.addEventListener('click', () => {
           if (busy) return;
           ui.fam = f;
-          if (f === 'pass') { ui.step = 'pass'; ui.pass = { target: null, routes: null, pa: false, roll: false, fresh: true }; drawField(); }
+          if (f === 'pass') { save(`${STORE}:usedpass`, true); ui.step = 'pass'; ui.pass = { target: null, routes: null, pa: false, roll: false, fresh: true }; drawField(); }
           else ui.step = 'detail';
           drawDock();
         });
         fam.append(b);
       });
       d.append(fam);
+      if (oobMatters(r)) d.append(oobToggle());
+      const nCalls = load(`${STORE}:ncalls`, 0);
+      if (nCalls >= 2 && !load(`${STORE}:usedpass`, false)) {
+        const h = hintOnce('pass', 'Tap Pass to pick who gets the ball: tap a receiver on the field to change his route, or call a quick pass in one tap.');
+        if (h) d.append(h);
+      }
       const extra = [];
       if (r.clock_running) {
         clockOptions(r).filter((k) => !TEMPOS.includes(k)).forEach((k) => extra.push([k, k === 'rundown' ? 'Run it down' : CLOCK[k].label,
@@ -3371,14 +3413,34 @@
   }
 
   // a pass: your receivers and their routes (tap one on the field or here), play action or a rollout, then throw
+  // A tip shown once ever, the first time it would have helped (players asked for things the game already does: pick
+  // the receiver, a quick pass, a replay). Never while the first drive's tour is talking; a tap on × or anywhere in it
+  // closes it
+  function hintOnce(key, text) {
+    if ((tour && !tour.done) || load(`${STORE}:hint:${key}`, false)) return null;
+    save(`${STORE}:hint:${key}`, true);
+    track('hint', { key });
+    const h = el('div', 'hintonce');
+    h.append(el('span', 'k', 'Tip'), el('span', 't', text));
+    const x = el('button', 'x', '×');
+    x.type = 'button'; x.setAttribute('aria-label', 'Close the tip');
+    h.append(x);
+    h.addEventListener('click', () => h.remove());
+    return h;
+  }
+  // going out of bounds keeps the clock stopped inside the last 2:00 of the first half and the last 5:00 of the game
+  // (and in overtime): it matters to you then when you're behind or tied, or the half is ending
+  const oobMatters = (r) => r.pos === G.me && halfLeft(r.t) <= (r.t > 1800 ? 120 : 300) && (r.t > 1800 || r.score[G.me] - r.score[1 - G.me] <= 0);
+  const setOob = (v) => { ui.oob = v; G.oobOff = !v; };
   function oobToggle() {
-    const tg = el('div', 'toggle');
-    const lab = el('div', 'lab', 'Get out of bounds');
-    lab.append(el('small', '', 'The ball carrier tries to stop the clock. No guarantee.'));
+    const hot = oobMatters(G.root);
+    const tg = el('div', `toggle${hot ? ' urgent' : ''}`);
+    const lab = el('div', 'lab', hot ? '⏱ Get out of bounds' : 'Get out of bounds');
+    lab.append(el('small', '', hot ? 'Going out stops the clock now. The ball carrier tries to; turn it off to fight for yards.' : 'The ball carrier tries to stop the clock. No guarantee.'));
     const sw = el('button', 'sw2');
     sw.type = 'button'; sw.id = 'oobSwitch';
     sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(ui.oob)); sw.setAttribute('aria-label', 'Get out of bounds');
-    sw.addEventListener('click', () => { ui.oob = !ui.oob; sw.setAttribute('aria-checked', String(ui.oob)); });
+    sw.addEventListener('click', () => { setOob(!ui.oob); sw.setAttribute('aria-checked', String(ui.oob)); });
     tg.append(lab, sw);
     return tg;
   }
@@ -3424,22 +3486,19 @@
     const opts = el('div', 'opts-row');
     opts.append(opt('Play action', 'Fake the handoff first: it freezes a loaded box.', P.pa, (v) => { P.pa = v; if (v) P.roll = false; }),
       opt('Roll out', 'Move the pocket toward your receiver’s side.', P.roll, (v) => { P.roll = v; if (v) P.pa = false; }),
-      opt('Out of bounds', 'The ball carrier tries to stop the clock. No guarantee.', ui.oob, (v) => { ui.oob = v; }, 'oobSwitch'));
+      opt(oobMatters(r) ? '⏱ Out of bounds' : 'Out of bounds', 'The ball carrier tries to stop the clock. No guarantee.', ui.oob, setOob, 'oobSwitch'));
     d.append(opts, list);
     const avail = callOptions(r).calls, more = ['hail_mary'].filter((id) => avail.includes(id));
     // the screen in one tap: the back's route set to the screen and the ball to him (it was only a route on the
     // picker, which players didn't find, while the grade could still name the screen as the best call)
-    const rbI = eligibles(scene).findIndex((a) => a.label === 'RB');
-    const extra = (rbI >= 0 && avail.includes('screen') ? ['screen'] : []).concat(more);
+    const extra = (avail.includes('quick_strong') ? ['quick_strong'] : []).concat(avail.includes('screen') ? ['screen'] : [], more);
     if (extra.length) {
       const row = el('div', 'keys');
       row.style.setProperty('--cols', extra.length);
       extra.forEach((id, i) => {
-        const b = key(id === 'screen' ? 'Screen' : CALL[id].label.replace(/ \(.*\)$/, ''), id === 'screen' ? 'To the back, blockers in front' : null, 'alt', i);
-        b.addEventListener('click', () => {
-          if (busy) return;
-          if (id === 'screen') { P.routes[rbI] = 'screen'; P.pa = false; P.roll = false; decideCall({ pass: rbI }); } else decideCall({ call: id });
-        });
+        const b = key(id === 'screen' ? 'Screen' : id === 'quick_strong' ? 'Quick pass' : CALL[id].label.replace(/ \(.*\)$/, ''),
+          id === 'screen' ? 'Back, receiver or tight end, blockers in front' : id === 'quick_strong' ? 'Out fast: the QB takes the first man open' : null, 'alt', i);
+        b.addEventListener('click', () => { if (!busy) decideCall({ call: id }); });
         row.append(b);
       });
       d.append(row);
@@ -4285,6 +4344,7 @@
     }
     acts.append(det);
     wrap.append(acts);
+    if (G.lastPlay && res.animated) { const h = hintOnce('replay', 'Missed it? ↻ Replay shows the play again.'); if (h) wrap.append(h); }
     // no extra tap: the result stays on top of your next call (or the final card); only when their plays come
     // next does it wait for "Next play" (advance)
     d.append(wrap);
