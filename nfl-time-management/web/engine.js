@@ -165,6 +165,9 @@
   // an all-out rush roughly triples that; blocked kicks are run back for touchdowns about one time in ten.
   const ST_BLOCK = { fg: 0.045, punt: 0.035 }, ST_FOUL = 0.02, ST_BLOCK_TD = 0.1, ST_FAIR_GAIN = 4;
   const WHO_CODE = { RB: 2, WR: 3, TE: 4 };            // the target's position in the playbook's carry codes
+  // the route an action asks for: the receiver's route, at the depth it was drawn to when it was drawn (act.depth)
+  const routeOfAct = (act) => (act.route && Number.isFinite(act.depth) ? `${act.route}@${Math.round(act.depth)}` : act.route);
+  const DRAWN_WIN = 3;                // a drawn route: real throws on it within 3 yards (a quarter deep) of the drawn depth
   const PB_LOOK_MIN = 15;             // daily game: a call's plays against one defensive look are used when at least this many
                                       // (playbook.py LOOK_MIN)
   // daily game: a defensive look as a bucket: 0 light box (6 or fewer), 1 light with a blitz, 2 loaded box (7 or more),
@@ -693,17 +696,33 @@
       return P.items[lo];
     }
 
+    // a route as the daily game names it, with the depth a player drew it to when he drew it ('out@12'): its index in
+    // the charting, and with a depth the code ri + 16 * (depth + 32), which keeps only the throws on that route that
+    // went within DRAWN_WIN of that depth (a draw with none of them falls back to the route alone)
+    _ri(route) {
+      const P = this.e.pb, k = typeof route === 'string' ? route.indexOf('@') : -1, ri = P.routeNames.indexOf(k < 0 ? route : route.slice(0, k));
+      if (!(ri > 0) || k < 0) return ri;
+      const d = Math.round(Number(route.slice(k + 1)));
+      return Number.isFinite(d) ? ri + 16 * (clip(d, -20, 70) + 32) : ri;
+    }
+    _rOk(r, ri) {
+      const P = this.e.pb;
+      if (P.ngs.route[r] !== (ri & 15)) return false;
+      if (ri < 16) return true;
+      const a = P.air ? P.air[r] : -128, d = (ri >> 4) - 32;
+      return a !== -128 && Math.abs(a - d) <= Math.max(DRAWN_WIN, Math.abs(d) * 0.25);
+    }
     // the real plays a pick (a receiver's route) draws from, with their weights: the route always; then the position,
     // then the look the defense showed, before the situation: the situation's pool, the call's coarser pools, every
     // situation of this call, then of every call of its kind (a dropback, play action, a rollout). null: none
     routeSet(team, callIdx, fk, oob, looks, s, route, who) {
       const P = this.e.pb, cdf = this._cdfOf(team, oob);
-      const ri = P.ngs ? P.routeNames.indexOf(route) : -1;
-      if (!(ri > 0)) return null;
+      const ri0 = P.ngs ? this._ri(route) : -1;
+      if (!(ri0 > 0)) return null;
       const pool = P.poolOf[callIdx * P.nFine + fk], coarse = [];
       if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (lp !== pool && !coarse.includes(lp)) coarse.push(lp); }
       const sets = [this._callRows(callIdx), this._groupRows(callIdx)];
-      for (const w of who ? [who, 0] : [0]) for (const lk of looks ? [looks, 0] : [0]) {
+      for (const ri of ri0 >= 16 ? [ri0, ri0 & 15] : [ri0]) for (const w of who ? [who, 0] : [0]) for (const lk of looks ? [looks, 0] : [0]) {
         for (const pl of [pool, ...coarse]) { const T = this._lookT(cdf, pl, lk, s, ri, w, true); if (T) return T; }
         for (const set of sets) { const T = this._setT(set, lk, s, ri, w); if (T) return T; }
       }
@@ -815,7 +834,7 @@
         for (let i = lo; i <= hi; i++) {
           const r = P.items[i];
           if (looks) { const b = P.lookB[r]; if (!(b < 8 && (looks >> b) & 1)) continue; }
-          if (ri && P.ngs.route[r] !== ri) continue;
+          if (ri && !this._rOk(r, ri)) continue;
           if (who && (P.carry[r] & 7) !== who) continue;
           if (pers && P.ngs.pers[r] !== pers) continue;
           let w = cdf[i] - (i > lo ? cdf[i - 1] : pool);
@@ -840,8 +859,8 @@
       if (P.ngs && P.ngs.dpers && dcValid(dc)) {
         const cdf = this._cdfOf(team, oob), pool = P.poolOf[callIdx * P.nFine + fk], pools = [pool];
         if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (!pools.includes(lp)) pools.push(lp); }
-        const ri = route ? P.routeNames.indexOf(route) : 0;
-        if (!(route && !(ri > 0))) {
+        const ri0 = route ? this._ri(route) : 0;
+        if (!(route && !(ri0 > 0))) for (const ri of ri0 >= 16 ? [ri0, ri0 & 15] : [ri0]) {
           const pass = P.calls[callIdx].kind !== 'run';
           const ref = this._dcRef(cdf, pool, pass, ri, who || 0, pers || 0);
           // the wider sets, built only when a draw gets to them
@@ -917,7 +936,7 @@
       const items = [], cum = [];
       for (let i = lo; i <= hi; i++) {
         const r = P.items[i];
-        if (ri && N.route[r] !== ri) continue;
+        if (ri && !this._rOk(r, ri)) continue;
         if (who && (P.carry[r] & 7) !== who) continue;
         if (pers && N.pers[r] && N.pers[r] !== pers) continue;
         const w = cdf[i] - (i > lo ? cdf[i - 1] : pool);
@@ -961,7 +980,7 @@
       // 0: the offense's own filters drop it, or the defense's call is not about it; 1: the defense's filters do (or
       // it was not charted for one); 2: it passes
       const test = (r) => {
-        if (ri && N.route[r] !== ri) return 0;
+        if (ri && !this._rOk(r, ri)) return 0;
         if (who && (P.carry[r] & 7) !== who) return 0;
         if (byPers && N.pers[r] && N.pers[r] !== pers) return 0;
         if (!this._dcAbout(r, pass)) return 0;
@@ -1107,7 +1126,7 @@
         const P = this.e.pb, rows = [];
         for (const r of set.rows) {
           if (looks) { const b = P.lookB[r]; if (!(b < 8 && (looks >> b) & 1)) continue; }
-          if (ri && P.ngs.route[r] !== ri) continue;
+          if (ri && !this._rOk(r, ri)) continue;
           if (who && (P.carry[r] & 7) !== who) continue;
           rows.push(r);
         }
@@ -1263,14 +1282,14 @@
       if (go2 && act && act.call !== undefined && this.pbCdf && this.e.pb.callIndex[act.call] !== undefined) {
         const P = this.e.pb;
         callIdx = P.callIndex[act.call];
-        const who = act.route ? (WHO_CODE[act.who] || 0) : undefined;
+        const who = act.route ? (WHO_CODE[act.who] || 0) : undefined, route = routeOfAct(act);
         if (dcValid(act.dc)) {
           const m = dcEffect(this.e.pb.dcEff, act.call, act.dc, act.pers, act.seen);
           why = m.why.slice(0, 3);
-          row = this.sampleVsDefense(o, callIdx, fineKey(MODE_NORMAL, 3, 2, 2), u[2], false, act.dc, m.s, act.route, who, act.pers);
+          row = this.sampleVsDefense(o, callIdx, fineKey(MODE_NORMAL, 3, 2, 2), u[2], false, act.dc, m.s, route, who, act.pers);
         } else {
           const match = this.matchOf(callIdx, this.defOfLooks(act.looks));
-          row = this.samplePlaybook(o, callIdx, fineKey(MODE_NORMAL, 3, 2, 2), u[2], false, act.looks, match, act.route, who, act.pers);
+          row = this.samplePlaybook(o, callIdx, fineKey(MODE_NORMAL, 3, 2, 2), u[2], false, act.looks, match, route, who, act.pers);
         }
         if (row >= 0) {
           const f = P.flags[row];
@@ -1468,14 +1487,14 @@
         if (act && act.call !== undefined && this.pbCdf && (kind === RUN || kind === PASS)) {
           // your call, against the look the defense showed (Versus: the defense's whole call): the matchup tilts the draw
           callIdx = this.e.pb.callIndex[act.call];
-          const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl), who = act.route ? (WHO_CODE[act.who] || 0) : undefined;
+          const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl), who = act.route ? (WHO_CODE[act.who] || 0) : undefined, route = routeOfAct(act);
           if (dcValid(act.dc)) {
             const m = dcEffect(this.e.pb.dcEff, act.call, act.dc, act.pers, act.seen);
             match = m.s; why = m.why.slice(0, 3);
-            pbRow = this.sampleVsDefense(o, callIdx, fk, u[2], mineOob, act.dc, match, act.route, who, act.pers);
+            pbRow = this.sampleVsDefense(o, callIdx, fk, u[2], mineOob, act.dc, match, route, who, act.pers);
           } else {
             match = this.matchOf(callIdx, this.defOfLooks(act.looks));
-            pbRow = this.samplePlaybook(o, callIdx, fk, u[2], mineOob, act.looks, match, act.route, who, act.pers);
+            pbRow = this.samplePlaybook(o, callIdx, fk, u[2], mineOob, act.looks, match, route, who, act.pers);
           }
         } else if (act && dcValid(act.dc) && this.pbCdf && (kind === RUN || kind === PASS)) {
           // no call from the offense: a call of the kind it chose, as often as play-callers make it here, against the

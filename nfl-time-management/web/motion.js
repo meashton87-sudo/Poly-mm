@@ -409,9 +409,10 @@
   }
   // The route's waypoints on the field, and the catch point when it is the target. ox, oy: where he lines up
   // (field yards); out: +1 or -1, the direction of his sideline across the field; dir: +1 or -1 the offense's
-  // direction along it; los: the line of scrimmage.
+  // direction along it; los: the line of scrimmage. name: a route's name, or a route the player drew ({ pts, at,
+  // minD }: its waypoints in the same (out, up) yards, from where he lines up, and where on it the catch is made)
   function routeOnField(name, D, ox, out, dir, los, d0, u) {
-    const R = route(name, D, d0, u);
+    const R = typeof name === 'object' ? { pts: name.pts.map((p) => p.slice()), at: name.at, minD: name.minD } : route(name, D, d0, u);
     const toField = (p) => [ox + out * p[0], los + dir * p[1]];
     const pts = R.pts.map(toField);
     let cat = null, legs = R.pts.length;

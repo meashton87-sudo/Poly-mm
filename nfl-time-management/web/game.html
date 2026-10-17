@@ -404,6 +404,20 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 #field .route.tgt { stroke: #ffffff; stroke-width: 3.4; stroke-dasharray: none; }
 #field .route-head.tgt { fill: #ffffff; stroke: rgba(8, 14, 10, .55); stroke-width: 1.2; }
 #field .dot.target circle.c { stroke: #ffffff; stroke-width: 3.6; }
+/* drawing routes: the field takes the finger (no page scroll), the picked receiver pulses, your lines are solid gold */
+#field.drawing { touch-action: none; cursor: crosshair; -webkit-user-select: none; user-select: none; }
+#field .route.drawn { stroke: var(--chain); stroke-width: 2.4; stroke-dasharray: none; }
+#field .route.drawn.tgt { stroke: #ffffff; stroke-width: 3.4; }
+#field .route-head.drawn { fill: var(--chain); stroke: rgba(8, 14, 10, .55); stroke-width: 1; }
+#field .route-head.drawn.tgt { fill: #ffffff; }
+#field .route.drawing { stroke: var(--chain); stroke-width: 3; stroke-dasharray: none; opacity: .95; pointer-events: none; }
+#field .dot.sel circle.c { stroke: var(--chain); stroke-width: 3.2; }
+#field .selring { fill: none; stroke: var(--chain); stroke-width: 2.2; pointer-events: none; transform-box: fill-box; transform-origin: center; animation: selpulse 1.1s ease-in-out infinite; }
+@keyframes selpulse { 50% { transform: scale(1.22); opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { #field .selring { animation: none; } }
+.chip.pen.on { background: var(--chain); color: var(--chain-ink); border-color: var(--chain); }
+.hint.draw { color: var(--ink); font-weight: 600; }
+.hint.draw .linkbtn { font-size: 13px; padding: 0; }
 .hint { margin: 0; font-size: 13px; color: var(--muted); }
 /* simpler screens: the pass options as small toggles on one line; the result's extras on one line */
 .opts-row { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -922,8 +936,8 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
     clock, timeouts and the 22 players who were on the field. Your job is to win it.</p>
   <h3>How it works</h3>
   <p>Call <b>Run</b>, <b>Pass</b>, <b>RPO</b> or <b>Trick</b>, then the play: 27 calls in all, from inside runs and
-    quick passes to deep shots, play action and a flea-flicker. On a pass, tap a receiver to change his route and pick
-    who gets the ball. Timeouts, spikes, kneel-downs and field goals appear when they matter, and you choose the tempo.
+    quick passes to deep shots, play action and a flea-flicker. On a pass, tap a receiver to change his route (or draw
+    your own) and pick who gets the ball. Timeouts, spikes, kneel-downs and field goals appear when they matter, and you choose the tempo.
     When the other team has the ball, you call the defense. Every snap is played out with a real NFL play of the call
     you made, from the same kind of situation.</p>
   <h3>How scoring works</h3>

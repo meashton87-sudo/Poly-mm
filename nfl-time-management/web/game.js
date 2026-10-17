@@ -178,10 +178,10 @@
   const ROUTES = { WR: ['slant', 'hitch', 'out', 'in', 'post', 'corner', 'go', 'screen'], TE: ['flat', 'hitch', 'out', 'cross', 'in', 'go'],
     RB: ['flat', 'angle', 'screen', 'wheel'] };
   const ROUTE_DEPTH = { go: 24, post: 16, corner: 19, out: 4, deep_out: 13, in: 12, slant: 6, cross: 4, hitch: 5, screen: -3, flat: -2, wheel: 16, angle: 3 };
-  const ROUTE_NAME = { go: 'Go', post: 'Post', corner: 'Corner', out: 'Quick out', in: 'Dig', slant: 'Slant', cross: 'Crosser', hitch: 'Hitch',
-    screen: 'Screen', flat: 'Flat', wheel: 'Wheel', angle: 'Angle' };
-  const ROUTE_SAY = { go: 'a go route', post: 'a post', corner: 'a corner route', out: 'a quick out', in: 'a dig', slant: 'a slant', cross: 'a crosser',
-    hitch: 'a hitch', screen: 'a screen', flat: 'a route to the flat', wheel: 'a wheel route', angle: 'an angle route' };
+  const ROUTE_NAME = { go: 'Go', post: 'Post', corner: 'Corner', out: 'Quick out', deep_out: 'Deep out', in: 'Dig', slant: 'Slant', cross: 'Crosser',
+    hitch: 'Hitch', screen: 'Screen', flat: 'Flat', wheel: 'Wheel', angle: 'Angle' };
+  const ROUTE_SAY = { go: 'a go route', post: 'a post', corner: 'a corner route', out: 'a quick out', deep_out: 'a deep out', in: 'a dig', slant: 'a slant',
+    cross: 'a crosser', hitch: 'a hitch', screen: 'a screen', flat: 'a route to the flat', wheel: 'a wheel route', angle: 'an angle route' };
   const routeName = (lab, rt) => (lab === 'TE' && rt === 'go' ? 'Seam' : ROUTE_NAME[rt]);
   const routeSay = (lab, rt) => (lab === 'TE' && rt === 'go' ? 'a seam route' : ROUTE_SAY[rt]);
   const DEEP_ROUTES = new Set(['go', 'post', 'corner', 'wheel']);
@@ -751,6 +751,7 @@
     svg.setAttribute('viewBox', `0 0 360 ${H}`);
     svg.textContent = '';
     svg.classList.remove('playing');
+    svg.classList.toggle('drawing', !!(passing() && ui.pass && ui.pass.draw));
     const sc = { svg, H, r, cam: { ...FULL }, parts: [], actors: [], calls: [] };
     const put = (el, upd) => { svg.append(el); if (upd) sc.parts.push(upd); return el; };
     put(S('rect', { x: 0, y: 0, width: 360, height: H, fill: 'var(--turf)' }));
@@ -947,15 +948,17 @@
     const P = ui.pass, E = eligibles(sc), Y = camY(sc), g = S('g', { class: 'routes' });
     sc.routePts = [];
     E.forEach((a, i) => {
-      const rt = P.routes[i], r = Motion.routeOnField(rt, ROUTE_DEPTH[rt], (a.x0 - SX0) / XYD, outOf(sc, a), sc.dir, sc.losL, Math.abs(a.L0 - sc.losL), 0.5);
+      const rt = P.routes[i], dr = P.drawn && P.drawn[i];
+      const r = Motion.routeOnField(dr || rt, ROUTE_DEPTH[rt], (a.x0 - SX0) / XYD, outOf(sc, a), sc.dir, sc.losL, Math.abs(a.L0 - sc.losL), 0.5);
       const pts = r.pts.map((q) => [clip(SX0 + q[0] * XYD, SX0 + 2, SX1 - 2), Y(clip(q[1], -9, 109))]);
       sc.routePts[i] = [[a.x0, Y(a.L0)], ...pts];
       const tgt = P.target === i, d = pts.map((q, k) => `${k ? 'L' : 'M'}${q[0].toFixed(1)} ${q[1].toFixed(1)}`).join('');
-      if (tgt) g.append(S('path', { class: 'route halo', d }));
-      g.append(S('path', { class: `route${tgt ? ' tgt' : ''}`, d }));
+      if (tgt || dr) g.append(S('path', { class: 'route halo', d }));
+      g.append(S('path', { class: `route${tgt ? ' tgt' : ''}${dr ? ' drawn' : ''}`, d }));
+      if (P.draw && P.sel === i) { a.g.classList.add('sel'); g.append(S('circle', { class: 'selring', cx: a.x0, cy: Y(a.L0), r: 13 })); }
       const e = pts[pts.length - 1], q = pts[pts.length - 2], ang = Math.atan2(e[1] - q[1], e[0] - q[0]);
       const head = [[e[0], e[1]], [e[0] - 6 * Math.cos(ang - 0.5), e[1] - 6 * Math.sin(ang - 0.5)], [e[0] - 6 * Math.cos(ang + 0.5), e[1] - 6 * Math.sin(ang + 0.5)]];
-      g.append(S('path', { class: `route-head${tgt ? ' tgt' : ''}`, d: `M${head.map((h) => h.map((v) => v.toFixed(1)).join(' ')).join('L')}Z` }));
+      g.append(S('path', { class: `route-head${tgt ? ' tgt' : ''}${dr ? ' drawn' : ''}`, d: `M${head.map((h) => h.map((v) => v.toFixed(1)).join(' ')).join('L')}Z` }));
       if (tgt) a.g.classList.add('target');
     });
     sc.svg.insertBefore(g, sc.layer);
@@ -968,8 +971,12 @@
     const i = eligibles(scene).indexOf(a);
     if (i < 0) return false;
     const list = ROUTES[a.label], P = ui.pass;
-    (P.hist = P.hist || []).push([i, P.routes[i]]);
-    P.routes[i] = list[(list.indexOf(P.routes[i]) + 1) % list.length];
+    if (P.draw) { P.sel = P.sel === i ? null : i; redrawPass(); return true; }
+    P.drawn = P.drawn || [];
+    (P.hist = P.hist || []).push([i, P.routes[i], P.drawn[i] || null]);
+    const was = P.drawn[i] ? -1 : list.indexOf(P.routes[i]);          // from a drawn route: the first on the list
+    P.drawn[i] = null;
+    P.routes[i] = list[(was + 1) % list.length];
     redrawPass();
     return true;
   }
@@ -978,10 +985,12 @@
     const P = ui.pass, h = P && P.hist && P.hist.pop();
     if (!h) return;
     P.routes[h[0]] = h[1];
+    (P.drawn = P.drawn || [])[h[0]] = h[2] || null;
     redrawPass();
   }
   // each receiver's odds on his current route, from the real plays it would draw (worker 'odds'), cached per snap
-  function pickKey(a) { return `${a.call}|${a.route}|${a.who}|${a.looks}`; }
+  const routeAt = (a) => (Number.isFinite(a.depth) ? `${a.route}@${a.depth}` : a.route);     // (engine.js routeOfAct)
+  function pickKey(a) { return `${a.call}|${routeAt(a)}|${a.who}|${a.looks}`; }
   async function fetchOdds() {
     if (!passing() || !scene) return;
     G.odds = G.odds || {};
@@ -989,7 +998,7 @@
     if (!picks.length) return;
     picks.forEach((a) => { G.odds[pickKey(a)] = null; });
     try {
-      const res = await send({ type: 'odds', scen: simScen(), root: G.root, picks: picks.map((a) => ({ call: a.call, route: a.route, who: a.who, looks: a.looks })) }, true);
+      const res = await send({ type: 'odds', scen: simScen(), root: G.root, picks: picks.map((a) => ({ call: a.call, route: routeAt(a), who: a.who, looks: a.looks })) }, true);
       picks.forEach((a, k) => { G.odds[pickKey(a)] = res.out[k]; });
     } catch (e) { picks.forEach((a) => { delete G.odds[pickKey(a)]; }); return; }      // asked again on the next redraw
     // into the cards already up, not a redrawn dock: a redraw between a finger's down and up would eat the throw
@@ -1011,7 +1020,7 @@
     svg.addEventListener('pointerdown', (ev) => { down = { x: ev.clientX, y: ev.clientY, t: Date.now() }; });
     svg.addEventListener('pointerup', (ev) => {
       const d0 = down; down = null;
-      if (!d0 || !passing() || !scene || !scene.routePts) return;
+      if (!d0 || !passing() || !scene || !scene.routePts || ui.pass.draw) return;
       if (Math.hypot(ev.clientX - d0.x, ev.clientY - d0.y) > 12 || Date.now() - d0.t > 700) return;
       const m = svg.getScreenCTM();
       if (!m) return;
@@ -1029,6 +1038,168 @@
       if (best >= 0 && bd <= 22) { ev.preventDefault(); routeTapAt = Date.now(); passTap(eligibles(scene)[best]); }
     });
   }
+  // ---- drawing a route (✏️ Draw routes on the pass picker): tap a receiver, then drag where he goes. The line is
+  // tidied into a route's legs (a stem and a break or two) and read as the real route it is closest to and the depth
+  // it is run at: the throws to him are real throws on that route that went about that deep (engine.js _ri), and on
+  // the snap he runs the line as drawn. The depth a drawing is read at stays within what real throws on the route
+  // reach (air yards on throws to it, 10th to 90th percentile):
+  const DRAWN_RANGE = { go: [11, 40], post: [8, 41], corner: [7, 33], wheel: [3, 26], out: [-1, 8], deep_out: [7, 19], in: [5, 20],
+    slant: [3, 10], cross: [-1, 14], hitch: [2, 13], screen: [-6, -1], flat: [-6, 3], angle: [0, 6] };
+  // how far along the break the ball meets him (yards across), as on the routes he is given (motion.js route)
+  const DRAWN_ALONG = { out: 5.5, deep_out: 7, in: 8, cross: 12, flat: 7.5, angle: 3 };
+  const DRAW_MIN = 1.5, DRAW_MAX = 60, DRAW_TOL = 0.9;     // yards: shorter is a tap, longer is cut off; tidied to within
+  const DRAW_KEY = `${STORE}:draw`;                        // the picker opens drawing when you drew last time
+  // the fewest points that keep a line within tol yards of it (Douglas-Peucker)
+  function simplify(pts, tol) {
+    if (pts.length < 3) return pts.slice();
+    const a = pts[0], b = pts[pts.length - 1], dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+    let k = -1, far = 0;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const p = pts[i], d = L ? Math.abs((p[0] - a[0]) * dy - (p[1] - a[1]) * dx) / L : Math.hypot(p[0] - a[0], p[1] - a[1]);
+      if (d > far) { far = d; k = i; }
+    }
+    return far <= tol ? [a, b] : simplify(pts.slice(0, k + 1), tol).concat(simplify(pts.slice(k), tol).slice(1));
+  }
+  // a drawn line ([x across, L along the field] in yards, as the finger went) as a route for receiver a: its legs in
+  // his (out, up) yards from where he lines up (motion.js route), the route it is read as, its depth, where the catch
+  // is made on it and where across the field that is (cx); null for a line too short to be one
+  function shapeDrawn(sc, a, field) {
+    const ox = (a.x0 - SX0) / XYD, out = outOf(sc, a), d0 = Math.abs(a.L0 - sc.losL);
+    // (read as the finger went, past the sideline too: a corner from a man near the sideline is still a corner)
+    const loc = (q) => [out * (q[0] - ox), clip(sc.dir * (clip(q[1], -9.5, 109.5) - sc.losL), -8, 70)];
+    const raw = [[0, -d0]];
+    let run = 0;
+    for (const q of field.map(loc)) {
+      const p = raw[raw.length - 1], l = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      if (l < 0.25) continue;
+      if (run + l > DRAW_MAX) { const w = (DRAW_MAX - run) / l; raw.push([p[0] + (q[0] - p[0]) * w, p[1] + (q[1] - p[1]) * w]); run = DRAW_MAX; break; }
+      raw.push(q); run += l;
+    }
+    if (run < DRAW_MIN) return null;
+    let pts = simplify(raw, DRAW_TOL);
+    for (let tol = DRAW_TOL * 1.5; pts.length > 6; tol *= 1.5) pts = simplify(raw, tol);       // a scribble: its main legs
+    // a leg under a yard and a half (a wobble as the finger lands or lifts) folds into the next
+    for (let k = pts.length - 2; k >= 1; k--) if (Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]) < 1.5) pts.splice(k, 1);
+    if (pts.length > 2 && Math.hypot(pts[pts.length - 1][0] - pts[pts.length - 2][0], pts[pts.length - 1][1] - pts[pts.length - 2][1]) < 1.5) pts.splice(pts.length - 2, 1);
+    let rd = readDrawn(pts, a.label), deeper = false;
+    // a break route drawn deeper than real ones are run (a dig at 45 yards): brought up to the deepest real one
+    const top = DRAWN_RANGE[rd.name][1] + 2, at = rd.atDepth;
+    if (!DEEP_ROUTES.has(rd.name) && rd.name !== 'slant' && at > top) {
+      const f = top / at;
+      pts = pts.map((p) => [p[0], p[1] > 0 ? p[1] * f : p[1]]);
+      rd = readDrawn(pts, a.label); deeper = true;
+    }
+    // what he runs: the line, kept on the field
+    const inField = (p) => [out * (clip(ox + out * p[0], 0.7, 52.6) - ox), p[1]];
+    const run_ = pts.map(inField).filter((p, k, A) => !k || Math.hypot(p[0] - A[k - 1][0], p[1] - A[k - 1][1]) > 0.3);
+    if (run_.length < 2) return null;
+    const d = { pts: run_.map((p) => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10]), name: rd.name, depth: rd.depth, at: rd.at, minD: rd.minD, deeper };
+    if (typeof d.at === 'number') d.at = Math.round(d.at * 10) / 10;
+    if (d.minD != null) d.minD = Math.round(d.minD * 10) / 10; else delete d.minD;
+    d.cx = Math.round(Motion.routeOnField(d, d.depth, ox, out, sc.dir, sc.losL, d0, 0.5).catchAt[0] * 10) / 10;
+    return d;
+  }
+  // which real route a drawn one is (by its last leg: up the field, back to the ball, on a slant, or across, and
+  // which way) and the depth it is thrown at: where it ends on a vertical route, slant or screen; the depth it
+  // breaks across at; the top of a hitch or comeback
+  function readDrawn(pts, label) {
+    const n = pts.length, a = pts[n - 2], b = pts[n - 1], dx = b[0] - a[0], dy = b[1] - a[1];
+    const th = (Math.atan2(dy, Math.abs(dx)) * 180) / Math.PI, brk = n > 2 ? a[1] : 0, legD = (a[1] + b[1]) / 2;
+    const maxD = Math.max(...pts.map((p) => p[1])), wide = Math.max(...pts.slice(0, -1).map((p) => p[0]));
+    let name;
+    if (maxD < 0.5) name = b[0] - pts[0][0] > 2.5 ? 'flat' : 'screen';
+    else if (th > 58) name = n === 2 && b[1] < 8 ? 'hitch' : n > 2 && wide >= 3.5 && brk <= 3 ? 'wheel' : 'go';
+    else if (th < -25) name = 'hitch';
+    else if (th >= 20) name = dx < 0 ? (brk <= 3.5 ? 'slant' : 'post') : b[1] <= 4 ? 'flat' : brk <= 3.5 ? 'go' : 'corner';
+    else if (dx >= 0) name = legD <= 1 ? 'flat' : legD < 8 ? 'out' : 'deep_out';
+    else name = label === 'RB' && wide >= 2 && legD < 5 ? 'angle' : legD < 5 ? 'cross' : 'in';
+    const at = name === 'hitch' ? maxD : DEEP_ROUTES.has(name) || name === 'slant' || name === 'screen' ? b[1] : legD;
+    const [lo, hi] = DRAWN_RANGE[name];
+    const r = { name, depth: Math.round(clip(at, lo, hi)), atDepth: at };
+    if (name === 'hitch' || name === 'screen') r.at = 'end';
+    else if (DRAWN_ALONG[name]) r.at = Math.sign(dx || 1) * Math.min(DRAWN_ALONG[name], Math.abs(dx) * 0.9);
+    else {
+      r.at = 'depth';
+      if (n > 2 && (name === 'post' || name === 'corner')) r.minD = brk + 1.5;
+      else if (name === 'slant') r.minD = 3;
+      else if (name === 'wheel') r.minD = 4;
+    }
+    return r;
+  }
+  const depthSay = (d) => (d > 0 ? `${d} yard${d === 1 ? '' : 's'} downfield` : d < 0 ? `${-d} behind the line` : 'at the line');
+  // the finger on the field while drawing: down on a receiver (or anywhere, with one picked), drag, lift
+  let drawing = null;
+  const dotOff = (a) => a.side * GAP * a.w;               // where his dot is drawn before the snap, from where he is
+  function drawTaps() {
+    const svg = $('field');
+    const at = (ev) => { const m = svg.getScreenCTM(); return m ? new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse()) : null; };
+    const near = (q) => {
+      const Y = camY(scene);
+      let best = -1, bd = 24;
+      eligibles(scene).forEach((a, i) => { const d = Math.hypot(q.x - a.x0, q.y - Y(a.L0) - dotOff(a)); if (d < bd) { bd = d; best = i; } });
+      return best;
+    };
+    svg.addEventListener('pointerdown', (ev) => {
+      if (busy || !passing() || !scene || !ui.pass.draw || (ev.pointerType === 'mouse' && ev.button !== 0)) return;
+      const q = at(ev);
+      if (!q) return;
+      const hit = near(q), i = hit >= 0 ? hit : ui.pass.sel;
+      ev.preventDefault();
+      drawing = { i: i == null ? -1 : i, hit, x: ev.clientX, y: ev.clientY, pts: [[q.x, q.y]], el: null, id: ev.pointerId };
+      try { svg.setPointerCapture(ev.pointerId); } catch (e) { /* the line still follows inside the field */ }
+    });
+    svg.addEventListener('pointermove', (ev) => {
+      const D = drawing;
+      if (!D || ev.pointerId !== D.id || D.i < 0 || !scene) return;
+      const q = at(ev), p = D.pts[D.pts.length - 1];
+      if (!q || Math.hypot(q.x - p[0], q.y - p[1]) < 2.5) return;
+      D.pts.push([q.x, q.y]);
+      const a = eligibles(scene)[D.i], Y = camY(scene);
+      if (!D.el) { D.el = S('path', { class: 'route drawing' }); svg.append(D.el); }
+      D.el.setAttribute('d', `M${a.x0.toFixed(1)} ${(Y(a.L0) + dotOff(a)).toFixed(1)}${D.pts.map((v) => `L${v[0].toFixed(1)} ${v[1].toFixed(1)}`).join('')}`);
+    });
+    const end = (ev, cancel) => {
+      const D = drawing;
+      if (!D || ev.pointerId !== D.id) return;
+      drawing = null;
+      routeTapAt = Date.now();                // (the dot under the finger stays shut)
+      if (D.el) D.el.remove();
+      if (cancel || busy || !passing() || !scene) return;
+      const P = ui.pass;
+      if (Math.hypot(ev.clientX - D.x, ev.clientY - D.y) <= 10 && D.pts.length <= 3) {
+        // a tap: pick that receiver (him again: let him go); off them all, let go of whoever was picked
+        P.sel = D.hit >= 0 && P.sel !== D.hit ? D.hit : null;
+        redrawPass();
+        return;
+      }
+      if (D.i < 0) { toast('Tap a receiver first, then draw his route'); return; }
+      commitDraw(D.i, D.pts);
+    };
+    svg.addEventListener('pointerup', (ev) => end(ev, false));
+    svg.addEventListener('pointercancel', (ev) => end(ev, true));
+  }
+  function commitDraw(i, line) {
+    const sc = scene, a = eligibles(sc)[i], P = ui.pass, k = (sc.H - 6) / (sc.cam.hi - sc.cam.lo);
+    // (from his dot as drawn: a step off the line of scrimmage before the snap, GAP)
+    const d = shapeDrawn(sc, a, line.map(([x, y]) => [(x - SX0) / XYD, sc.cam.lo + (sc.H - 3 - y + dotOff(a)) / k]));
+    if (!d) { P.sel = i; redrawPass(); return; }
+    P.drawn = P.drawn || [];
+    (P.hist = P.hist || []).push([i, P.routes[i], P.drawn[i] || null]);
+    P.drawn[i] = d;
+    P.routes[i] = d.name;
+    P.sel = null;
+    redrawPass();
+    toast(`${shortName(a.p ? a.p.name : '') || a.label}: ${routeSay(a.label, d.name)}, ${depthSay(d.depth)}${d.deeper ? ' (as deep as real ones go)' : ''}`);
+    track('route_drawn', { route: d.name, depth: d.depth, legs: d.pts.length - 1 });
+    if (window.__sepLog) (window.__drawLog = window.__drawLog || []).push({ i, label: a.label, ...d });      // (browser tests)
+  }
+  function setDraw(on) {
+    const P = ui.pass;
+    P.draw = on; P.sel = null;
+    save(DRAW_KEY, on);
+    redrawPass();
+    track('draw_mode', { on });
+  }
   // who gets the ball, by his place in the list (the field may be redrawn under the buttons: a resize, the phone's
   // address bar)
   function passPick(i) {
@@ -1045,7 +1216,16 @@
   }
   // the engine call a pick stands for (its pools hold the real plays): a screen, play action, a rollout, a deep shot
   // (the post down the middle), a throw over the middle (dig, crosser, angle) or a quick throw, to the receiver's side
-  function passCallOf(sc, a, rt, pa, roll) {
+  // A drawn route: deep (15 yards or more, as the play-by-play splits it) or short by its depth, over the middle
+  // (within 9 yards of the middle of the field) or to the side it is caught on
+  function passCallOf(sc, a, rt, pa, roll, dr) {
+    if (dr && rt !== 'screen') {
+      const deep = dr.depth >= 15, mid = Math.abs(dr.cx - 53.333 / 2) < 9;
+      const side = (Math.sign(dr.cx - (sc.bx - SX0) / XYD) || outOf(sc, a)) === sc.s * sc.dir ? 'strong' : 'weak';
+      if (pa) return deep ? 'pa_deep' : 'pa_short';
+      if (roll) return `roll_${side}`;
+      return mid ? (deep ? 'deep_middle' : 'quick_middle') : `${deep ? 'deep' : 'quick'}_${side}`;
+    }
     const side = outOf(sc, a) === sc.s * sc.dir ? 'strong' : 'weak';
     if (rt === 'screen') return 'screen';
     if (pa) return DEEP_ROUTES.has(rt) ? 'pa_deep' : 'pa_short';
@@ -1056,12 +1236,14 @@
   }
   // the option your pick is graded as, and the action the engine plays it with
   function passOption(sc, i, oob) {
-    const P = ui.pass, a = eligibles(sc)[i], rt = P.routes[i], call = passCallOf(sc, a, rt, P.pa, P.roll);
+    const P = ui.pass, a = eligibles(sc)[i], rt = P.routes[i], dr = P.drawn && P.drawn[i], call = passCallOf(sc, a, rt, P.pa, P.roll, dr);
     const name = a.p ? a.p.name : a.label;
-    return { key: `pass:${i}:${rt}${P.pa ? ':pa' : P.roll ? ':roll' : ''}${oob ? '+oob' : ''}`,
-      label: `${routeName(a.label, rt)} to ${shortName(name) || a.label}${P.pa ? ', play action' : P.roll ? ', rollout' : ''}${oob ? ', get out of bounds' : ''}`,
+    // what you drew goes with the call: the target's depth (the real throws it draws from) and every drawn line
+    const drawn = P.drawn && P.drawn.some(Boolean) ? { drawn: eligibles(sc).map((_, k) => { const d = P.drawn[k]; return d ? { pts: d.pts, at: d.at, minD: d.minD } : null; }) } : {};
+    return { key: `pass:${i}:${rt}${dr ? `@${dr.depth}` : ''}${P.pa ? ':pa' : P.roll ? ':roll' : ''}${oob ? '+oob' : ''}`,
+      label: `${routeName(a.label, rt)}${dr ? ` (drawn, ${dr.depth} yds)` : ''} to ${shortName(name) || a.label}${P.pa ? ', play action' : P.roll ? ', rollout' : ''}${oob ? ', get out of bounds' : ''}`,
       action: withTempo({ to_off: false, play: 'pass', call, oob: !!oob, looks: G.look != null ? 1 << G.look : 0, route: rt, who: a.label,
-        target: i, routes: P.routes.slice(), targetName: name, targetPos: a.label, pa: !!P.pa, roll: !!P.roll }) };
+        target: i, routes: P.routes.slice(), targetName: name, targetPos: a.label, pa: !!P.pa, roll: !!P.roll, ...(dr ? { depth: dr.depth } : {}), ...drawn }) };
   }
   function drawField() {
     const sc = makeScene(G.root, G.side);
@@ -1069,7 +1251,7 @@
     // the chips over the field go to the open grass: the half of the screen away from the line of scrimmage
     sc.svg.parentElement.classList.toggle('chipsdown', camY(sc)(spotGeom(G.root).L) < sc.H / 2);
     if (passing()) {
-      if (!ui.pass.routes || ui.pass.routes.length !== eligibles(sc).length) ui.pass.routes = defaultRoutes(sc);
+      if (!ui.pass.routes || ui.pass.routes.length !== eligibles(sc).length) { ui.pass.routes = defaultRoutes(sc); ui.pass.drawn = []; ui.pass.sel = null; }
       drawRoutes(sc);
     }
     if (fadeNext || lastBall) sc.layer && sc.layer.classList.add('movefade');
@@ -1691,11 +1873,15 @@
     function passShape(o) {
       const { kind, tgt, catchPt, tThrow, tCatch, rushers, shell, side, qbSpot } = o;
       const man = Motion.MAN[shell];
-      const others = K.recv.filter((a) => a !== tgt && a !== o.passer);
+      // (a second back you gave a route runs it too)
+      const backs = mine && act && act.routes ? eligibles(sc).filter((a) => a.label === 'RB' && a !== K.rb) : [];
+      const others = K.recv.concat(backs).filter((a) => a !== tgt && a !== o.passer);
       const runners = [];                     // [actor, route plan] for coverage to read
+      const drewFor = (a) => { const k = mine && act && act.drawn ? eligibles(sc).indexOf(a) : -1; return k >= 0 ? act.drawn[k] : null; };
       others.forEach((a, i) => {
         const yours = mine && act && act.routes && eligibles(sc).indexOf(a) >= 0;    // you gave him a route: he runs it
-        if (a.label === 'TE' && (rushers.length >= 6 || (!yours && R() < 0.3))) {        // stays in to block
+        // a tight end stays in to block against six or more (and now and then otherwise); one you drew a route for runs it
+        if (a.label === 'TE' && !drewFor(a) && (rushers.length >= 6 || (!yours && R() < 0.3))) {
           const edge = nearest(K.rush, here(a)), at = edge && passRush.get(edge);
           // (on a rusher in the pocket: beside his blocker, on the outside of him)
           if (at) {
@@ -1711,16 +1897,16 @@
         const ei = mine && act && act.routes ? eligibles(sc).indexOf(a) : -1;
         const name = ei >= 0 && act.routes[ei] ? act.routes[ei] : kind === 'hail' ? 'go' : pickOf(kind === 'deep' || kind === 'pa' ? OTHER_ROUTES.deep : OTHER_ROUTES.short);
         const D = (ROUTE_DEPTH[name] ?? 6) + (name === 'go' ? 2 : name === 'post' || name === 'corner' ? 1 : 0) + jit(2);
-        const out = ei >= 0 ? outOf(sc, a) : Math.sign(a.b.x - BX) || side || 1;
-        const r = Motion.routeOnField(name, D, a.b.x, out, dir, L0, Math.abs(a.b.y - L0), R());
+        const out = ei >= 0 ? outOf(sc, a) : Math.sign(a.b.x - BX) || side || 1, dr = ei >= 0 && act.drawn ? act.drawn[ei] : null;
+        const r = Motion.routeOnField(dr || name, D, a.b.x, out, dir, L0, Math.abs(a.b.y - L0), R());
         const rp = r.pts.map((p) => [inX(p[0]), inL(p[1])]);
         const pl = follow(a, REACT_OFF, plan(a, rp, { eff: 0.86 + R() * 0.1, ...edgeStop(rp) }));
         runners.push([a, pl]);
         leg(a, Math.max(tCatch, tThrow + 0.5) + 0.3 + R() * 0.4, 'stand');
       });
-      // the back: blocks when they send five or more, else checks out into the flat
+      // the back: blocks when they send five or more (unless you drew him a route), else checks out into the flat
       if (K.rb && K.rb !== tgt && kind !== 'pa' && kind !== 'flea' && !(kind === 'tpass' && (o.passer === K.rb || e.philly))) {
-        if (rushers.length >= 5) {
+        if (rushers.length >= 5 && !drewFor(K.rb)) {
           const blitzer = rushers[rushers.length - 1];
           leg(K.rb, REACT_OFF, 'track', { gain: 2.6, eff: 0.85, fn: (t) => {
             const q = Wd.posAt(blitzer.b, t), Q = qbSpot(t);
@@ -1729,15 +1915,16 @@
         } else {
           const ei = mine && act && act.routes ? eligibles(sc).indexOf(K.rb) : -1;
           const rbRoute = ei >= 0 && act.routes[ei] ? act.routes[ei] : 'flat';
-          const out = ei >= 0 ? outOf(sc, K.rb) : Math.sign(K.rb.b.x - BX) || side;
-          const r = Motion.routeOnField(rbRoute, ROUTE_DEPTH[rbRoute] ?? 0, K.rb.b.x, out, dir, L0, Math.abs(K.rb.b.y - L0), R());
+          const out = ei >= 0 ? outOf(sc, K.rb) : Math.sign(K.rb.b.x - BX) || side, dr = ei >= 0 && act.drawn ? act.drawn[ei] : null;
+          const r = Motion.routeOnField(dr || rbRoute, ROUTE_DEPTH[rbRoute] ?? 0, K.rb.b.x, out, dir, L0, Math.abs(K.rb.b.y - L0), R());
           const rp = r.pts.map((p) => [inX(p[0]), inL(p[1])]);
           follow(K.rb, 1.3, plan(K.rb, rp, { eff: 0.75, ...edgeStop(rp) }));
         }
       }
       // coverage: man (trail him a beat behind, a cushion deep) or zone (drop to the landmark), then break on the ball
       const cover = K.def.filter((d) => !rushers.includes(d));
-      const recvs = K.recv.concat(K.rb && K.rb !== tgt && rushers.length < 5 ? [K.rb] : []).concat(K.rb === tgt ? [K.rb] : []);
+      const rbOut = K.rb && K.rb !== tgt && (rushers.length < 5 || drewFor(K.rb));
+      const recvs = K.recv.concat(rbOut ? [K.rb] : []).concat(K.rb === tgt ? [K.rb] : []).concat(backs.filter((a) => a !== o.passer));
       const S_ = Motion.SHELLS[shell] || Motion.SHELLS.cover3;
       const assigned = new Map(), carry = new Map();         // carry: a deep man running with a vertical
       // the deep men and the verticals: each vertical to the deep man whose lane it runs in, by where it is across the
@@ -1992,7 +2179,8 @@
       // forward progress: a completion is caught no deeper than where it is spotted (he is not carried back after it)
       const held = !e.incomplete && e.evt !== 'interception' && e.evt !== 'pick_six' && !e.td;
       const deep = held ? Math.min(air, e.yards ?? air) : air;
-      const r = Motion.routeOnField(routeName, deep, tgt.b.x, out, dir, L0, Math.abs(tgt.b.y - L0), R());
+      const drew = pick && !thrownAway && tgt !== qb && act.drawn ? act.drawn[act.target] : null;      // he runs the line you drew
+      const r = Motion.routeOnField(drew || routeName, deep, tgt.b.x, out, dir, L0, Math.abs(tgt.b.y - L0), R());
       let catchPt = [inX(r.catchAt[0]), inL(fwd(L0, deep))];
       let rpts = r.toCatch.slice(0, -1).map((p) => [inX(p[0]), inL(p[1])]).concat([catchPt]);
       const tStart = tgt === qb ? T_SNAP + 0.6 : tgt === K.rb && kind !== 'screen' ? 0.5 : REACT_OFF;
@@ -2005,7 +2193,7 @@
       // he turns, and the ball meets him coming out of his break: caught where he is, running flat out, when it gets
       // there, a step or two past the break (never at the end of the route with the ball hanging in the air while
       // he gets there). Thrown late, he is further along the break (a hitch sits down facing the passer and waits).
-      const cutK = BREAK_OUT[routeName];
+      const cutK = drew ? null : BREAK_OUT[routeName];
       if (cutK != null && !thrownAway && rpts.length >= 3) {
         const top = rpts[1], tail = [inX(r.catchAt[0]), r.catchAt[1]];
         const legL = Math.hypot(tail[0] - top[0], tail[1] - top[1]), [ux, uy] = unit(tail[0] - top[0], tail[1] - top[1]);
@@ -3130,7 +3318,7 @@
     let what;
     if (mine && act && act.targetName && act.route && e.call >= 0) {       // your pass: to the receiver you picked, on his route
       const to = shortName(act.targetName) || act.targetPos;
-      what = `${nm.qb || `The ${who}`} ${act.pa ? 'fakes the handoff, then looks for' : act.roll ? 'rolls out and looks for' : 'looks for'} ${to} on ${routeSay(act.targetPos, act.route)}${e.row >= 0 ? lookText(e.look, e) : ''}`;
+      what = `${nm.qb || `The ${who}`} ${act.pa ? 'fakes the handoff, then looks for' : act.roll ? 'rolls out and looks for' : 'looks for'} ${to} on ${act.drawn && act.drawn[act.target] ? `the route you drew (${routeSay(act.targetPos, act.route)})` : routeSay(act.targetPos, act.route)}${e.row >= 0 ? lookText(e.look, e) : ''}`;
     } else if (e.call >= 0) {
       const c = idx.calls[e.call];
       const actor = c.id.startsWith('rb_') ? nm.rb : nm.qb;
@@ -3549,7 +3737,7 @@
         b.addEventListener('click', () => {
           if (busy) return;
           ui.fam = f;
-          if (f === 'pass') { save(`${STORE}:usedpass`, true); ui.step = 'pass'; ui.pass = { target: null, routes: null, pa: false, roll: false, fresh: true }; drawField(); }
+          if (f === 'pass') { save(`${STORE}:usedpass`, true); ui.step = 'pass'; ui.pass = { target: null, routes: null, drawn: [], draw: !!load(DRAW_KEY, false), sel: null, pa: false, roll: false, fresh: true }; drawField(); }
           else ui.step = 'detail';
           drawDock();
         });
@@ -3688,13 +3876,37 @@
     back.addEventListener('click', () => { if (busy) return; ui.step = 'family'; drawField(); drawDock(); });
     head.append(back);
     if (P.hist && P.hist.length) {
-      const undo = el('button', 'chip', '↶ Undo route');
+      const undo = el('button', 'chip', '↶ Undo');
       undo.type = 'button';
+      undo.setAttribute('aria-label', 'Undo the last route change');
       undo.addEventListener('click', undoRoute);
       head.append(undo);
     }
+    const pen = el('button', `chip pen${P.draw ? ' on' : ''}`, P.draw ? '✓ Done' : '✏️ Draw');
+    pen.type = 'button'; pen.id = 'drawBtn';
+    pen.setAttribute('aria-label', P.draw ? 'Done drawing routes' : 'Draw routes');
+    pen.setAttribute('aria-pressed', String(!!P.draw));
+    pen.addEventListener('click', () => { if (!busy) setDraw(!P.draw); });
+    head.append(pen);
     if (G.look != null) d.append(readLine(G.look));
-    d.append(el('p', 'hint', 'Tap a receiver on the field to change his route. Tap a name below to throw it to him.'));
+    const E = eligibles(sc), selA = P.draw && P.sel != null ? E[P.sel] : null;
+    if (!P.draw) d.append(el('p', 'hint', 'Tap a receiver on the field to change his route, or ✏️ draw your own. Tap a name below to throw it to him.'));
+    else {
+      const h = el('p', 'hint draw', selA ? `Now drag from ${shortName(selA.p ? selA.p.name : '') || selA.label} to where he should go.`
+        : 'Tap a receiver, then drag on the field where you want him to go. Each line plays as the real route it is closest to.');
+      if (P.drawn && P.drawn.some(Boolean)) {
+        const clr = el('button', 'linkbtn', 'Clear drawings');
+        clr.type = 'button';
+        clr.addEventListener('click', () => {
+          if (busy) return;
+          const def = defaultRoutes(sc);
+          P.drawn.forEach((x, k) => { if (x) { (P.hist = P.hist || []).push([k, P.routes[k], x]); P.routes[k] = def[k]; P.drawn[k] = null; } });
+          redrawPass();
+        });
+        h.append(' ', clr);
+      }
+      d.append(h);
+    }
     const list = el('div', 'rcvs');
     eligibles(sc).forEach((a, i) => {
       const b = el('button', `rcv${P.target === i ? ' on' : ''}`);
@@ -3702,7 +3914,9 @@
       b.setAttribute('aria-pressed', String(P.target === i));
       const pk = pickKey(passOption(sc, i, false).action), od = G.odds && G.odds[pk];
       b.dataset.k = pk;
-      b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label), el('span', 'rt', `${routeName(a.label, P.routes[i])}${P.target === i ? ' · the target' : ''}`));
+      const dr = P.drawn && P.drawn[i];
+      b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label),
+        el('span', 'rt', `${dr ? '✏️ ' : ''}${routeName(a.label, P.routes[i])}${dr ? ` · ${dr.depth} yds` : ''}${P.target === i ? ' · the target' : ''}`));
       if (od) b.append(el('span', 'od', oddsText(od)));
       b.setAttribute('aria-label', `Throw it to ${a.p ? a.p.name : a.label}, ${routeName(a.label, P.routes[i])}`);
       b.addEventListener('click', () => { if (busy) return; P.target = i; decideCall({ pass: i }); });
@@ -6683,7 +6897,7 @@
     const ul = el('ul');
     [
       'You call the plays at the end of a real NFL game. A new drive every day.',
-      'Pick Run, Pass, RPO or Trick. On a pass, tap a receiver on the field to change his route, then tap his name to throw it.',
+      'Pick Run, Pass, RPO or Trick. On a pass, tap a receiver on the field to change his route (or ✏️ draw it), then tap his name to throw it.',
       'Every snap is a real NFL play. Read the defense: a blitz loses to quick throws, a loaded box to play action.',
       SURV ? 'Survivor: win each real game to keep going. One loss ends your run; put your name on the board.'
         : 'Beat the real coach, and see how you rank against everyone who played today.',
@@ -8485,6 +8699,7 @@
     topH(); addEventListener('resize', topH);
     $('helpBtn').addEventListener('click', openHelp);
     fieldTaps();
+    drawTaps();
     boardInit();
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
     $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE || GAUNTLET ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
