@@ -1401,6 +1401,15 @@
       else if (tempo === T_FIRE) runoff = FIRE_DRILL[0] + (FIRE_DRILL[1] - FIRE_DRILL[0]) * u[0];
       else { const arr = this.e.tempo[tempo]; runoff = arr[Math.floor(u[0] * arr.length)]; }
       runoff = runC ? Math.max(runoff - S.credit, 0) : 0;
+      // a kick you called always gets off (players saw the clock run out on a field goal they had called): with too
+      // little time for the unit to run on, your timeout first when you have one; without, the rush beats the clock
+      // (the page only offers it from 0:07)
+      if (fire && forced === 'fg' && runC && runoff >= tHalf - 0.5) {
+        if (S.to[o] > 0) {
+          S.to[o] -= 1; runoff = 0; fire = false; tempo = NORMAL;
+          if (S.log) S.log.push({ ev: 'timeout', team: o, t: S.t, why: 'kick' });
+        } else runoff = Math.max(tHalf - 1, 0);
+      }
       // running it down: never past the point where the kick is still safe (daily game: a milk call does the same)
       const runDown = free || (!!this.pbCdf && !!act && act.tempo === 'milk');
       if (runDown && closing && runC && tempo === MILK) runoff = Math.min(runoff, Math.max(S.t - halfEnd - CLOSE_SNAP_FLOOR, 0));

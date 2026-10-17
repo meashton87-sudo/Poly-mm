@@ -138,6 +138,14 @@ details.cl > summary { cursor: pointer; font: 700 12px var(--body); color: var(-
   decision list, win chances included, so only a copied or shared run matches; lists of fewer than three calls are skipped,
   since the first call of a drive is the same for everyone). The board sends the entries a page at a time: the counts and
   the same-calls flag cover the entries loaded, so load them all before a prize.</p>
+<section class="card" id="diff">
+  <h2>Daily difficulty</h2>
+  <div class="row"><button class="ghost" id="loadDays" type="button">Load the dailies</button></div>
+  <div id="days" class="calls"></div>
+  <p class="note">Every daily anyone finished (board /days, no token): players, the average score and the best. A day whose
+    average sits 8 or more points off the median of all the days is marked: too easy (▲) or too hard (▼), the drift that
+    wears a daily game down.</p>
+</section>
 </div>
 <script>
 (() => {
@@ -373,6 +381,31 @@ details.cl > summary { cursor: pointer; font: 700 12px var(--body); color: var(-
     det.append(wrap);
     return det;
   }
+  // the dailies' difficulty, day by day (public: no token)
+  async function loadDays() {
+    const box = $('days');
+    box.textContent = 'Loading…';
+    try {
+      const r = await fetch(api() + '/days', { cache: 'no-store' });
+      const d = await r.json();
+      const days = (d.days || []).slice().reverse(), avgs = days.map((x) => x.avg).sort((a, b) => a - b);
+      const med = avgs.length ? avgs[Math.floor(avgs.length / 2)] : 0;
+      const t = document.createElement('table');
+      t.innerHTML = '<thead><tr><th>Date</th><th>Players</th><th>Average</th><th>Best</th><th></th></tr></thead>';
+      const tb = document.createElement('tbody');
+      days.forEach((x) => {
+        const tr = document.createElement('tr'), off = Math.round((x.avg - med) * 100);
+        [x.date, x.n.toLocaleString(), Math.round(x.avg * 100), Math.round(x.best * 100), Math.abs(off) >= 8 ? `${off > 0 ? '▲ easy' : '▼ hard'} (${off > 0 ? '+' : ''}${off})` : '']
+          .forEach((v) => { const td = document.createElement('td'); td.textContent = String(v); tr.append(td); });
+        tb.append(tr);
+      });
+      t.append(tb);
+      box.textContent = '';
+      box.append(t);
+      if (!days.length) box.textContent = 'No dailies finished yet.';
+    } catch (e) { box.textContent = `Could not load the dailies: ${e.message}`; }
+  }
+  $('loadDays').addEventListener('click', loadDays);
   $('cfg').addEventListener('submit', (ev) => { ev.preventDefault(); loadAll(); });
   $('more').addEventListener('click', loadMore);
   $('forget').addEventListener('click', () => { ss.set('gadm:tok', ''); $('tok').value = ''; S.data = null; $('entries').textContent = ''; $('tiles').hidden = $('filters').hidden = $('more').hidden = true; say('Token forgotten.'); });
