@@ -14,8 +14,9 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const A = path.join(process.env.VS_ASSETS || path.join(HERE, 'assets'), 'vs');
 if (!fs.existsSync(path.join(A, 'engine_data.pack'))) { console.log('pairs: no engine data (board/assets/vs), skipped'); process.exit(0); }
 const ab = (b) => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
-const eng = new NFLClockEngine(VSCore.unpack(ab(zlib.gunzipSync(fs.readFileSync(path.join(A, 'engine_data.pack'))))));
-eng.loadPlaybook(VSCore.unpack(ab(zlib.gunzipSync(fs.readFileSync(path.join(A, 'playbook.pack'))))));
+const data = VSCore.unpack(ab(zlib.gunzipSync(fs.readFileSync(path.join(A, 'engine_data.pack')))));
+const eng = new NFLClockEngine(data);
+eng.loadPlaybook(VSCore.unpack(ab(zlib.gunzipSync(fs.readFileSync(path.join(A, 'playbook.pack')))), data));
 const pool = JSON.parse(fs.readFileSync(path.join(A, 'teams.json'), 'utf8')), T = Object.keys(pool.teams).sort();
 assert.strictEqual(T.length, 32, 'all 32 teams');
 for (const t of T) {

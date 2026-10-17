@@ -75,8 +75,9 @@ export function loadEngine(env) {
         if (!r.ok) throw new Error(`vs/${p} ${r.status}`);
         return r;
       };
-      const unz = async (r) => VSCore.unpack(await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
-      const [d, pb, pool] = await Promise.all([get('engine_data.pack').then(unz), get('playbook.pack').then(unz), get('teams.json').then((r) => r.json())]);
+      const unz = async (r) => new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+      const [eb, pbb, pool] = await Promise.all([get('engine_data.pack').then(unz), get('playbook.pack').then(unz), get('teams.json').then((r) => r.json())]);
+      const d = VSCore.unpack(eb), pb = VSCore.unpack(pbb, d);         // (the playbook's pack refers to the engine's)
       const eng = new NFLClockEngine(d);
       eng.loadPlaybook(pb);
       return { eng, pool };

@@ -8,8 +8,11 @@
 // last build's cache (keeping what this build can use: activate below). Only this site's own GETs are touched: the
 // board API, fonts, analytics and ads are other origins (the browser handles them as if there were no worker), and ad
 // frames, the admin page and version.json are skipped.
+// The simulator's packs are the one exception: they are stamped with what is in them (?d=, site.py), not the build, so
+// a copy is the file itself: answered from here first, and kept across builds while a build's pages name the same.
 // To turn it off: ship a sw.js that unregisters itself (self.registration.unregister()) and deletes its caches.
 const VERSION = '__BUILD__';
+const DATA = '__DATA__';
 const CACHE = `tmd-${VERSION}`;
 const KEEP = /\.(?:js|json|pack|png|svg|ico|webmanifest)$/;          // what a page loads; anything else passes through
 const SKIP = /^\/(?:ad-|admin|sw\.js|version\.json|remind-)/;
@@ -20,7 +23,8 @@ self.addEventListener('install', () => self.skipWaiting());
 // this the first visit after every deploy left nothing for the app to open with offline. A file stamped with another
 // build is not this build's; nor is a page naming another build (a deploy between the page and the worker's check)
 const ours = async (req, res) => {
-  const v = new URL(req.url).searchParams.get('v');
+  const q = new URL(req.url).searchParams, v = q.get('v');
+  if (q.has('d')) return q.get('d') === DATA;
   if (v !== null) return v === VERSION;
   if (!/html/.test(res.headers.get('content-type') || '')) return true;
   const m = (await res.clone().text()).match(/<meta name="build" content="([^"]*)"/);
@@ -49,13 +53,19 @@ self.addEventListener('fetch', (e) => {
   if (!page && !KEEP.test(url.pathname)) return;
   // a page is kept by its path (the same page opened from the home screen, ?utm_source=..., or with a #mode)
   const key = page ? url.origin + url.pathname : req;
+  // a pack this build names: the same bytes whatever the build, so a copy kept here needs no network at all
+  const fixed = url.searchParams.has('d') && url.searchParams.get('d') === DATA;
   e.respondWith((async () => {
+    if (fixed) {
+      try { const hit = await (await caches.open(CACHE)).match(req); if (hit) return hit; } catch (err) { /* storage off: the network */ }
+    }
     try {
       const res = await fetch(req);
       if (res.ok && res.type === 'basic') {
         const copy = res.clone();
         // a stamped file never changes within a build: kept once, not rewritten on every load
-        e.waitUntil(caches.open(CACHE).then(async (c) => { if (!(url.searchParams.has('v') && await c.match(key))) await c.put(key, copy); })
+        const stamped = url.searchParams.has('v') || url.searchParams.has('d');
+        e.waitUntil(caches.open(CACHE).then(async (c) => { if (!(stamped && await c.match(key))) await c.put(key, copy); })
           .catch(() => { /* storage full or off: online play is the same */ }));
       }
       return res;                        // the network's answer, whatever it is (a 404 stays a 404)
