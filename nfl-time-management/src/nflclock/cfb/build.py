@@ -125,6 +125,8 @@ def make_drills(e: pd.DataFrame, bundle, rules: str, diff_rules: str, difficulty
     rep["classic_missing"] = missing
     order = list(DR.CATEGORIES)
     sel = sel.assign(o=sel["category"].map(order.index)).sort_values(["o", "season", "game_id"], ascending=[True, False, True])
+    if len(cr):               # a classic the selection also picked is kept once, as the classic
+        sel = sel[~sel["spot_id"].isin(cr["spot_id"])]
     rows = pd.concat([sel, cr], ignore_index=True) if len(cr) else sel
     log(f"assembling {len(rows)} drills ...")
     drills = assemble(rows, e, bundle, teams, rules, cmeta)

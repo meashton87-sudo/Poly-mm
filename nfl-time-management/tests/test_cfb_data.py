@@ -114,3 +114,12 @@ def test_fd_credit_and_report_run_without_nan():
     e["oob_src"] = np.where(e["oob_src"] == "", "", "text")
     rep = D.oob_window(e)
     assert set(rep) >= {"oob_inside_2min", "inbounds_inside_2min"}
+
+
+def test_failed_two_point_try_told_by_its_text():
+    df = game()
+    df.loc[4, "play_text"] = "J Back 59 Yd Run (Q Back intercepted )"
+    df.loc[4, "pos_team_score"] = 6
+    n = D.normalize(df)
+    tr = n[n["two_point_attempt"] == 1]
+    assert len(tr) == 1 and tr.iloc[0]["two_point_conv_result"] == "failure"

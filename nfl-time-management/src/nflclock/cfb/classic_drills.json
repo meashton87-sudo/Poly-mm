@@ -12,7 +12,7 @@
      "story": "2016: Louisville trailed Clemson 42-36 on 4th and 7 at the Clemson 9; a false start made it 4th and 12. Lamar Jackson's pass to James Quick gained 11, a yard short, and Clemson won 42-36."},
     {"key": "tamu-clemson-2018-two", "game_id": "401012270", "cat": "two_pt", "phase": "pat", "qtr": 4, "clock": 52, "tol": 15,
      "posteam": "Texas A&M", "title": "Texas A&M, down 2 after a touchdown, 0:46 left",
-     "story": "2018: Kellen Mond's touchdown pass pulled Texas A&M within 28-26 of Clemson in the final minute. The Aggies went for two, it failed, and Clemson won 28-26."},
+     "story": "2018: Kellen Mond's 24-yard touchdown pass to Kendrick Rogers pulled Texas A&M within 28-26 of Clemson with 0:46 left. Mond's two-point pass was intercepted; the Aggies kicked onside, Clemson recovered at the A&M 45 and won 28-26."},
     {"key": "lsu-alabama-2019-onside", "game_id": "401110842", "cat": "onside", "phase": "kickoff", "qtr": 4, "clock": 81,
      "posteam": "Alabama", "title": "Alabama, down 5 after a touchdown: kick off with 1:21 left",
      "story": "2019: DeVonta Smith's 85-yard touchdown catch cut LSU's lead to 46-41 with 1:21 left. Alabama kicked onside, LSU recovered at the Alabama 49 and knelt out the clock: 46-41."},

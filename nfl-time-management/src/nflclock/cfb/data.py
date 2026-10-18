@@ -25,7 +25,7 @@ from .. import data as D
 from .. import library as L
 from . import config as K
 
-VERSION = 9               # of normalize/enrich: a change here rebuilds the enriched cache
+VERSION = 10               # of normalize/enrich: a change here rebuilds the enriched cache
 CFB_COLS = [
     "year", "week", "season_type", "game_id", "id_play", "game_play_number", "drive_number", "drive_play_number",
     "pos_team", "def_pos_team", "home", "away", "home_team_division", "away_team_division", "neutral_site",
@@ -123,7 +123,8 @@ KO_TYPES = {"Kickoff", "Kickoff Return (Offense)", "Kickoff Return Touchdown", "
 DROP_TYPES = {"End Period", "End of Half", "End of Game", "End of Regulation", "placeholder", "Uncategorized",
               "Two Point Pass", "Two Point Rush", "Defensive 2pt Conversion", "Extra Point Good", "Extra Point Missed",
               "Penalty Touchdown"}
-TWO_RE = r"two[- ]?point|2[- ]?pt|2 point"
+# a two-point try, said so or told by how it failed: "(Kellen Mond intercepted )", "(Smith run failed)"
+TWO_RE = r"two[- ]?point|2[- ]?pt|2 point|\([^()]*(?:intercepted|incomplete|pass failed|run failed|rush failed)\s*\)\s*$"
 XP_RE = r"\bkick\b|\bpat\b|extra point|\bxp\b"
 NO_RECEIVER = r"pass incomplete\s*\.?\s*$|pass incomplete\s*(?:,|\(|clock)"
 KNEEL_RE = r"kneel|takes a knee|knee down"
