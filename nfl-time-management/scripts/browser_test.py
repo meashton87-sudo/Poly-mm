@@ -98,6 +98,43 @@ def unstamped(url: str, base: str, pats: list[str], stamps: dict) -> bool:
     return "v" not in dict(q) or any(want(u.path[1:] if k == "v" else k) != v for k, v in q)
 
 
+HOME = """() => {
+  const h = document.getElementById('homeview');
+  if (!h || h.hidden) return null;
+  return { text: h.innerText, hero: !!h.querySelector('.hhero'), cls: (h.querySelector('.hhero') || {}).className || '',
+    surv: !!h.querySelector('a.hcard[href="#survivor"]'), cur: (document.querySelector('.modes [aria-current="page"]') || {}).id || '' };
+}"""
+
+
+async def visit_home(page, base: str, stored: bool) -> list[str]:
+    """After a finished daily: Home from the end card, then the bare address (today done: it opens Home). Without
+    storage (the nostore quirk) nothing says the day is done: Home only, as a new day."""
+    out: list[str] = []
+    first = await page.evaluate("() => { const a = document.querySelector('#bmenu > *'); return a ? a.getAttribute('href') : null; }")
+    if first != "#home":
+        out.append(f"the menu's first item is not Home ({first!r})")
+    btn = page.locator("#done a.homebtn[href='#home']")
+    if not await btn.count():
+        return out + ["the daily end card has no Home button"]
+    await btn.first.click(timeout=3000)
+    for where in ("the end card's Home", "the bare address")[:2 if stored else 1]:
+        h = None
+        for _ in range(100):
+            await page.wait_for_timeout(100)
+            h = await page.evaluate(HOME)
+            if h:
+                break
+        if not h:
+            out.append(f"{where} did not open the home screen")
+        elif not h["hero"] or (stored and ("done" not in h["cls"] or "see your result" not in h["text"].lower())) or not h["surv"] or h["cur"] != "modeHome":
+            out.append(f"{where}: the home screen is missing today's finished drive, survivor or the Home tab: {h['text'][:200]!r}")
+        elif BAD_TEXT.search(h["text"]):
+            out.append(f"broken text on the home screen: {BAD_TEXT.search(h['text']).group(0)!r}")
+        if where == "the end card's Home" and stored:
+            await page.goto(f"{base}/index.html")
+    return out
+
+
 async def episode(browser, base: str, name: str, mode: str, seed: int, target: int, out: Path, mobile: bool, quirk: str = "",
                   stamped: tuple = ([], {}), first: bool = False) -> dict:
     rnd = random.Random(seed)
@@ -198,7 +235,13 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         await page.wait_for_timeout(200)
                     if mode == "daily":
                         finished = max(finished, 1)
+                        # home: the end card's Home, the ☰ menu's first item, and the bare address now that the day is done
+                        problems.extend(await visit_home(page, base, quirk != "nostore"))
                         break
+                    if "home" not in chaos_done:
+                        chaos_done.add("home")
+                        if not await page.locator("#done a.homebtn[href='#home']").count():
+                            problems.append("the survivor end card has no Home button")
                     if finished >= target:
                         break
                     await page.get_by_role("button", name="New run").click(timeout=3000)
