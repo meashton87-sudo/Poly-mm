@@ -73,6 +73,9 @@
   // by 9+ in the last 5:00 nobody punts from the other half (0-2%); and a field goal that ties or takes the lead in the
   // last 5:00 is kicked on 4th and 2+ when it is a good one (67-100%)
   const FOURTH_KICK_P = 0.75;
+  // ... and a team one or two scores behind (1-16) does not punt in the last 1:30, or 9-16 behind in the last 2:30
+  // (NFL 2016-25: 1 punt in 751 4th downs, 2 in 365); the coaches' own model punted down 10 at 1:00 from its 40
+  const NO_PUNT_BEHIND = [16, 90.0, 9, 150.0];
   const KO_TOUCHBACK = 65;             // daily game: a kickoff through the end zone starts the receivers at their 35 (2025 rule)
   const PB_TD_SHARE = 0.6;            // daily game: a playbook touchdown drawn farther out scores only if it covered 60% of the way
   // daily game: matchups. Every call against the defense's call (a blitz, a loaded box, or playing soft / a light box):
@@ -1619,6 +1622,8 @@
         if (late && margin < -3) choice = -1;
         if (late && margin >= -3 && margin <= 0 && pFg >= 0.3) choice = FG;
         if (late && margin >= -3 && margin < 0 && pFg < 0.3) choice = -1;  // trailing: must go
+        const nb = NO_PUNT_BEHIND;
+        if (choice === PUNT && margin < 0 && margin >= -nb[0] && (tHalf <= nb[1] || (margin <= -nb[2] && tHalf <= nb[3]))) choice = -1;
         // Tied and out of range: punt and play for overtime (the WP model overrates late possession here).
         if (margin === 0 && pFg < 0.3 && yl >= 35 && (late || (tHalf <= 120 && yl >= 50))) choice = PUNT;
       } else {
