@@ -56,7 +56,7 @@
  {
   "title": "Foles to Ertz",
   "id": "2017_21_PHI_NE#3580",
-  "note": "Super Bowl LII, Feb 4, 2018. Brady's touchdown to Gronkowski gave New England a 33–32 lead with 9:22 left. Your ball at your own 25. The Eagles went 75 yards in 14 plays and took 7:02 off the clock; Ertz dove in with 2:21 to go."
+  "note": "Super Bowl LII, Feb 4, 2018. Brady's touchdown to Gronkowski gave New England a 33–32 lead with 9:22 left. Your ball at your own 25. The Eagles went 75 yards in 14 plays and took 7:01 off the clock; Ertz dove in with 2:21 to go."
  },
  {
   "title": "28–3: the last drive",
@@ -96,7 +96,23 @@
  {
   "title": "One Yard Short",
   "id": "1999_21_STL_TEN#3796",
-  "note": "Super Bowl XXXIV, Jan 30, 2000. Warner's 73-yard touchdown to Bruce put the Rams up 23–16. Your ball at your own 12 with 1:48 left. McNair shook off two rushers to find Dyson at the 10; Mike Jones tackled him one yard short as the clock ran out."
+  "note": "Super Bowl XXXIV, Jan 30, 2000. Warner's 73-yard touchdown to Bruce put the Rams up 23–16. Your ball at your own 12 with 1:48 left. McNair shook off two rushers to find Dyson at the 10; Mike Jones tackled him one yard short as the clock ran out.",
+  "line": {
+   "TEN": [
+    "Brad Hopkins",
+    "Bruce Matthews",
+    "Kevin Long",
+    "Benji Olson",
+    "Jon Runyan"
+   ],
+   "LA": [
+    "Orlando Pace",
+    "Tom Nutten",
+    "Mike Gruttadauria",
+    "Adam Timmerman",
+    "Fred Miller"
+   ]
+  }
  },
  {
   "title": "Mahomes on one ankle",

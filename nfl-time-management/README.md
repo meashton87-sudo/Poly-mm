@@ -393,7 +393,7 @@ select), `help_open` (a tap on ?; auto: the three-line help a first visit to a P
 (step), `install_prompt_shown` (the Add to Home Screen card: prompt or ios, which offer of three),
 `install_accepted` (via launch: first opened from the home screen) and `install_dismissed` (close or the
 browser's prompt), `sim_ready` (packed data or JSON, ms since load, ms a player
-sat waiting on it), `drive_leave` (the page went to the background mid-drive: calls made, seconds in, still
+sat waiting on it), `info_mismatch` (a spot's first-call facts, shipped with it, differ from the simulator's: spot id), `drive_leave` (the page went to the background mid-drive: calls made, seconds in, still
 loading), `stats_open`, `stats_page_link`, `replay`, `name_set`, `leaderboard_tab` (day or week), `practice_start` (from the
 daily card or a practice card), `practice_finish` (practice drive number, kind, score, snaps). Share opens the phone's share sheet
 where there is one. In Google Analytics: Reports, Engagement, Events (custom fields need registering as custom
@@ -405,14 +405,25 @@ up; no backdrop, a tap anywhere moves on, kept in `tmd:v3:tour`). The site is in
 `web/sw.js`): from the second day played the daily end card offers Add to Home Screen (Chrome's install prompt, or
 Safari's two taps on iOS), at most three times, a week apart, never inside the installed app. The service worker
 goes to the network first for every page, script and data file and answers from its cache only offline; its cache
-is named for the build stamp, so a deploy is a new worker that drops the old copy. It is registered on the real site
+is named for the build stamp, so a deploy is a new worker that drops the old copy (keeping the files the new build
+names as they were). It is registered on the real site
 only (not on localhost or 127.0.0.1, where the browser test runs, unless `tmd:v3:sw_local` is set).
 
 **Packed data**: on the website the simulator's data ships as `engine_data.pack` and `playbook.pack`
 (`scripts/site.py pack`: the same typed arrays as raw bytes, index arrays as differences, multi-byte arrays
 byte-plane shuffled, gzipped; 3.7 MB instead of 5.6 MB gzipped JSON). `game.js` gunzips them with
 DecompressionStream and `game_worker.js` unpacks them; without a pack (claude.ai, a local copy) or without
-DecompressionStream it loads the JSON. The first snap shows the download's progress while it waits.
+DecompressionStream it loads the JSON. Each spot's file on the website (`spots/p<i>.json`) also carries its opening snap's facts (the
+worker's `info`: the call mix, the odds, the kick, the tempo, the looks), worked out at build time by the site's own
+worker on its packs (`web/spot_info.js`, run by `site.py`; every tenth spot checked against the scripts as written on
+the JSON): the first call shows as soon as the spot is in, and only the snap waits on the data ("Getting the playbook
+ready…", with the download's progress). The page uses them only for the question they answer (a fingerprint of it),
+and asks the simulator the same once it is in (a difference: `info_mismatch`).
+
+**Caching**: every file a page loads is named with a stamp of what is in it (`?v=`, one per file; the spots share
+one), listed in the page (`<meta name="stamps">`) and in `sw.js`, and cached for good (`_headers`): a deploy leaves the
+addresses, and the phone's copies, of the files it did not change. `site.py` fails the build on an address cached for
+good named without its stamp, and the browser test fails on a request for one.
 
 **The stats page** (`web/stats.html`, nfl2mindrill.com/stats; `board/worker.js` `/days`): players per day, today's
 count and average, the all-time total, and any day up close (its score spread, the drive's average and the top

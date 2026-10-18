@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from . import config, data
@@ -25,6 +26,22 @@ ROUND = {"WC": "Wild Card", "DIV": "Divisional", "CON": "Conference Championship
 TEAM_NOW = {"STL": "LA", "SD": "LAC", "OAK": "LV"}        # games.csv keeps the code of the time; play-by-play today's
 
 
+def overtime_rules(season: int, game_type: str) -> dict:
+    """The overtime of the time, for a historic drive (the daily game plays today's): rules 'sd' sudden death, the
+    first score wins (playoffs before 2010, the regular season before 2012); 'msd' a touchdown wins at once, a field
+    goal on the first possession gives the other team the ball (playoffs 2010-2021, the regular season 2012-2024);
+    'both' each team gets the ball, then the next score wins (playoffs 2022 on, every game 2025 on). len: the period,
+    15:00 (the regular season's 10:00 from 2017)."""
+    po = game_type != "REG"
+    if season >= 2025 or (po and season >= 2022):
+        rules = "both"
+    elif season >= 2012 or (po and season >= 2010):
+        rules = "msd"
+    else:
+        rules = "sd"
+    return {"rules": rules, "len": 900 if po or season < 2017 else 600}
+
+
 def playoff_games(games: pd.DataFrame, season: int, team: str) -> pd.DataFrame:
     """The team's playoff games that season, in order (games.csv)."""
     g = games[(games["season"] == season) & (games["game_type"] != "REG")]
@@ -32,23 +49,34 @@ def playoff_games(games: pd.DataFrame, season: int, team: str) -> pd.DataFrame:
     return g[mine].sort_values("week")
 
 
+RUN_WP = (0.05, 0.95)     # a run spot with something at stake: the team's win chance at the snap, 5% to 95% (a rout's are not)
+
+
 def run_spot(pbp: pd.DataFrame, game_id: str, team: str) -> str:
-    """The game's spot for the team's run: of its fourth-quarter (or overtime) drive starts with the game within
-    reach (down by 16 or less, up by 8 or less, half a minute or more left), the one it was least likely to win from
-    (the deepest hole, or the tightest moment); a game never that close gives its first fourth-quarter drive, and a
-    game with none its last drive."""
+    """The game's spot for the team's run, always with something at stake (a win chance in RUN_WP): of its
+    fourth-quarter (or overtime) drive starts with the game within reach (down by 16 or less, up by 8 or less, half a
+    minute or more left), the one it was least likely to win from (the deepest hole, or the tightest moment); a game
+    decided before that (a rout late) gives the last drive start of its second half with the game still in doubt, and
+    one decided by halftime the second-half drive start nearest a coin flip."""
     s = pbp[(pbp["game_id"] == game_id) & (pbp["posteam"] == team) & pbp["is_snap"] & pbp["play_type"].isin(["run", "pass"])
             & pbp["posteam_timeouts_remaining"].notna() & pbp["defteam_timeouts_remaining"].notna()]
     starts = s.sort_values("row_order").groupby("fixed_drive").head(1)
     starts = starts[starts["down"] == 1]
     if not len(starts):
         raise RuntimeError(f"no drive start for {team} in {game_id}")
-    late = starts[(starts["qtr"] >= 4) & ((starts["qtr"] >= 5) | (starts["game_seconds_remaining"] >= 30)) & starts["margin"].between(-16, 8)]
+    stakes = starts["wp"].between(*RUN_WP)
+    late = starts[stakes & (starts["qtr"] >= 4) & ((starts["qtr"] >= 5) | (starts["game_seconds_remaining"] >= 30))
+                  & starts["margin"].between(-16, 8)]
+    second = starts[starts["qtr"] >= 3]
+    doubt = second[stakes.loc[second.index]]
     if len(late):
         pick = late.sort_values(["wp", "game_seconds_remaining"]).iloc[0]
+    elif len(doubt):
+        pick = doubt.iloc[-1]
+    elif len(second):
+        pick = second.iloc[int(np.argmin(np.abs(second["wp"].to_numpy(float) - 0.5)))]
     else:
-        q4 = starts[starts["qtr"] >= 4]
-        pick = q4.iloc[0] if len(q4) else starts.iloc[-1]
+        pick = starts.iloc[-1]
     return f"{game_id}#{int(pick['play_id'])}"
 
 
@@ -176,10 +204,14 @@ def build(bundle=None, lib=None) -> dict:
             raise RuntimeError(f"spots missing from the {season} data: {missing}")
         receive2h = DG.receive2h_of(pbp)
         hist = HI.History(bundle, lib, seasons=(season,), pbp=pbp)
+        for d in drives:            # a line no data names (before the depth charts): the game's starters, by name
+            for team, names in d.get("line", {}).items():
+                hist.starters[(d["id"].split("#")[0], team)] = names
         ids = sorted(want)
         season_spots = [DG.spot_record(cand.loc[i], games.loc[i.split("#")[0]], receive2h) for i in ids]
-        teams = DG.team_chunks(hist, season_spots, games, chunk=10 ** 6)[0] if season_spots else {}
+        teams = DG.team_chunks(hist, season_spots, games, chunk=10 ** 6, drive=True)[0] if season_spots else {}
         for k, i in enumerate(ids):
+            season_spots[k]["overtime"] = overtime_rules(season, season_spots[k]["real"]["type"])
             spots[i] = (season_spots[k], teams[str(k)])
         for d in live:
             if d["live"]["season"] == season:

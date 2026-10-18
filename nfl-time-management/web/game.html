@@ -165,6 +165,8 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .endcard .vsrating:empty { display: none; }
 .endcard > .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 .endcard > .row .btn { flex: 1 1 140px; text-align: center; }
+#mBody > a.btn { display: flex; align-items: center; justify-content: center; text-decoration: none; margin-top: 12px; }
+.endcard > .row a.btn, .endcard > a.btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 #vsAgain.ask { outline: 3px solid #e0a526; outline-offset: 2px; }
 .result .vscalls { font-size: 13px; color: var(--muted); margin: 6px 0; }
 .arch .day.fresh { border: 2px solid #e0a526; background-image: linear-gradient(100deg, rgba(224,165,38,.16), rgba(224,165,38,0) 60%); }
@@ -216,11 +218,11 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .gradecard.g .gbar i { background: var(--sq-g); }
 .gradecard .gbar .gmark { position: absolute; left: 90%; top: -4px; bottom: -4px; width: 2px; background: var(--ink); }
 .gradecard .gnote { margin: 0; font: 600 14px var(--body); }
-.gradecard .gprog { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px 10px; align-items: baseline; padding-top: 10px; border-top: 1px solid var(--line); }
+.gradecard .gprog { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; align-items: baseline; padding-top: 10px; border-top: 1px solid var(--line); }
 .gradecard .gprog .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
 .gradecard .gprog b { font: 800 15px var(--body); }
 .gradecard .gprog .rk { font: 800 12px var(--body); letter-spacing: .06em; text-transform: uppercase; }
-.gradecard .gprog .gstrip, .gradecard .gprog .sub { grid-column: 1 / -1; }
+.gradecard .gprog .gstrip, .gradecard .gprog .sub, .gradecard .gprog .rk { grid-column: 1 / -1; }      /* (the rank on its own line: at phone width it ran into the count) */
 .gradecard .gprog .sub { font-size: 13px; color: var(--muted); }
 .gradecard .greal summary { cursor: pointer; font: 700 12px var(--body); letter-spacing: .08em; text-transform: uppercase; }
 .gradecard .greal p { margin: 6px 0 0; font-size: 14px; line-height: 1.45; }
@@ -801,6 +803,7 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 .h2h.beat { border-color: var(--sq-g); } .h2h.lost { border-color: var(--sq-r); }
 .h2h .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
 .h2h .res { font: 900 28px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; text-wrap: balance; }
+.h2h .res.both { font-size: 22px; line-height: 1.1; }      /* (the same result by different margins: a longer line) */
 .h2h.beat .res { color: var(--sq-g); } .h2h.lost .res { color: var(--sq-r); }
 .h2h .rows { display: grid; gap: 4px; }
 .h2h .r { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
@@ -935,6 +938,7 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; font-weight: 600; }
 .toast { position: fixed; left: 50%; top: calc(60px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); z-index: 30; background: var(--ink); color: var(--paper); font-weight: 700; padding: 10px 16px; border-radius: 6px; }
+.toast.low { top: auto; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); pointer-events: none; box-shadow: 0 4px 16px rgba(0, 0, 0, .25); }
 .err { color: var(--sq-r); font-weight: 600; }
 .siteinfo { max-width: 680px; margin: 28px auto 0; padding: 18px 16px 0; border-top: 1px solid var(--line); }
 .siteinfo h2 { font: 900 24px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; margin: 0 0 8px; }

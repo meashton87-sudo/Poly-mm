@@ -4,8 +4,12 @@
  *            the usual tempo and seconds between snaps by tempo)
  *   eval  -> win probability of a list of options (same seed for all: common random numbers), with its standard error
  *   step  -> plays one real snap / try / kickoff and returns the new state and a play-by-play log */
-importScripts('engine.js' + self.location.search);     // the page's build stamp (?v=...), if any
-importScripts('vs_core.js' + self.location.search);    // a full defensive call, shown as called (VSCore.called); the packed data's unpack
+// each file's stamp (site.py: what is in it) rides in the worker's address, one parameter a file (game.js workerUrl):
+// these addresses are cached for good, so every one carries its own
+const STAMP = new URLSearchParams(self.location.search);
+const at = (f) => (STAMP.get(f) ? `${f}?v=${encodeURIComponent(STAMP.get(f))}` : f);
+importScripts(at('engine.js'));
+importScripts(at('vs_core.js'));    // a full defensive call, shown as called (VSCore.called); the packed data's unpack
 
 let eng = null, lastInfo = null;
 const sims = new Map();
@@ -105,10 +109,10 @@ self.onmessage = async (ev) => {
       // the page fetches the data once and hands each worker its own copy (bytes); on its own, a worker fetches it.
       // Packed (scripts/site.py pack, gunzipped by the page): VSCore.unpack, the engine's first (the playbook's refers to it)
       const get = (buf, url, what, ref) => (buf ? Promise.resolve(m.packed ? VSCore.unpack(buf, ref) : JSON.parse(new TextDecoder().decode(buf)))
-        : fetch(url + self.location.search).then((r) => { if (!r.ok) throw new Error(what + ' ' + r.status); return r.json(); }));     // (stamped like the page's: these addresses are cached for good)
-      const pbGet = m.playbook ? null : get(null, 'playbook.json', 'playbook');        // (fetched alongside the engine's)
-      const d = await get(m.engine, 'engine_data.json', 'engine data');
-      const pb = await (pbGet || get(m.playbook, 'playbook.json', 'playbook', d));
+        : fetch(url).then((r) => { if (!r.ok) throw new Error(what + ' ' + r.status); return r.json(); }));
+      const pbGet = m.playbook ? null : get(null, at('playbook.json'), 'playbook');        // (fetched alongside the engine's)
+      const d = await get(m.engine, at('engine_data.json'), 'engine data');
+      const pb = await (pbGet || get(m.playbook, at('playbook.json'), 'playbook', d));
       eng = new NFLClockEngine(d);
       eng.loadPlaybook(pb);
       self.postMessage({ type: 'ready' });

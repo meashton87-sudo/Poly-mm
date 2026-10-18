@@ -39,6 +39,10 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
 - **Parity**: any change to `src/nflclock/sim.py` (or to library sampling in `library.py`) must be made
   identically in `web/engine.js`, and the parity check above must pass. The browser tool is what
   coaches use during a game.
+- First call on the website: each spot's file carries its opening snap's facts (scripts/site.py spot_info runs
+  web/spot_info.js, the site's own worker on its packs). spot_info.js copies game.js startRoot, buildScen, simScen and
+  infoKey: change them together (a mismatch only makes the first call wait on the simulator, and the browser test fails).
+  Every file the site loads is stamped with its own content (`?v=`; site.py check_stamps fails the build otherwise).
 - NFL rules are encoded explicitly (clock stops, two-minute warning, out-of-bounds windows, play clock,
   timeouts). Keep a one-line rationale next to every policy constant at the top of `sim.py`.
 - The full grading pipeline (`scripts/run_analysis.py`, `validate_sim.py`, `make_report.py`,
@@ -67,7 +71,19 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   calls that fit the spot (game.js PRESET). After changing any of it, run web/defense_calibration.js (every rush level,
   coverage, box and defensive-back count against the real plays, within a few standard errors; try a few seeds) and
   board/vs_balance_test.mjs.
-- The Gauntlet (board/worker.js /race*, game.js racePanel): the contest on the historic drives. A Pro code enters once under
+- Pro data (src/nflclock/pro.py build: pro_drives.json, pro_runs.json -> web/pro/drives.json, runs.json, d*.json, r*.json;
+  generated, never committed; the site workflow builds it and deploys it to the worker's assets). Each spot's teams come
+  from history.History.teams with drive=True: the lineup of the real drive from the spot on, everyone who touched the
+  ball on it (offense) or made a play (defense) on the field at his position (_drive_lineup), the line in its depth
+  chart's slots (nflverse depth charts, 2001 on). Who is on the field: the snap's participation (2016 on), the game's
+  snap counts (2013-2015), the depth chart's starters (2001-2012), the box score and the season roster before that; a
+  line no data names (1999-2000) is the drive's "line" in pro_drives.json. Each spot carries its time's overtime
+  (pro.py overtime_rules: sudden death, the 2010-2024 touchdown-wins rule, or both teams get the ball; engine.js
+  _otAfter S.ot.r). A run's game spot always has something at stake (RUN_WP); a run ends at the first loss (game.js
+  runOut), as a real one does, and can be played again.
+- The Gauntlet (board/worker.js /race*): the contest on the historic drives, over (RACE_TO, Oct 16 2026). Its game code
+  (game.js racePanel, the race bar, #gauntlet) was removed in #125; the worker endpoints and web/admin.html remain, so
+  what follows describes them. game.js keeps only GAUNTLET_FROM / gauntletFresh (the drive records from its start). A Pro code enters once under
   a public name (blocked() names refused); a drive counts the first time it is passed (an A, 90+, and the game won) after entering and after
   RACE_FROM (4 pm Eastern, Oct 16 2026 by default); each pass keeps its calls (race:audit) for the check before a prize.
   The first to pass all RACE_N (24) wins. `DELETE /race?id=` (or `?name=`) with the admin token takes a run off the board.
@@ -77,9 +93,7 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   /race/admin?id= (the calls), flags short tries, The Miami Miracle before
   its fix (MIAMI_FIX in the page) and the same calls from two entries, and voids one pass (POST /race/admin/void: n, nAt
   and the winner worked out again, the audit kept under race:void:) or takes a run off. Optional worker vars: RACE_TO (an
-  end time: no try or pass after it) and NEXT_CONTEST (a line shown with the results). The panel shows the results
-  (champion, 2nd, 3rd, standings, next contest) once there is a winner or it is over; #gauntlet (#gauntlet-results) is
-  the panel on its own, the link the results share.
+  end time: no try or pass after it) and NEXT_CONTEST (a line shown with the results, GET /race).
 - Accounts (board/worker.js /auth*, game.js authNodes/proVerify): Pro can belong to an account (Sign in with Google: the
   ID token is verified in the worker; or a one-use emailed link via Resend). Off (503, hidden on the page) without
   GOOGLE_CLIENT_ID (wrangler.toml var; site.py --google-client-id puts the same id in the page) or RESEND_KEY + MAIL_FROM.
