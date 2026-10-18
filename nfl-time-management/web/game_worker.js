@@ -105,7 +105,7 @@ self.onmessage = async (ev) => {
       // the page fetches the data once and hands each worker its own copy (bytes); on its own, a worker fetches it.
       // Packed (scripts/site.py pack, gunzipped by the page): VSCore.unpack, the engine's first (the playbook's refers to it)
       const get = (buf, url, what, ref) => (buf ? Promise.resolve(m.packed ? VSCore.unpack(buf, ref) : JSON.parse(new TextDecoder().decode(buf)))
-        : fetch(url).then((r) => { if (!r.ok) throw new Error(what + ' ' + r.status); return r.json(); }));
+        : fetch(url + self.location.search).then((r) => { if (!r.ok) throw new Error(what + ' ' + r.status); return r.json(); }));     // (stamped like the page's: these addresses are cached for good)
       const pbGet = m.playbook ? null : get(null, 'playbook.json', 'playbook');        // (fetched alongside the engine's)
       const d = await get(m.engine, 'engine_data.json', 'engine data');
       const pb = await (pbGet || get(m.playbook, 'playbook.json', 'playbook', d));
