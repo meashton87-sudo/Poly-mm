@@ -107,7 +107,7 @@ HOME = """() => {
 
 
 async def visit_home(page, base: str, stored: bool) -> list[str]:
-    """After a finished daily: Home from the end card, then the bare address (today done: it opens Home). Without
+    """After a finished daily: Home from the end card, then the bare address (Home, today's drive done). Without
     storage (the nostore quirk) nothing says the day is done: Home only, as a new day."""
     out: list[str] = []
     first = await page.evaluate("() => { const a = document.querySelector('#bmenu > *'); return a ? a.getAttribute('href') : null; }")
@@ -157,8 +157,23 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     # (a reload cuts short what is still downloading: the first call shows before the simulator's data is in)
     page.on("requestfailed", lambda r: base in r.url and "ERR_ABORTED" not in (r.failure or "") and problems.append(f"request failed: {r.url} {r.failure}"))
     page.on("request", lambda r: unstamped(r.url, base, *stamped) and problems.append(f"an address cached for good, without its stamp: {r.url}"))
-    url = f"{base}/index.html" + ("#survivor" if mode == "survivor" else "")
-    await page.goto(url)
+    url = f"{base}/index.html" + ("#survivor" if mode == "survivor" else "#daily")
+    if mode != "survivor":
+        # the bare address is the front door: Home, with today's drive on it
+        await page.goto(f"{base}/index.html")
+        h = None
+        for _ in range(100):
+            await page.wait_for_timeout(100)
+            h = await page.evaluate(HOME)
+            if h:
+                break
+        if not h or not h["hero"]:
+            problems.append("the bare address did not open the home screen")
+    if mode != "survivor":
+        async with page.expect_event("load"):  # (a hash-only move: the page reloads itself into the drive)
+            await page.goto(url)
+    else:
+        await page.goto(url)
     finished = reloads = steps = rundowns = drawn = 0
     last_key, since, chaos_done = None, time.time(), set()
     trail: list[str] = []            # the last screens and actions, printed with a failure
@@ -235,7 +250,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         await page.wait_for_timeout(200)
                     if mode == "daily":
                         finished = max(finished, 1)
-                        # home: the end card's Home, the ☰ menu's first item, and the bare address now that the day is done
+                        # home: the end card's Home, the ☰ menu's first item, and the bare address (the day done)
                         problems.extend(await visit_home(page, base, quirk != "nostore"))
                         break
                     if "home" not in chaos_done:
