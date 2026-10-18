@@ -448,6 +448,15 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 #field .route-head.drawn.tgt { fill: #ffffff; }
 #field .route.drawing { stroke: var(--chain); stroke-width: 3; stroke-dasharray: none; opacity: .95; pointer-events: none; }
 #field .route.drawing.bad { stroke: #ff5a4f; stroke-dasharray: 5 4; }
+/* your defense drawn: rushers through the line, drops into coverage; a kick */
+#field .route.drawn.rush { stroke: #ff8a5c; }
+#field .route-head.drawn.rush { fill: #ff8a5c; }
+#field .route.drawn.drop { stroke: #8fd3ff; }
+#field .route-head.drawn.drop { fill: #8fd3ff; }
+#field .route.drawn.kick { stroke: #ffffff; stroke-dasharray: 2 4; }
+#field .route-head.drawn.kick { fill: #ffffff; }
+#field .selring.soft { stroke-width: 1.4; opacity: .7; }
+.hint.draw.bad { color: #d4372c; }
 #field .dot.sel circle.c { stroke: var(--chain); stroke-width: 3.2; }
 #field .selring { fill: none; stroke: var(--chain); stroke-width: 2.2; pointer-events: none; transform-box: fill-box; transform-origin: center; animation: selpulse 1.1s ease-in-out infinite; }
 @keyframes selpulse { 50% { transform: scale(1.22); opacity: .45; } }
