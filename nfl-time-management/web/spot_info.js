@@ -56,15 +56,17 @@ function startRoot(sc) {
 }
 // a spot in overtime (a historic drive: Super Bowl LVIII's, Fitzgerald's): the period it is in, playoff rules or not, and
 // whether the other team has had the ball (behind, or past the period's first snap: they have), so the engine plays the
-// overtime rules from it (each team a possession, then the next score wins) and not a fourth quarter
+// overtime rules from it (each team a possession, then the next score wins; a historic drive's of its time, the
+// spot's overtime: pro.py overtime_rules) and not a fourth quarter
 function otOf(sc) {
   const st = sc.start;
   if (!(st.qtr > 4)) return {};
   const pos = st.pos === sc.home ? 0 : 1, po = ['WC', 'DIV', 'CON', 'SB'].includes((sc.real || {}).type);
-  const fresh = st.qtr === 5 && st.score[0] === st.score[1] && st.clock >= (po ? 900 : 600);
+  const rules = (sc.overtime || {}).rules, len = (sc.overtime || {}).len || (po ? 900 : 600);
+  const fresh = st.qtr === 5 && st.score[0] === st.score[1] && st.clock >= len;
   const c = [0, 0];
   if (!fresh) c[1 - pos] = 1;
-  return { ot: { c, po, n: st.qtr - 4 } };
+  return { ot: { c, po, n: st.qtr - 4, ...(rules === 'sd' || rules === 'msd' ? { r: rules } : {}) } };
 }
 function buildScen(idx, sp, T) {
   const H = T.home, A = T.away;

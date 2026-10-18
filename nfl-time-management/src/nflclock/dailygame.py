@@ -131,7 +131,7 @@ def spot_record(r, g, receive2h: dict) -> dict:
                          int(r["posteam_timeouts_remaining"] if home_off else r["defteam_timeouts_remaining"])],
                   "running": False, "phase": "snap", "receive2h": receive2h.get(gid, away)},
         "spread": float(np.nan_to_num(g["spread_line"])),
-        "real": {"season": int(g["season"]), "week": int(g["week"]), "type": str(g["game_type"]),
+        "real": {"season": int(g["season"]), "week": int(g["week"]), "type": str(g["game_type"]), "date": str(g["gameday"]),
                  "coach": CO.coach_name(g["home_coach"] if home_off else g["away_coach"], off, g["season"]),
                  "call": call if isinstance(call, str) else None,          # the library's label for the real play (2022 on)
                  "drive": None if res is None or (isinstance(res, float) and np.isnan(res)) else DRIVE_RESULT.get(res, res),
@@ -139,15 +139,16 @@ def spot_record(r, g, receive2h: dict) -> dict:
     }
 
 
-def team_chunks(hist, spots: list, games: pd.DataFrame, chunk: int = SPOT_CHUNK) -> dict:
+def team_chunks(hist, spots: list, games: pd.DataFrame, chunk: int = SPOT_CHUNK, drive: bool = False) -> dict:
     """The two teams as they were in each spot's game (history.History.teams), in chunks the browser loads one at a
-    time: {chunk index: {spot index: teams}}; each spot gets its league constants."""
+    time: {chunk index: {spot index: teams}}; each spot gets its league constants. drive: the lineups of the real drive
+    from the spot on (Pro's historic drives and playoff runs)."""
     chunks: dict = {}
     for i, sp in enumerate(spots):
         gid, pid = sp["id"].split("#")
         g = games.loc[gid]
         t = hist.teams(gid, int(g["season"]), int(g["week"]), float(pid), sp["home"], sp["away"],
-                       {"home": g["home_coach"], "away": g["away_coach"]})
+                       {"home": g["home_coach"], "away": g["away_coach"]}, drive=drive)
         sp["league"] = t["league"]
         chunks.setdefault(i // chunk, {})[str(i)] = t["teams"]
     return chunks

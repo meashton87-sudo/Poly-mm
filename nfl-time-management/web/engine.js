@@ -1223,7 +1223,7 @@
         S.t = root.t; S.pos = root.pos; S.s[0] = root.score[0]; S.s[1] = root.score[1]; S.down = root.down;
         S.ytg = root.ytg; S.yl = root.yl; S.to[0] = root.to[0]; S.to[1] = root.to[1]; S.running = !!root.clock_running;
         S.credit = 0; S.phase = root.phase || SNAP; S.freeKick = false; S.stratActive = !!action.h1; S.plays = 0;
-        S.ot = root.ot ? { c: [root.ot.c[0], root.ot.c[1]], po: !!root.ot.po, n: root.ot.n || 1 } : null;
+        S.ot = root.ot ? { c: [root.ot.c[0], root.ot.c[1]], po: !!root.ot.po, n: root.ot.n || 1, r: root.ot.r || null } : null;
         let driveOpen = startPhase === SNAP;
         const pos0 = root.pos, pts0 = root.score[pos0];
         for (let step = 0; step < maxSteps && S.phase !== DONE; step++) {
@@ -1270,7 +1270,7 @@
       const S = { t: root.t, pos: root.pos, s: [root.score[0], root.score[1]], down: root.down, ytg: root.ytg, yl: root.yl,
         to: [root.to[0], root.to[1]], running: !!root.clock_running, credit: root.credit || 0, phase: root.phase || SNAP,
         freeKick: !!root.free_kick, stratActive: false, plays: 0, log: [],
-        ot: root.ot ? { c: [root.ot.c[0], root.ot.c[1]], po: !!root.ot.po, n: root.ot.n || 1 } : null };
+        ot: root.ot ? { c: [root.ot.c[0], root.ot.c[1]], po: !!root.ot.po, n: root.ot.n || 1, r: root.ot.r || null } : null };
       const u = new Float64Array(8);
       for (let c = 0; c < 8; c++) u[c] = uni(seed, 0, 0, c);
       const b = { phase: S.phase, pos: S.pos, s: [S.s[0], S.s[1]] };
@@ -1283,7 +1283,7 @@
       }
       const out = { t: S.t, pos: S.pos, score: [S.s[0], S.s[1]], down: S.down, ytg: S.ytg, yl: S.yl, to: [S.to[0], S.to[1]],
         clock_running: S.running, phase: S.phase, credit: S.credit, free_kick: S.freeKick };
-      if (S.ot) out.ot = { c: [S.ot.c[0], S.ot.c[1]], po: S.ot.po, n: S.ot.n };
+      if (S.ot) out.ot = { c: [S.ot.c[0], S.ot.c[1]], po: S.ot.po, n: S.ot.n, ...(S.ot.r ? { r: S.ot.r } : {}) };
       return {
         root: out,
         log: S.log, done: S.phase === DONE,
@@ -1630,9 +1630,9 @@
         if (tHalf <= 20 && pFg >= 0.2) choice = FG;
         if (tHalf <= 20 && pFg < 0.2 && choice === PUNT && yl < 60) choice = -1;
       }
-      // overtime, once the other team has had its possession: this one decides it. Down 4 or more, only a
-      // touchdown keeps the game going; down 1-3 a field goal ties or wins; tied, a field goal wins.
-      if (S.ot && S.ot.c[d] >= 1) {
+      // overtime, once the other team has had its possession (sudden death: always): this one decides it. Down 4 or
+      // more, only a touchdown keeps the game going; down 1-3 a field goal ties or wins; tied, a field goal wins.
+      if (S.ot && (S.ot.c[d] >= 1 || S.ot.r === 'sd')) {
         if (margin <= -4) choice = -1;
         else if (margin < 0) choice = pFg >= 0.3 ? FG : -1;
         else if (margin === 0 && pFg >= 0.5) choice = FG;
@@ -1802,6 +1802,9 @@
     // wins; a safety ends it at once. S.ot.c counts each team's finished possessions; `b` is the state before the
     // phase just played. A touchdown that wins it needs no try. A regular-season period (10:00) can end in a tie;
     // the playoffs play another 15:00 from where the ball is (a kickoff after a score), timeouts back to 3 every two.
+    // A historic drive plays the rules of its time (S.ot.r): 'msd' (playoffs 2010-2021, regular season 2012-2024) a
+    // touchdown wins at once, a field goal on the first possession gives the other team the ball; 'sd' (before) the
+    // first score wins.
     _otAfter(S, b) {
       if (S.phase === DONE) {
         if (!S.ot.po || S.t > 0 || S.s[0] !== S.s[1]) return;
@@ -1816,8 +1819,8 @@
       if (S.phase === PAT && (b.phase === KICKOFF || S.pos !== b.pos)) c[S.pos] += 1;   // a return touchdown: theirs too
       if (b.phase === SNAP && S.phase === KICKOFF && S.s[1 - b.pos] > b.s[1 - b.pos]) { S.phase = DONE; return; }   // safety
       // a touchdown that puts them ahead after the other team has had the ball wins it; otherwise the try decides
-      if (S.phase === PAT) { const o = S.pos; if (S.s[o] > S.s[1 - o] && c[1 - o] >= 1) S.phase = DONE; return; }
-      if (c[0] >= 1 && c[1] >= 1 && S.s[0] !== S.s[1]) S.phase = DONE;
+      if (S.phase === PAT) { const o = S.pos; if (S.s[o] > S.s[1 - o] && (c[1 - o] >= 1 || S.ot.r)) S.phase = DONE; return; }
+      if (S.s[0] !== S.s[1] && ((c[0] >= 1 && c[1] >= 1) || S.ot.r === 'sd')) S.phase = DONE;
     }
 
     _endHalfCheck(S, g) {
