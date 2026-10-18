@@ -252,7 +252,9 @@
   const simpleDef = () => !VS && !!load(`${STORE}:simpledef`, false);
   const VS_DECIDE_MS = 30000;      // the play clock in Versus: 30 seconds a call (board/match.js DECIDE_MS)
   // spots whose data was corrected, and when the fix went live: a drive's try saved before it starts over
-  const SPOT_FIXED = { '2018_14_NE_MIA#4172': Date.parse('2026-10-16T22:50:00Z') };
+  // (the two overtime drives were played as a fourth quarter until their start carried the overtime: startRoot otOf)
+  const SPOT_FIXED = { '2018_14_NE_MIA#4172': Date.parse('2026-10-16T22:50:00Z'), '2023_22_SF_KC#4561': Date.parse('2026-10-18T13:00:00Z'),
+    '2015_19_GB_ARI#4454': Date.parse('2026-10-18T13:00:00Z') };
   const stateKey = () => (VS ? `${STORE}:vs:${VS_ROOM}` : SURV ? `${STORE}:surv` : PRACTICE ? PRACTICE_KEY : DRIVE ? `${STORE}:drive:${DRIVE}` : RUN_N ? `${STORE}:run:${RUN_N}` : `${STORE}:day:${dayN}`);
   const saveState = () => save(stateKey(), state);
   const seedKey = () => (VS ? `vs${vs.seed}` : SURV ? `s${state.run}:${state.games.length}` : PRACTICE ? `p${state.run}` : DRIVE ? `drive${DRIVE}` : RUN_N ? `run${RUN_N}` : dayN);    // what the engine's draws are seeded by
@@ -347,7 +349,19 @@
     const st = sc.start;
     return { t: st.qtr <= 4 ? (4 - st.qtr) * 900 + st.clock : st.clock, pos: st.pos === sc.home ? 0 : 1,
       score: [st.score[1], st.score[0]], down: st.down, ytg: Math.min(st.ytg, st.yl), yl: st.yl,
-      to: [st.to[1], st.to[0]], clock_running: !!st.running, phase: SNAP, credit: 0, free_kick: false };
+      to: [st.to[1], st.to[0]], clock_running: !!st.running, phase: SNAP, credit: 0, free_kick: false, ...otOf(sc) };
+  }
+  // a spot in overtime (a historic drive: Super Bowl LVIII's, Fitzgerald's): the period it is in, playoff rules or not, and
+  // whether the other team has had the ball (behind, or past the period's first snap: they have), so the engine plays the
+  // overtime rules from it (each team a possession, then the next score wins) and not a fourth quarter
+  function otOf(sc) {
+    const st = sc.start;
+    if (!(st.qtr > 4)) return {};
+    const pos = st.pos === sc.home ? 0 : 1, po = ['WC', 'DIV', 'CON', 'SB'].includes((sc.real || {}).type);
+    const fresh = st.qtr === 5 && st.score[0] === st.score[1] && st.clock >= (po ? 900 : 600);
+    const c = [0, 0];
+    if (!fresh) c[1 - pos] = 1;
+    return { ot: { c, po, n: st.qtr - 4 } };
   }
   // a spot's matchup: its two teams as they were in that game (web/spots), the real point spread, that
   // season's league averages
@@ -4006,7 +4020,7 @@
     drawTiles();
     const me = code(G.me), op = code(1 - G.me);
     const lead = r.score[G.me] - r.score[1 - G.me], ck = clockOf(r.t);
-    const left = `${ck.text} left in ${ck.q === 4 ? 'the game' : ck.q === 2 ? 'the half' : ck.q === 3 ? 'the third quarter' : 'the first quarter'}`;
+    const left = `${ck.text} left in ${r.ot ? (r.ot.n > 1 ? `overtime (period ${r.ot.n})` : 'overtime') : ck.q === 4 ? 'the game' : ck.q === 2 ? 'the half' : ck.q === 3 ? 'the third quarter' : 'the first quarter'}`;
     const state_ = lead > 0 ? `Up by ${lead}` : lead < 0 ? `Down by ${-lead}` : 'Tied';
     const big = el('div', 'big', state_);
     big.append(el('span', 'left', left));
@@ -5997,15 +6011,18 @@
     const hh = headToHead(G.si, res);
     if (hh) card.append(hhCard(hh));
     const rl = sc.real || {};
-    const realCall = rl.call && CALL[rl.call] ? CALL[rl.call].label : 'a play';
+    // (the first call is known only where the snap was charted: most historic drives have none, and say how it ended)
+    const realCall = rl.call && CALL[rl.call] ? CALL[rl.call].label : null;
     const lead0 = sc.start.score[sc.player === sc.home ? 1 : 0] - sc.start.score[sc.player === sc.home ? 0 : 1];
     const drive = !rl.drive ? '' : rl.drive === 'ran out the clock' ? (lead0 > 0 ? 'they ran out the clock' : 'time ran out on them') : `the drive ended in a ${rl.drive}`;
+    const realLine = realCall ? `${rl.coach || 'the coach'} called "${realCall}" here${drive ? `; ${drive}` : ''}` : drive ? `with ${rl.coach || 'their coach'} calling it, ${drive}` : '';
     card.append(el('p', 'real', rl.live ? `Straight from ${rl.date ? new Date(rl.date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }) : 'this week'} (${gameTag(sc)}): see how ${rl.coach || 'the coach'} actually called it.`
-      : rl.summary ? `In the real game (${gameTag(sc)}): ${rl.summary}.` : `In the real game (${gameTag(sc)}), ${rl.coach || 'the coach'} called "${realCall}" here; ${drive}.`));
+      : rl.summary ? `In the real game (${gameTag(sc)}): ${rl.summary}.` : realLine ? `In the real game (${gameTag(sc)}), ${realLine}.` : `From the real game (${gameTag(sc)}).`));
     const cc = coachCard(G.decisions, 'You called this one like');
     if (cc) card.append(cc.el);
     card.append(el('p', 'verdict', callsLine(G.decisions)));
-    const btn = el('button', 'btn', SURV ? (state.out ? 'Your run' : 'Next game') : PRACTICE ? 'Your score' : G.si < today.length - 1 ? 'Next spot' : "Today's score");
+    const btn = el('button', 'btn', SURV ? (state.out ? 'Your run' : 'Next game') : PRACTICE ? 'Your score' : G.si < today.length - 1 ? (RUN_N ? 'Next game' : 'Next spot')
+      : DRIVE ? 'Your grade' : RUN_N ? 'Your run' : ARCH_DAY ? 'Your score' : "Today's score");
     btn.type = 'button';
     if (SURV) card.append(...lifeOffer());
     let went = false;                  // once: the await below leaves room for a second tap
@@ -6523,7 +6540,7 @@
     location.reload();
   }
   function driveActions(rec) {
-    const row = el('div', 'row');
+    const row = el('div', 'row pacts');
     const again = el('button', 'btn', rec && rec.p * 100 >= PASS_AT - 0.5 ? 'Play it again' : 'Try again');
     again.type = 'button';
     again.addEventListener('click', retryDrive);
@@ -7212,7 +7229,7 @@
     const box = el('div', 'pro provalue'), days = Math.max(0, dayOf(new Date()) - 1);
     box.append(el('div', 'k', 'Want more? Two-Minute Drill Pro'), el('div', 'price', '$4.99 \u00b7 once, yours for good'));
     const ul = el('ul');
-    ['The historic drives: Mahomes\u2019 13 seconds, the Minneapolis Miracle, the Philly Special, 28\u20133 and more, from their real spots',
+    ['The historic drives: Mahomes\u2019 13 seconds, the Minneapolis Miracle, the Helmet Catch, 28\u20133 and more, from their real spots',
       'Playoff runs: coach a team through its whole postseason, every late-game spot in order',
       `The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed`].forEach((t) => ul.append(el('li', '', t)));
     const row = el('div', 'row'), buy = el('button', 'btn', 'Unlock Pro \u00b7 $4.99'), more = el('a', 'btn ghostbtn', 'See what\u2019s inside');
@@ -7464,14 +7481,16 @@
   function countdown(label) {
     const w = el('div', 'countdown');
     const b = el('b', '', '');
-    w.append(document.createTextNode(label || (today.length > 1 ? 'New spots in ' : 'Next drive in ')), b);
+    // (a historic drive or a playoff run stays as it is: what comes at midnight is the next daily)
+    w.append(document.createTextNode(label || (DRIVE || RUN_N ? 'Next daily drive in ' : today.length > 1 ? 'New spots in ' : 'Next drive in ')), b);
     const upd = () => {
       if (dayOf(new Date()) > dayN) {           // past midnight on yesterday's screen: the new drive is out
         clearInterval(tick);
         if (w.querySelector('button')) return;     // drawn once: a redraw under the finger would eat the tap
         w.textContent = '';
         const go = el('button', 'btn', 'Play today’s drive');
-        go.addEventListener('click', () => location.reload());
+        // (from a past day of the archive the page is that day's: the daily is another address, its hash change reloads)
+        go.addEventListener('click', () => { if (ARCH_DAY) location.hash = '#daily'; else location.reload(); });
         w.append(go);
         return;
       }
@@ -7890,7 +7909,11 @@
       track('pro_unlocked');
       track('purchase', { currency: 'USD', value: 4.99, transaction_id: d.code, items: [{ item_id: 'pro', item_name: 'Two-Minute Drill Pro', price: 4.99, quantity: 1 }] });
       toast('Pro unlocked');
-      openModal('Pro unlocked', [proCodeCard(true)]);
+      // (Stripe sends the buyer back to the front page, the day's drive under this card: the way on to Pro is on it)
+      const go = el('a', 'btn', 'Open Pro');
+      go.href = '#archive';
+      go.addEventListener('click', () => { if (ARCH) closeModal(); });
+      openModal('Pro unlocked', [proCodeCard(true), go]);
     } catch (e) { toast('The purchase could not be confirmed: ' + e.message); }
   }
   // signed in (Google, or an emailed link): keep the session; on to the Pro tab, where it shows
@@ -8470,7 +8493,7 @@
     box.append(el('div', 'k', 'Two-Minute Drill Pro'), el('div', 'price', '$4.99 · once'));
     const ul = el('ul');
     [`The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed, with its score and stats`,
-      'The historic drives. Mahomes’ 13 seconds, the Minneapolis Miracle, the Philly Special, 28–3 and more, each from its real spot',
+      'The historic drives. Mahomes’ 13 seconds, the Minneapolis Miracle, the Helmet Catch, 28–3 and more, each from its real spot',
       'The playoff runs. A team’s whole postseason, every late-game spot in order. Win them all'].forEach((t) => ul.append(el('li', '', t)));
     box.append(ul);
     if (isPro()) {
@@ -8487,6 +8510,7 @@
     inp.placeholder = 'TMD-XXXX-XXXX-XXXX'; inp.setAttribute('aria-label', 'Your Pro code'); inp.autocapitalize = 'characters'; inp.spellcheck = false;
     go.type = 'button';
     go.addEventListener('click', async () => {
+      if (!inp.value.trim()) { toast('Paste your Pro code first: it looks like TMD-XXXX-XXXX-XXXX'); inp.focus(); return; }
       try {
         const d = await proApi('/restore', { code: inp.value, key: deviceKey() });
         save(PRO_KEY, { code: d.code, at: Date.now() });
@@ -8494,7 +8518,10 @@
         track('pro_restored');
         toast('Pro restored');
         if (location.hash === '#archive') location.reload(); else location.hash = '#archive';
-      } catch (e) { toast(e.message); }
+      } catch (e) {        // (the board's reasons, said for a player: "unknown code", "a code looks like ...")
+        toast(/unknown code/.test(e.message) ? 'That is not a Pro code: check it and try again'
+          : /looks like/.test(e.message) ? 'A Pro code looks like TMD-XXXX-XXXX-XXXX: check it and try again' : e.message);
+      }
     });
     rs.append(inp, go);
     box.append(el('p', 'note', 'Already have Pro? Enter your code.'), rs);
@@ -9344,7 +9371,7 @@
         const teams = await loadChunks('r', PRO_RUNS.spot_chunk, run.games.map((g) => g.spot));
         today = run.games.map((g) => {
           const sc = buildScen(PRO_RUNS.spots[g.spot], teams[g.spot]);
-          sc.story = `${g.round}, ${g.home ? 'vs' : 'at'} the ${teamName(g.opp)}. That day the ${teamName(run.team)} ${g.won ? 'won' : 'lost'} ${g.score}.`;
+          sc.story = `${g.round}, ${g.home || g.round === 'Super Bowl' ? 'vs' : 'at'} the ${teamName(g.opp)}. That day the ${teamName(run.team)} ${g.won ? 'won' : 'lost'} ${g.score}.`;
           return sc;
         });
         $('dayLabel').textContent = `Run · ${run.title}`;
