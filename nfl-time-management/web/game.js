@@ -3604,7 +3604,8 @@
       const sw = el('span', 'tsw'); sw.style.background = color(c);
       const meta = el('span');
       const tos = el('span', 'tos');
-      for (let k = 0; k < 3; k++) tos.append(el('i', k < r.to[i] ? '' : 'used'));
+      // (the one just called flashes while the clock is stopped for it)
+      for (let k = 0; k < 3; k++) tos.append(el('i', k < r.to[i] ? '' : r.timeout && r.timeout.team === i && k === r.to[i] ? 'used just' : 'used'));
       const ab = el('span', 'ab', c);
       if (i === G.me) ab.append(el('small', '', 'YOU'));
       meta.append(ab, tos);
@@ -3618,7 +3619,7 @@
     if (G.cot) mid.append(el('span', 'q', over ? (G.cot.round > 1 ? `FINAL/${G.cot.round}OT` : 'FINAL/OT') : `${G.cot.round > 1 ? G.cot.round : ''}OT`),
       el('span', 'clk', over ? '' : G.cot.round >= 3 ? 'Two-point' : `${G.cot.idx ? '2nd' : '1st'} poss`));
     else mid.append(el('span', 'q', over ? (r.t >= 1800 ? 'HALF' : r.ot ? 'FINAL/OT' : needsOvertime(r) ? 'END Q4' : 'FINAL') : qLabel(r)),
-      el('span', `clk${r.clock_running && !over ? ' run' : ''}`, over ? '0:00' : ck.text));
+      el('span', `clk${r.clock_running && !over ? ' run' : ''}`, over || r.untimed ? '0:00' : ck.text));
     b.append(side(1, false), mid, side(0, true));
     b.setAttribute('aria-label', `${code(1)} ${r.score[1]}, ${code(0)} ${r.score[0]}, ${ck.text} left in ${r.ot ? 'overtime' : `the ${ordinal(ck.q)} quarter`}. Game details`);
     const dd = $('dd');
@@ -3626,9 +3627,10 @@
     if (r.phase === SNAP) {
       dd.append(el('b', '', r.try2 ? 'Two-point try' : ddText(r)), ' · ', el('span', 'sp', spotText(r)));
       // (the clock its own piece: on a phone it takes a line of its own, never cut to "clock sto…", game.html)
-      if (!VS) { const ck = el('span', 'ck'); ck.append(el('span', 'sep', ' · '), `clock ${r.clock_running ? 'running' : 'stopped'}`); dd.append(ck); }
+      // (why it is stopped, when a timeout stopped it or no time is left)
+      if (!VS) { const ck = el('span', 'ck'); ck.append(el('span', 'sep', ' · '), r.untimed ? 'untimed down' : r.timeout ? 'stopped (timeout)' : `clock ${r.clock_running ? 'running' : 'stopped'}`); dd.append(ck); }
     }
-    else dd.textContent = r.phase === PAT ? 'Try after the touchdown' : r.phase === KICKOFF ? 'Kickoff' : r.t >= 1800 ? 'Halftime' : 'Final';
+    else dd.textContent = r.phase === PAT ? `Try after the touchdown${ck.text === '0:00' ? ' (untimed)' : ''}` : r.phase === KICKOFF ? 'Kickoff' : r.t >= 1800 ? 'Halftime' : 'Final';
   }
   function drawAll() { drawTiles(); drawBar(); drawField(); }
   function show(which) {
@@ -3744,7 +3746,7 @@
     for (const e of log) {
       let text = null, t = e.t;
       switch (e.ev) {
-        case 'timeout': text = `Timeout, ${teamName(code(e.team))}${e.why === 'kick' ? ' (to set up the kick)' : ''}`; break;
+        case 'timeout': text = `Timeout, ${teamName(code(e.team))}${e.left != null ? ` (${e.left} left)` : ''}${e.why === 'kick' ? ', to set up the kick' : ''}`; break;
         case 'runoff':
           if (e.stop === '2mw') text = 'Two-minute warning';
           else if (e.stop === 'quarter') text = 'End of the quarter';
@@ -3916,6 +3918,15 @@
       if (VS) { if ((await vsAdvance(r)) === 'stop') return; continue; }
       if (G.cot) { if ((await cotAdvance(r)) === 'stop') return; continue; }
       if (r.pos === G.me) G.autoDef = false;
+      if (r.phase === SNAP && r.clock_running && (await theirTimeout(r))) continue;
+      // no time left for a snap: under a second with the clock running (every tempo takes a second or more, engine.js),
+      // unless your timeout stops it in time and you need it (players were asked for a play the clock had run out on)
+      const th = halfLeft(r.t), lead = r.score[G.me] - r.score[1 - G.me];
+      if (r.phase === SNAP && (r.clock_running ? th < 1 && !(r.pos === G.me && r.to[G.me] > 0 && (r.t > 1800 || lead <= 0)) : th <= 1e-6)) {
+        status('Time runs out', G.log.length ? G.log[G.log.length - 1][0] : '');
+        await stepWith({ to_off: false, to_def: false, tempo: 'normal' });
+        continue;
+      }
       if (r.phase === SNAP && r.pos === G.me) return promptOffense();
       if (r.phase === SNAP && !G.autoDef) return promptDefense();
       if (r.phase === PAT && r.pos === G.me) return promptChoice('pat');
@@ -3942,6 +3953,22 @@
       const res = await stepWith(action);
       await sleep(G.fast ? 60 : res.animated ? 300 : 1000);
     }
+  }
+  // the other team's timeout, right after the whistle: the engine takes it at the start of the next snap, after your call
+  // (players called a play on a running clock the other team then stopped, and never saw the timeout). Played here
+  // first, as the engine would (a look at that snap, as decideTimeout does yours), it is on the scoreboard and above
+  // your call. Not their run-down-then-timeout for the kick: you can still stop the clock before it
+  async function theirTimeout(r) {
+    const them = 1 - G.me;
+    if (!(r.to[them] > 0)) return false;
+    const action = r.pos === G.me ? { to_off: false, tempo: 'normal' } : { to_def: false };
+    const peek = (await send({ type: 'step', scen: simScen(), root: r, action, seed: hash('step', seedKey(), G.si, G.seq) }, true)).res;
+    const e = peek.log[0];
+    if (G.root !== r || !e || e.ev !== 'timeout' || e.team !== them || e.why) return false;
+    G.root = { ...r, t: e.t, to: r.to.map((x, i) => (i === them ? x - 1 : x)), clock_running: false, credit: 0, timeout: { team: them, left: r.to[them] - 1 } };
+    narrate([e]).forEach(([text, t, mine]) => addLog(text, t, mine));
+    persist();
+    return true;
   }
   // "Next play" before the other team's snaps: optional, kept per player, it goes on by itself after a few seconds
   // (a tap anywhere on the result first holds it, to read the grade)
@@ -3992,6 +4019,7 @@
     narrate(res.log, action).forEach(([text, t, mine]) => addLog(text, t, mine));
     G.root = res.root;
     if (res.done) G.root.phase = DONE;
+    if (res.log.some((x) => x.untimed)) G.root.untimed = true;        // a defensive foul as time ran out: one more snap at 0:00
     persist();
     const pe = res.log.find((x) => x.ev === 'play');
     const look = before.pos === G.me ? G.look : action && (action.def || action.dc) && pe && pe.look && pe.look.box ? (pe.look.box >= 7 ? 2 : 0) + (pe.look.blitz ? 1 : 0) : null;
@@ -4677,10 +4705,10 @@
       // out of the half: a timeout called at 0:01 keeps the snap (engine.js the same at the warning)
       const floor = Math.min(r.t, r.t > halfEnd + 120 ? halfEnd + 120.01 : halfEnd + 0.5);
       const t = rundown ? Math.min(r.t - 1, halfEnd + RUNDOWN_AT) : r.t - 1;
-      G.root = { ...r, to: r.to.slice(), clock_running: false, t: Math.max(floor, t) };
+      G.root = { ...r, to: r.to.slice(), clock_running: false, t: Math.max(floor, t), timeout: { team: G.me, left: r.to[G.me] - 1 } };
       G.root.to[G.me] -= 1;
       if (rundown) addLog(`Ran the clock down to ${clockOf(G.root.t).text}`, G.root.t, true);
-      addLog(`Timeout, ${teamName(code(G.me))}${rundown ? ' (to set up the kick)' : ''}`, G.root.t, true);
+      addLog(`Timeout, ${teamName(code(G.me))} (${G.root.to[G.me]} left)${rundown ? ', to set up the kick' : ''}`, G.root.t, true);
       persist();
       showResult([x], { log: [], action: { to_off: true } }, rundown ? 'Ran it down, timeout' : 'Timeout');
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
@@ -5241,6 +5269,7 @@
     advance();
   }
   function takeBanner(d) {
+    stopNote(d);
     if (!G.banner) return;
     G.banner.classList.add('banner');
     // (a tip in it points at what the compact banner folds away, the Replay: it waits for a full result card)
@@ -5249,6 +5278,26 @@
     G.banner.querySelectorAll('.verdict').forEach((v) => { if (v.querySelector('.why')) v.addEventListener('click', () => v.classList.toggle('open')); });
     d.append(G.banner);
     G.banner = null;
+    const n = d.querySelector('.stopnote');
+    if (n) d.append(n);         // after your last result: in the order it happened
+  }
+  // above your call, until the next snap: the other team's timeout (on a phone the play-by-play is out of sight), or a
+  // snap with no time left that is still played, and why
+  function stopNote(d) {
+    const r = G.root;
+    if (VS || !r || r.phase === DONE) return;
+    let text = null, c = null;
+    if (r.untimed && r.phase === SNAP) text = 'Untimed down: defensive penalty. A half cannot end on a defensive foul, so the offense gets one more snap at 0:00.';
+    else if (r.phase === SNAP && r.timeout && r.timeout.team !== G.me) {
+      c = code(r.timeout.team);
+      text = `Timeout, ${teamName(c)} (${r.timeout.left} left). The clock is stopped at ${clockOf(r.t).text}.`;
+    } else if (r.phase === SNAP && r.clock_running && r.pos === G.me && halfLeft(r.t) < 1) text = 'Under a second left with the clock running: only a timeout stops it before it runs out.';
+    if (!text) return;
+    const n = el('div', 'stopnote');
+    n.setAttribute('role', 'status');
+    if (c) { const sw = el('span', 'tsw'); sw.style.background = color(c); n.append(sw); }
+    n.append(el('span', '', text));
+    d.append(n);
   }
 
   // ------------------------------------------------- who you coached like ---

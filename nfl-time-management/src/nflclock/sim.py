@@ -37,6 +37,7 @@ FIRE_DRILL_LOGIT = -0.3      # rushed kicks are a little less accurate
 FG_LONG = (52.0, 0.045, 60.0, 0.05)  # taper past 52 yd to the NFL's 2016-26 makes (60-61 46%, 64-65 27%, 66+ 23%)
 XP_LOGIT = 0.35              # an extra point beats a 33-yard field goal (snapped from the middle): 2023-25 ~95.7%
 FIRE_WINDOW = 25.0           # seconds left in the half below which a kick with the clock running is a fire drill
+CLOCK_EPS = 1e-6             # a clock left this close to the end of the half has run out (the tenths summed drift by 1e-14: a snap at 0:00)
 # Clock-aware play calls when the offense needs the clock stopped and has no timeouts (2020-25 data):
 # a pass that would end in bounds with a gain is kept with this probability, otherwise redrawn from the
 # same pool's incompletions / catches out of bounds; and the pass rate rises from ~81% to ~95%.
@@ -298,6 +299,7 @@ class Simulator:
         S.pos[ix] = np.where(rec, kt, rt)
         S.yl[ix] = np.where(onside, np.where(rec, 54.0, 46.0), start)
         S.t[ix] = np.maximum(S.t[ix] - np.where(onside, 3.0, dur), self.half_end)
+        S.t[ix] = np.where(S.t[ix] <= self.half_end + CLOCK_EPS, self.half_end, S.t[ix])
         S.down[ix] = 1
         S.ytg[ix] = np.minimum(10.0, S.yl[ix])
         S.running[ix] = False
@@ -437,6 +439,7 @@ class Simulator:
             runoff = np.where(run_c, float(act["runoff"]), 0.0)
         t0 = S.t[ix]
         t1 = t0 - runoff
+        t1 = np.where(t1 <= half_end + CLOCK_EPS, half_end, t1)
         stop = (t0 > self.tmw) & (t1 <= self.tmw)
         t1 = np.where(stop, self.tmw, t1)
         stop_q = (t0 > self.q_end) & (t1 <= self.q_end)
@@ -594,7 +597,7 @@ class Simulator:
         cross_tmw = (t0 > self.tmw) & (t1 <= self.tmw)
         cross_q = (t0 > self.q_end) & (t1 <= self.q_end)
         t1 = np.where(cross_q, np.maximum(t1, self.q_end), t1)
-        S.t[ix] = np.maximum(t1, self.half_end)
+        S.t[ix] = np.where(t1 <= self.half_end + CLOCK_EPS, self.half_end, t1)
         S.running[ix] = ~(stop_flags | cross_tmw | cross_q)
         S.credit[ix] = np.where(S.running[ix], credit, 0.0)
 

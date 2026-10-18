@@ -44,6 +44,7 @@
   const FG_LONG = [52.0, 0.045, 60.0, 0.05];
   const XP_LOGIT = 0.35;               // an extra point beats a 33-yard field goal (snapped from the middle): 2023-25 ~95.7%
   const FIRE_WINDOW = 25.0;            // seconds left in the half below which a kick with the clock running is a fire drill
+  const CLOCK_EPS = 1e-6;              // a clock left this close to the end of the half has run out (the tenths summed drift by 1e-14: a snap at 0:00)
   // Clock-aware play calls when the offense needs the clock stopped and has no timeouts (2020-25 data):
   // a pass that would end in bounds with a gain is kept with this probability, otherwise redrawn from the
   // same pool's incompletions / catches out of bounds; and the pass rate rises from ~81% to ~95%.
@@ -1322,6 +1323,7 @@
       S.pos = rec ? kt : rt;
       S.yl = onside ? (rec ? 54 : 46) : start;
       S.t = Math.max(S.t - (onside ? 3 : dur), g.halfEnd);
+      if (S.t <= g.halfEnd + CLOCK_EPS) S.t = g.halfEnd;
       S.down = 1; S.ytg = Math.min(10, S.yl); S.running = false; S.credit = 0; S.freeKick = false; S.phase = SNAP;
       if (retTd) { S.s[S.pos] += 6; S.phase = PAT; }
       if (S.log) S.log.push({ ev: 'kickoff', team: kt, onside, recovered: rec, retTd, yl: S.yl, tb: !onside && dur === 0, kick: act && act.kick || null });
@@ -1383,9 +1385,9 @@
       const endkick = closing && runC && tHalf <= CLOSE_END && S.to[o] > 0 && free;
       if (endkick) { S.t = halfEnd + Math.min(tHalf, CLOSE_KICK_AT); S.to[o] -= 1; runC = false; }
       if (S.log) {
-        if (defCall) S.log.push({ ev: 'timeout', team: d, t: S.t });
-        if (offCall) S.log.push({ ev: 'timeout', team: o, t: S.t });
-        if (endkick) S.log.push({ ev: 'timeout', team: o, t: S.t, why: 'kick' });
+        if (defCall) S.log.push({ ev: 'timeout', team: d, t: S.t, left: S.to[d] });
+        if (offCall) S.log.push({ ev: 'timeout', team: o, t: S.t, left: S.to[o] });
+        if (endkick) S.log.push({ ev: 'timeout', team: o, t: S.t, why: 'kick', left: S.to[o] });
       }
 
       // (2) tempo and between-snap runoff
@@ -1429,7 +1431,7 @@
       if (fire && forced === 'fg' && runC && runoff >= tHalf - 0.5) {
         if (S.to[o] > 0) {
           S.to[o] -= 1; runoff = 0; fire = false; tempo = NORMAL;
-          if (S.log) S.log.push({ ev: 'timeout', team: o, t: S.t, why: 'kick' });
+          if (S.log) S.log.push({ ev: 'timeout', team: o, t: S.t, why: 'kick', left: S.to[o] });
         } else runoff = Math.max(tHalf - 1, 0);
       }
       // running it down: never past the point where the kick is still safe (daily game: a milk call does the same)
@@ -1438,6 +1440,7 @@
       if (act && act.runoff !== undefined) runoff = runC ? act.runoff : 0;
       const t0 = S.t;
       let t1 = t0 - runoff;
+      if (t1 <= halfEnd + CLOCK_EPS) t1 = halfEnd;
       const stop = t0 > g.tmw && t1 <= g.tmw;
       if (stop) t1 = g.tmw;
       const stopQ = t0 > g.qEnd && t1 <= g.qEnd;
@@ -1606,7 +1609,7 @@
       const crossTmw = t0 > g.tmw && t1 <= g.tmw;
       const crossQ = t0 > g.qEnd && t1 <= g.qEnd;
       if (crossQ) t1 = Math.max(t1, g.qEnd);
-      S.t = Math.max(t1, g.halfEnd);
+      S.t = t1 <= g.halfEnd + CLOCK_EPS ? g.halfEnd : t1;
       S.running = !(stopFlag || crossTmw || crossQ);
       S.credit = S.running ? credit : 0;
     }
@@ -1706,7 +1709,10 @@
         if (S.log) S.log.push({ ev: kind, team: o, dist, made: false, p, foul: true, net: 0, retTd: false, blocked: false, touchback: false });
         const t0 = S.t;
         this._clockAfterPlay(S, g, 4.0, true, 0);
-        if (S.t <= g.halfEnd) S.t = Math.min(t0, g.halfEnd + 0.5);   // a half cannot end on a defensive foul: an untimed down
+        // a half cannot end on a defensive foul: an untimed down (the page shows 0:00 and says why)
+        const untimed = S.t <= g.halfEnd;
+        if (untimed) S.t = Math.min(t0, g.halfEnd + 0.5);
+        if (untimed && S.log) S.log[S.log.length - 1].untimed = true;
         S.yl = Math.max(yl0 - 15, 1); S.down = 1; S.ytg = Math.min(10, S.yl);
         return true;
       }
