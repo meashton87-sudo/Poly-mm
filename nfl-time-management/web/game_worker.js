@@ -120,7 +120,7 @@ self.onmessage = async (ev) => {
       // (the overlay is plain JSON, handed over as bytes or fetched)
       const ovGet = !cfb ? null : m.overlay ? Promise.resolve(JSON.parse(new TextDecoder().decode(m.overlay)))
         : fetch(at('cfb_overlay.json')).then((r) => { if (!r.ok) throw new Error('overlay ' + r.status); return r.json(); });
-      const d = await get(m.engine, (cfb && at('engine_data_cfb.json')) || at('engine_data.json'), 'engine data');
+      const d = await get(m.engine, at(cfb ? 'engine_data_cfb.json' : 'engine_data.json'), 'engine data');
       const pb = await (pbGet || get(m.playbook, at('playbook.json'), 'playbook', cfb ? undefined : d));
       eng = new NFLClockEngine(d);
       eng.loadPlaybook(pb);
