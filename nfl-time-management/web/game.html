@@ -320,7 +320,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .playgrid { display: grid; gap: 6px; }
 /* the calls' sheet and the menu button: a phone's broadcast view only (below); elsewhere the dock sits in the page */
 .sheet { display: contents; }
-.grip, .menubtn, .bmenu, .skiphint { display: none; }
+.grip, .menubtn, .bmenu, .skiphint, .skipbtn { display: none; }
 /* A phone, playing: the broadcast view. The field fills the screen, the scoreboard floats over its top, and the calls
    are a sheet over its bottom, under the thumbs, that drags down to a bar to show the whole field. Nothing scrolls
    but the sheet itself, when a call has more on it than fits. */
@@ -361,6 +361,10 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
     transform: translateX(-50%); padding: 7px 14px; border-radius: 999px; background: rgba(9, 15, 11, .78); color: #fff;
     font: 700 13px var(--body); pointer-events: none; opacity: 0; transition: opacity .3s ease; white-space: nowrap; }
   body.bcast .fieldbox:has(#field.playing) .skiphint { opacity: 1; transition-delay: .4s; }
+  /* their drive: skip to your next call, beside the note (the sheet's own button is away with the sheet) */
+  body.bcast .fieldbox:has(#field.playing) .skipbtn:not([hidden]) { display: block; position: absolute; z-index: 3; right: 10px;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 7px); min-height: 40px; padding: 0 14px; border: 0; border-radius: 999px;
+    background: var(--chain); color: var(--chain-ink); font: 800 13px var(--body); cursor: pointer; }
   body.bcast .sheet.down { transform: translateY(calc(100% - 66px - env(safe-area-inset-bottom, 0px))); }
   body.bcast .grip { display: flex; align-items: center; justify-content: center; flex: none; height: 26px; border: 0; background: none; cursor: grab; touch-action: none; position: relative; }
   body.bcast .grip::before { content: ""; position: absolute; inset: -14px 0 0; }      /* (a finger-sized 40px to grab, 14px of it over the field) */
@@ -611,6 +615,10 @@ a.chip { color: var(--ink); text-decoration: none; display: inline-block; }
 .segb:hover { background: var(--key); }
 .segb.on { background: var(--ink); color: var(--paper); }
 .segb.on small { color: var(--paper); opacity: .75; }
+/* the clock runs out before the snap (game.js tempoPicker) */
+.segb small.out { color: var(--sq-r); font-weight: 800; }
+.segb.on small.out { color: #ffb4a8; opacity: 1; }
+.tempo .warn { grid-column: 1 / -1; margin: 0; padding: 7px 10px; border-radius: 8px; background: var(--chain); color: var(--chain-ink); font: 800 13.5px/1.3 var(--body); }
 .seg.n { grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); }
 .vdef { display: grid; gap: 7px; }
 .vdef .vrow { grid-template-columns: 74px minmax(0, 1fr); gap: 6px; }
@@ -801,6 +809,8 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 .big-pct { font: 900 96px/.9 var(--display); }
 .pct-lab { font: 800 15px var(--body); letter-spacing: .08em; text-transform: uppercase; margin-top: -4px; text-wrap: balance; }
 .pct-lab.brag { color: var(--gold); margin-top: 2px; }
+/* the score against the result, when they disagree: why, in a line (game.js scoreWhy) */
+.pct-why { margin: 2px auto 0; max-width: 34em; font: 600 14px/1.35 var(--body); color: var(--muted); text-wrap: balance; }
 .streak { font: 700 14px var(--body); margin-top: 2px; }
 /* a missed day a streak freeze covered, under the streak; a badge just earned (game.js badgeCard), gold like a Madden find */
 .frz { justify-self: center; font: 700 13px var(--body); color: var(--ice); background: var(--ice-soft); border-radius: 999px; padding: 5px 12px; text-wrap: balance; }
@@ -970,6 +980,7 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
         <!-- the timeout: its own button in a corner, away from the others (the bottom one, or the top when they sit at the bottom) -->
         <button id="toBtn" class="tobtn" type="button" hidden></button>
         <div class="skiphint" aria-hidden="true">Tap to skip</div>
+        <button id="skipBtn" class="skipbtn" type="button" hidden>Skip ahead ⏭</button>
         <!-- on the field, out of the way of the calls below it: the down, the color key, personnel and the ratings -->
         <div class="fov">
           <div class="fovl"><div id="dd" class="dd"></div><span class="ramp" aria-label="Player dots: red is worse, green is better">worse <i></i> better</span></div>
@@ -995,9 +1006,10 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
 
 <section class="siteinfo" aria-labelledby="aboutGame">
   <h2 id="aboutGame">What is Two-Minute Drill?</h2>
-  <p>Two-Minute Drill is a free daily football game: you call the plays for the end of a real NFL game. Every day
-    everyone gets the same real late-game drive from the 2023 to 2026 seasons, playoffs included, with the real score,
-    clock, timeouts and the 22 players who were on the field. Your job is to win it.</p>
+  <p>Two-Minute Drill is a free daily football game: you call the plays for the end of a real game. Every day
+    everyone gets the same real spot, most often a late-game drive from a recent NFL season (playoffs included), now and
+    then a famous moment from another year or from college football, with the real score, clock, timeouts and the 22
+    players who were on the field. Your job is to win it.</p>
   <h3>How it works</h3>
   <p>Call <b>Run</b>, <b>Pass</b>, <b>RPO</b> or <b>Trick</b>, then the play: 27 calls in all, from inside runs and
     quick passes to deep shots, play action and a flea-flicker. On a pass, tap a receiver to change his route (in Pro
