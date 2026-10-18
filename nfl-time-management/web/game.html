@@ -256,7 +256,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .pro p { margin: 0; }
 .pro .row { display: flex; gap: 6px; flex-wrap: wrap; }
 .pro input { flex: 1; min-width: 160px; font: 600 14px var(--body); padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
-.modes { display: flex; justify-content: center; gap: 4px; }
+.modes { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
 .modes a { font: 700 12px var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); text-decoration: none;
   padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); }
 .modes a[hidden] { display: none; }
@@ -348,6 +348,8 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
   body.bcast .bmenu > * { display: block; padding: 12px 14px; border: 0; background: none; text-align: left; font: 700 15px var(--body); color: var(--ink); text-decoration: none; border-radius: 10px; cursor: pointer; }
   body.bcast .bmenu > *:hover, body.bcast .bmenu > *:focus-visible { background: var(--paper); }
   body.bcast .bmenu > [data-mode] { font-weight: 600; color: var(--muted); }
+  body.bcast .bmenu > [data-home] { font-weight: 800; color: var(--ink); }
+  body.bcast .bmenu > [hidden] { display: none; }
   body.bcast .fieldbox .fov { top: calc(env(safe-area-inset-top, 0px) + 66px); bottom: auto; align-items: flex-start; }
   body.bcast .fieldbox .fovl .ramp { display: none; }      /* (the color key: in the ratings) */
   body.bcast .fieldbox .fov .dd { overflow: hidden; max-width: calc(100vw - 200px); line-height: 1.3; }
@@ -660,6 +662,63 @@ a.chip { color: var(--ink); text-decoration: none; display: inline-block; }
 .sw2::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--card); transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
 .sw2[aria-checked="true"] { background: var(--sq-g); }
 .sw2[aria-checked="true"]::after { left: 21px; }
+/* home (#home): today's drive on the turf, then survivor and Pro side by side, then the small things. Thumb-sized
+   cards; on a 375 x 667 phone the three main ones fit without scrolling */
+.top h1 a.home { color: inherit; text-decoration: none; }
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
+#homeview { display: grid; gap: 12px; margin-top: 2px; }
+#homeview[hidden] { display: none; }
+#homeview a { -webkit-tap-highlight-color: transparent; }
+.hhero { display: grid; gap: 8px; padding: 14px 16px 12px; border-radius: 16px; color: #fff;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, .18)), repeating-linear-gradient(180deg, var(--turf) 0 34px, var(--turf-2) 34px 68px);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06); }
+.hhero .hk { display: flex; justify-content: space-between; align-items: center; gap: 8px; font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: rgba(255, 255, 255, .82); }
+.hhero .hk .tag { flex: none; padding: 4px 9px; border-radius: 999px; background: rgba(0, 0, 0, .28); color: #fff; letter-spacing: .1em; }
+.hhero.done .hk .tag { background: var(--chain); color: var(--chain-ink); }
+.hhero.progress .hk .tag { background: var(--los); }
+.hhero .hbig { font: 900 46px/.95 var(--display); letter-spacing: .01em; text-transform: uppercase; }
+.hhero .hbig .left { display: block; margin-top: 5px; font-size: 21px; letter-spacing: .04em; color: rgba(255, 255, 255, .8); }
+.hhero .hm { font-size: 13.5px; font-weight: 600; line-height: 1.35; color: rgba(255, 255, 255, .88); text-wrap: pretty; }
+.hhero .hscore { display: flex; align-items: center; gap: 12px; }
+.hhero .hscore b { font: 900 64px/.9 var(--display); font-variant-numeric: tabular-nums; }
+.hhero .hscore span { font: 700 15px/1.3 var(--body); max-width: 16ch; }
+.hhero .btn { display: flex; align-items: center; justify-content: center; min-height: 54px; margin-top: 2px; text-decoration: none; font-size: 16px;
+  background: var(--call-light); color: var(--call-light-ink); box-shadow: 0 3px 10px rgba(0, 0, 0, .18); }
+.hhero .btn.ghostbtn { background: rgba(0, 0, 0, .2); color: #fff; border: 1.5px solid rgba(255, 255, 255, .55); box-shadow: none; }
+.hhero .hfoot { padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, .2); font-size: 13px; font-weight: 600; color: rgba(255, 255, 255, .86); text-align: center; }
+.hhero .hfoot .countdown { color: inherit; font-size: 13px; }
+.hhero .hfoot .countdown b { color: #fff; font-size: 17px; }
+.hhero .hfoot .countdown .btn { min-height: 46px; }
+.hmodes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.hmodes.one { grid-template-columns: minmax(0, 1fr); }
+.hcard { display: grid; grid-template-rows: auto auto 1fr auto; gap: 4px; min-height: 150px; padding: 13px 14px 14px; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--card); color: var(--ink); text-decoration: none; }
+.hcard:hover { border-color: var(--muted); }
+.hcard .hk { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.hcard.hsurv { border-top: 4px solid var(--sq-r); padding-top: 10px; }
+.hcard.hpro { border-top: 4px solid var(--gold); padding-top: 10px; background: linear-gradient(160deg, var(--gold-soft), transparent 70%), var(--card); }
+.hcard .hnum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; }
+.hcard .hnum b { flex: none; font: 900 40px/1 var(--display); font-variant-numeric: tabular-nums; }
+.hcard .hnum span { flex: 1 1 64px; min-width: 0; font: 600 12px/1.25 var(--body); color: var(--muted); }
+.hcard .hpitch { font: 900 26px/1 var(--display); text-transform: uppercase; letter-spacing: .02em; padding-top: 4px; }
+.hcard p { margin: 0; font-size: 13px; line-height: 1.35; color: var(--muted); }
+.hcard .cta { justify-self: start; margin-top: 6px; padding: 9px 16px; border-radius: 999px; background: var(--ink); color: var(--paper); font: 800 13px var(--body); letter-spacing: .08em; text-transform: uppercase; }
+.hcard.hpro .cta { background: var(--gold); color: #1d1700; }
+.hmodes.one .hcard { min-height: 0; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: none; column-gap: 12px; }
+.hmodes.one .hcard > * { grid-column: 1; }
+.hmodes.one .hcard .cta { grid-column: 2; grid-row: 1 / span 3; align-self: center; margin: 0; }
+.htools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.htools.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.htool { display: grid; place-items: center; gap: 3px; min-width: 0; min-height: 62px; padding: 8px 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); font: 700 13px/1.2 var(--body); cursor: pointer; }
+.htool:hover { border-color: var(--muted); }
+.htool svg { width: 22px; height: 22px; }
+.htool span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hsec { display: grid; gap: 6px; }
+.hsec h3 { margin: 4px 0 0; font: 800 12px var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.hlinks { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px 18px; padding: 4px 0 2px; font-size: 13px; }
+.hlinks a { color: var(--muted); font-weight: 600; text-underline-offset: 2px; }
+.endcard a.homebtn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+@media (max-width: 359px) { .hcard .hnum b { font-size: 34px; } .hhero .hbig { font-size: 40px; } }
 .status { display: flex; align-items: center; gap: 10px; color: var(--muted); font-weight: 600; min-height: 46px; }
 .spin { width: 18px; height: 18px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--ink); animation: spin .8s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -991,15 +1050,16 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 20V12M10 20V5M15 20v-9M20 20v-5"/></svg>
     </button>
     </div>
-    <h1>Two-Minute Drill<small id="dayLabel">Daily play-calling</small></h1>
+    <h1><a id="homeLink" class="home" href="#home">Two-Minute Drill</a><small id="dayLabel">Daily play-calling</small></h1>
     <div class="tr"><button id="acctBtn" class="acctbtn" type="button" hidden></button></div>
   </div>
 </header>
 
 <main class="wrap">
-  <nav class="modes" aria-label="Game mode"><a id="modeDaily" href="#daily">Daily</a><a id="modeSurv" href="#survivor">Survivor</a><a id="modeVs" href="#vs" hidden>Versus</a><a id="modeArch" href="#archive">Pro</a></nav>
+  <nav class="modes" aria-label="Game mode"><a id="modeHome" href="#home">Home</a><a id="modeDaily" href="#daily">Daily</a><a id="modeSurv" href="#survivor">Survivor</a><a id="modeVs" href="#vs" hidden>Versus</a><a id="modeArch" href="#archive">Pro</a></nav>
   <div id="tiles" class="tiles" role="group" aria-label="Today's three spots"></div>
   <section id="arch" class="arch" aria-label="Archive" hidden></section>
+  <section id="homeview" aria-labelledby="homeH" hidden></section>
   <section id="intro" class="intro" hidden></section>
   <section id="play" hidden>
     <div class="playgrid">
@@ -1007,6 +1067,7 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
       </button>
       <div id="bmenu" class="bmenu" hidden>
+        <a href="#home" data-mode data-home>Home</a>
         <button type="button" data-go="helpBtn">How to play</button>
         <button type="button" data-go="statsBtn">Your stats</button>
         <button type="button" data-go="acctBtn" data-acct>Account</button>
