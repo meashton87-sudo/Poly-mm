@@ -4211,7 +4211,12 @@
     // and on any down late in a half once in decent range (down 9 with 2:00 left: take the points now, then the onside)
     const late = r.t > 1800 ? th <= 120 : th <= 300;
     if (kickable && ((r.down === 4 && p >= 0.05) || (th <= 20 && p >= 0.2) || (r.down === 3 && th <= 40 && p >= 0.4) || (late && p >= 0.3))) specials.push('fg');
-    if (r.down === 4 && r.yl >= 30) specials.push('punt');
+    // a punt hands the ball over for good when behind in the game's last 40 s (NFL 2016-25: no team trailing in the
+    // last 0:40 punted; engine.js _fourthDown makes the computer go), and it never gets off when the clock runs out
+    // before any snap (a gold PUNT at 0:02, down 4, beside the timeout)
+    const behind = r.score[G.me] < r.score[1 - G.me];
+    const puntHelps = !(r.t <= 1800 && behind && th <= 40) && !(r.clock_running && allRunOut(r));
+    if (r.down === 4 && r.yl >= 30 && puntHelps) specials.push('punt');
     if (!r.clock_running && canKneel(r)) specials.push('kneel');
     return { calls, specials };
   }
@@ -4249,6 +4254,7 @@
         if (h) d.append(h);
       }
       const extra = [];
+      let fitTo = fam;
       if (r.clock_running) {
         // (a phone: the timeout is the button on the field, toButton, not a key here too)
         clockOptions(r).filter((k) => !TEMPOS.includes(k) && !(k === 'timeout' && bcast())).forEach((k) => extra.push([k, k === 'rundown' ? 'Run it down' : CLOCK[k].label,
@@ -4277,10 +4283,12 @@
           });
           row.append(b);
         });
-        if (r.clock_running && allRunOut(r)) d.insertBefore(row, fam);      // (no tempo snaps in time: the timeout first)
-        else d.append(row);
+        // (no tempo snaps in time: the timeout first.) Else right under the calls, above the out-of-bounds switch and
+        // the tips, and on a phone in sight with them: a SPIKE at 0:53, down 5, sat below the fold under the switch
+        if (r.clock_running && allRunOut(r)) d.insertBefore(row, fam);
+        else { d.insertBefore(row, fam.nextSibling); fitTo = row; }
       }
-      fitDock(fam);
+      fitDock(fitTo);
       return;
     }
     if (ui.step === 'pass') return drawPassDock(head);
@@ -4572,8 +4580,10 @@
       toButton();
     };
   }
-  function persButton() {
-    toButton();
+  // (the chips first, then the timeout under them: placed before the personnel chip showed, it sat over Ratings when
+  // the chips wrapped to a second row on a 375-wide phone)
+  function persButton() { persChip(); toButton(); }
+  function persChip() {
     const b = $('persBtn'), r = G && G.root;
     if (!b) return;
     const show = !!(r && r.phase === SNAP && r.pos === G.me && !r.try2 && !G.over);
@@ -4978,7 +4988,7 @@
       tg.append(lab, sw);
       d.append(tg);
     }
-    toButton();
+    persButton();         // (the offense's personnel chip off the field: it stayed up on defense)
     const keys = el('div', 'keys');
     keys.style.setProperty('--cols', 1);
     const go = key('Call it', null, 'big', 0);
@@ -5043,7 +5053,7 @@
       tg.append(lab, sw);
       d.append(tg);
     }
-    toButton();
+    persButton();
     if (VS) return;
     if (FULLDEF) d.append(defModeChip(false));
     const auto = el('button', 'chip', 'Let the coordinator call this drive');
@@ -5143,6 +5153,7 @@
         opts: [{ key: 'deep', label: 'Kick deep', action: { kick: 'deep' } }, { key: 'onside', label: 'Onside', action: { kick: 'onside' } }],
         q: () => coachProbs('onside', r, me) || { deep: 0.85, onside: 0.15 } },
     }[kind];
+    persChip();
     d.textContent = '';
     takeBanner(d);
     const head = el('div', 'ask');
@@ -5478,7 +5489,8 @@
     // show it (a "lean on the run" to someone who threw on most snaps read as wrong)
     const why = Object.keys(w).filter((k) => w[k] && Math.abs(zu[k]) >= 0.35 && Math.sign(zu[k]) === Math.sign(best.z[k] || 0))
       .sort((a, b) => w[b] * Math.abs(zu[b]) - w[a] * Math.abs(zu[a]))
-      .map((k) => whyText(k, zu[k] > 0, acc[k])).filter(Boolean).slice(0, 2);
+      .map((k) => whyText(k, zu[k] > 0, acc[k])).filter(Boolean).slice(0, 2)
+      .map((x, i) => (i ? x : x.replace('(most: ', '(most play-callers: ')));     // (the first names who "most" are)
     return { coach: best, why };
   }
   function whyText(k, more, [, n, mine, theirs]) {
@@ -5486,7 +5498,7 @@
     if (more ? a <= e : a >= e) return null;               // rounded, the counts don't show it: say nothing
     const of = (x, what) => `${x} of ${n} ${what}`;
     return {
-      pass: more ? `threw on ${of(a, 'plays')} (most play-callers: ${e})` : `ran on ${of(na, 'plays')} (most play-callers: ${ne})`,
+      pass: more ? `threw on ${of(a, 'plays')} (most: ${e})` : `ran on ${of(na, 'plays')} (most: ${ne})`,
       deep: more ? `went deep on ${of(a, 'throws')} (most: ${e})` : `kept it short on ${of(na, 'throws')} (most: ${ne})`,
       go: more ? `went for it on ${of(a, 'fourth downs')} (most: ${e})` : `kicked on ${of(na, 'fourth downs')} (most: ${ne})`,
       two: more ? `went for two ${a} of ${n} times (most: ${e})` : `kicked the extra point ${na} of ${n} times (most: ${ne})`,

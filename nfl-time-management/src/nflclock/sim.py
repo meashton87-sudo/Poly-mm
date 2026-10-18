@@ -73,6 +73,9 @@ URGENT_LATE = (60.0, 0.75, 18.0, 26.0)
 # and 2+ when it is a good one (67-100%)
 FOURTH_GO_EDGE = 0.02
 FOURTH_KICK_P = 0.75
+# ... and a team one or two scores behind (1-16) does not punt in the last 1:30, or 9-16 behind in the last 2:30
+# (NFL 2016-25: 1 punt in 751 4th downs, 2 in 365); the coaches' own model punted down 10 at 1:00 from its 40
+NO_PUNT_BEHIND = (16, 90.0, 9, 150.0)
 TEMPO_NAMES = {"hurry": HURRY, "normal": NORMAL, "milk": MILK, "urgent": URGENT}
 SNAP, PAT, KICKOFF, DONE = range(4)
 KICKOFF_START_YL = 70.0   # mean receiving-team start under 2024-25 kickoff rules
@@ -616,6 +619,9 @@ class Simulator:
             choice = np.where(late & (margin < -3), -1, choice)
             choice = np.where(late & (margin >= -3) & (margin <= 0) & (p_fg >= 0.3), FG, choice)
             choice = np.where(late & (margin >= -3) & (margin < 0) & (p_fg < 0.3), -1, choice)  # trailing: must go
+            nb = NO_PUNT_BEHIND
+            no_punt = (margin < 0) & (margin >= -nb[0]) & ((t_half <= nb[1]) | ((margin <= -nb[2]) & (t_half <= nb[3])))
+            choice = np.where(no_punt & (choice == PUNT), -1, choice)
             # Tied and out of range: punt and play for overtime (the WP model overrates late possession here).
             tied_punt = (margin == 0) & (p_fg < 0.3) & (yl >= 35) & (late | ((t_half <= 120) & (yl >= 50)))
             choice = np.where(tied_punt, PUNT, choice)
