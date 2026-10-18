@@ -1896,7 +1896,7 @@
       if (o.out) {
         const sp = vel(car), mx = start[0] + (sp > 1.2 ? (car.b.vx / sp) * Math.min(4, Math.max(1, sp * 0.45)) : 0);
         const far = o.out > 0 ? Math.max(start[0], mx) : Math.min(start[0], mx);
-        if (o.out * (far - endPt[0]) > 0) endPt[0] = inX(far);
+        if (o.out * (far - endPt[0]) > 0) endPt[0] = o.oob ? far : inX(far);       // (out of bounds: where it takes him)
       }
       const after0 = tackled ? (o.after ?? (car.label === 'RB' || car.label === 'QB' ? 1.5 + R() : 0.6 + R() * 0.8)) : 0;
       // a short run after the catch with nobody close: he works sideways toward the nearest man, who comes up to
@@ -2524,7 +2524,18 @@
       const held = !e.incomplete && e.evt !== 'interception' && e.evt !== 'pick_six' && !e.td;
       const deep = held ? Math.min(air, e.yards ?? air) : air;
       const drew = pick && !thrownAway && tgt !== qb && act.drawn ? act.drawn[act.target] : null;      // he runs the line you drew
-      const r = Motion.routeOnField(drew || routeName, deep, tgt.b.x, out, dir, L0, Math.abs(tgt.b.y - L0), R());
+      const back = Math.abs(tgt.b.y - L0), ru = R(), onField = (nm) => Motion.routeOnField(nm, deep, tgt.b.x, out, dir, L0, back, ru);
+      let r = onField(drew || routeName), wide = null;
+      // a catch that ends out of bounds was made near that sideline (real ones mostly are, outside the numbers): a
+      // route that would leave him too far in for the run after it (a back's, a tight end's, one breaking inside) is
+      // drawn breaking out (a short one, or a back's from the backfield: to the flat), caught a few yards from the
+      // sideline (the ball thrown when he gets there, below)
+      const yacO = (e.yards || 0) - deep, cx0 = inX(r.catchAt[0]);
+      if (e.oob && held && !pick && !thrownAway && tgt !== qb && Math.min(cx0, FW - cx0) > yacO + 5) {
+        const cx = Math.max(0.5, (out > 0 ? FW - tgt.b.x : tgt.b.x) - clip(2.5 + yacO * 0.4, 2.5, 6)), s = Math.max(deep, 2) + 1.2;
+        r = onField(wide = deep <= 2 || (back > 3 && deep <= 8) ? { pts: [[0, -back], [2.2, 1.6 - back], [cx + 2, Math.max(deep, -1) + 0.6]], at: cx - 2.2 }
+          : { pts: [[0, -back], [0, s], [cx + 2, s - 1]], at: cx });
+      }
       let catchPt = [inX(r.catchAt[0]), inL(fwd(L0, deep))];
       let rpts = r.toCatch.slice(0, -1).map((p) => [inX(p[0]), inL(p[1])]).concat([catchPt]);
       const tStart = tgt === qb ? T_SNAP + 0.6 : tgt === K.rb && kind !== 'screen' ? 0.5 : REACT_OFF;
@@ -2533,12 +2544,13 @@
       const qRel = passer === qb && !philly && kind !== 'flea' ? qPlan.at(Math.max(0, tThrow - T_SNAP)) : null;
       const arm = armOf(passer.p);
       const flightTo = (c) => (qRel ? Math.hypot(c[0] - qRel[0], c[1] - qRel[1]) / ballSpeed(deep, arm) : flight(deep, arm));
-      let tCatch = tThrow + flightTo(catchPt), v1 = routeName === 'hitch' || routeName === 'screen' ? 0 : undefined, timed = true;
+      if (wide) tThrow = Math.max(tThrow, tStart + plan(tgt, rpts).T - flightTo(catchPt));
+      let tCatch = tThrow + flightTo(catchPt), v1 = !wide && (routeName === 'hitch' || routeName === 'screen') ? 0 : undefined, timed = true;
       // a timing route (a hitch, an out, a dig, a deep out): the throw (when it was charted) is thrown on time, before
       // he turns, and the ball meets him coming out of his break: caught where he is, running flat out, when it gets
       // there, a step or two past the break (never at the end of the route with the ball hanging in the air while
       // he gets there). Thrown late, he is further along the break (a hitch sits down facing the passer and waits).
-      const cutK = drew ? null : BREAK_OUT[routeName];
+      const cutK = drew || wide ? null : BREAK_OUT[routeName];
       if (cutK != null && !thrownAway && rpts.length >= 3) {
         const top = rpts[1], tail = [inX(r.catchAt[0]), r.catchAt[1]];
         const legL = Math.hypot(tail[0] - top[0], tail[1] - top[1]), [ux, uy] = unit(tail[0] - top[0], tail[1] - top[1]);
@@ -2597,6 +2609,7 @@
         // left that receiver running free downfield; when he is, the next man takes the vertical over)
         const loose = near.find((d) => !cov.carry.has(d));
         shadow = manOf || (near[0] && cov.carry.has(near[0]) && loose && dist(here(loose), end) < dist(here(near[0]), end) + 4 ? loose : near[0]) || null;
+        const runOn = caught && !e.incomplete && (e.td || (e.yards || 0) - air >= 5);
         const ins = Math.sign(BX - end[0]) || 1, toBreak = (e.incomplete || e.evt === 'near_pick') && e.evt !== 'drop' && !thrownAway && kind !== 'hail' && sepd.sep < 2;
         const span = Math.max(0.3, tCatch - tS), t0 = Wd.t;
         const shadowOn = (d) => {
@@ -2606,8 +2619,11 @@
           // where he came, closing; at the drawn distance
           // (a ball he will break up: at the receiver's hip rather than trailing, so the step he takes to the ball as
           // it comes is across, not a chase from behind he cannot finish on a ball thrown downfield)
-          const z = unit(rel0[0], rel0[1]);
-          const u = cov.man ? (toBreak ? [ins * 0.89, -dir * 0.45] : [ins * 0.55, -dir * 0.83]) : toBreak ? unit((Math.sign(z[0]) || ins) * 0.9, z[1] * 0.5) : z;
+          // (a catch he runs on from: in zone a step late, level with him and on the side away from where his run goes,
+          // never in front of him: players saw receivers run straight through the man on them)
+          const z = unit(rel0[0], rel0[1]), away = YAC_IN.has(routeName) ? out : YAC_OUT.has(routeName) ? -out : Math.sign(z[0]) || ins;
+          const u = cov.man ? (toBreak ? [ins * 0.89, -dir * 0.45] : [ins * 0.55, -dir * 0.83]) : toBreak ? unit((Math.sign(z[0]) || ins) * 0.9, z[1] * 0.5)
+            : runOn && dir * z[1] > -0.3 ? unit(away, -dir * 0.3) : z;
           leg(d, tS, 'track', { gain: 3, eff: 1, fn: (t) => {
             const k = clip((t - tS) / span, 0, 1), q = rAt(Math.min(t, tCatch));
             return [q[0] + rel0[0] * (1 - k) + u[0] * sepd.sep * k, q[1] + rel0[1] * (1 - k) + u[1] * sepd.sep * k];
@@ -2836,7 +2852,10 @@
       const sg = sign || (id === 'qb_run' ? sc.s * dir : 0) || 0;
       // forward progress: he never has the ball past where it is spotted; on a loss he is met in the backfield
       const cap = e.td ? 99 : (e.yards || 0) - ((e.yards || 0) < 3 ? 1.6 : 0.8), md = Math.min(-4.3, cap - 0.3);
-      const hole = [inX(BX + (sg * gap) / XYD), fwd(L0, Math.min(0.6, cap))];
+      // going out: an outside or off-tackle run keeps to its side; one inside, with the other sideline the nearer (the
+      // short side), is cut back at the line toward it (the line still flows the way it was called)
+      const hs = outTry && gap < 40 && sg === (BX < FW / 2 ? 1 : -1) ? -sg : sg;
+      const hole = [inX(BX + (hs * gap) / XYD), fwd(L0, Math.min(0.6, cap))];
       if (direct) { fly(0, T_SNAP, bx, L0, carrier.x0, carrier.L0, 0.15); hold(T_SNAP, carrier); } else snapToQb();
       busy.add(carrier);
       // one continuous run from his stance through the mesh to the hole, flat out: across the QB's face when the
@@ -2902,7 +2921,7 @@
         else leg(K.fb, REACT_OFF - 0.1, 'go', { x: hole[0], y: fwd(L0, 1.5), eff: 0.9 });
       }
       const Lend = e.td ? tdL() : inL(fwd(L0, e.yards));
-      const sx = sidelineX(sg ? (sg > 0 ? FW : 0) : hole[0]);
+      const sx = sidelineX(hs ? (hs > 0 ? FW : 0) : hole[0]);
       const xEnd = e.oob ? sx : outTry ? outShort(hole[0], sx, e.yards) : inX(hole[0] + sg * Math.min(9, Math.abs(e.yards) * 0.5) + jit(3));
       const tEnd = runDown(carrier, Math.max(tLos - 0.15, tMesh + 0.2), [xEnd, Lend], { td: e.td, oob: e.oob, bt: e.bt, eff: 0.95, after: e.yards < 2 ? 0.8 + R() : undefined, from: tMesh,
         out: outTry ? Math.sign(sx - FW / 2) : 0 });
@@ -2997,6 +3016,16 @@
       const sx = sidelineX(esc[0] + side * 10);
       const xEnd = e.oob ? sx : outTry ? outShort(esc[0], sx, e.yards) : inX(esc[0] + side * (4 + R() * 6));
       const tOut = tE + Motion.minTime([here(qb), esc], 'QB', { v0: vel(qb) }) * 1.05;
+      // nobody gets a hand on him as he breaks out (only the man who brings him down does): a rusher whose way takes
+      // him within reach of the passer as he gets away turns and chases him, a couple of yards off (players saw a
+      // scrambler run through the rush)
+      for (let k = 0; k < 2; k++) {
+        Wd.run(tOut + 0.4);
+        const close = K.def.filter((d) => { for (let t = tE + 0.2; t < tOut + 0.4; t += 0.1) if (dist(Wd.posAt(d.b, t), Wd.posAt(qb.b, t)) < 1.5) return true; return false; });
+        Wd.rewind(tE);
+        if (!close.length) break;
+        close.forEach((d) => leg(d, tE + 0.1, 'chase', { who: qb.b, gap: 2.6 + k * 1.2, eff: 0.85, lead: 0.3 }));
+      }
       const tEnd = runDown(qb, tOut, [xEnd, Lend], { td: e.td, oob: e.oob, eff: 0.9, after: e.slide ? 0 : undefined, from: tE, out: outTry ? Math.sign(sx - FW / 2) : 0 });
       finish(qb, tEnd, [xEnd, Lend]);
     }
