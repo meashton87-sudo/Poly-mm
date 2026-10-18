@@ -16,7 +16,9 @@ Clock rules modelled
   * out of bounds stops it until the snap only inside 2:00 (1st half) / 5:00
     (2nd half); elsewhere it restarts on the ready-for-play signal;
   * play durations come from the sampled play; a half can end on a play (the
-    untimed PAT still happens) or during between-snap runoff (kneel-outs).
+    untimed PAT still happens when it can change the result; never on an
+    accepted defensive foul: an untimed down) or during between-snap runoff
+    (kneel-outs).
 """
 from __future__ import annotations
 
@@ -48,12 +50,29 @@ CLOCK_PASS_WINDOW = 60.0
 # for it. The offense runs the clock down (clock-killing plays, timeouts kept), takes a timeout with
 # ~3 s left and kicks. The defense spends its timeouts to save time for a reply. (Without a timeout the
 # offense keeps hurrying and spikes for the kick: a rushed field-goal unit costs more than it saves.)
-CLOSE_FG_P = 0.5          # make probability that puts the offense in kick-to-win mode
+CLOSE_FG_P = 0.7          # make probability that puts the offense in kick-to-win mode: a ~52-yarder (NFL 2016-25,
+                          # trailing 1-2 or tied in the last 20-75 s with a timeout: 96% clock-killing runs inside the
+                          # 25, 60% at the 30-35, 38% at the 35-40: from farther out they keep moving)
 CLOSE_WINDOW = 180.0      # seconds left in the game
 CLOSE_END = 45.0          # clock running with this little left: run it down and kick
 CLOSE_KICK_AT = 3.0       # seconds left at the final timeout
 CLOSE_SNAP_FLOOR = 12.0   # latest snap while running it down, so the play ends with time to call timeout
 CLOSE_DEF_WINDOW = 120.0
+CLOSE_REPLY = 30.0        # the defense saves time only if, stopping the clock after every down it has a timeout for,
+CLOSE_PLAY = 6.0          # (a play ~6 s, a gap run down ~39 s) it gets the ball back with this long left: a kickoff
+CLOSE_GAP = 39.0          # and a few throws to a long kick
+# A hurry-up from a running clock in the last minute is faster: the urgent draw scaled and capped, from x0.75 and 18 s
+# at 0:00 to as drawn and 26 s at 1:00 (NFL 2016-25 no-huddle snaps after the whistle: median 15.8 s over the whole
+# pool, 13.4 s inside 0:30 and 11.8 s inside 0:20; the last minute's p99 26 s, inside 0:30 22 s)
+URGENT_LATE = (60.0, 0.75, 18.0, 26.0)
+# 4th down, the sound choice (NFL coaches 2020-25): a go must beat the best kick by FOURTH_GO_EDGE win probability (the
+# one-step look-ahead overrates keeping the ball: up 10 at 5:00 its WP is 0.76-0.92 for a team that wins ~97%); coaches
+# all but never go on 4th and 2+ in their own half (2-10%) or 4th and 1 inside their 20 (6%) unless trailing in the
+# last 3:00 (by 4+ in the last 5:00, by 9+ in the last 7:00: then no edge either); trailing by 9+ in the last 5:00
+# nobody punts from the other half (0-2%); a field goal that ties or takes the lead in the last 5:00 is kicked on 4th
+# and 2+ when it is a good one (67-100%)
+FOURTH_GO_EDGE = 0.02
+FOURTH_KICK_P = 0.75
 TEMPO_NAMES = {"hurry": HURRY, "normal": NORMAL, "milk": MILK, "urgent": URGENT}
 SNAP, PAT, KICKOFF, DONE = range(4)
 KICKOFF_START_YL = 70.0   # mean receiving-team start under 2024-25 kickoff rules
@@ -259,6 +278,7 @@ class Simulator:
 
     # ----------------------------------------------------------------- PAT ---
     def _pat(self, S, u, act):
+        self._no_try(S, np.flatnonzero(S.phase == PAT))
         ix = np.flatnonzero(S.phase == PAT)
         if not ix.size:
             return
@@ -287,8 +307,9 @@ class Simulator:
         onside = (self.half == 2) & (margin_k < 0) & (
             ((t_half <= 125) & (S.to[ix, kt] <= 1)) | (t_half <= 65) | ((t_half <= 160) & (margin_k <= -9)))
         onside &= ~S.free_kick[ix]
-        if "kick" in act:
+        if "kick" in act:   # only a team behind may declare one (2024+ rules); a free kick after a safety is no kickoff
             onside[:] = act["kick"] == "onside"
+            onside &= (margin_k < 0) | S.free_kick[ix]
         ko = self.b.kickoffs
         j = (u[ix, 4] * len(ko["start_yl"])).astype(int)
         start = ko["start_yl"][j]
@@ -312,6 +333,7 @@ class Simulator:
             S.phase[r] = PAT
         over = (S.t[ix] <= self.half_end) & (S.phase[ix] == SNAP)
         S.phase[ix[over]] = DONE
+        self._no_try(S, ix)
 
     # ---------------------------------------------------------------- SNAP ---
     def _snap(self, S, u, act):
@@ -342,10 +364,12 @@ class Simulator:
             closing = (margin >= -2) & (margin <= 0) & (t_half <= CLOSE_WINDOW) & (off_to > 0) & (
                 self.fg_prob(yl + FG_SNAP_YARDS, o) >= CLOSE_FG_P)
             off_wants &= ~closing                                 # timeouts are kept for the kick
-            # the defense saves time for a reply when a field goal would beat it, whatever timeouts the offense has
-            # left (players saw a defense let the clock run out on them with the offense in range and out of timeouts)
-            def_saves = (margin >= -2) & (margin <= 0) & (t_half <= CLOSE_DEF_WINDOW) & (
-                self.fg_prob(yl + FG_SNAP_YARDS, o) >= CLOSE_FG_P)
+            # the defense saves time for a reply when a field goal would beat it: only when the offense can run the
+            # clock down to its kick (a timeout left: without one the running clock is the offense's problem), and only
+            # if stopping the clock after every down it can still gets it the ball back with time to answer
+            kick_at = t_half - (4 - down) * CLOSE_PLAY - np.maximum(5 - down - def_to, 0) * CLOSE_GAP
+            def_saves = (margin >= -2) & (margin <= 0) & (t_half <= CLOSE_DEF_WINDOW) & (off_to > 0) & (
+                kick_at >= CLOSE_REPLY) & (self.fg_prob(yl + FG_SNAP_YARDS, o) >= CLOSE_FG_P)
             def_wants |= def_saves
             attempt = np.ones(ix.size, bool)
             run_out = np.zeros(ix.size, bool)
@@ -431,6 +455,12 @@ class Simulator:
         runoff[mk] = KNEEL_RUNOFF[0] + (KNEEL_RUNOFF[1] - KNEEL_RUNOFF[0]) * u[ix[mk], 0]
         mf = tempo == T_FIRE
         runoff[mf] = FIRE_DRILL[0] + (FIRE_DRILL[1] - FIRE_DRILL[0]) * u[ix[mf], 0]
+        # the last minute's hurry-up is faster
+        late = (tempo == URGENT) & (t_half <= URGENT_LATE[0])
+        if late.any():
+            f = np.clip(t_half / URGENT_LATE[0], 0.0, 1.0)
+            runoff = np.where(late, np.minimum(runoff * (URGENT_LATE[1] + (1 - URGENT_LATE[1]) * f),
+                                               URGENT_LATE[2] + (URGENT_LATE[3] - URGENT_LATE[2]) * f), runoff)
         runoff = np.where(run_c, np.maximum(runoff - S.credit[ix], 0.0), 0.0)
         if free and closing.any():   # running it down: never past the point where the kick is still safe
             cap = closing & run_c & (tempo == MILK)
@@ -567,7 +597,17 @@ class Simulator:
         wp_punt = 1 - w[5]
         wp_fg = np.where(p_fg > 0.02, wp_fg, -1.0)
         wp_punt = np.where(yl >= 35, wp_punt, -1.0)
-        choice = np.where((wp_go >= wp_fg) & (wp_go >= wp_punt), -1, np.where(wp_fg >= wp_punt, FG, PUNT))
+        # the sound choice, as NFL coaches make it (FOURTH_GO_EDGE, FOURTH_KICK_P)
+        behind_late = (half == 2) & (margin < 0) & ((t_half <= 180) | ((margin <= -4) & (t_half <= 300))
+                                                    | ((margin <= -9) & (t_half <= 420)))
+        wp_punt = np.where((half == 2) & (margin <= -9) & (t_half <= 300) & (yl < 50), -1.0, wp_punt)
+        kick = np.maximum(wp_fg, wp_punt)
+        choice = np.where((kick < 0) | (wp_go >= kick + np.where(behind_late, 0.0, FOURTH_GO_EDGE)), -1,
+                          np.where(wp_fg >= wp_punt, FG, PUNT))
+        choice = np.where((choice == -1) & (wp_punt >= 0) & ~behind_late & (yl >= 50) & ((ytg >= 2) | (yl >= 80)),
+                          PUNT, choice)
+        choice = np.where((half == 2) & (t_half <= 300) & (margin >= -3) & (margin <= 0) & (ytg >= 2)
+                          & (p_fg >= FOURTH_KICK_P), FG, choice)
         if u5 is not None and self.ctx.coach4th is not None and any(c is not None for c in self.ctx.coach4th):
             choice = self._coach_choice(S, ix, o, margin, t_half, p_fg, u5, choice)
         # Hard end-of-game logic the WP model cannot know precisely.
@@ -685,7 +725,11 @@ class Simulator:
         in_win = (S.t[ix] - dur - self.half_end) <= self.oob_window
         stop = incomplete | (oob & in_win) | (penalty & in_win) | change | score_play
         credit = np.where(oob, self.oob_credit, np.where(penalty, self.pen_credit, 0.0))
+        t0 = S.t[ix].copy()
         self._clock_after_play(S, ix, dur, stop, credit)
+        # a half cannot end on an accepted defensive foul: an untimed down
+        untimed = penalty & (yards > 0) & ~change & ~score_play & (S.t[ix] <= self.half_end)
+        S.t[ix] = np.where(untimed, np.minimum(t0, self.half_end + 0.5), S.t[ix])
 
         # state transitions
         keep = ~change & ~score_play
@@ -765,9 +809,19 @@ class Simulator:
     def _end_half_check(self, S, ix):
         over = (S.t[ix] <= self.half_end) & (S.phase[ix] == SNAP)
         S.phase[ix[over]] = DONE
-        # a score as time expires still gets its (untimed) PAT; skip the kickoff
+        # a score as time expires still gets its (untimed) PAT, unless it cannot change the result; skip the kickoff
         ko_over = (S.t[ix] <= self.half_end) & (S.phase[ix] == KICKOFF)
         S.phase[ix[ko_over]] = DONE
+        self._no_try(S, ix)
+
+    def _no_try(self, S, ix):
+        """A touchdown as the fourth quarter runs out: no try when it cannot change the result (NFL since 2018), a lead
+        or a deficit of 3 or more (a try is worth 2 at most, to either team: the defense can return one for 2)."""
+        if self.half != 2 or not ix.size:
+            return
+        p = S.pos[ix]
+        m = np.abs(S.score[ix, p] - S.score[ix, 1 - p])
+        S.phase[ix[(S.phase[ix] == PAT) & (S.t[ix] <= self.half_end) & (m >= 3)]] = DONE
 
     # --------------------------------------------------------------- value ---
     def _value(self, S, perspective):
