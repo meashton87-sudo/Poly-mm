@@ -78,7 +78,7 @@
   // your defense on their snaps: the looks it shows (the engine draws their play from real plays against it)
   const DEFS = ['blitz', 'load', 'soft'];
   const DEF = { blitz: { label: 'Blitz', sub: 'Send extra rushers' }, load: { label: 'Load the box', sub: 'Stop the run' },
-    soft: { label: 'Play it soft', sub: 'Keep it in front' } };
+    soft: { label: 'Play it soft', sub: 'Drop seven into coverage' } };
   // the defense's pre-snap look, as the engine buckets real plays: a light box (6 or fewer near the line) or a loaded
   // one (7 or more), with or without a blitz
   const LOOKS = [{ loaded: false, blitz: false }, { loaded: false, blitz: true }, { loaded: true, blitz: false }, { loaded: true, blitz: true }];
@@ -257,7 +257,11 @@
     '2015_19_GB_ARI#4454': Date.parse('2026-10-18T13:00:00Z') };
   const stateKey = () => (VS ? `${STORE}:vs:${VS_ROOM}` : SURV ? `${STORE}:surv` : PRACTICE ? PRACTICE_KEY : DRIVE ? `${STORE}:drive:${DRIVE}` : RUN_N ? `${STORE}:run:${RUN_N}` : `${STORE}:day:${dayN}`);
   const saveState = () => save(stateKey(), state);
-  const seedKey = () => (VS ? `vs${vs.seed}` : SURV ? `s${state.run}:${state.games.length}` : PRACTICE ? `p${state.run}` : DRIVE ? `drive${DRIVE}` : RUN_N ? `run${RUN_N}` : dayN);    // what the engine's draws are seeded by
+  // what the engine's draws are seeded by. A Pro drive or playoff run by its try too (state.tryAt: a try again is a new
+  // state, a reload keeps it): each try a fresh challenge, where the same calls once played out the same way again.
+  // The daily (and a past day's, from the archive) stays the day's: the same draws for everyone that day
+  const tryOf = () => (state && state.tryAt ? `:${state.tryAt}` : '');
+  const seedKey = () => (VS ? `vs${vs.seed}` : SURV ? `s${state.run}:${state.games.length}` : PRACTICE ? `p${state.run}` : DRIVE ? `drive${DRIVE}${tryOf()}` : RUN_N ? `run${RUN_N}${tryOf()}` : dayN);
   let G = null;                   // the spot being played
   let ui = { step: null, fam: null, oob: false };
   let busy = false, lastFocus = null, tick = null, lastBall = null;
@@ -5523,7 +5527,9 @@
   }
   // the matchup behind a snap (engine.js MATCH): your call against their look, or their call against your defense
   const LOOK_NAME = ['the light box (six or fewer up front)', 'the blitz', 'the loaded box', 'the blitz'];
-  const DEF_NAME = { blitz: 'blitz', load: 'loaded box', soft: 'soft coverage' };
+  // a light box with nobody blitzing, against a pass: what it means is seven in coverage
+  const lookName = (b, kind) => (b === 0 && kind === 'pass' ? 'seven in coverage (no blitz, a light box)' : LOOK_NAME[b]);
+  const DEF_NAME = { blitz: 'blitz', load: 'loaded box', soft: 'coverage' };
   // a call's name inside a sentence: lower case, but RPO, QB, RB and the Hail Mary keep their capitals
   const callLower = (l) => (/^([A-Z]{2,}\b|Hail Mary)/.test(l) ? l : l[0].toLowerCase() + l.slice(1));
   function matchupLine(e, action) {
@@ -5536,8 +5542,8 @@
     if (e.team === G.me) {
       const b = action && action.looks ? Math.round(Math.log2(action.looks)) : -1;
       if (!(b >= 0 && b < 4)) return null;
-      const Look = `${LOOK_NAME[b][0].toUpperCase()}${LOOK_NAME[b].slice(1)}`;
-      if (e.match > 0) return { good: true, text: none ? `Good read: ${call} against ${LOOK_NAME[b]}. It just didn't work this time.` : `Good read: ${call} against ${LOOK_NAME[b]}.` };
+      const look = lookName(b, idx.calls[e.call].kind), Look = `${look[0].toUpperCase()}${look.slice(1)}`;
+      if (e.match > 0) return { good: true, text: none ? `Good read: ${call} against ${look}. It just didn't work this time.` : `Good read: ${call} against ${look}.` };
       return { good: false, text: big ? `${Look} was set up to stop ${call}, but you made the play anyway.` : `${Look} was set up to stop ${call}.` };
     }
     const d = action && DEF_NAME[action.def];
@@ -5546,6 +5552,7 @@
     return { good: false, text: none ? `They checked into ${call} against your ${d}, and you still stopped it.` : `They checked into ${call} against your ${d}.` };
   }
   function showResult(decisions, res, head) {
+    adsSoon(ADS_AFTER);
     drawAll();
     const d = $('dock');
     d.textContent = '';
@@ -5619,6 +5626,7 @@
     advance();
   }
   function takeBanner(d) {
+    adsSoon(ADS_WAIT);                 // (a call on screen: the ads' script once the game is up)
     stopNote(d);
     if (!G.banner) return;
     G.banner.classList.add('banner');
@@ -7319,6 +7327,35 @@
     openModal('Extra life', [el('p', 'note', 'Thanks for supporting the game. Your run continues when the timer ends.'), wrap, go]);
     onModalClose = () => clearInterval(tick);
   }
+  // Google AdSense's script on the game's page (site.py ADSENSE_LATER: its address in a meta): not during start-up,
+  // where it competed with the game's own files for the network and the phone's CPU, but once the game is up: on idle
+  // after the first play (a result on screen), or ADS_WAIT after the first call if no play is made, and only once the
+  // game's data is in and no snap is on its way or playing; at once for a unit between games (adBox); a page that
+  // shows neither (the intro left open, the Pro tab) gets it ADS_LATE after it loads. Auto ads come with the script
+  const ADS_AFTER = 1000, ADS_WAIT = 15000, ADS_LATE = 30000;
+  let adsIn = false, adsDue = Infinity, adsT = 0;
+  function adsLoad() {
+    const m = document.querySelector('meta[name="ads-src"]');
+    if (adsIn || !m) return;
+    adsIn = true;
+    clearTimeout(adsT);
+    const sc = document.createElement('script');
+    sc.async = true; sc.crossOrigin = 'anonymous'; sc.src = m.content;
+    document.head.append(sc);
+  }
+  function adsSoon(ms) {
+    if (adsIn || !document.querySelector('meta[name="ads-src"]')) return;
+    const due = performance.now() + ms;
+    if (due >= adsDue) return;
+    adsDue = due;
+    clearTimeout(adsT);
+    adsT = setTimeout(() => Promise.resolve(fetched ? dataBytes : null).catch(() => null).then(() => {
+      // (never while a snap is on its way or playing: a little after it)
+      if (busy || document.querySelector('#field.playing')) { adsDue = Infinity; adsSoon(3 * ADS_AFTER); return; }
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(adsLoad, { timeout: 3000 }); else adsLoad();
+    }), ms);
+  }
+  addEventListener('load', () => adsSoon(ADS_LATE));
   function adBox() {
     // another network's banner (site.py: web/ads/banner.html, e.g. Adsterra): in a sandboxed frame of its own, so its
     // script can't touch the game or send the page elsewhere (a tap on the ad still opens it in a new tab)
@@ -7334,6 +7371,7 @@
     }
     const client = document.querySelector('meta[name="google-adsense-account"]'), slot = document.querySelector('meta[name="ad-slot"]');
     if (!client || !slot) return null;
+    adsLoad();
     const box = el('div', 'adbox'), ins = document.createElement('ins');
     ins.className = 'adsbygoogle';
     ins.style.display = 'block';
@@ -7805,7 +7843,7 @@
       'You\'re the head coach for the last minutes of a real NFL game. A new drive every day.',
       'Call Run, Pass or RPO. On a pass, every receiver shows his route: tap any of them on the field to change it, then pick who gets the ball, with play action or a rollout if you like. Timeouts, spikes, kicks and tempo pop up when they matter. On their ball, you call the defense, and when they line up to kick, you choose to go for the block or play it safe.',
       'Every snap is a real NFL play run against your call. Tap the field to skip, or a player to see who he is.',
-      'Matchups matter: a blitz beats deep shots but loses to quick passes and screens; a loaded box stuffs runs but gets beaten by play-action and deep shots; playing soft stops deep shots but gives up runs. Read their look before you call, and when you call the defense, they will check into what beats it.',
+      'Matchups matter, as measured on the real plays: a blitz beats deep shots but loses to quick passes and screens; a loaded box stuffs runs but gets beaten by screens and play action; playing soft (no blitz, seven in coverage) takes away quick passes and screens but gives up runs. Read their look before you call, and when you call the defense, they will check into what beats it.',
       'Beat the real coach\'s result, and find out which NFL coach you call it like.',
       'Survivor: random real fourth quarters back to back. Win to keep going; lose once and your run is over. Tied at the end, you play overtime: both teams get the ball, then the next score wins.',
       `Your streak: every ${FREEZE_EVERY} days in a row earn a streak freeze (you can hold ${FREEZE_MAX}). Miss a day and a freeze covers it when you play the next one. Badges for the milestones are in your stats.`,
