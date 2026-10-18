@@ -7,9 +7,9 @@
 //   GET    /daily?date=2026-10-14                         -> that day's players: { n, hist, spots, top }
 //   GET    /days                                           -> every day played: { days: [{ date, n, avg, best }] }
 //   GET    /madden                                         -> every John Madden found: { odds, finds: [{ date, at, code }] }
-//   POST   /daily  { date, key, p, spots: [w, ...], name? }  -> the same, after counting your result (1-3 spots: the
-//                                                             day's drive, or the three spots days had before), and
-//                                                             week: the week to that date with your own line
+//   POST   /daily  { date, key, p, spots: [w, ...], name?, restarted? }  -> the same, after counting your result (1-3
+//                                                             spots: the day's drive, or the three spots days had
+//                                                             before), and week: the week to that date with your own line
 //   GET    /week?date=2026-10-17                          -> the week to that date: { from, to, best, n, top: [{ name, pts, days }] }
 //   DELETE /week?name=Eli  (Authorization: Bearer <ADMIN_TOKEN>)          a name off the day and week lists, for good
 // The daily game: every device's first result of a day counts once (a replay of the day changes nothing). p is the
@@ -18,6 +18,11 @@
 // in points of win chance (-50..50, clipped) and its average, and the top 10 named players (name optional; a name
 // is claimed the same way as on the survivor board, one claim across both). date is the player's local date, so
 // one within a day of the server's.
+// A restarted drive (restarted: true; game.js restartAsk: the player started the day's drive over, so may have seen
+// the day's draws play out once) is still the device's first result of the day (a later post changes nothing), but
+// it stays out of the day's numbers: not in n, the histogram, the spots' averages, the day's list or the weeks. Out of
+// n too, so n is always the histogram's total (the page's rank and median read both). The day counts them on their
+// own (nr); the answer's you carries restarted: true.
 // Players are identified by name (a game among friends): trimmed, control characters dropped, 1-24 characters,
 // matched case-insensitively. The first post under a name claims it for that device's key (a random string the page
 // keeps; only its SHA-256 is stored), so nobody else can overwrite your score. Signed in ({ session } with the post:
@@ -148,7 +153,7 @@ async function ownerOf(storage, lower) {
 }
 const claim = (storage, lower, kh) => storage.put(`claim:${lower}`, kh);
 const emptyDay = () => ({ n: 0, hist: new Array(101).fill(0), spots: [0, 1, 2].map(() => ({ n: 0, sum: 0, hist: new Array(101).fill(0) })), top: [] });
-const dayView = (d) => ({ n: d.n, hist: d.hist, spots: d.spots.map((x) => ({ n: x.n, avg: x.n ? x.sum / x.n : 0, hist: x.hist })),
+const dayView = (d) => ({ n: d.n, nr: d.nr || 0, hist: d.hist, spots: d.spots.map((x) => ({ n: x.n, avg: x.n ? x.sum / x.n : 0, hist: x.hist })),
   top: shown(d.top).slice(0, DAY_TOP).map(({ name, p }) => ({ name, p })) });
 function dateOk(date, now = Date.now()) {
   if (!DATE_RE.test(date)) return false;
@@ -270,7 +275,7 @@ async function daily(req, env, storage, hits, h, url) {
   let body;
   try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
   const date = String((body && body.date) || ''), p = body && body.p, devKey = String((body && body.key) || '');
-  const spots = Array.isArray(body && body.spots) ? body.spots : null, raw = clean(body && body.name);
+  const spots = Array.isArray(body && body.spots) ? body.spots : null, raw = clean(body && body.name), restarted = !!(body && body.restarted === true);
   const refused = !!raw && blocked(raw), name = refused ? '' : raw;   // a refused name: the result counts, unnamed
   if (!dateOk(date)) return json({ error: 'date (YYYY-MM-DD, today) wanted' }, 400, h);
   if (!(typeof p === 'number' && p >= 0 && p <= 1)) return json({ error: 'p (0-1) wanted' }, 400, h);
@@ -289,30 +294,33 @@ async function daily(req, env, storage, hits, h, url) {
     unclaimed = !owner;
   }
   const weekOut = async () => weekFor(storage, date, (prev && prev.name) || (name && !taken ? name : ''));
-  if (prev) {           // the day's first result stands; a name given afterwards puts that result on the list
-    if (name && !prev.name && !taken) {
+  if (prev) {           // the day's first result stands; a name given afterwards puts that result on the list (never a restarted one)
+    if (name && !prev.name && !taken && !prev.restarted) {
       prev.name = name;
       await listed(storage, day, date, name, nk, prev.p);
       await storage.put(mine, prev);
       await storage.put(`day:${date}`, day);
       if (unclaimed) await claim(storage, name.toLowerCase(), nk);
     }
-    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots }, week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}),
+    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots, ...(prev.restarted ? { restarted: true } : {}) }, week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}),
       ...(prev.madden ? { madden: prev.madden } : {}) }, 200, h);
   }
   const pt = Math.round(p * 100);
-  day.n += 1;
-  day.hist[pt] += 1;
-  spots.forEach((w, i) => { const x = day.spots[i]; x.n += 1; x.sum += w; x.hist[Math.max(0, Math.min(100, Math.round(w * 100) + 50))] += 1; });
-  if (name && !taken) await listed(storage, day, date, name, nk, p);
-  const you = { p, spots };
+  if (restarted) day.nr = (day.nr || 0) + 1;        // off the day's numbers and lists (above)
+  else {
+    day.n += 1;
+    day.hist[pt] += 1;
+    spots.forEach((w, i) => { const x = day.spots[i]; x.n += 1; x.sum += w; x.hist[Math.max(0, Math.min(100, Math.round(w * 100) + 50))] += 1; });
+    if (name && !taken) await listed(storage, day, date, name, nk, p);
+  }
+  const you = { p, spots, ...(restarted ? { restarted: true } : {}) };
   const madden = await maddenDraw(env, storage, kh, date);
   if (madden) {
     const list = (await storage.get('madden:list')) || [];
     list.push({ date, at: new Date().toISOString(), code: madden });
     await storage.put('madden:list', list.slice(-MADDEN_KEEP));
   }
-  await storage.put(mine, { ...you, ...(name && !taken ? { name } : {}), ...(madden ? { madden } : {}) });
+  await storage.put(mine, { ...you, ...(name && !taken && !restarted ? { name } : {}), ...(madden ? { madden } : {}) });
   await storage.put(`day:${date}`, day);
   if (unclaimed && name) await claim(storage, name.toLowerCase(), nk);
   return json({ ...dayView(day), counted: true, you, week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}), ...(madden ? { madden } : {}) }, 200, h);

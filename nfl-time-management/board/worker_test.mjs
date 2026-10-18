@@ -796,6 +796,40 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual((await day({ date: D(51), key: wkey('rl-x'), p: 0.5, spots: [0] }, one)).status, 429, 'rate limited');
   Date.now = realNow;
 }
+// a restarted daily (game.js restartAsk: the day's drive started over): the device's first result all the same (a later
+// post changes nothing), but off the day's numbers (n, histogram, the spots' averages: n stays the histogram's total)
+// and off the day's and week's lists, named or not; counted on its own (nr)
+{
+  const realNow = Date.now, date = new Date(Date.parse('2027-06-01T12:00:00Z')).toISOString().slice(0, 10);
+  Date.now = () => Date.parse(date + 'T15:00:00Z');
+  const rk = (who) => `restart-test-key-${who}`.padEnd(24, '0');
+  let w = await (await day({ date, key: rk('ann'), p: 0.6, spots: [0.1], name: 'Ann' })).json();
+  assert.deepStrictEqual([w.counted, w.n, w.nr, w.hist[60]], [true, 1, 0, 1], 'a plain result: counted');
+  w = await (await day({ date, key: rk('rob'), p: 0.97, spots: [0.4], name: 'Rob', restarted: true })).json();
+  assert.deepStrictEqual([w.counted, w.n, w.nr, w.hist[97], w.spots[0].n], [true, 1, 1, 0, 1], 'restarted: not in n, the histogram or the spot');
+  assert.ok(Math.abs(w.spots[0].avg - 0.1) < 1e-9, 'nor the spot\'s average');
+  assert.deepStrictEqual(w.you, { p: 0.97, spots: [0.4], restarted: true }, 'its own result, marked');
+  assert.deepStrictEqual(w.top.map((x) => x.name), ['Ann'], 'not on the day\'s list');
+  assert.strictEqual(w.week.n, 1, 'nor the week\'s'); assert.strictEqual(w.week.you, undefined);
+  assert.ok(!store.has('wn:rob') || !(date in store.get('wn:rob').d), 'no week points kept');
+  assert.strictEqual(w.hist.reduce((a, c) => a + c, 0), w.n, 'n is the histogram\'s total');
+  // the first result stands: a plain post after it is still the restarted one, never counted, never listed
+  w = await (await day({ date, key: rk('rob'), p: 0.99, spots: [0.5], name: 'Rob' })).json();
+  assert.deepStrictEqual([w.counted, w.n, w.nr, w.you.p, w.you.restarted], [false, 1, 1, 0.97, true], 'a later plain post changes nothing');
+  assert.deepStrictEqual(w.top.map((x) => x.name), ['Ann']);
+  // unnamed, then named afterwards: still off the lists
+  await day({ date, key: rk('kim'), p: 0.88, spots: [0], restarted: true });
+  w = await (await day({ date, key: rk('kim'), p: 0.88, spots: [0], name: 'Kim' })).json();
+  assert.deepStrictEqual([w.n, w.nr, w.top.map((x) => x.name).join()], [1, 2, 'Ann'], 'named afterwards: still off');
+  // only a real true marks it (anything else is a plain result); GET and /days read the counted ones only
+  w = await (await day({ date, key: rk('lee'), p: 0.5, spots: [0], restarted: 'yes' })).json();
+  assert.deepStrictEqual([w.n, w.nr, w.you.restarted], [2, 2, undefined]);
+  const g = await (await call('GET', null, { path: `/daily?date=${date}` })).json();
+  assert.deepStrictEqual([g.n, g.nr, g.hist[97]], [2, 2, 0]);
+  const dd = (await (await call('GET', null, { path: '/days' })).json()).days.find((x) => x.date === date);
+  assert.deepStrictEqual([dd.n, dd.best], [2, 0.6], 'the stats page: counted results only');
+  Date.now = realNow;
+}
 // Accounts, continued: stats that follow the account, usernames on the boards, friend leagues, the daily email
 {
   const realFetch = globalThis.fetch;

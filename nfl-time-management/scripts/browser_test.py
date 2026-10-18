@@ -7,7 +7,10 @@ Each daily episode plays one day's drive (the date shifted forward, so every kin
 episode plays games back to back, starting a new run when one ends, until it has finished that many games. Calls
 are random among every button the dock offers (timeouts, spikes, kicks, tempo and routes included), and now and
 then the bot opens the help, the stats, the game details or the player ratings mid-play, replays a snap, waits out
-an animation instead of skipping it, or reloads the page mid-drive (the drive must pick up where it was).
+an animation instead of skipping it, or reloads the page mid-drive (the drive must pick up where it was). Every
+other daily episode starts its drive over (Start over: the ☰ menu on a phone, the button under the field elsewhere)
+after its first call: never mid-play, asked first, the day's state a new try marked restarted that a reload keeps, and the
+end card saying it is off the leaderboard. Survivor never offers it.
 Needs Playwright with Chromium (pip install playwright; python -m playwright install chromium).
 """
 from __future__ import annotations
@@ -55,6 +58,9 @@ DOTS = """() => {
   const up = qb && ball ? Math.sign(pt(tr(ball))[1] - pt(tr(qb))[1]) || -1 : -1;
   return { rec, up };
 }"""
+# the day's saved drive (the daily's own state): its restarts and the calls made so far
+DAYSTATE = """() => { const k = Object.keys(localStorage).find((x) => /:day:\\d+$/.test(x)), st = k && JSON.parse(localStorage.getItem(k));
+  return st ? { restarts: st.restarts || 0, calls: st.spots.reduce((a, x) => a + ((x && x.decisions) || []).length, 0), done: !!st.done } : null; }"""
 SNAP = "() => [document.getElementById('dock').innerText, document.getElementById('bar').innerText].join('|')"
 BAD_TEXT = re.compile(r"undefined|NaN|\[object|Infinity")
 # how long a screen may sit unchanged before it counts as frozen (s); a play's animation runs ~5-15 s
@@ -178,6 +184,8 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     last_key, since, chaos_done = None, time.time(), set()
     trail: list[str] = []            # the last screens and actions, printed with a failure
     first_q = None                   # the quarter a daily drive starts in: a first-half drive ends at halftime
+    restart_ep = mode == "daily" and seed % 2 == 1 and quirk != "nostore"     # (no storage: a reload is a new try already)
+    restarted = False
     first_call = first               # the first call shows on the spot's own facts (game.js firstInfo), not the simulator's
     act = lambda what: trail.append(f"  > {what}")
     t_start = time.time()
@@ -216,6 +224,12 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 elif st == "intro":
                     act("intro Next"); await page.click("#intro .btn", timeout=3000)
                 elif st == "animating":
+                    if restart_ep and "restart_mid" not in chaos_done:
+                        # never mid-play: Start over during a play's animation asks nothing
+                        chaos_done.add("restart_mid")
+                        await page.evaluate("() => document.getElementById('restartBtn').click()")
+                        if await page.evaluate("() => !document.getElementById('modal').hidden"):
+                            problems.append("Start over asked in the middle of a play"); continue
                     if rnd.random() < 0.6:
                         await page.click("#field", timeout=1500)
                 elif st == "result":
@@ -250,6 +264,10 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         await page.wait_for_timeout(200)
                     if mode == "daily":
                         finished = max(finished, 1)
+                        if restarted and not await page.locator("#done .rsnote").count():
+                            problems.append("a restarted daily's end card does not say it is off the leaderboard")
+                        if restart_ep and not restarted:
+                            print(f"{name}: the drive ended before a second call, no Start over exercise")
                         # home: the end card's Home, the ☰ menu's first item, and the bare address (the day done)
                         problems.extend(await visit_home(page, base, quirk != "nostore"))
                         break
@@ -260,6 +278,35 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     if finished >= target:
                         break
                     await page.get_by_role("button", name="New run").click(timeout=3000)
+                elif st == "choose" and mode == "survivor" and "norestart" not in chaos_done:
+                    chaos_done.add("norestart")
+                    if not await page.evaluate("() => document.getElementById('restartBtn').hidden"):
+                        problems.append("survivor offers Start over (one life: it never should)")
+                elif st == "choose" and restart_ep and "restart" not in chaos_done and (await page.evaluate(DAYSTATE) or {}).get("calls", 0) >= 1:
+                    # Start over, a call in: asked first (the leaderboard note), then a new try the page reloads into
+                    chaos_done.add("restart"); act("START OVER")
+                    if mobile:
+                        await page.click("#menuBtn", timeout=3000)
+                        item = page.locator("#bmenu [data-restart]")
+                        if not await item.is_visible():
+                            problems.append("the ☰ menu has no Start over during the daily"); continue
+                        await item.click(timeout=3000)
+                    else:
+                        if not await page.locator("#restartBtn").is_visible():
+                            problems.append("no Start over under the field during the daily"); continue
+                        await page.click("#restartBtn", timeout=3000)
+                    await page.wait_for_timeout(200)
+                    txt = await page.evaluate("() => document.getElementById('modal').hidden ? '' : document.getElementById('modal').innerText")
+                    if "leaderboard" not in txt.lower():
+                        problems.append(f"Start over did not ask first with the leaderboard note: {txt[:160]!r}"); continue
+                    async with page.expect_event("load"):
+                        await page.click("#modal [data-restart-go]", timeout=3000)
+                    await page.wait_for_timeout(800)
+                    ds = await page.evaluate(DAYSTATE)
+                    if not ds or ds["restarts"] != 1 or ds["calls"] or ds["done"]:
+                        problems.append(f"after Start over the day's state is not a new, marked try: {ds}")
+                    restarted = True
+                    print(f"{name}: started over (asked first, a new try marked restarted)")
                 elif st == "choose":
                     if first_call:
                         first_call = False

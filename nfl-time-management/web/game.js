@@ -261,7 +261,9 @@
   const SPOT_FIXED = { '2018_14_NE_MIA#4172': Date.parse('2026-10-16T22:50:00Z'), '2023_22_SF_KC#4561': Date.parse('2026-10-18T13:00:00Z'),
     '2015_19_GB_ARI#4454': Date.parse('2026-10-18T13:00:00Z') };
   const stateKey = () => (VS ? `${STORE}:vs:${VS_ROOM}` : SURV ? `${STORE}:surv` : PRACTICE ? PRACTICE_KEY : DRIVE ? `${STORE}:drive:${DRIVE}` : RUN_N ? `${STORE}:run:${RUN_N}` : `${STORE}:day:${dayN}`);
-  const saveState = () => save(stateKey(), state);
+  // (not once a restart is under way: a grading still running for the old try must not save it back over the new one)
+  let restarting = false;
+  const saveState = () => { if (!restarting) save(stateKey(), state); };
   // what the engine's draws are seeded by. A Pro drive or playoff run by its try too (state.tryAt: a try again is a new
   // state, a reload keeps it): each try a fresh challenge, where the same calls once played out the same way again.
   // The daily (and a past day's, from the archive) stays the day's: the same draws for everyone that day
@@ -1355,6 +1357,7 @@
     mb.addEventListener('click', () => {
       menu.hidden = !menu.hidden; mb.setAttribute('aria-expanded', String(!menu.hidden));
       menu.querySelector('[data-acct]').hidden = $('acctBtn').hidden;       // (Account only where the site has sign-in)
+      menu.querySelector('[data-restart]').hidden = $('restartBtn').hidden;     // (Start over only where it is offered: restartSync)
     });
     menu.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => { close(); const t = $(b.dataset.go); if (t) t.click(); }));
     menu.querySelectorAll('[data-mode]').forEach((a) => a.addEventListener('click', close));
@@ -3797,6 +3800,7 @@
     return w >= 0.01 ? 'g' : w >= -0.01 ? 'y' : w >= -0.04 ? 'o' : 'r';
   }
   function drawBar() {
+    restartSync();
     const r = G.root, b = $('bar');
     b.textContent = '';
     const side = (i, right) => {
@@ -3844,6 +3848,7 @@
     $('play').hidden = which !== 'play';
     $('done').hidden = which !== 'done';
     $('boot').hidden = which !== 'boot';
+    restartSync();
   }
 
   function addLog(text, t, mine) {
@@ -4180,6 +4185,7 @@
     box.append(el('div', 'who', VS ? `You're the ${teamName(me)}. Your opponent has the ${teamName(op)}: they call their side, you call yours.`
       : `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
     if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
+    if (todayDaily() && state.restarts) box.append(el('div', 'who prac', 'Started over: this drive counts for your streak and stats, not on today’s leaderboard.'));
     if (PRACTICE) box.append(el('div', 'who prac', 'Practice: graded like the daily, but it doesn’t count toward your stats, streak or the leaderboard.'));
     const chl = challengeLine();
     if (chl) box.append(chl);
@@ -6667,6 +6673,53 @@
     });
     return strip;
   }
+  // ---- Start over: a drive gone wrong played again from its first snap, asked for on the field (the ☰ menu's last item
+  // on a phone, the button under the field elsewhere; game.html), confirmed first, never while a play runs. Never in
+  // survivor (one life is the game), practice or Versus. What it keeps fair:
+  // - a Pro drive or playoff run: a fresh try (a new tryAt, so new draws: seedKey), and the try left counts for nothing
+  //   (a drive's or run's record is written at its finish only; the best grade stays). A run starts at its first game.
+  // - a past day (the archive, Pro): from the top, freely (it posts nowhere).
+  // - today's daily: its draws are everyone's, so a restart could learn them and farm the day's list. It may restart,
+  //   and the result counts for the player as any day does (the score, the stats day, the streak), but the day's state
+  //   remembers it (restarts) and the /daily post says so (restarted): board/worker.js keeps it off the day's and the
+  //   week's lists, the histogram and the averages.
+  // The new try is saved before the page reloads into it (a reload after it goes on with it); the reload takes the
+  // workers and any grading still running for the old try with it, and nothing saves the old one after (restarting).
+  const RESTART_OK = !(SURV || PRACTICE || VS);
+  const todayDaily = () => !(SURV || PRACTICE || VS || DRIVE || RUN_N || ARCH_DAY);
+  const canRestart = () => RESTART_OK && !restarting && !!G && !!state && !state.done && !G.over && !$('play').hidden;
+  function restartSync() { const b = $('restartBtn'); if (b) b.hidden = !canRestart(); }
+  const playRunning = () => busy || $('field').classList.contains('playing');
+  function restartAsk() {
+    if (!canRestart()) return;
+    if (playRunning()) { toast('Wait for this play to finish'); return; }
+    const what = DRIVE ? 'this drive' : RUN_N ? 'this run' : ARCH_DAY ? 'this day' : 'today’s drive';
+    const note = DRIVE ? 'This try won’t count. The new try gets fresh luck on every snap; your best grade here stays.'
+      : RUN_N ? 'This try won’t count. The run starts again from its first game, with fresh luck on every snap.'
+        : ARCH_DAY ? 'It starts again from the first snap. Archive days don’t go on any leaderboard.'
+          : 'Your streak still counts, but a restarted drive’s score doesn’t go on today’s leaderboard.';
+    const go = el('button', 'btn', 'Start over'), keep = el('button', 'btn ghostbtn', 'Keep playing');
+    go.type = 'button'; keep.type = 'button';
+    go.dataset.restartGo = '';
+    go.addEventListener('click', () => {
+      closeModal();
+      if (!canRestart() || playRunning()) return;
+      restartGo();
+    });
+    keep.addEventListener('click', closeModal);
+    const row = el('div', 'row restartacts');
+    row.append(go, keep);
+    openModal(`Start ${what} over?`, [el('p', 'note', note), row]);
+    track('restart_ask', { mode: modeName() });
+  }
+  function restartGo() {
+    const n = (state.restarts || 0) + 1;
+    track('restart', { mode: modeName(), calls: allDecisions().length, restarts: n, ...(DRIVE ? { drive: DRIVE } : RUN_N ? { run: RUN_N } : { day: dayN }) });
+    restarting = true;
+    pool.forEach((sl) => { try { sl.w.terminate(); } catch (e) { /* gone already */ } });
+    save(stateKey(), { spots: [], current: 0, done: false, tryAt: Date.now(), restarts: n });
+    location.reload();
+  }
   // a drive played again from the snap: its saved state cleared (its best grade stays)
   // "the Divisional round", "the Super Bowl": a playoff round in a sentence
   const roundIn = (r) => (/Championship|Super Bowl/.test(r) ? `the ${r}` : `the ${r} round`);
@@ -6763,6 +6816,7 @@
         ...(scoreWhy(p) ? [el('p', 'pct-why', scoreWhy(p))] : []),
         Object.assign(el('div', 'pct-lab brag'), { hidden: true }),
         el('div', 'streak', RUN_N ? 'Playoff run' : ARCH_DAY ? 'From the archive' : streakLine(sk)));
+      if (todayDaily() && state.restarts) box.append(el('p', 'note rsnote', 'Restarted: this counts for your streak and stats, not on today’s leaderboard.'));
       if (!RUN_N && state.froze && state.froze.length) box.append(el('div', 'frz', `❄️ Streak saved by a freeze${state.froze.length > 1 ? ` (${state.froze.length} days)` : ''}: ${state.froze.length > 1 ? 'the days you missed count' : 'the day you missed counts'}`));
     }
     if (RUN_N) {                      // the run's record against the real one; a loss ended it (state.out: that game)
@@ -7510,7 +7564,8 @@
     box.hidden = true;
     if (ARCH_DAY || DRIVE || RUN_N) return box;        // the archive, a historic drive, a run: nothing to post
     const post = async () => {
-      const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: driveDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)), ...(myName() ? { name: myName(), ...withSession() } : {}) }));
+      const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: driveDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)),
+        ...(state.restarts ? { restarted: true } : {}), ...(myName() ? { name: myName(), ...withSession() } : {}) }));      // (restarted: off the lists, restartAsk)
       if (!res.ok) throw new Error(`daily ${res.status}`);
       return res.json();
     };
@@ -7528,15 +7583,19 @@
     box.textContent = '';
     box.hidden = false;
     // one big number on the screen (your score against NFL play-callers); here, where you rank among today's players
-    const you = d.you ? d.you.p : p, pt = Math.round(you * 100), others = d.n - 1;
-    let above = 0, ties = -1;
+    // (a restarted drive's result is off the day's numbers, worker.js: where it would rank among them, not counted in)
+    const rs = !!(d.you && d.you.restarted);
+    const you = d.you ? d.you.p : p, pt = Math.round(you * 100), others = d.n - (rs ? 0 : 1);
+    let above = 0, ties = rs ? 0 : -1;
     d.hist.forEach((c, k) => { if (k > pt) above += c; else if (k === pt) ties += c; });
     box.append(el('div', 'k', 'Everyone today'));
     // the brag: how many of today's other players you outcalled (the rank's own number, so the card has one)
     const beat = others > 0 ? Math.round((100 * Math.max(0, others - above - Math.max(ties, 0))) / others) : null;
-    box.append(el('p', 'daily-head', others <= 0 ? 'You’re the first to finish today. Check back later to see how you stack up.'
+    if (rs) box.append(el('p', 'daily-head', others <= 0 ? 'Restarted drive: not on today’s leaderboard. Nobody else has finished yet.'
+      : `Restarted drive: not on today’s leaderboard. It would have outcalled ${beat}% of today’s ${others.toLocaleString()} player${others === 1 ? '' : 's'}.`));
+    else box.append(el('p', 'daily-head', others <= 0 ? 'You’re the first to finish today. Check back later to see how you stack up.'
       : `You outcalled ${beat}% of today’s players · #${(above + 1).toLocaleString()} of ${d.n.toLocaleString()}${ties > 0 ? ` (tied with ${ties.toLocaleString()})` : ''}`));
-    if (beat != null && others >= 4 && onRank) onRank(beat, d.n);
+    if (!rs && beat != null && others >= 4 && onRank) onRank(beat, d.n);
     if (d.counted === false && d.you && Math.abs(d.you.p - p) > 0.005) box.append(el('p', 'note', `Your first finish today counts: ${Math.round(d.you.p * 100)}.`));
     // the day's scores, in the buckets your own stats use; yours highlighted
     const dist = el('div', 'dist');
@@ -7565,7 +7624,7 @@
       sp.append(row);
     });
     box.append(sp);
-    box.append(leaders(d, { rank: above + 1, n: d.n, pt }));
+    box.append(leaders(d, { rank: rs ? 0 : above + 1, n: d.n, pt }));       // (restarted: no line of yours on the list)
     if (d.refused) box.append(el('p', 'note', 'That name isn’t allowed on the list. Your result still counts; pick another name to be on it.'));
     else if (d.taken) box.append(el('p', 'note', `Someone else already plays as ${myName()} here. Pick another name to get on the list.`));
     if (!myName() || d.taken || d.refused) box.append(nameInput(again));
@@ -7614,7 +7673,7 @@
     };
     const views = {
       day: () => {
-        const ol = list((d.top || []).map((r) => ({ name: r.name, score: String(Math.round(r.p * 100)) })), d.n > 0 ? [day.rank, day.n, String(day.pt)] : null);
+        const ol = list((d.top || []).map((r) => ({ name: r.name, score: String(Math.round(r.p * 100)) })), d.n > 0 && day.rank ? [day.rank, day.n, String(day.pt)] : null);
         if (!(d.top || []).length) panel.append(el('p', 'note', 'Nobody with a name on today’s list yet.'));
         panel.append(ol);
       },
@@ -9689,6 +9748,7 @@
     if (VS || VS_LOBBY) { $('modeDaily').removeAttribute('aria-current'); $('modeVs').setAttribute('aria-current', 'page'); }
     $('statsBtn').addEventListener('click', openStats);
     $('bar').addEventListener('click', () => { if (G) spotInfo(); });
+    $('restartBtn').addEventListener('click', restartAsk);
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
     $('persBtn').addEventListener('click', openPers);
     speedBtn();
