@@ -1,7 +1,7 @@
 /* Two-Minute Drill: the daily NFL play-calling game.
  *
- * One real late-game drive a day (2023-26, playoffs included), played by the two teams of that game:
- * the 22 who were on the field, rated as of that week. Each spot opens on a scenario card;
+ * One real spot a day (most a late-game drive from a recent NFL season, playoffs included), played by the two teams
+ * of that game: the 22 who were on the field, rated as of that week. Each spot opens on a scenario card;
  * Next shows the whole field (their end zone at the top, yours at the bottom) with every player as a dot
  * from red to green by his overall rating. Call Run, Pass or RPO (or a timeout, spike, kneel or kick when it
  * matters), then the play. The nflclock engine (engine.js, in Web Workers) plays the snap from real NFL
@@ -1033,9 +1033,14 @@
       b.g.setAttribute('transform', `translate(${b.x.toFixed(1)},${Y(b.L).toFixed(1)}) scale(${(1 + 0.35 * b.z).toFixed(2)})`);
       b.g.style.opacity = b.show ? 1 : 0;
     }
+    // (a call-out stays clear of the scoreboard over the field's top on a phone: under the man it follows, if need be)
+    const top = 18 + (bcast() ? PLAY_COVER.top * (360 / (sc.svg.parentElement.clientWidth || 360)) : 0);
     sc.calls.forEach((c) => {
       const at_ = c.follow ? { x: c.follow.x, L: c.follow.L } : c;
-      const x = clip(at_.x, c.w / 2 + 6, 354 - c.w / 2), y = clip(Y(at_.L) - 26 - c.slot * 30, 18, sc.H - 18);
+      let y = Y(at_.L) - 26 - c.slot * 30;
+      if (y < top && c.follow) y = Y(at_.L) + 26 + c.slot * 30;
+      const x = clip(at_.x, c.w / 2 + 6, 354 - c.w / 2);
+      y = clip(y, top, sc.H - 18);
       c.g.setAttribute('transform', `translate(${x.toFixed(1)},${y.toFixed(1)})`);
     });
   }
@@ -1158,6 +1163,20 @@
   // the field takes the tap itself (phones do not always send taps on small SVG shapes): a quick touch, not a scroll,
   // anywhere near a receiver's dot or along his route changes that route
   let routeTapAt = 0;                 // when the field last used a tap for a route (the dot under it then stays shut)
+  // a phone: the call's keys (Run, Pass, RPO, Trick, or the defense's) in sight under the thumbs, no scrolling. When the
+  // last result, the stop note, the defense's look and the tempo push them past the sheet's edge, those fold a step at
+  // a time (game.html .fit1-3; a tap on the result shows it all); past that the sheet scrolls to them. The sheet's
+  // height, and so the field's framing (covers), follows as before.
+  let fitKeys = null;
+  function fitDock(k) {
+    fitKeys = k;
+    if (!k || !k.isConnected) return;
+    k.classList.remove('fit1', 'fit2', 'fit3');
+    if (!bcast()) return;
+    const d = $('dock'), over = () => k.getBoundingClientRect().bottom - d.getBoundingClientRect().bottom;
+    for (let i = 1; i <= 3 && over() > 0.5; i++) k.classList.add(`fit${i}`);
+    if (over() > 0.5) d.scrollTop += Math.ceil(over());
+  }
   // the calls' sheet (broadcast view): drag its grip down to a bar to see the whole field, up (or tap it) for the calls;
   // the field frames the play again in what then shows
   function sheetDown(on) {
@@ -1198,7 +1217,7 @@
       h0 = h;
       if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing') && scene && scene.cover && Math.abs(covers().bot - scene.cover.bot) >= 24) drawField();
     };
-    if (window.ResizeObserver) new ResizeObserver(() => { clearTimeout(rz); rz = setTimeout(again, 90); }).observe(sh);
+    if (window.ResizeObserver) new ResizeObserver(() => { placeToast(); clearTimeout(rz); rz = setTimeout(again, 90); }).observe(sh);
     sh.addEventListener('transitionend', again);
     // the menu: what the page's header has, on the field
     const mb = $('menuBtn'), menu = $('bmenu');
@@ -1478,7 +1497,7 @@
   // (browser tests only, window.__sepLog: the drawing and the play, for bots that draw thousands of lines and plays)
   if (window.__sepLog) {
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
-      DRAWN_RANGE, CALL, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, get: () => ({ G, ui, scene }) };
+      DRAWN_RANGE, CALL, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, get: () => ({ G, ui, scene }) };
   }
   // who gets the ball, by his place in the list (the field may be redrawn under the buttons: a resize, the phone's
   // address bar)
@@ -1694,11 +1713,16 @@
     const tdL = () => (dir > 0 ? 103 : -3);                 // the end zone the offense is attacking
     const defTdL = () => (dir > 0 ? -3 : 103);              // the one behind it, where a defensive return scores
     // a turnover returned for a touchdown (the engine's outcome, whatever the real play's label): the man with the
-    // ball runs it back to the end zone behind the offense, the offense chasing
+    // ball runs it back to the end zone behind the offense, the offense chasing and his teammates trailing him (they
+    // stood frozen at the spot); the call-out his as he picks it up ("Fumble!" stayed up the whole return), the
+    // touchdown when he gets there, and the camera stays on him there (P.stay: it went back up under the scoreboard)
     function returnTd(rec, t, from, call) {
       const pl = runFrom(rec, t, [[inX(from[0] + jit(8)), defTdL()]], { eff: 0.95 });
       foes(rec).forEach((d) => { if (d !== rec) leg(d, t + 0.3, 'chase', { who: rec.b, gap: 2, eff: 0.9 }); });
-      say(t + pl.T, call, 'hit', { follow: rec });
+      (rec.off ? K.off : K.def).forEach((m) => { if (m !== rec && !busy.has(m)) leg(m, t + 0.25 + R() * 0.3, 'chase', { who: rec.b, gap: 4 + R() * 8, eff: 0.7 + R() * 0.2 }); });
+      say(t, call, 'hit', { follow: rec });
+      say(t + pl.T, 'Touchdown!', 'hit', { follow: rec });
+      P.stay = true;
       return t + pl.T;
     }
     const sidelineX = (x) => (x > FW / 2 ? FW + 0.6 : -0.6);
@@ -1896,7 +1920,7 @@
       if (o.out) {
         const sp = vel(car), mx = start[0] + (sp > 1.2 ? (car.b.vx / sp) * Math.min(4, Math.max(1, sp * 0.45)) : 0);
         const far = o.out > 0 ? Math.max(start[0], mx) : Math.min(start[0], mx);
-        if (o.out * (far - endPt[0]) > 0) endPt[0] = inX(far);
+        if (o.out * (far - endPt[0]) > 0) endPt[0] = o.oob ? far : inX(far);       // (out of bounds: where it takes him)
       }
       const after0 = tackled ? (o.after ?? (car.label === 'RB' || car.label === 'QB' ? 1.5 + R() : 0.6 + R() * 0.8)) : 0;
       // a short run after the catch with nobody close: he works sideways toward the nearest man, who comes up to
@@ -2524,7 +2548,18 @@
       const held = !e.incomplete && e.evt !== 'interception' && e.evt !== 'pick_six' && !e.td;
       const deep = held ? Math.min(air, e.yards ?? air) : air;
       const drew = pick && !thrownAway && tgt !== qb && act.drawn ? act.drawn[act.target] : null;      // he runs the line you drew
-      const r = Motion.routeOnField(drew || routeName, deep, tgt.b.x, out, dir, L0, Math.abs(tgt.b.y - L0), R());
+      const back = Math.abs(tgt.b.y - L0), ru = R(), onField = (nm) => Motion.routeOnField(nm, deep, tgt.b.x, out, dir, L0, back, ru);
+      let r = onField(drew || routeName), wide = null;
+      // a catch that ends out of bounds was made near that sideline (real ones mostly are, outside the numbers): a
+      // route that would leave him too far in for the run after it (a back's, a tight end's, one breaking inside) is
+      // drawn breaking out (a short one, or a back's from the backfield: to the flat), caught a few yards from the
+      // sideline (the ball thrown when he gets there, below)
+      const yacO = (e.yards || 0) - deep, cx0 = inX(r.catchAt[0]);
+      if (e.oob && held && !pick && !thrownAway && tgt !== qb && Math.min(cx0, FW - cx0) > yacO + 5) {
+        const cx = Math.max(0.5, (out > 0 ? FW - tgt.b.x : tgt.b.x) - clip(2.5 + yacO * 0.4, 2.5, 6)), s = Math.max(deep, 2) + 1.2;
+        r = onField(wide = deep <= 2 || (back > 3 && deep <= 8) ? { pts: [[0, -back], [2.2, 1.6 - back], [cx + 2, Math.max(deep, -1) + 0.6]], at: cx - 2.2 }
+          : { pts: [[0, -back], [0, s], [cx + 2, s - 1]], at: cx });
+      }
       let catchPt = [inX(r.catchAt[0]), inL(fwd(L0, deep))];
       let rpts = r.toCatch.slice(0, -1).map((p) => [inX(p[0]), inL(p[1])]).concat([catchPt]);
       const tStart = tgt === qb ? T_SNAP + 0.6 : tgt === K.rb && kind !== 'screen' ? 0.5 : REACT_OFF;
@@ -2533,12 +2568,13 @@
       const qRel = passer === qb && !philly && kind !== 'flea' ? qPlan.at(Math.max(0, tThrow - T_SNAP)) : null;
       const arm = armOf(passer.p);
       const flightTo = (c) => (qRel ? Math.hypot(c[0] - qRel[0], c[1] - qRel[1]) / ballSpeed(deep, arm) : flight(deep, arm));
-      let tCatch = tThrow + flightTo(catchPt), v1 = routeName === 'hitch' || routeName === 'screen' ? 0 : undefined, timed = true;
+      if (wide) tThrow = Math.max(tThrow, tStart + plan(tgt, rpts).T - flightTo(catchPt));
+      let tCatch = tThrow + flightTo(catchPt), v1 = !wide && (routeName === 'hitch' || routeName === 'screen') ? 0 : undefined, timed = true;
       // a timing route (a hitch, an out, a dig, a deep out): the throw (when it was charted) is thrown on time, before
       // he turns, and the ball meets him coming out of his break: caught where he is, running flat out, when it gets
       // there, a step or two past the break (never at the end of the route with the ball hanging in the air while
       // he gets there). Thrown late, he is further along the break (a hitch sits down facing the passer and waits).
-      const cutK = drew ? null : BREAK_OUT[routeName];
+      const cutK = drew || wide ? null : BREAK_OUT[routeName];
       if (cutK != null && !thrownAway && rpts.length >= 3) {
         const top = rpts[1], tail = [inX(r.catchAt[0]), r.catchAt[1]];
         const legL = Math.hypot(tail[0] - top[0], tail[1] - top[1]), [ux, uy] = unit(tail[0] - top[0], tail[1] - top[1]);
@@ -2597,6 +2633,7 @@
         // left that receiver running free downfield; when he is, the next man takes the vertical over)
         const loose = near.find((d) => !cov.carry.has(d));
         shadow = manOf || (near[0] && cov.carry.has(near[0]) && loose && dist(here(loose), end) < dist(here(near[0]), end) + 4 ? loose : near[0]) || null;
+        const runOn = caught && !e.incomplete && (e.td || (e.yards || 0) - air >= 5);
         const ins = Math.sign(BX - end[0]) || 1, toBreak = (e.incomplete || e.evt === 'near_pick') && e.evt !== 'drop' && !thrownAway && kind !== 'hail' && sepd.sep < 2;
         const span = Math.max(0.3, tCatch - tS), t0 = Wd.t;
         const shadowOn = (d) => {
@@ -2606,8 +2643,11 @@
           // where he came, closing; at the drawn distance
           // (a ball he will break up: at the receiver's hip rather than trailing, so the step he takes to the ball as
           // it comes is across, not a chase from behind he cannot finish on a ball thrown downfield)
-          const z = unit(rel0[0], rel0[1]);
-          const u = cov.man ? (toBreak ? [ins * 0.89, -dir * 0.45] : [ins * 0.55, -dir * 0.83]) : toBreak ? unit((Math.sign(z[0]) || ins) * 0.9, z[1] * 0.5) : z;
+          // (a catch he runs on from: in zone a step late, level with him and on the side away from where his run goes,
+          // never in front of him: players saw receivers run straight through the man on them)
+          const z = unit(rel0[0], rel0[1]), away = YAC_IN.has(routeName) ? out : YAC_OUT.has(routeName) ? -out : Math.sign(z[0]) || ins;
+          const u = cov.man ? (toBreak ? [ins * 0.89, -dir * 0.45] : [ins * 0.55, -dir * 0.83]) : toBreak ? unit((Math.sign(z[0]) || ins) * 0.9, z[1] * 0.5)
+            : runOn && dir * z[1] > -0.3 ? unit(away, -dir * 0.3) : z;
           leg(d, tS, 'track', { gain: 3, eff: 1, fn: (t) => {
             const k = clip((t - tS) / span, 0, 1), q = rAt(Math.min(t, tCatch));
             return [q[0] + rel0[0] * (1 - k) + u[0] * sepd.sep * k, q[1] + rel0[1] * (1 - k) + u[1] * sepd.sep * k];
@@ -2836,7 +2876,10 @@
       const sg = sign || (id === 'qb_run' ? sc.s * dir : 0) || 0;
       // forward progress: he never has the ball past where it is spotted; on a loss he is met in the backfield
       const cap = e.td ? 99 : (e.yards || 0) - ((e.yards || 0) < 3 ? 1.6 : 0.8), md = Math.min(-4.3, cap - 0.3);
-      const hole = [inX(BX + (sg * gap) / XYD), fwd(L0, Math.min(0.6, cap))];
+      // going out: an outside or off-tackle run keeps to its side; one inside, with the other sideline the nearer (the
+      // short side), is cut back at the line toward it (the line still flows the way it was called)
+      const hs = outTry && gap < 40 && sg === (BX < FW / 2 ? 1 : -1) ? -sg : sg;
+      const hole = [inX(BX + (hs * gap) / XYD), fwd(L0, Math.min(0.6, cap))];
       if (direct) { fly(0, T_SNAP, bx, L0, carrier.x0, carrier.L0, 0.15); hold(T_SNAP, carrier); } else snapToQb();
       busy.add(carrier);
       // one continuous run from his stance through the mesh to the hole, flat out: across the QB's face when the
@@ -2902,7 +2945,7 @@
         else leg(K.fb, REACT_OFF - 0.1, 'go', { x: hole[0], y: fwd(L0, 1.5), eff: 0.9 });
       }
       const Lend = e.td ? tdL() : inL(fwd(L0, e.yards));
-      const sx = sidelineX(sg ? (sg > 0 ? FW : 0) : hole[0]);
+      const sx = sidelineX(hs ? (hs > 0 ? FW : 0) : hole[0]);
       const xEnd = e.oob ? sx : outTry ? outShort(hole[0], sx, e.yards) : inX(hole[0] + sg * Math.min(9, Math.abs(e.yards) * 0.5) + jit(3));
       const tEnd = runDown(carrier, Math.max(tLos - 0.15, tMesh + 0.2), [xEnd, Lend], { td: e.td, oob: e.oob, bt: e.bt, eff: 0.95, after: e.yards < 2 ? 0.8 + R() : undefined, from: tMesh,
         out: outTry ? Math.sign(sx - FW / 2) : 0 });
@@ -2997,6 +3040,16 @@
       const sx = sidelineX(esc[0] + side * 10);
       const xEnd = e.oob ? sx : outTry ? outShort(esc[0], sx, e.yards) : inX(esc[0] + side * (4 + R() * 6));
       const tOut = tE + Motion.minTime([here(qb), esc], 'QB', { v0: vel(qb) }) * 1.05;
+      // nobody gets a hand on him as he breaks out (only the man who brings him down does): a rusher whose way takes
+      // him within reach of the passer as he gets away turns and chases him, a couple of yards off (players saw a
+      // scrambler run through the rush)
+      for (let k = 0; k < 2; k++) {
+        Wd.run(tOut + 0.4);
+        const close = K.def.filter((d) => { for (let t = tE + 0.2; t < tOut + 0.4; t += 0.1) if (dist(Wd.posAt(d.b, t), Wd.posAt(qb.b, t)) < 1.5) return true; return false; });
+        Wd.rewind(tE);
+        if (!close.length) break;
+        close.forEach((d) => leg(d, tE + 0.1, 'chase', { who: qb.b, gap: 2.6 + k * 1.2, eff: 0.85, lead: 0.3 }));
+      }
       const tEnd = runDown(qb, tOut, [xEnd, Lend], { td: e.td, oob: e.oob, eff: 0.9, after: e.slide ? 0 : undefined, from: tE, out: outTry ? Math.sign(sx - FW / 2) : 0 });
       finish(qb, tEnd, [xEnd, Lend]);
     }
@@ -3428,7 +3481,7 @@
       const frame = (now) => {
         if (start === null) start = now;
         const t = skip ? total : ((now - start) / 1000) * speed, tt = t - PRE;
-        const k = EASE.io(clip(tt / ZI, 0, 1)) * (1 - EASE.io(clip((tt - ZI - P.T - P.hold) / ZO, 0, 1)));
+        const k = EASE.io(clip(tt / ZI, 0, 1)) * (P.stay ? 1 : 1 - EASE.io(clip((tt - ZI - P.T - P.hold) / ZO, 0, 1)));
         const c0 = sc.cam0 || FULL;            // from the pre-snap frame into the play's, and back
         sc.cam = { lo: lerp(c0.lo, P.cam.lo, k), hi: lerp(c0.hi, P.cam.hi, k) };
         const tp = clip(tt - ZI, 0, P.T);
@@ -3636,7 +3689,7 @@
   function show(which) {
     // (a phone playing: the broadcast view, game.html; the page under it starts from the top again after)
     const bc = which === 'play';
-    if (bc !== document.body.classList.contains('bcast')) { document.body.classList.toggle('bcast', bc); window.scrollTo(0, 0); if (!bc) sheetDown(false); }
+    if (bc !== document.body.classList.contains('bcast')) { document.body.classList.toggle('bcast', bc); window.scrollTo(0, 0); if (!bc) sheetDown(false); placeToast(); }
     $('arch').hidden = which !== 'arch';
     $('intro').hidden = which !== 'intro';
     $('play').hidden = which !== 'play';
@@ -3665,10 +3718,16 @@
     s.append(el('span', 'spin'), el('span', '', text));
     d.append(s);
     if (line) d.append(el('div', 'feedline', line));
+    // their drive: skip ahead to your next call. On a phone the sheet is away while a play runs, so a second button sits
+    // on the field beside "Tap to skip" (the one in the sheet was out of reach); it cuts the play running too
+    const fb = $('skipBtn');
+    if (fb) fb.hidden = !skip;
     if (skip) {
       const c = el('button', 'chip', 'Skip ahead');
       c.type = 'button';
-      c.addEventListener('click', () => { G.fast = true; c.disabled = true; });
+      const go = () => { G.fast = true; c.disabled = true; if (fb) fb.hidden = true; };
+      c.addEventListener('click', go);
+      if (fb) fb.onclick = () => { go(); if (cutAnim) cutAnim(); };
       d.append(c);
     }
   }
@@ -3681,7 +3740,25 @@
   function toast(msg) {
     const t = $('toast');
     t.textContent = msg; t.hidden = false;
+    t.removeAttribute('style');
+    if (bcast()) requestAnimationFrame(placeToast);          // (once what called it has drawn the sheet)
     clearTimeout(toast.h); toast.h = setTimeout(() => { t.hidden = true; }, Math.max(1800, msg.length * 45));
+  }
+  // a phone playing: over the field, under its buttons and above the calls' sheet, never on a control; with no room
+  // there, as under the final card, over the scoreboard (again when the sheet changes size under it, or the page
+  // leaves the broadcast view)
+  function placeToast() {
+    const t = $('toast');
+    if (t.hidden) return;
+    t.removeAttribute('style');
+    if (!bcast()) return;
+    // (the sheet as it settles, not mid-slide: during a play, away but for the skip note; down, its bar)
+    const sh = $('sheet'), bar = $('bar').getBoundingClientRect();
+    const sheetTop = window.innerHeight - ($('field').classList.contains('playing') ? 52 : sh.classList.contains('down') ? 66 : sh.offsetHeight);
+    const under = [document.querySelector('.fieldbox .fov'), $('toBtn')].filter((e) => e && !e.hidden && e.getClientRects().length)
+      .reduce((y, e) => Math.max(y, e.getBoundingClientRect().bottom), bar.bottom);
+    if (under + 8 + t.offsetHeight + 8 <= sheetTop) t.style.top = `${Math.round(under + 8)}px`;
+    else Object.assign(t.style, { top: `${bar.top}px`, left: `${bar.left}px`, width: `${bar.width}px`, minHeight: `${bar.height}px`, transform: 'none', borderRadius: '14px' });
   }
 
   // ------------------------------------------------------------ narration ---
@@ -3733,7 +3810,7 @@
     // the engine decides the score: a turnover it returned for a touchdown says so, whatever the real play's label
     if (e.tdDef && !/touchdown/.test(res)) res = e.kind === PASS && !/fumble|bad snap|strip/.test(res) ? 'intercepted and returned for a touchdown' : `${res.split(',')[0]}, returned for a touchdown`;
     const extra = [];
-    if (e.oob && !e.incomplete) extra.push('out of bounds');
+    if (e.oob && !e.incomplete && !e.td && !e.tdDef) extra.push('out of bounds');      // (a touchdown is the score, wherever he ended up)
     else if (act && act.oob && mine && !e.incomplete && !e.penalty && !e.turnover && !e.td && !e.safety) extra.push('could not get out of bounds');
     if (e.fd && !e.td) extra.push(e.penalty ? 'automatic first down' : 'first down');
     if (e.onDowns) extra.push('turnover on downs');
@@ -3915,6 +3992,7 @@
   async function advance() {
     while (true) {
       const r = G.root;
+      $('skipBtn').hidden = true;             // (their plays' status shows it again: status)
       G.side = sideFor(G.seq);
       drawAll();
       if (r.phase === DONE) return finishSpot();
@@ -4077,7 +4155,8 @@
     // late and trailing (or ending the first half): getting out stops the clock, so it starts on (players didn't find
     // the switch); once turned off it stays off for the drive
     const oobOn = oobMatters(r) && (r.t > 1800 || r.score[G.me] < r.score[1 - G.me]) && !G.oobOff;      // (tied: shown, left to you)
-    ui = { step: 'family', fam: null, oob: oobOn, tempo: tempoKeyOf(G.info.tempo) };
+    const t0 = tempoKeyOf(G.info.tempo), tFit = TEMPOS.find((k) => !runsOut(k, r));      // (the usual tempo, or one that snaps in time)
+    ui = { step: 'family', fam: null, oob: oobOn, tempo: runsOut(t0, r) && tFit ? tFit : t0 };
     if (!VS) save(`${STORE}:ncalls`, load(`${STORE}:ncalls`, 0) + 1);
     drawField();
     drawDock();
@@ -4099,6 +4178,9 @@
     if (r.pos !== opp || r.score[opp] <= r.score[G.me] || n <= 0) return false;
     return halfLeft(r.t) <= 2 * n + 38 * Math.max(n - 1 - r.to[G.me], 0);
   }
+  // a timeout is featured (the gold key, the button on the field) late in a half, when the time is worth saving; before
+  // that it is a plain key (a gold TIMEOUT in the middle of the third quarter, down 25, had first-timers spending them)
+  const toHot = (r) => halfLeft(r.t) <= (r.t > 1800 ? 120 : 300);
   function clockOptions(r) {      // with the clock running
     const me = G.me, lead = r.score[me] - r.score[1 - me];
     const needTime = r.t > 1800 || lead <= 0;
@@ -4165,7 +4247,8 @@
       }
       const extra = [];
       if (r.clock_running) {
-        clockOptions(r).filter((k) => !TEMPOS.includes(k)).forEach((k) => extra.push([k, k === 'rundown' ? 'Run it down' : CLOCK[k].label,
+        // (a phone: the timeout is the button on the field, toButton, not a key here too)
+        clockOptions(r).filter((k) => !TEMPOS.includes(k) && !(k === 'timeout' && bcast())).forEach((k) => extra.push([k, k === 'rundown' ? 'Run it down' : CLOCK[k].label,
           k === 'timeout' ? `${r.to[me]} left` : k === 'rundown' ? `timeout at 0:0${RUNDOWN_AT}, then kick` : null]));
       }
       const { specials, calls: avail2 } = callOptions(r);
@@ -4180,7 +4263,7 @@
         const row = el('div', 'keys');
         row.style.setProperty('--cols', Math.min(extra.length, 4));
         extra.forEach(([k, label, sub], i) => {
-          const b = key(label, sub, 'alt', 3 + i);
+          const b = key(label, sub, k === 'timeout' && !toHot(r) ? '' : 'alt', 3 + i);
           b.addEventListener('click', () => {
             if (busy) return;
             if (k === 'timeout') decideTimeout();
@@ -4191,8 +4274,10 @@
           });
           row.append(b);
         });
-        d.append(row);
+        if (r.clock_running && allRunOut(r)) d.insertBefore(row, fam);      // (no tempo snaps in time: the timeout first)
+        else d.append(row);
       }
+      fitDock(fam);
       return;
     }
     if (ui.step === 'pass') return drawPassDock(head);
@@ -4243,9 +4328,9 @@
       list.append(pr);
     });
     d.append(list);
-    const tg = oobToggle();
-    d.append(tg);
-    requestAnimationFrame(() => tg.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' }));
+    const tg = oobMatters(r) ? oobToggle() : null, last = tg || list.lastElementChild;
+    if (tg) d.append(tg);
+    if (last) requestAnimationFrame(() => last.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' }));
   }
 
   // a pass: your receivers and their routes (tap one on the field or here), play action or a rollout, then throw
@@ -4266,14 +4351,14 @@
     return h;
   }
   // going out of bounds keeps the clock stopped inside the last 2:00 of the first half and the last 5:00 of the game
-  // (and in overtime): it matters to you then when you're behind or tied, or the half is ending
+  // (and in overtime): it matters to you then when you're behind or tied, or the half is ending. The switch shows only
+  // then (it said "tries to stop the clock" when going out stops nothing, and was offered to a team ahead late)
   const oobMatters = (r) => r.pos === G.me && halfLeft(r.t) <= (r.t > 1800 ? 120 : 300) && (r.t > 1800 || r.score[G.me] - r.score[1 - G.me] <= 0);
   const setOob = (v) => { ui.oob = v; G.oobOff = !v; };
   function oobToggle() {
-    const hot = oobMatters(G.root);
-    const tg = el('div', `toggle${hot ? ' urgent' : ''}`);
-    const lab = el('div', 'lab', hot ? '⏱ Get out of bounds' : 'Get out of bounds');
-    lab.append(el('small', '', hot ? 'Going out stops the clock now. Turn it off to stay in bounds and keep the clock running.' : 'The ball carrier tries to stop the clock. No guarantee.'));
+    const tg = el('div', 'toggle urgent');
+    const lab = el('div', 'lab', '⏱ Get out of bounds');
+    lab.append(el('small', '', 'Going out stops the clock now. Turn it off to stay in bounds and keep the clock running.'));
     const sw = el('button', 'sw2');
     sw.type = 'button'; sw.id = 'oobSwitch';
     sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(ui.oob)); sw.setAttribute('aria-label', 'Get out of bounds');
@@ -4356,8 +4441,8 @@
     };
     const opts = el('div', 'opts-row');
     opts.append(opt('Play action', 'Fake the handoff first: it freezes a loaded box.', P.pa, (v) => { P.pa = v; if (v) P.roll = false; }),
-      opt('Roll out', 'Move the pocket toward your receiver’s side.', P.roll, (v) => { P.roll = v; if (v) P.pa = false; }),
-      opt(oobMatters(r) ? '⏱ Out of bounds' : 'Out of bounds', 'The ball carrier tries to stop the clock. No guarantee.', ui.oob, setOob, 'oobSwitch'));
+      opt('Roll out', 'Move the pocket toward your receiver’s side.', P.roll, (v) => { P.roll = v; if (v) P.pa = false; }));
+    if (oobMatters(r)) opts.append(opt('⏱ Out of bounds', 'Going out stops the clock now.', ui.oob, setOob, 'oobSwitch'));
     d.append(opts, list);
     const avail = callOptions(r).calls, more = ['hail_mary'].filter((id) => avail.includes(id));
     // the screen in one tap: the back's route set to the screen and the ball to him (it was only a route on the
@@ -4451,7 +4536,8 @@
     13: ['1 RB · 3 TE · 1 WR', 'Heavy: short yardage and the goal line.'],
   };
   // the timeout on the field, by the other buttons there (players asked): yours to call with the clock running, or,
-  // on defense, the "timeout first" before their snap (the same switch as in the calls below)
+  // on defense, the "timeout first" before their snap. A phone's broadcast view only, where it is always in sight
+  // (the sheet scrolls, or is down); a wide screen has it with the calls beside the field (one or the other, never both)
   function placeTo() {
     const b = $('toBtn'), fov = document.querySelector('.fieldbox .fov');
     if (!b || !fov) return;
@@ -4463,13 +4549,14 @@
   function toButton() {
     const b = $('toBtn'), r = G && G.root;
     if (!b) return;
-    const off = !!(r && ui.step === 'family' && r.phase === SNAP && r.pos === G.me && r.clock_running && !G.over && clockOptions(r).includes('timeout'));
-    const def = !!(r && !VS && (ui.step === 'vdef' || ui.step === 'defense') && defTimeoutOk(r));
+    // (on a phone it is the only timeout control, so it shows whenever a timeout can be called, late or not)
+    const off = !!(r && bcast() && ui.step === 'family' && r.phase === SNAP && r.pos === G.me && r.clock_running && !G.over && clockOptions(r).includes('timeout'));
+    const def = !!(r && bcast() && !VS && (ui.step === 'vdef' || ui.step === 'defense') && defTimeoutOk(r));
     b.hidden = !(off || def) || busy;
     if (b.hidden) return;
     b.classList.toggle('on', def && !!ui.to);
     b.textContent = off ? '⏱ Timeout' : `⏱ Timeout first${ui.to ? ' ✓' : ''}`;
-    if (off) b.append(el('small', '', `${r.to[G.me]} left`));
+    b.append(el('small', '', `${r.to[G.me]} left`));
     b.setAttribute('aria-pressed', String(def && !!ui.to));
     // (the broadcast view: just under the chips on the field, however many rows they wrap to)
     placeTo();
@@ -4606,6 +4693,10 @@
     openModal('Personnel', []);
     render();
   }
+  // a tempo whose usual run-off before the snap is the time left in the half: the clock runs out on it (a player at 0:02,
+  // No-huddle "about 16 s" picked for him, lost to the clock with two timeouts left)
+  const runsOut = (k, r) => r.clock_running && (tempoSecs(k, r) || 0) >= halfLeft(r.t);
+  const allRunOut = (r) => TEMPOS.every((k) => runsOut(k, r));
   function tempoPicker(r) {
     const w = el('div', 'tempo');
     w.append(el('span', 'lab', 'Tempo'));
@@ -4617,7 +4708,7 @@
       b.type = 'button';
       b.setAttribute('role', 'radio');
       const secs = tempoSecs(k, r);
-      b.append(el('b', '', CLOCK[k].short), el('small', '', secs ? `about ${Math.round(secs)} s` : ''));
+      b.append(el('b', '', CLOCK[k].short), el('small', runsOut(k, r) ? 'out' : '', runsOut(k, r) ? 'clock runs out' : secs ? `about ${Math.round(secs)} s` : ''));
       const mark = () => seg.querySelectorAll('.segb').forEach((x, i) => {
         x.classList.toggle('on', TEMPOS[i] === ui.tempo); x.setAttribute('aria-checked', String(TEMPOS[i] === ui.tempo));
       });
@@ -4626,6 +4717,10 @@
       if (k === TEMPOS[TEMPOS.length - 1]) requestAnimationFrame(mark);
     });
     w.append(seg);
+    if (allRunOut(r)) {
+      const o = clockOptions(r), to = o.includes('timeout'), sp = o.includes('spike');
+      w.append(el('p', 'warn', `⏱ The clock runs out before the snap${to || sp ? `: use ${[to && 'a timeout', sp && 'a spike'].filter(Boolean).join(' or ')}` : ''}.`));
+    }
     return w;
   }
 
@@ -4654,7 +4749,9 @@
     const out = [];
     for (const sp of pend.specs) {
       const vals = await evaluateGraded(sp.r, sp.opts, sp.seed, sp.chosen);
-      out.push({ ...decisionFrom(sp.kind, sp.family, sp.opts, vals, sp.chosen, sp.q, sp.situation, pend.snap), ...(sp.extra || {}) });
+      // (ctx: the score and the clock it was made at, for its tip: whyLine)
+      const ctx = { lead: sp.r.score[G.me] - sp.r.score[1 - G.me], left: Math.round(halfLeft(sp.r.t)), h2: sp.r.t <= 1800 };
+      out.push({ ...decisionFrom(sp.kind, sp.family, sp.opts, vals, sp.chosen, sp.q, sp.situation, pend.snap), ctx, ...(sp.extra || {}) });
     }
     return out;
   }
@@ -4676,7 +4773,9 @@
     graded.then(() => { done = true; }, () => { done = true; });
     await Promise.resolve();
     if (!done) status('Grading your call…');
-    const decisions = await graded;
+    let decisions = await graded;
+    // the clock ran out before the snap: the play never ran, so its call is not graded (the tempo, before it, is)
+    if (!res.log.some((e) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(e.ev)) && decisions.some((x) => x.kind !== 'call')) decisions = decisions.filter((x) => x.kind !== 'call');
     decisions.forEach((x) => G.decisions.push(x));
     G.pending = null;
     persist();
@@ -4865,7 +4964,7 @@
     custom.append(cs, box);
     if (!VS && share) custom.append(el('p', 'vdeftip', 'NFL %: how often NFL defenses lined up each way in this spot. It starts on the most common.'));
     d.append(presets, sum, tip, custom);
-    if (!VS && defTimeoutOk(r)) {
+    if (!VS && defTimeoutOk(r) && !bcast()) {          // (a phone: the button on the field, toButton)
       const tg = el('div', 'toggle');
       const lab = el('div', 'lab', 'Timeout first');
       lab.append(el('small', '', `Stop the clock before their snap · ${r.to[G.me]} left`));
@@ -4889,6 +4988,7 @@
     });
     keys.append(go);
     d.append(keys);
+    fitDock(keys);
     if (!VS) d.append(defModeChip(true));
     if (!VS) {
       const auto = el('button', 'chip', 'Let the coordinator call this drive');
@@ -4928,7 +5028,8 @@
       keys.append(b);
     });
     d.append(keys);
-    if (defTimeoutOk(r)) {
+    fitDock(keys);
+    if (defTimeoutOk(r) && (VS || !bcast())) {          // (a phone: the button on the field, toButton)
       const tg = el('div', 'toggle');
       const lab = el('div', 'lab', 'Timeout first');
       lab.append(el('small', '', `Stop the clock before their snap · ${r.to[G.me]} left`));
@@ -5086,19 +5187,26 @@
 
   // ------------------------------------------------------- after the snap ---
   // why the better call was better, in one line: what it does for you in this kind of decision, and how often NFL
-  // play-callers make it here (the grade itself is the simulation's: thousands of games from this spot each way)
+  // play-callers make it here (the grade itself is the simulation's: thousands of games from this spot each way). The
+  // score and the clock pick the words (x.ctx; a call graded before it was kept: the plain words): "Behind with the
+  // clock running" after a kneel with the lead read as a bug
   function whyLine(x) {
     if (!x || x.cost < 0.0005 || x.best === x.chosen) return '';
     const b = x.best, c = x.chosen, nfl = Math.round(((x.q && x.q[b]) || 0) * 100);
+    // (a call graded before ctx was kept: the old words, which took ahead for a kneel or a milk and behind otherwise)
+    const k = x.ctx, lead = k ? k.lead : null, left = k ? k.left : 0, h1 = !!k && !k.h2;
+    const up = !k || lead > 0, mmss = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
     let why = '';
-    if (x.kind === 'clock') {
+    if (x.kind === 'clock') {          // (always with the clock running)
       why = { timeout: 'Stopping the clock now keeps the seconds you need for more snaps.',
         spike: 'A spike stops the clock and saves your timeout for when you need it more.',
-        kneel: 'Ahead with the ball: a kneel runs the clock with no chance of a turnover.',
+        kneel: up ? 'Ahead with the ball: a kneel runs the clock with no chance of a turnover.' : 'A kneel ends the half with no chance of a turnover.',
         rundown: 'In range: run it down to 0:03, then kick. They never get the ball back.',
-        milk: 'Ahead: every second you take off the clock is one they don\u2019t get.',
-        nohuddle: 'Behind with the clock running: the no-huddle gets the next snap off sooner.',
-        huddle: 'No need to rush here: the huddle uses clock you can afford.' }[b] || '';
+        milk: up ? 'Ahead: every second you take off the clock is one they don\u2019t get.' : 'Take your time: the less clock they get back after your drive, the better.',
+        nohuddle: k && c === 'kneel' ? `${mmss} is ${h1 ? 'time to score before the half' : 'too long to kneel out'}: keep playing, and the no-huddle gets the next snap off sooner.`
+          : k && lead > 0 ? (h1 ? 'Ahead, with time to add points before the half: the no-huddle gets the next snap off sooner.' : 'Snap it sooner: more points put the game away.')
+          : `${k && lead === 0 ? 'Tied' : 'Behind'} with the clock running: the no-huddle gets the next snap off sooner.`,
+        huddle: k && lead > 0 && !h1 ? 'Ahead: the huddle runs clock they won\u2019t get back.' : 'No need to rush here: the huddle uses clock you can afford.' }[b] || '';
       if (!why && c === 'timeout') why = 'That timeout was worth more later in the drive.';
       if (!why && c === 'spike') why = 'The spike wasted a down you could use.';
     } else if (x.kind === 'deftime') {
@@ -5115,11 +5223,12 @@
       const run = (l) => /run|RB |inside|outside|off tackle|sneak|keeper|draw/i.test(l) && !pass(l);
       const BL = x.bestLabel, CL = x.chosenLabel;
       if (kick(CL) && dn && dn < 4) why = `Kicking on ${['', '1st', '2nd', '3rd'][dn]} down gives up downs you could use to get closer, or score six.`;
-      else if (kick(BL)) why = 'Take the points: the kick is a good bet from here, and the clock is short.';
+      else if (kick(BL)) why = `Take the points: the kick is a good bet from here${!k || left <= 300 ? ', and the clock is short' : ''}.`;
       else if (punt(BL)) why = 'Punt it: pinning them deep is worth more than the chance of converting here.';
       else if (dn === 4 && (punt(CL) || kick(CL))) why = `Go for it: with ${sec < 180 ? 'this little time' : 'this much at stake'}, keeping the ball is worth the risk.`;
-      else if (pass(BL) && run(CL) && sec < 150) why = 'With the clock running down, a pass can stop the clock and gain more than a run.';
-      else if (run(BL) && pass(CL)) why = sec < 150 ? 'A run keeps it simple: fewer ways to lose the ball, and the yards come.' : 'A run fits this down and distance better than a throw.';
+      else if (pass(BL) && run(CL) && sec < 150 && !(k && lead > 0)) why = 'With the clock running down, a pass can stop the clock and gain more than a run.';
+      else if (run(BL) && pass(CL)) why = sec < 150 && k && lead > 0 ? 'Ahead late: a run keeps the clock moving, with fewer ways to lose the ball.'
+        : sec < 150 ? 'A run keeps it simple: fewer ways to lose the ball, and the yards come.' : 'A run fits this down and distance better than a throw.';
       else why = `${BL} wins more of the simulated games from this down, distance and clock than ${CL}.`;
     }
     return `${why}${nfl >= 1 ? ` NFL play-callers make that call ${nfl}% of the time here.` : ''}`;
@@ -5180,11 +5289,13 @@
   // the matchup behind a snap (engine.js MATCH): your call against their look, or their call against your defense
   const LOOK_NAME = ['the light box (six or fewer up front)', 'the blitz', 'the loaded box', 'the blitz'];
   const DEF_NAME = { blitz: 'blitz', load: 'loaded box', soft: 'soft coverage' };
+  // a call's name inside a sentence: lower case, but RPO, QB, RB and the Hail Mary keep their capitals
+  const callLower = (l) => (/^([A-Z]{2,}\b|Hail Mary)/.test(l) ? l : l[0].toLowerCase() + l.slice(1));
   function matchupLine(e, action) {
     if (e && e.dc) return defenseLine(e, e.team !== G.me);
     if (!e || e.ev !== 'play' || !e.match || Math.abs(e.match) < 0.5 || e.call < 0 || !idx.calls[e.call]) return null;
     const call = e.team === G.me && action && action.route && action.targetName
-      ? `${routeSay(action.targetPos, action.route)} to ${shortName(action.targetName) || action.targetPos}` : idx.calls[e.call].label.toLowerCase();
+      ? `${routeSay(action.targetPos, action.route)} to ${shortName(action.targetName) || action.targetPos}` : callLower(idx.calls[e.call].label);
     // how it went for the offense: a big play, or nothing (no gain, an incompletion, a turnover)
     const big = !e.turnover && (e.td || e.yards >= 10), none = e.turnover || e.incomplete || e.yards <= 0;
     if (e.team === G.me) {
@@ -5216,7 +5327,7 @@
     const sq = played ? el('div', 'sq swing pending flip', '…') : el('div', `sq ${m} flip`, GLYPH[m]);
     if (!played) sq.setAttribute('aria-label', { g: 'Best call or close to it', y: 'A little worse than the best call', o: 'Costly', r: 'A big mistake' }[m]);
     const txt = el('div', 'res-play');
-    txt.append(el('span', 'yd', head || headline(main, res.log)), document.createTextNode(lines.length ? lines[0][0] : `You stop the clock with ${clockOf(G.root.t).text} left.`));
+    txt.append(el('span', 'yd', head || headline(main, res.log)), el('span', 'pl', lines.length ? lines[0][0] : `You stop the clock with ${clockOf(G.root.t).text} left.`));
     const wc = el('span', 'wc');
     if (played) txt.append(wc);
     top.append(sq, txt);
@@ -5232,6 +5343,7 @@
         sq.textContent = `${shown >= 0 ? '+' : '−'}${Math.abs(shown)}`;
         sq.setAttribute('aria-label', `Your win chance ${shown >= 0 ? 'up' : 'down'} ${Math.abs(shown)} point${Math.abs(shown) === 1 ? '' : 's'}`);
         wc.textContent = `Win chance ${Math.round(before * 100)}% → ${Math.round(after * 100)}%`;
+        fitDock(fitKeys);          // (the line it adds, on top of the next call already shown)
       }).catch(() => { sq.className = `sq ${m}`; sq.textContent = GLYPH[m]; });
     }
     // the call, graded apart from how the play turned out: a small chip, and the better call when there was one
@@ -5277,8 +5389,10 @@
     G.banner.classList.add('banner');
     // (a tip in it points at what the compact banner folds away, the Replay: it waits for a full result card)
     G.banner.querySelectorAll('.hintonce').forEach((h) => { h.remove(); save(`${STORE}:hint:${h.dataset.hint}`, false); });
-    // (on a phone its reason is cut to two lines, game.html: a tap shows it all)
-    G.banner.querySelectorAll('.verdict').forEach((v) => { if (v.querySelector('.why')) v.addEventListener('click', () => v.classList.toggle('open')); });
+    // (on a phone its reason is cut to two lines, and more of it folds when the keys need the room, game.html, fitDock:
+    // a tap shows it all)
+    const b = G.banner;
+    b.addEventListener('click', () => b.classList.toggle('open'));
     d.append(G.banner);
     G.banner = null;
     const n = d.querySelector('.stopnote');
@@ -5681,8 +5795,7 @@
       : rl.summary ? `In the real game (${gameTag(sc)}): ${rl.summary}.` : `In the real game (${gameTag(sc)}), ${rl.coach || 'the coach'} called "${realCall}" here; ${drive}.`));
     const cc = coachCard(G.decisions, 'You called this one like');
     if (cc) card.append(cc.el);
-    const wpa = G.decisions.reduce((a, x) => a + x.wpa, 0);
-    card.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller in this spot.`));
+    card.append(el('p', 'verdict', callsLine(G.decisions)));
     const btn = el('button', 'btn', SURV ? (state.out ? 'Your run' : 'Next game') : PRACTICE ? 'Your score' : G.si < today.length - 1 ? 'Next spot' : "Today's score");
     btn.type = 'button';
     if (SURV) card.append(...lifeOffer());
@@ -6048,6 +6161,8 @@
   // three middling calls, so the league's calls score about 50 lost and 65-75 won; a 90 takes sharp calls (a loss
   // with near-perfect ones still gets there in a long shot) and poor calls stay poor, won or lost.
   const RESULT_W = 0.03, RESULT_FROM = 6;
+  // a percentile shows 1 to 99: a 0 beside a win read as broken, a 100 beside a loss as perfect
+  const pctShown = (p) => clip(p, 0.01, 0.99);
   const resultScored = () => !!(DRIVE || RUN_N || PRACTICE || dayN >= RESULT_FROM);
   function spotGroups() {
     const out = [];
@@ -6090,8 +6205,22 @@
       if (m < my - 1e-9) better += 1; else if (Math.abs(m - my) <= 1e-9) better += 0.5;
     }
     // a historic drive is a mission: an A (a pass) takes winning the game
-    if (DRIVE && groups.some((g) => g.res < 1)) return Math.min(better / N, (PASS_AT - 1) / 100);
-    return better / N;
+    if (DRIVE && groups.some((g) => g.res < 1)) return pctShown(Math.min(better / N, (PASS_AT - 1) / 100));
+    return pctShown(better / N);
+  }
+  // the score against the result, when they disagree (a win scored low, a loss high): one line on why
+  function scoreWhy(p) {
+    const rs = today.map((_, i) => state.spots[i] && state.spots[i].result).filter((r) => r && r.half !== 1);
+    const w = rs.filter((r) => r.mine > r.theirs).length, l = rs.filter((r) => r.mine < r.theirs).length;
+    if (w && !l && p < 0.4) return 'You won, but your calls gave up win chance: the bounces bailed you out.';
+    if (l && !w && p >= 0.6) return 'You lost, but your calls were sound: the bounces went the other way.';
+    return null;
+  }
+  // the calls in a line: how many were the best (or close), and the average call against a typical NFL play-caller's
+  // (their sum over a long drive read like a score: "−46.5 points of win chance" beside a win)
+  function callsLine(decs) {
+    const n = decs.length, g = decs.filter((x) => markOf(x.cost) === 'g').length, avg = n ? decs.reduce((a, x) => a + x.wpa, 0) / n : 0;
+    return n ? `Your calls: ${g} of ${n} the best or close to it · ${Math.abs(avg * 100).toFixed(1)} points of win chance per call ${avg >= 0 ? 'better' : 'worse'} than a typical NFL play-caller’s.` : '';
   }
   function percentileVsNFL(decs) {
     const my = decs.reduce((a, x) => a + x.cost, 0);
@@ -6116,7 +6245,7 @@
       }
       if (tot > my + 1e-9) better += 1; else if (Math.abs(tot - my) <= 1e-9) better += 0.5;
     }
-    return better / N;
+    return pctShown(better / N);
   }
   // Pro: the end of a historic drive. The grade (A, green, is a pass), the score behind it, what it takes to pass,
   // your best and your tries, where you stand across every drive, and what really happened
@@ -6138,6 +6267,7 @@
     box.append(bar);
     const lines = [];
     const r0 = state.spots[0] && state.spots[0].result, won = !!(r0 && r0.mine > r0.theirs);
+    if (scoreWhy(p)) lines.push(scoreWhy(p));
     if (!g.pass) lines.push(won ? `${PASS_AT} passes: ${PASS_AT - score} more ${PASS_AT - score === 1 ? 'point' : 'points'}.` : `A pass takes winning the game: a loss or a tie tops out at ${PASS_AT - 1}.`);
     if (prev && prev.p * 100 >= score + 0.5) lines.push(`Your best here: ${Math.round(prev.p * 100)} (${gradeOf(Math.round(prev.p * 100)).L}).`);
     else if (prev && score > Math.round(prev.p * 100)) lines.push(`New best: up from ${Math.round(prev.p * 100)}.`);
@@ -6259,6 +6389,7 @@
     else {
       box.append(el('div', 'note', RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · your run` : `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
         el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers${resultScored() ? ', the calls and the result' : ''}`),
+        ...(scoreWhy(p) ? [el('p', 'pct-why', scoreWhy(p))] : []),
         Object.assign(el('div', 'pct-lab brag'), { hidden: true }),
         el('div', 'streak', RUN_N ? 'Playoff run' : ARCH_DAY ? 'From the archive' : streakLine(sk)));
       if (!RUN_N && state.froze && state.froze.length) box.append(el('div', 'frz', `❄️ Streak saved by a freeze${state.froze.length > 1 ? ` (${state.froze.length} days)` : ''}: ${state.froze.length > 1 ? 'the days you missed count' : 'the day you missed counts'}`));
@@ -6272,7 +6403,7 @@
       box.append(v);
     }
     if (cc) box.append(cc.el);
-    box.append(el('p', 'verdict', `Your calls: ${pts(wpa)} points of win chance against a typical NFL play-caller ${today.length > 1 ? 'across today’s spots' : 'on today’s drive'}.`));
+    box.append(el('p', 'verdict', callsLine(decs)));
     const dbox = dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0)));
     box.append(dbox);
     if (!DRIVE && !RUN_N && !ARCH_DAY) box.append(practiceNodes());
@@ -6286,6 +6417,7 @@
       if (hh) rec[hh.v > 0 ? 0 : hh.v < 0 ? 1 : 2]++;
       return `${today[i].player} ${r} ${squeeze(s.decisions || []).map((m) => SQ[m]).join('')}`;
     });
+    const k3 = box.querySelector('.pct-why') ? 4 : 3;          // (the cards below go in under the score, and its why line)
     const met = rec[0] + rec[1] + rec[2], recTxt = `${rec[0]}-${rec[1]}${rec[2] ? `-${rec[2]}` : ''}`;
     liveDrive.on = false;
     if (firstFinish) track('daily_finish', { day: dayN, kind: today[0] && today[0].category, score: Math.round(p * 100),
@@ -6295,22 +6427,22 @@
     const one = today.length === 1 ? (hh0 ? (rec[0] ? `Beat ${hh0.coach}` : rec[1] ? `${hh0.coach} did better` : `Matched ${hh0.coach}`)
       : rec[0] ? 'Beat the real coach' : rec[1] ? 'Lost to the real coach' : 'Matched the real coach') : null;
     const vs = met ? (one ? `\n${one}` : `\nVs the real coaches: ${recTxt}`) : '';
-    if (met && one && hh0) box.insertBefore(hhCard(hh0), box.children[3] || null);      // beating the real coach is the hook: say who
+    if (met && one && hh0) box.insertBefore(hhCard(hh0), box.children[k3] || null);      // beating the real coach is the hook: say who
     else if (met && one) {
       const v = el('div', 'h2h-day');
       v.append(el('span', 'k', 'Vs the real coach'), el('b', '', rec[0] ? 'Better' : rec[1] ? 'Worse' : 'Same'));
-      box.insertBefore(v, box.children[3] || null);
+      box.insertBefore(v, box.children[k3] || null);
     } else if (met) {
       const v = el('div', 'h2h-day');
       v.append(el('span', 'k', 'Vs the real coaches'), el('b', '', recTxt),
         el('span', 'sub', `${rec[0]} better, ${rec[1]} worse${rec[2] ? `, ${rec[2]} the same` : ''}`));
-      box.insertBefore(v, box.children[3] || null);
+      box.insertBefore(v, box.children[k3] || null);
     }
     const text = `${DRIVE ? `Two-Minute Drill · ${PRO.drives[DRIVE - 1].title}\nGrade ${gradeOf(Math.round(p * 100)).L}${p * 100 >= PASS_AT - 0.5 ? ' ✅ passed' : ''}` : RUN_N ? `Two-Minute Drill · the ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Two-Minute Drill #${dayN}`}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
       `${streak >= 2 ? `\n🔥 ${streak}-day streak` : ''}\n${rows.join('\n')}\nCan you beat me? ${!DRIVE && !RUN_N && !ARCH_DAY ? chLink(p) : SITE}`;
     // sharing is how new players find the game: the button sits right under the result, not below the standings
     const chc = challengeCard(p);
-    if (chc) box.insertBefore(chc, box.children[3] || null);
+    if (chc) box.insertBefore(chc, box.children[k3] || null);
     const share = { text };
     const pre = el('div', 'grid-share', text);
     const btn = el('button', 'btn', 'Share your score');
@@ -6397,7 +6529,7 @@
   function renderPractice() {
     if (!G) resumeSpot(0);
     show('done');
-    const decs = allDecisions(), p = decs.length ? scoreVsNFL(decs) : 0, wpa = decs.reduce((a, x) => a + x.wpa, 0), score = Math.round(p * 100);
+    const decs = allDecisions(), p = decs.length ? scoreVsNFL(decs) : 0, score = Math.round(p * 100);
     if (!state.done) track('practice_finish', { n: state.n, kind: today[0] && today[0].category, score, snaps: decs.length });
     state.done = true;
     saveState();
@@ -6410,7 +6542,8 @@
       el('div', 'streak', 'Practice: not in your stats, streak or the leaderboard'));
     const hh = r ? headToHead(0, r) : null;
     if (hh) box.append(hhCard(hh));
-    box.append(el('p', 'verdict', `${pts(wpa)}% win chance against a typical NFL play-caller on this drive.`), callsExplained(decs));
+    if (scoreWhy(p)) box.append(el('p', 'pct-why', scoreWhy(p)));
+    box.append(el('p', 'verdict', callsLine(decs)), callsExplained(decs));
     const row = el('div', 'row pacts');
     const again = el('button', 'btn', 'Another practice drive');
     again.type = 'button';
@@ -6477,6 +6610,7 @@
   const ACH_KEY = `${STORE}:ach`;      // this browser's counts outside the days: { beat, wins } in survivor, drives, runs
   const lead0 = (sc) => sc.start.score[sc.player === sc.home ? 1 : 0] - sc.start.score[sc.player === sc.home ? 0 : 1];
   const gWon = (g) => !!(g.r && g.r.half !== 1 && g.r.mine > g.r.theirs);
+  const gLost = (g) => !!(g.r && g.r.half !== 1 && g.r.mine < g.r.theirs);
   const anyG = (ev, f) => !!ev && ev.some(f);
   const fullWeek = (days) => Object.keys(days).map(Number).some((k) => dayDate(k).getDay() === 1 && [1, 2, 3, 4, 5, 6].every((j) => days[k + j]));
   const BADGES = [
@@ -6484,7 +6618,8 @@
     ['win', '✅', 'In the win column', 'Win a game.', (R, ev) => anyG(ev, gWon) || R.wins > 0 || R.surv > 0 || R.drives.some((d) => d.won) || R.runs.some((r) => r.w > 0)],
     ['coach', '🧠', 'Outcoached', 'Beat the real coach: a better result than he got.', (R) => R.beat >= 1],
     ['coach10', '🎓', 'Coaching tree', 'Beat the real coach 10 times.', (R) => R.beat >= 10],
-    ['day90', '⭐', 'Pro Bowl day', 'Score 90 or more on a daily.', (R) => Object.values(R.days).some((x) => Math.round(x.p * 100) >= 90)],
+    // (not on the finish of a game lost: a star day beside a loss read as a mistake)
+    ['day90', '⭐', 'Pro Bowl day', 'Score 90 or more on a daily you don’t lose.', (R, ev) => !anyG(ev, gLost) && Object.values(R.days).some((x) => Math.round(x.p * 100) >= 90)],
     ['perfect', '💎', 'Perfect drive', 'Make every call green on a drive of 3 snaps or more.', (R, ev) => anyG(ev, (g) => { const s = snapsOf(g.decs); return s.length >= 3 && s.every((m) => m === 'g'); })],
     ['comeback', '🔄', 'Comeback kid', 'Win a game you took over down 7 or more.', (R, ev) => anyG(ev, (g) => gWon(g) && lead0(g.sc) <= -7)],
     ['twomin', '⏱️', 'Two-minute warrior', 'Win a game you took over with under 1:00 to play.', (R, ev) => anyG(ev, (g) => gWon(g) && g.sc.start.qtr === 4 && g.sc.start.clock < 60)],
@@ -7175,8 +7310,9 @@
   const TOUR_OK = !(VS || VS_LOBBY || DRIVE || RUN_N || ARCH || ARCH_DAY);
   const qs = (s) => document.querySelector(s);
   const TOUR = [
-    { id: 'spot', at: () => qs('#intro .chips'), side: 'below', title: 'Your spot',
-      text: () => `A real NFL ending: the real score, clock, ball and timeouts. ${SURV ? 'Win it to stay alive.' : 'Tap Play to take over.'}` },
+    // (past: below, it goes under Play, not over it; keep: what it never covers, the score and the clock it talks about)
+    { id: 'spot', at: () => qs('#intro .chips'), side: 'below', past: () => qs('#intro .btn'), keep: '#intro .big, #intro .matchup', title: 'Your spot',
+      text: () => `A real game situation: the real score, clock, ball and timeouts. ${SURV ? 'Win it to stay alive.' : 'Tap Play to take over.'}` },
     { id: 'bar', at: () => $('bar'), side: 'below', title: 'The scoreboard',
       text: () => 'Score, quarter and clock. The dashes under each team are its timeouts left. Tap it for the game details.' },
     { id: 'call', at: () => qs('#dock .keys.fam'), side: 'below', title: 'Your call',
@@ -7205,6 +7341,9 @@
     document.addEventListener('click', tourTap, true);
     addEventListener('scroll', tourSoon, { passive: true });
     addEventListener('resize', tourSoon);
+    // and what moves under a tip without any of those: the intro settling as its fonts load (the first tip was left
+    // over the spot's facts it pointed at, its ring over Play)
+    if (window.ResizeObserver) { tour.ro = new ResizeObserver(tourSoon); ['intro', 'dock'].forEach((id) => tour.ro.observe($(id))); }
     tourSoon();
   }
   function tourSoon() { if (tour && !tourRaf) tourRaf = requestAnimationFrame(() => { tourRaf = 0; tourTick(); }); }
@@ -7262,8 +7401,9 @@
     box.style.width = `${w}px`;
     const h = box.offsetHeight, topH = (qs('.top') || { offsetHeight: 0 }).offsetHeight, vt = visTop(anchor);
     const cx = Math.min(Math.max(12, r.left + r.width / 2 - w / 2), vw - 12 - w), cy = Math.max(vt + 8, r.top);
-    const at = { below: [cx, r.bottom + gap], above: [cx, r.top - gap - h], left: [r.left - gap - w, cy], right: [r.right + gap, cy] };
-    const clear = [...document.querySelectorAll('#dock button, #intro .btn, #bar')].filter((b) => b !== anchor && !anchor.contains(b))
+    const pb = step.past && step.past(), below = pb && pb.getClientRects().length ? Math.max(r.bottom, pb.getBoundingClientRect().bottom) : r.bottom;
+    const at = { below: [cx, below + gap], above: [cx, r.top - gap - h], left: [r.left - gap - w, cy], right: [r.right + gap, cy] };
+    const clear = [...document.querySelectorAll(`#dock button, #intro .btn, #bar${step.keep ? `, ${step.keep}` : ''}`)].filter((b) => b !== anchor && !anchor.contains(b))
       .map((b) => b.getBoundingClientRect()).filter((b) => b.width);
     const cost = ([x, y]) => clear.reduce((a, b) => a + Math.max(0, Math.min(x + w, b.right) - Math.max(x, b.left)) * Math.max(0, Math.min(y + h, b.bottom) - Math.max(y, b.top)), 0);
     const ok = ([x, y]) => x >= 8 && x + w <= vw - 8 && y + sy >= topH;
@@ -7322,6 +7462,7 @@
     tour.done = true;
     tourSave();
     tour.mo.disconnect();
+    if (tour.ro) tour.ro.disconnect();
     document.removeEventListener('click', tourTap, true);
     removeEventListener('scroll', tourSoon);
     removeEventListener('resize', tourSoon);
@@ -8909,7 +9050,7 @@
     });
     let rz = null;
     // (not while a play runs: the redraw would wipe the animation; the next draw picks up the new size)
-    window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); }, 150); });
+    window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); fitDock(fitKeys); }, 150); });
     show('boot');
     if (!(VS || VS_LOBBY || ARCH || ARCH_DAY || DRIVE || RUN_N)) fetchData();      // the daily, survivor, practice
     try {
