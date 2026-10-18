@@ -97,7 +97,8 @@ a.play { font-weight: 700; color: var(--ink); text-decoration: none; border: 1px
     had, and compares the win chance of your call with the best option. The result of the play doesn't change the
     grade: a good call that didn't work is still a good call.</p>
   <ul>
-    <li><b>Green ✓</b>: the best call, or within half a point of win chance of it.</li>
+    <li><b>Green ✓</b>: the best call, within half a point of win chance of it, or so close that the simulation can't
+      tell them apart.</li>
     <li><b>Yellow ≈</b>: close, within 2 points.</li>
     <li><b>Orange !</b>: costly, within 5 points.</li>
     <li><b>Red ✗</b>: a big miss, more than 5 points worse than the best call.</li>
@@ -105,10 +106,12 @@ a.play { font-weight: 700; color: var(--ink); text-decoration: none; border: 1px
   <p>The big number after each snap is how that play moved your win chance.</p>
 
   <h2>Your daily score</h2>
-  <p>At the end of the day your drive gets a percentile against NFL play-callers: the share of 4,000 simulated NFL
-    coaches whose calls in the same spots would have cost more win chance than yours. Each simulated coach calls plays
-    as often as NFL play-callers do in that situation, and each reads the situation with a different level of skill, so
-    the scores spread from 0 to 100 and a typical player lands near the middle. You also see where you rank among
+  <p>At the end of the day your drive gets a percentile against NFL play-callers: the share of 6,000 simulated NFL
+    coaches who did worse than you on the same drive, counting the calls and the result. Each simulated coach calls
+    plays as often as NFL play-callers do in that situation, and each reads the situation with a different level of
+    skill, as many worse than the league's habits as better, so the scores spread from 0 to 100 and calls like the
+    league's land near 50. Their calls are graded with exactly the same numbers as yours. When nothing anyone could call
+    changes the win chance (down 25 in the third quarter), those calls count for nobody and the result decides. You also see where you rank among
     everyone who played that day, how your win chance compares with a typical play-caller, and which NFL head coach
     your calls look most like (how often you throw, go deep, go for it on fourth down and go for two).</p>
 

@@ -2,7 +2,7 @@
  *   init  -> loads engine_data.json and playbook.json
  *   info  -> per-call facts for the current spot (NFL call mix, out-of-bounds rates, FG / conversion odds,
  *            the usual tempo and seconds between snaps by tempo)
- *   eval  -> win probability of a list of options (same seed for all: common random numbers)
+ *   eval  -> win probability of a list of options (same seed for all: common random numbers), with its standard error
  *   step  -> plays one real snap / try / kickoff and returns the new state and a play-by-play log */
 // each file's stamp (site.py: what is in it) rides in the worker's address, one parameter a file (game.js workerUrl):
 // these addresses are cached for good, so every one carries its own
@@ -126,7 +126,7 @@ self.onmessage = async (ev) => {
       const sim = simFor(m.scen);
       const out = m.options.map((o) => {
         const r = sim.run(m.root, { n: m.n, action: o.action, perspective: m.persp, seed: m.seed });
-        return { key: o.key, mean: r.mean, values: r.values };
+        return { key: o.key, mean: r.mean, se: r.se, values: r.values };
       });
       self.postMessage({ type: 'eval', id: m.id, out }, out.map((o) => o.values.buffer));
     } else if (m.type === 'odds') {         // each pick's odds here (a receiver's route): caught, yards a throw, picks
