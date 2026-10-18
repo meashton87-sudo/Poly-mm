@@ -206,6 +206,11 @@
   // counts for nothing (no stats day, streak, tendencies or daily list); only once the day's drive is done (boot)
   let PRACTICE = location.hash === '#practice';
   const PRACTICE_KEY = `${STORE}:practice`;
+  // the home screen (#home: the title, the Home tab, the menu on the field, the end cards): today's drive, survivor,
+  // Pro and your stats. A bare address opens it too once today's drive is done (boot); before that it opens the day's
+  // drive, so a player from a shared link is one tap from playing. A friend's challenge (?ch=) opens the day's card
+  let HOME_PG = location.hash === '#home';
+  const CH_LINK = new URLSearchParams(location.search).has('ch');
   // Pro is off until it is turned on in the site build (scripts/site.py --pro: <meta name="pro">): no tab, no
   // archive, no drives, no purchase
   // ... and, when the build sets a launch time (scripts/site.py --pro-at: <meta name="pro-at">), not before it: a page
@@ -1343,7 +1348,10 @@
     // the menu: what the page's header has, on the field
     const mb = $('menuBtn'), menu = $('bmenu');
     const close = () => { menu.hidden = true; mb.setAttribute('aria-expanded', 'false'); };
-    mb.addEventListener('click', () => { menu.hidden = !menu.hidden; mb.setAttribute('aria-expanded', String(!menu.hidden)); });
+    mb.addEventListener('click', () => {
+      menu.hidden = !menu.hidden; mb.setAttribute('aria-expanded', String(!menu.hidden));
+      menu.querySelector('[data-acct]').hidden = $('acctBtn').hidden;       // (Account only where the site has sign-in)
+    });
     menu.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => { close(); const t = $(b.dataset.go); if (t) t.click(); }));
     menu.querySelectorAll('[data-mode]').forEach((a) => a.addEventListener('click', close));
     document.addEventListener('pointerdown', (ev) => { if (!menu.hidden && !menu.contains(ev.target) && !mb.contains(ev.target)) close(); });
@@ -3827,6 +3835,7 @@
     const bc = which === 'play';
     if (bc !== document.body.classList.contains('bcast')) { document.body.classList.toggle('bcast', bc); window.scrollTo(0, 0); if (!bc) sheetDown(false); placeToast(); }
     $('arch').hidden = which !== 'arch';
+    $('homeview').hidden = which !== 'home';
     $('intro').hidden = which !== 'intro';
     $('play').hidden = which !== 'play';
     $('done').hidden = which !== 'done';
@@ -6485,7 +6494,7 @@
     const again = el('button', 'btn', 'New run');
     again.type = 'button';
     again.addEventListener('click', () => { state = newRun(); saveState(); survOpen(); });
-    box.append(...lifeOffer(), nameInput(), pre, share, again, boardEl());
+    box.append(...lifeOffer(), nameInput(), pre, share, again, homeBtn(), boardEl());
     const ad = adBox();
     if (ad) box.append(ad);
     box.append(disclaimer());
@@ -6769,7 +6778,8 @@
     box.append(dbox);
     if (!DRIVE && !RUN_N && !ARCH_DAY) box.append(practiceNodes());
     if (ARCH_DAY || RUN_N) { const a = el('a', 'btn', RUN_N ? 'More runs' : 'Back to the archive'); a.href = '#archive'; box.append(a); }
-    else if (PRO_ON && !isPro() && BOARD.api) box.append(proValueCard());       // the website: what Pro adds, after the free drive
+    box.append(homeBtn());                     // (everything else there is to play)
+    if (!ARCH_DAY && !RUN_N && PRO_ON && !isPro() && BOARD.api) box.append(proValueCard());       // the website: what Pro adds, after the free drive
     const rec = [0, 0, 0];             // against the real coaches: better, worse, the same (a W-L-T record)
     const rows = today.map((_, i) => {
       const s = state.spots[i]; if (!s) return '';
@@ -6912,7 +6922,7 @@
     const back = el('button', 'btn ghostbtn', 'Back to today');
     back.type = 'button';
     back.addEventListener('click', () => { scrollTo(0, 0); location.hash = '#daily'; });     // (the hash change reloads the page into the day)
-    row.append(again, back);
+    row.append(again, back, homeBtn());
     box.append(row, disclaimer());
   }
   // ---- the daily habit: the streak in the top bar, and a reminder in the player's own calendar (a daily event at the
@@ -8421,6 +8431,7 @@
   }
   // a day finished on another phone: the top bar's streak, and the end card's streak line if it is up, count it
   function streakRedraw() {
+    if (homeUp) { renderHome(false, true); return; }
     dayLabelSet();
     const line = document.querySelector('#done .streak');
     if (!line || !state || !state.done || SURV || PRACTICE || DRIVE || RUN_N || ARCH_DAY) return;
@@ -8699,6 +8710,156 @@
   }
   // the Pro screen: the historic drives and every past day, newest first, with your score where you played; the
   // pitch when Pro is not on
+  // ---- the home screen (#home): today's drive first (what it is, or how you did and when the next one comes), then
+  // survivor and Pro, then your stats, the help, the account and your leagues. Big cards, one tap each; every mode keeps
+  // its own address (a tap is a hash change, which reloads the page into it)
+  let homeUp = false;
+  function homeBtn() {
+    const a = el('a', 'btn ghostbtn homebtn', 'Home');
+    a.href = '#home';
+    a.addEventListener('click', () => scrollTo(0, 0));       // (the reload keeps the scroll: Home opens at the top)
+    return a;
+  }
+  const HOME_ICON = {
+    stats: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 20V12M10 20V5M15 20v-9M20 20v-5"/></svg>',
+    help: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M9.3 9.2a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4.1"/><circle cx="12" cy="17.6" r=".6" fill="currentColor"/></svg>',
+  };
+  function renderHome(auto, redraw) {
+    HOME_PG = true; homeUp = true;
+    show('home');
+    ['modeDaily', 'modeSurv', 'modeArch', 'modeVs'].forEach((id) => $(id).removeAttribute('aria-current'));
+    $('modeHome').setAttribute('aria-current', 'page');
+    const n = dayOf(new Date()), st = load(`${STORE}:stats`, { days: {} }), sk = streakOf(st, n);
+    $('dayLabel').textContent = `No. ${n} · ${dayDate(n).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${sk.n >= 2 ? ` · 🔥${sk.n}${sk.pending.length ? '❄️' : ''}` : ''}`;
+    const box = $('homeview');
+    box.textContent = '';
+    const h = el('h2', 'vh', 'Home');
+    h.id = 'homeH';
+    const day = homeDaily(n, st, sk);
+    const modes = el('div', `hmodes${PRO_ON ? '' : ' one'}`);
+    modes.append(homeSurv());
+    if (PRO_ON) modes.append(homePro(n));
+    box.append(h, day.el, modes, homeTools());
+    const ls = myLeagues();
+    if (ls.length) {
+      const sec = el('div', 'hsec'), list = el('div', 'llist');
+      sec.append(el('h3', '', ls.length === 1 ? 'Your league' : 'Your leagues'));
+      ls.forEach((l) => {
+        const b = el('button', 'lrow');
+        b.type = 'button';
+        b.append(el('span', 'nm', l.name), el('span', 'n', `${l.n} player${l.n === 1 ? '' : 's'}`), el('span', 'go', '›'));
+        b.addEventListener('click', () => { track('home_tap', { to: 'league' }); leagueBoard(l.code); });
+        list.append(b);
+      });
+      sec.append(list);
+      box.append(sec);
+    }
+    const links = el('nav', 'hlinks');
+    links.setAttribute('aria-label', 'About the game');
+    [['about', 'About'], ['how-it-works', 'How it works'], ['privacy', 'Privacy']].forEach(([href, t]) => { const a = el('a', '', t); a.href = href; links.append(a); });
+    box.append(links);
+    // where each tap goes, for the analytics (one event a tap; the next page's own events follow)
+    box.querySelectorAll('a[data-to]').forEach((a) => a.addEventListener('click', () => { track('home_tap', { to: a.dataset.to }); scrollTo(0, 0); }));
+    if (!redraw) track('home_open', { daily: day.status, auto: !!auto, pro: isPro(), streak: sk.n });
+  }
+  // the card for today's drive: the spot (its kind, the score and clock, the game) and Play; mid-drive, Continue; done,
+  // your score, your result one tap away and the countdown to the next one. The streak under it either way
+  function homeDaily(n, st, sk) {
+    const sp = idx.spots[dayIds(n)[0]], feat = idx.featured && idx.featured[n], s0 = sp.start;
+    const meH = sp.player === sp.home, lead = s0.score[meH ? 1 : 0] - s0.score[meH ? 0 : 1];
+    const ck = `${Math.floor(s0.clock / 60)}:${String(Math.ceil(s0.clock) % 60).padStart(2, '0')}`;
+    const left = s0.qtr > 4 ? `${ck} left in overtime` : `${ck} left in the ${s0.qtr === 4 ? 'game' : s0.qtr === 2 ? 'half' : s0.qtr === 3 ? 'third quarter' : 'first quarter'}`;
+    const saved = load(`${STORE}:day:${n}`, null), rec = st.days[n];
+    const done = !!rec || !!(saved && saved.done);
+    const going = !done && !!(saved && saved.spots && saved.spots.some((s) => s && (s.started || (s.decisions && s.decisions.length))));
+    const status = done ? 'done' : going ? 'progress' : 'new';
+    const card = el('section', `hhero ${status}`);
+    card.setAttribute('aria-label', 'Today’s drive');
+    const top = el('div', 'hk');
+    top.append(el('span', '', `Today’s drive · No. ${n}`), el('span', 'tag', done ? 'Done ✓' : going ? 'In progress' : feat ? 'Featured' : catLabel(sp)));
+    card.append(top);
+    if (done && rec) {
+      const p = Math.round(rec.p * 100), sc = el('div', 'hscore');
+      sc.append(el('b', '', String(p)), el('span', '', `Better than ${p}% of NFL play‑callers`));
+      card.append(sc, el('div', 'hm', `${lead > 0 ? `Up by ${lead}` : lead < 0 ? `Down by ${-lead}` : 'Tied'}, ${left} · ${matchLine(sp)}`));
+    } else {
+      const big = el('div', 'hbig', lead > 0 ? `Up by ${lead}` : lead < 0 ? `Down by ${-lead}` : 'Tied');
+      big.append(el('span', 'left', left));
+      const opp = sp.player === sp.home ? sp.away : sp.home, at = sp.neutral ? 'vs' : sp.player === sp.home ? 'hosting' : 'at';
+      card.append(big, el('div', 'hm', `You’re the ${teamName(sp.player)}, ${at} the ${teamName(opp)} · ${gameTag(sp)}`));
+    }
+    const go = el('a', `btn${done ? ' ghostbtn' : ''}`, done ? 'See your result' : going ? 'Continue the drive' : 'Play today’s drive');
+    go.href = '#daily';
+    go.dataset.to = `daily_${status}`;
+    card.append(go);
+    const foot = el('div', 'hfoot');
+    const streak = sk.n >= 2 ? `🔥 ${sk.n}-day streak` : sk.n === 1 ? '🔥 1-day streak' : '';
+    if (done) {
+      foot.append(countdown(streak ? `${streak} · next drive in ` : 'Next drive in '));
+    } else {
+      foot.append(el('span', '', streak ? `${streak}${sk.pending.length ? ' ❄️' : ''}: play today to keep it` : 'One real drive a day, the same for everyone'));
+    }
+    card.append(foot);
+    return { el: card, status };
+  }
+  function homeSurv() {
+    const sv = survStats(), run = load(`${STORE}:surv`, null);
+    const alive = !!(run && !run.out && (run.won > 0 || (run.spots && run.spots.some((s) => s && s.started))));
+    const a = el('a', 'hcard hsurv');
+    a.href = '#survivor';
+    a.dataset.to = 'survivor';
+    const num = el('div', 'hnum');
+    num.append(el('b', '', sv.best ? String(sv.best) : '–'), el('span', '', sv.best ? `win${sv.best === 1 ? '' : 's'}, your best run` : 'no runs yet'));
+    a.append(el('div', 'hk', 'Survivor'), num,
+      el('p', '', alive ? `Your run is alive: ${run.won} win${run.won === 1 ? '' : 's'} so far.` : 'Real fourth quarters back to back. One loss ends it.'),
+      el('span', 'cta', alive ? 'Continue' : 'Play'));
+    return a;
+  }
+  // Pro: your record (drives passed and the rank, the runs, the archive), else what it is and its price
+  function homePro(n) {
+    const a = el('a', `hcard hpro${isPro() ? ' on' : ''}`);
+    a.href = '#archive';
+    a.dataset.to = isPro() ? 'pro' : 'pro_pitch';
+    if (!isPro()) {
+      a.append(el('div', 'hk', 'Pro · $4.99 once'), el('div', 'hpitch', 'Historic drives'),
+        el('p', '', `The Helmet Catch, 28\u2060–\u20603 and more, playoff runs, every past daily.`),
+        el('span', 'cta', 'Take a look'));
+      return a;
+    }
+    const ds = load(`${STORE}:drives`, {}), rs = load(`${STORE}:runs`, {});
+    const passed = Object.values(ds).filter((r) => r && Math.round(r.p * 100) >= PASS_AT).length;
+    const num = el('div', 'hnum'), nb = el('b', '', String(passed)), nr = Object.keys(rs).length;
+    num.append(nb, el('span', '', `drive${passed === 1 ? '' : 's'} passed`));
+    const more = `${nr ? `${nr} playoff run${nr === 1 ? '' : 's'} played` : 'Playoff runs'}, ${n > 1 ? `${n - 1} past dailies` : 'the archive'}.`;
+    const line = el('p', '', `Historic drives. ${more}`);
+    a.append(el('div', 'hk', 'Pro'), num, line, el('span', 'cta', 'Open'));
+    // the drives' count and your rank, once the list is in (the Pro screen loads the same file)
+    loadPro().then((pro) => {
+      if (!pro || !pro.drives.length || !a.isConnected) return;
+      const k = pro.drives.filter((_, i) => ds[i + 1] && Math.round(ds[i + 1].p * 100) >= PASS_AT).length;
+      nb.textContent = `${k}/${pro.drives.length}`;
+      line.textContent = `${proRank(k, pro.drives.length).title}. ${more}`;
+    }).catch(() => { /* the record from this device stays */ });
+    return a;
+  }
+  // the smaller things, one row: your stats, how to play, the account (when the site has sign-in)
+  function homeTools() {
+    const row = el('div', 'htools');
+    const tool = (icon, label, fn, to) => {
+      const b = el('button', 'htool');
+      b.type = 'button';
+      if (icon) b.innerHTML = icon;
+      b.append(el('span', '', label));
+      b.addEventListener('click', () => { track('home_tap', { to }); fn(); });
+      row.append(b);
+      return b;
+    };
+    tool(HOME_ICON.stats, 'Your stats', () => openStats(), 'stats');
+    tool(HOME_ICON.help, 'How to play', () => openHelp(), 'help');
+    if (!$('acctBtn').hidden) tool(PERSON, signedIn() ? (ACCT.me.name || 'Account') : 'Log in', openAccount, 'account');
+    row.classList.toggle('two', row.children.length === 2);
+    return row;
+  }
   // a #drive-N / #run-N link naming none: the Pro screen (#archive) says so at its top, once
   function badProLink() {
     const m = /^#(drive|run)-(\d+)$/.exec(location.hash) || [];
@@ -9484,7 +9645,7 @@
     // (not while a play runs: the redraw would wipe the animation; the next draw picks up the new size)
     window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); fitDock(fitKeys); }, 150); });
     show('boot');
-    if (!(VS || VS_LOBBY || ARCH || ARCH_DAY || DRIVE || RUN_N)) fetchData();      // the daily, survivor, practice
+    if (!(VS || VS_LOBBY || ARCH || ARCH_DAY || DRIVE || RUN_N || HOME_PG)) fetchData();      // the daily, survivor, practice
     try {
       idx = await fetch(asset('game.json')).then((r) => { if (!r.ok) throw new Error('game data ' + r.status); return r.json(); });
       idx.calls.forEach((c) => { CALL[c.id] = c; });
@@ -9495,7 +9656,14 @@
       challengeFromUrl();
       await proClaimFromUrl();
       await proVerify();
-      acctInit();
+      const acct = acctInit();
+      // home: asked for (#home), or a bare address once today's drive is done (the page between days); drawn again when
+      // the account is in (its button, your leagues)
+      if (HOME_PG || (!location.hash && !CH_LINK && dayDone(dayN))) {
+        renderHome(!HOME_PG);
+        acct.then(() => { if (homeUp) renderHome(false, true); }).catch(() => {});
+        return;
+      }
       if (VS_LOBBY) { renderVsLobby(); return; }
       if (VS) {
         await BOARD.ready;
