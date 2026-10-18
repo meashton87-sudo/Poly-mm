@@ -1158,6 +1158,20 @@
   // the field takes the tap itself (phones do not always send taps on small SVG shapes): a quick touch, not a scroll,
   // anywhere near a receiver's dot or along his route changes that route
   let routeTapAt = 0;                 // when the field last used a tap for a route (the dot under it then stays shut)
+  // a phone: the call's keys (Run, Pass, RPO, Trick, or the defense's) in sight under the thumbs, no scrolling. When the
+  // last result, the stop note, the defense's look and the tempo push them past the sheet's edge, those fold a step at
+  // a time (game.html .fit1-3; a tap on the result shows it all); past that the sheet scrolls to them. The sheet's
+  // height, and so the field's framing (covers), follows as before.
+  let fitKeys = null;
+  function fitDock(k) {
+    fitKeys = k;
+    if (!k || !k.isConnected) return;
+    k.classList.remove('fit1', 'fit2', 'fit3');
+    if (!bcast()) return;
+    const d = $('dock'), over = () => k.getBoundingClientRect().bottom - d.getBoundingClientRect().bottom;
+    for (let i = 1; i <= 3 && over() > 0.5; i++) k.classList.add(`fit${i}`);
+    if (over() > 0.5) d.scrollTop += Math.ceil(over());
+  }
   // the calls' sheet (broadcast view): drag its grip down to a bar to see the whole field, up (or tap it) for the calls;
   // the field frames the play again in what then shows
   function sheetDown(on) {
@@ -1198,7 +1212,7 @@
       h0 = h;
       if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing') && scene && scene.cover && Math.abs(covers().bot - scene.cover.bot) >= 24) drawField();
     };
-    if (window.ResizeObserver) new ResizeObserver(() => { clearTimeout(rz); rz = setTimeout(again, 90); }).observe(sh);
+    if (window.ResizeObserver) new ResizeObserver(() => { placeToast(); clearTimeout(rz); rz = setTimeout(again, 90); }).observe(sh);
     sh.addEventListener('transitionend', again);
     // the menu: what the page's header has, on the field
     const mb = $('menuBtn'), menu = $('bmenu');
@@ -3636,7 +3650,7 @@
   function show(which) {
     // (a phone playing: the broadcast view, game.html; the page under it starts from the top again after)
     const bc = which === 'play';
-    if (bc !== document.body.classList.contains('bcast')) { document.body.classList.toggle('bcast', bc); window.scrollTo(0, 0); if (!bc) sheetDown(false); }
+    if (bc !== document.body.classList.contains('bcast')) { document.body.classList.toggle('bcast', bc); window.scrollTo(0, 0); if (!bc) sheetDown(false); placeToast(); }
     $('arch').hidden = which !== 'arch';
     $('intro').hidden = which !== 'intro';
     $('play').hidden = which !== 'play';
@@ -3681,7 +3695,25 @@
   function toast(msg) {
     const t = $('toast');
     t.textContent = msg; t.hidden = false;
+    t.removeAttribute('style');
+    if (bcast()) requestAnimationFrame(placeToast);          // (once what called it has drawn the sheet)
     clearTimeout(toast.h); toast.h = setTimeout(() => { t.hidden = true; }, Math.max(1800, msg.length * 45));
+  }
+  // a phone playing: over the field, under its buttons and above the calls' sheet, never on a control; with no room
+  // there, as under the final card, over the scoreboard (again when the sheet changes size under it, or the page
+  // leaves the broadcast view)
+  function placeToast() {
+    const t = $('toast');
+    if (t.hidden) return;
+    t.removeAttribute('style');
+    if (!bcast()) return;
+    // (the sheet as it settles, not mid-slide: during a play, away but for the skip note; down, its bar)
+    const sh = $('sheet'), bar = $('bar').getBoundingClientRect();
+    const sheetTop = window.innerHeight - ($('field').classList.contains('playing') ? 52 : sh.classList.contains('down') ? 66 : sh.offsetHeight);
+    const under = [document.querySelector('.fieldbox .fov'), $('toBtn')].filter((e) => e && !e.hidden && e.getClientRects().length)
+      .reduce((y, e) => Math.max(y, e.getBoundingClientRect().bottom), bar.bottom);
+    if (under + 8 + t.offsetHeight + 8 <= sheetTop) t.style.top = `${Math.round(under + 8)}px`;
+    else Object.assign(t.style, { top: `${bar.top}px`, left: `${bar.left}px`, width: `${bar.width}px`, minHeight: `${bar.height}px`, transform: 'none', borderRadius: '14px' });
   }
 
   // ------------------------------------------------------------ narration ---
@@ -4162,7 +4194,8 @@
       }
       const extra = [];
       if (r.clock_running) {
-        clockOptions(r).filter((k) => !TEMPOS.includes(k)).forEach((k) => extra.push([k, k === 'rundown' ? 'Run it down' : CLOCK[k].label,
+        // (a phone: the timeout is the button on the field, toButton, not a key here too)
+        clockOptions(r).filter((k) => !TEMPOS.includes(k) && !(k === 'timeout' && bcast())).forEach((k) => extra.push([k, k === 'rundown' ? 'Run it down' : CLOCK[k].label,
           k === 'timeout' ? `${r.to[me]} left` : k === 'rundown' ? `timeout at 0:0${RUNDOWN_AT}, then kick` : null]));
       }
       const { specials, calls: avail2 } = callOptions(r);
@@ -4190,6 +4223,7 @@
         });
         d.append(row);
       }
+      fitDock(fam);
       return;
     }
     if (ui.step === 'pass') return drawPassDock(head);
@@ -4448,7 +4482,8 @@
     13: ['1 RB · 3 TE · 1 WR', 'Heavy: short yardage and the goal line.'],
   };
   // the timeout on the field, by the other buttons there (players asked): yours to call with the clock running, or,
-  // on defense, the "timeout first" before their snap (the same switch as in the calls below)
+  // on defense, the "timeout first" before their snap. A phone's broadcast view only, where it is always in sight
+  // (the sheet scrolls, or is down); a wide screen has it with the calls beside the field (one or the other, never both)
   function placeTo() {
     const b = $('toBtn'), fov = document.querySelector('.fieldbox .fov');
     if (!b || !fov) return;
@@ -4460,13 +4495,13 @@
   function toButton() {
     const b = $('toBtn'), r = G && G.root;
     if (!b) return;
-    const off = !!(r && ui.step === 'family' && r.phase === SNAP && r.pos === G.me && r.clock_running && !G.over && clockOptions(r).includes('timeout'));
-    const def = !!(r && !VS && (ui.step === 'vdef' || ui.step === 'defense') && defTimeoutOk(r));
+    const off = !!(r && bcast() && ui.step === 'family' && r.phase === SNAP && r.pos === G.me && r.clock_running && !G.over && clockOptions(r).includes('timeout'));
+    const def = !!(r && bcast() && !VS && (ui.step === 'vdef' || ui.step === 'defense') && defTimeoutOk(r));
     b.hidden = !(off || def) || busy;
     if (b.hidden) return;
     b.classList.toggle('on', def && !!ui.to);
     b.textContent = off ? '⏱ Timeout' : `⏱ Timeout first${ui.to ? ' ✓' : ''}`;
-    if (off) b.append(el('small', '', `${r.to[G.me]} left`));
+    b.append(el('small', '', `${r.to[G.me]} left`));
     b.setAttribute('aria-pressed', String(def && !!ui.to));
     // (the broadcast view: just under the chips on the field, however many rows they wrap to)
     placeTo();
@@ -4862,7 +4897,7 @@
     custom.append(cs, box);
     if (!VS && share) custom.append(el('p', 'vdeftip', 'NFL %: how often NFL defenses lined up each way in this spot. It starts on the most common.'));
     d.append(presets, sum, tip, custom);
-    if (!VS && defTimeoutOk(r)) {
+    if (!VS && defTimeoutOk(r) && !bcast()) {          // (a phone: the button on the field, toButton)
       const tg = el('div', 'toggle');
       const lab = el('div', 'lab', 'Timeout first');
       lab.append(el('small', '', `Stop the clock before their snap · ${r.to[G.me]} left`));
@@ -4886,6 +4921,7 @@
     });
     keys.append(go);
     d.append(keys);
+    fitDock(keys);
     if (!VS) d.append(defModeChip(true));
     if (!VS) {
       const auto = el('button', 'chip', 'Let the coordinator call this drive');
@@ -4925,7 +4961,8 @@
       keys.append(b);
     });
     d.append(keys);
-    if (defTimeoutOk(r)) {
+    fitDock(keys);
+    if (defTimeoutOk(r) && (VS || !bcast())) {          // (a phone: the button on the field, toButton)
       const tg = el('div', 'toggle');
       const lab = el('div', 'lab', 'Timeout first');
       lab.append(el('small', '', `Stop the clock before their snap · ${r.to[G.me]} left`));
@@ -5213,7 +5250,7 @@
     const sq = played ? el('div', 'sq swing pending flip', '…') : el('div', `sq ${m} flip`, GLYPH[m]);
     if (!played) sq.setAttribute('aria-label', { g: 'Best call or close to it', y: 'A little worse than the best call', o: 'Costly', r: 'A big mistake' }[m]);
     const txt = el('div', 'res-play');
-    txt.append(el('span', 'yd', head || headline(main, res.log)), document.createTextNode(lines.length ? lines[0][0] : `You stop the clock with ${clockOf(G.root.t).text} left.`));
+    txt.append(el('span', 'yd', head || headline(main, res.log)), el('span', 'pl', lines.length ? lines[0][0] : `You stop the clock with ${clockOf(G.root.t).text} left.`));
     const wc = el('span', 'wc');
     if (played) txt.append(wc);
     top.append(sq, txt);
@@ -5229,6 +5266,7 @@
         sq.textContent = `${shown >= 0 ? '+' : '−'}${Math.abs(shown)}`;
         sq.setAttribute('aria-label', `Your win chance ${shown >= 0 ? 'up' : 'down'} ${Math.abs(shown)} point${Math.abs(shown) === 1 ? '' : 's'}`);
         wc.textContent = `Win chance ${Math.round(before * 100)}% → ${Math.round(after * 100)}%`;
+        fitDock(fitKeys);          // (the line it adds, on top of the next call already shown)
       }).catch(() => { sq.className = `sq ${m}`; sq.textContent = GLYPH[m]; });
     }
     // the call, graded apart from how the play turned out: a small chip, and the better call when there was one
@@ -5274,8 +5312,10 @@
     G.banner.classList.add('banner');
     // (a tip in it points at what the compact banner folds away, the Replay: it waits for a full result card)
     G.banner.querySelectorAll('.hintonce').forEach((h) => { h.remove(); save(`${STORE}:hint:${h.dataset.hint}`, false); });
-    // (on a phone its reason is cut to two lines, game.html: a tap shows it all)
-    G.banner.querySelectorAll('.verdict').forEach((v) => { if (v.querySelector('.why')) v.addEventListener('click', () => v.classList.toggle('open')); });
+    // (on a phone its reason is cut to two lines, and more of it folds when the keys need the room, game.html, fitDock:
+    // a tap shows it all)
+    const b = G.banner;
+    b.addEventListener('click', () => b.classList.toggle('open'));
     d.append(G.banner);
     G.banner = null;
     const n = d.querySelector('.stopnote');
@@ -8906,7 +8946,7 @@
     });
     let rz = null;
     // (not while a play runs: the redraw would wipe the animation; the next draw picks up the new size)
-    window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); }, 150); });
+    window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); fitDock(fitKeys); }, 150); });
     show('boot');
     if (!(VS || VS_LOBBY || ARCH || ARCH_DAY || DRIVE || RUN_N)) fetchData();      // the daily, survivor, practice
     try {
