@@ -1683,7 +1683,7 @@
         const k = Math.min(4, Math.max(1, s * 0.45)) / s, m = [b.x + b.vx * k, b.y + b.vy * k];
         st.push(o && o.lim ? o.lim(m) : m);          // (lim: a ball carrier's momentum never takes him past the spot)
       }
-      return follow(a, t, plan(a, st.concat(pts.map((p) => [inX(p[0]), p[1]])), { v0: s, ...(o || {}) }));
+      return follow(a, t, plan(a, st.concat(pts.map((p) => [o && o.past ? p[0] : inX(p[0]), p[1]])), { v0: s, ...(o || {}) }));     // (past: he may run out)
     }
     const nearest = (list, p, skip) => {
       let best = null, bd = Infinity;
@@ -1702,6 +1702,10 @@
       return t + pl.T;
     }
     const sidelineX = (x) => (x > FW / 2 ? FW + 0.6 : -0.6);
+    // the carrier going for the sideline: he got out (the result), or you called for it and he was stopped short:
+    // run down on his way there, as far over as his run took him (a short gain, a few yards toward it)
+    const outTry = !e.td && (!!e.oob || !!(act && act.oob && mine));
+    const outShort = (x, sx, yds) => inX(x + Math.sign(sx - x) * clip(Math.abs(sx - x) - 1.5 - R() * 1.5, 0, 3 + Math.abs(yds) * 0.8));
     const lastEnd = (t) => { P.T = Math.max(P.T, t); };
 
     // ---- the snap and the line
@@ -1887,10 +1891,17 @@
       const free = foes(car).filter((d) => !busy.has(d));
       const start = here(car), defs = free.length ? free : foes(car);
       const tackled = !o.td && !o.oob && !o.free;
+      // going out (o.out: the sideline he goes for, -1 or 1): the spot is never back toward the middle from where he
+      // is, or where his momentum takes him
+      if (o.out) {
+        const sp = vel(car), mx = start[0] + (sp > 1.2 ? (car.b.vx / sp) * Math.min(4, Math.max(1, sp * 0.45)) : 0);
+        const far = o.out > 0 ? Math.max(start[0], mx) : Math.min(start[0], mx);
+        if (o.out * (far - endPt[0]) > 0) endPt[0] = inX(far);
+      }
       const after0 = tackled ? (o.after ?? (car.label === 'RB' || car.label === 'QB' ? 1.5 + R() : 0.6 + R() * 0.8)) : 0;
       // a short run after the catch with nobody close: he works sideways toward the nearest man, who comes up to
       // make the tackle at the same yard line (never a carrier going down alone in the open; players saw it)
-      if (tackled && !o.oob && defs.length && dist(start, endPt) < 4) {
+      if (tackled && !o.out && defs.length && dist(start, endPt) < 4) {
         const near_ = defs.slice().sort((a, b) => dist(here(a), endPt) - dist(here(b), endPt))[0], q = here(near_);
         if (dist(q, endPt) > 3) endPt[0] = inX(endPt[0] + clip((q[0] - endPt[0]) * 0.3, -2, 2));   // (a step his way; the man closes the rest, below)
       }
@@ -1906,6 +1917,7 @@
         let best = mid, bs = -1;
         [-3, -1.5, 0, 1.5, 3].forEach((off) => {
           const c = [inX(mid[0] - uy * off), short(mid[1] + ux * off * 0.2)];
+          if (o.out && o.out * (c[0] - mid[0]) < -0.1) return;            // (going out: never back toward the middle)
           const m = Math.min(99, ...defs.map((d) => dist(c, [d.b.x + d.b.vx * tm, d.b.y + d.b.vy * tm])));
           const s = Math.min(m, 6) - Math.abs(off) * 0.4;
           if (s > bs) { bs = s; best = c; }
@@ -1920,14 +1932,19 @@
       if (tackled) {
         const room = fd * (endPt[1] - ref[1]) - 0.2;
         if (fd * ey > 0.25) after = Math.min(after, Math.max(0, room) / (fd * ey));
-        if (fd * ey <= 0.25 || after < 0.5) { ex = Math.sign(endPt[0] - ref[0]) || (endPt[0] < FW / 2 ? 1 : -1); ey = 0; after = Math.min(after0, 0.6 + R() * 0.4); }
+        if (fd * ey <= 0.25 || after < 0.5) { ex = o.out || Math.sign(endPt[0] - ref[0]) || (endPt[0] < FW / 2 ? 1 : -1); ey = 0; after = Math.min(after0, 0.6 + R() * 0.4); }
       }
       // (inside the sideline, as every run is: the pile below starts where his run ended)
       let contact = tackled ? [inX(endPt[0] - ex * after), endPt[1] - ey * after] : endPt;
+      if (tackled && o.out) contact[0] = o.out > 0 ? Math.max(contact[0], start[0]) : Math.min(contact[0], start[0]);     // (going out: met where he is or nearer it)
       let route = dist(start, contact) > 0.6 ? pts.concat([contact]) : [contact];
       // forward progress: his momentum carries him to where he is met at most (the spot, when nobody meets him)
-      const lim = o.td ? null : (p) => { const yy = tackled ? contact[1] : endPt[1]; return [p[0], fd > 0 ? Math.min(p[1], yy) : Math.max(p[1], yy)]; };
-      const runO = { eff: o.eff ?? 0.97, v1: tackled ? 3.4 : undefined, lim };
+      // (nor over the sideline unless he goes out, nor, going out, back toward the middle: he turns for it at once)
+      const lim = o.td ? null : (p) => {
+        const yy = tackled ? contact[1] : endPt[1], x = o.oob ? p[0] : inX(p[0]);
+        return [o.out ? (o.out > 0 ? Math.max(x, start[0]) : Math.min(x, start[0])) : x, fd > 0 ? Math.min(p[1], yy) : Math.max(p[1], yy)];
+      };
+      const runO = { eff: o.eff ?? 0.97, v1: tackled ? 3.4 : undefined, lim, past: !!o.oob };
       let A = runFrom(car, t0, route, runO);
       let tC = t0 + A.T;
       // who gets there: the defender with the shortest time to the contact point, from where he is now
@@ -1966,10 +1983,12 @@
       // nobody can get there in time: he doesn't wait for them. He bounces wider at full speed, toward the sideline he
       // is headed for (else the other), and the pursuit runs him down at the same yard line, the spot the result gives
       // (where across the field he goes down is the animation's to choose; a back slowing in open space is not football)
-      if (tackled && reach.length && reach[0].T > tC - t0 + 0.1 && !o.straight) {
+      // A man who is there a beat late is not open space: he gathers himself and takes the hit (players saw a catch at
+      // the sideline with a defender on him turn into a run across the field to no gain)
+      if (tackled && reach.length && reach[0].T > tC - t0 + 0.5 && !o.straight) {
         const lean = Math.sign(contact[0] - start[0]) || (contact[0] < FW / 2 ? -1 : 1);
         let done = false;
-        for (const side of [lean, -lean]) {             // (his own side first, all the way out: a cutback is the last resort)
+        for (const side of o.out ? [o.out] : [lean, -lean]) {   // (his own side first, all the way out: a cutback is the last resort)
           for (const sh of [3, 6, 9, 12, 16]) {
             const c2 = [inX(contact[0] + side * sh), contact[1]];
             if (Math.abs(c2[0] - contact[0]) < sh - 0.5) continue;             // past the sideline that way
@@ -1986,6 +2005,25 @@
       }
       car.endAt = endPt;
       let tackler = null, tEnd = tC, tGo = t0, B = null;
+      // a man whose way in runs with the carrier, at his side within reach long before he is down, reads as one who
+      // could have made the tackle then: he keeps a couple of yards off instead (one in front gives ground and turns
+      // as the carrier goes by on the other side), and closes at the end, to `off` from him at tA
+      const carAt = (t) => (t < tC || !B ? A.at(Math.min(t, tC) - t0) : B.at(Math.min(t - tC, B.T)));
+      const trail = (d, t1, pl, tA, off) => {
+        const p = here(d), c = carAt(t1), u0 = unit(p[0] - c[0], p[1] - c[1]), [rx, ry] = unit(contact[0] - start[0], contact[1] - start[1]);
+        let close = false;
+        for (let t = t1 + 0.3; t < tA - 0.3 && !close; t += 0.1) close = dist(pl.at(t - t1), carAt(t)) < 1.4;
+        if (!close) return;
+        const d0 = dist(p, c), L1 = Math.max(d0, 2.2), lE = Math.hypot(off[0], off[1]), a0 = Math.atan2(u0[1], u0[0]);
+        let da = Math.atan2(Math.sin(Math.atan2(off[1], off[0]) - a0), Math.cos(Math.atan2(off[1], off[0]) - a0));
+        const sd = rx * u0[1] - ry * u0[0];                     // (round on his own side of the carrier's line)
+        if (sd * da < 0 && Math.abs(sd) > 0.1) da += Math.sign(sd) * 2 * Math.PI;
+        leg(d, t1, 'track', { eff: 1, gain: 3, fn: (t) => {
+          const u = clip((t - t1) / (tA - t1), 0, 1), q = carAt(t), a = a0 + da * u;
+          const l = u < 0.3 ? d0 + (L1 - d0) * (u / 0.3) : L1 + (lE - L1) * ((u - 0.3) / 0.7);
+          return [q[0] + Math.cos(a) * l, q[1] + Math.sin(a) * l];
+        } });
+      };
       if (tackled && reach.length) {
         tackler = reach[0].d;
         if (reach[0].T > tC - t0 + 0.1) {            // still nobody (the field ran out): he slows in traffic
@@ -2007,7 +2045,8 @@
         if (two_) {
           busy.add(two_.d);
           const q = here(two_.d), [qx, qy] = unit(endPt[0] - q[0], endPt[1] - q[1]);
-          runFrom(two_.d, t0, [[endPt[0] - qx * 1.0, endPt[1] - qy * 1.0]], { T: Math.max(0.4, tEnd - t0 + 0.12) });
+          const T2 = Math.max(0.4, tEnd - t0 + 0.12);
+          trail(two_.d, t0, runFrom(two_.d, t0, [[endPt[0] - qx * 1.0, endPt[1] - qy * 1.0]], { T: T2 }), t0 + T2, [-qx, -qy]);
           leg(two_.d, tEnd + 0.3, 'stand');
         }
       } else if (o.oob && reach.length && reach[0].T < tC - t0 + 0.3) {
@@ -2054,9 +2093,24 @@
       if (tackler && B) {
         Wd.run(tGo);
         const p = here(tackler), [cx, cy] = unit(contact[0] - p[0], contact[1] - p[1]);
-        runFrom(tackler, Wd.t, [[contact[0] - cx * 0.7, contact[1] - cy * 0.7]], { T: Math.max(0.2, tC - Wd.t) });
+        const t1 = Wd.t;
+        trail(tackler, t1, runFrom(tackler, t1, [[contact[0] - cx * 0.7, contact[1] - cy * 0.7]], { T: Math.max(0.2, tC - t1) }), tC, [-cx * 0.7, -cy * 0.7]);
         leg(tackler, tC, 'stick', { who: car.b, dx: -cx * 0.75, dy: -cy * 0.75, ease: 0.2 });
         leg(tackler, tEnd + 0.05, 'stand');
+      }
+      // nobody he goes by gets to him and lets him go (only the broken tackle does): a chaser who would come within
+      // arm's reach before the tackle takes a deeper angle, held off further (players saw men run into the coverage)
+      const tHit = (tackler ? tC : tEnd) - 0.3, near = (d) => {
+        let m = 99;
+        for (let t = t0 + 0.3; t < tHit; t += 0.1) m = Math.min(m, dist(Wd.posAt(d.b, t), Wd.posAt(car.b, t)));
+        return m;
+      };
+      for (let k = 0; k < 2; k++) {
+        Wd.run(tHit);
+        const close = foes(car).filter((d) => !busy.has(d) && near(d) < 1.4);
+        if (!close.length) break;
+        Wd.rewind(t0);
+        close.forEach((d) => leg(d, t0 + 0.15, 'chase', { who: car.b, gap: 3.5 + k * 1.5, eff: 0.8, lead: 0.5 }));
       }
       Wd.run(tEnd);
       // (tests: forward progress. How far past the spot he ever had the ball, beyond where he got it)
@@ -2751,10 +2805,23 @@
       const endY = e.td ? tdL() : inL(fwd(L0, e.yards));
       // after the catch he keeps going the way the route took him: a slant or a dig inside, an out or a flat outside
       const lat = YAC_IN.has(routeName) ? -out : YAC_OUT.has(routeName) ? out : 0;
-      const endX = e.oob ? sidelineX(catchPt[0] + out * 6) : inX(catchPt[0] + clip(jit(lat ? 2.5 : 5) + lat * Math.min(Math.abs(yac), 12) * 0.35, -9, 9));
+      const sx = sidelineX(catchPt[0] + out * 2);              // (the nearer sideline; in the middle, his outside one)
+      const x0 = inX(catchPt[0] + clip(jit(lat ? 2.5 : 5) + lat * Math.min(Math.abs(yac), 12) * 0.35, -9, 9));
+      // a run after the catch goes into the open grass that way: of the lanes to the spot, the one clearest of the
+      // defenders (where they are headed), a lane off his line costing a little (players saw a man wide open turn
+      // into the coverage)
+      const lane = (x) => {
+        const s = here(tgt), [ux, uy] = unit(x - s[0], endY - s[1]), len = dist(s, [x, endY]);
+        return K.def.reduce((c, d) => {
+          const p = [d.b.x + d.b.vx * 0.4, d.b.y + d.b.vy * 0.4], u = clip((p[0] - s[0]) * ux + (p[1] - s[1]) * uy, Math.min(2, len), len);
+          return c + Math.max(0, 4 - dist(p, [s[0] + ux * u, s[1] + uy * u])) ** 2;
+        }, Math.abs(x - x0));
+      };
+      const endX = e.oob ? sx : outTry ? outShort(catchPt[0], sx, yac) : Math.abs(yac) < 4 ? x0
+        : [-8, -6, -4, -2, 0, 2, 4, 6, 8].map((k) => inX(x0 + k)).reduce((b, x) => (lane(x) < lane(b) ? x : b), x0);
       if (Math.abs(yac) > 4 && !e.bt) say(tCatch, 'Caught', 'boom', { follow: tgt });
       if (shadow) busy.delete(shadow);       // the man on him at the catch is the first who can tackle him
-      const ep = [endX, endY], tEnd = runDown(tgt, tCatch, ep, { td: e.td, oob: e.oob, bt: e.bt, from: tCatch });
+      const ep = [endX, endY], tEnd = runDown(tgt, tCatch, ep, { td: e.td, oob: e.oob, bt: e.bt, from: tCatch, out: outTry ? Math.sign(sx - FW / 2) : 0 });
       finish(tgt, tEnd, ep);
     }
 
@@ -2835,8 +2902,10 @@
         else leg(K.fb, REACT_OFF - 0.1, 'go', { x: hole[0], y: fwd(L0, 1.5), eff: 0.9 });
       }
       const Lend = e.td ? tdL() : inL(fwd(L0, e.yards));
-      const xEnd = e.oob ? sidelineX(sg ? (sg > 0 ? FW : 0) : hole[0]) : inX(hole[0] + sg * Math.min(9, Math.abs(e.yards) * 0.5) + jit(3));
-      const tEnd = runDown(carrier, Math.max(tLos - 0.15, tMesh + 0.2), [xEnd, Lend], { td: e.td, oob: e.oob, bt: e.bt, eff: 0.95, after: e.yards < 2 ? 0.8 + R() : undefined, from: tMesh });
+      const sx = sidelineX(sg ? (sg > 0 ? FW : 0) : hole[0]);
+      const xEnd = e.oob ? sx : outTry ? outShort(hole[0], sx, e.yards) : inX(hole[0] + sg * Math.min(9, Math.abs(e.yards) * 0.5) + jit(3));
+      const tEnd = runDown(carrier, Math.max(tLos - 0.15, tMesh + 0.2), [xEnd, Lend], { td: e.td, oob: e.oob, bt: e.bt, eff: 0.95, after: e.yards < 2 ? 0.8 + R() : undefined, from: tMesh,
+        out: outTry ? Math.sign(sx - FW / 2) : 0 });
       finish(carrier, tEnd, [xEnd, Lend]);
     }
 
@@ -2912,7 +2981,7 @@
       snapToQb();
       busy.add(qb);
       ring(T_SNAP, qb);
-      const side = R() < 0.5 ? -1 : 1, tE = 2.3 + R() * 0.8;
+      const coin = R() < 0.5 ? -1 : 1, side = outTry ? (BX > FW / 2 ? 1 : -1) : coin, tE = 2.3 + R() * 0.8;     // (going out: the nearer sideline)
       const q0 = here(qb);
       follow(qb, T_SNAP, plan(qb, [q0, [q0[0], fwd(L0, -7.2)]], { eff: 0.5, v1: 0 }));
       const rushers = rushersOf(e.rushers || 4), front = rushers.filter((d) => K.rush.includes(d));
@@ -2925,9 +2994,10 @@
       const esc = [inX(here(qb)[0] + side * 6), fwd(L0, -6)];
       runFrom(qb, tE, [esc], { eff: 0.9, v1: 5 });
       say(tE, 'Scramble!', 'boom', { follow: qb });
-      const xEnd = e.oob ? sidelineX(esc[0] + side * 10) : inX(esc[0] + side * (4 + R() * 6));
+      const sx = sidelineX(esc[0] + side * 10);
+      const xEnd = e.oob ? sx : outTry ? outShort(esc[0], sx, e.yards) : inX(esc[0] + side * (4 + R() * 6));
       const tOut = tE + Motion.minTime([here(qb), esc], 'QB', { v0: vel(qb) }) * 1.05;
-      const tEnd = runDown(qb, tOut, [xEnd, Lend], { td: e.td, oob: e.oob, eff: 0.9, after: e.slide ? 0 : undefined, from: tE });
+      const tEnd = runDown(qb, tOut, [xEnd, Lend], { td: e.td, oob: e.oob, eff: 0.9, after: e.slide ? 0 : undefined, from: tE, out: outTry ? Math.sign(sx - FW / 2) : 0 });
       finish(qb, tEnd, [xEnd, Lend]);
     }
 
