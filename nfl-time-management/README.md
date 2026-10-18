@@ -376,6 +376,9 @@ worked out the old way and ran high (Super Bowl LI, down 25: nothing anyone call
 the simulation's noise). Nothing replaces them (a device's first result counts once), but where a day has both, the
 day card ranks a fair-scored result among the fair set, and the stats page shows only the fair set and its top ten,
 with a line saying how many were scored the old way. A device's own day-7 record keeps its number, with a note.
+The weeks count only that day's fair-scored results: an old-way one stays on the day's list but adds nothing to any
+week (the weeks kept before this were made again without them, once, when the board started), and the This week tab
+tells its player so (`old` in `/daily`'s week).
 Under it, two tabs: **Today's top 10** (name and score) and **This week** (`/week`: each name's best 5 daily scores of
 the last 7 days, added up, out of 500; the page says so), each with your own line under the list when you're not on it
 ("You: #142 of 1,380": the day's rank among everyone who played, named or not; the week's among the names in it). A

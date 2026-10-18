@@ -867,6 +867,99 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.deepStrictEqual([d2.n, d2.n2, d2.best, d2.best2], [3, 1, 0.7, 0.7], 'the stats page\'s fair figures: counted results only');
   Date.now = realNow;
 }
+// the weeks made fair (OLD_WAY_DAYS: Oct 18, 2026, the day the fair score came in): an old-way result of that day goes
+// on the day's whole list but into no week (the name's day used all the same), a fair one counts as on any day; the
+// weeks kept before the fix (old-way points in wn:<name> and wk:<D>..<D+6>) are made again once, at the board's start
+{
+  const realNow = Date.now, at = (date) => { Date.now = () => Date.parse(date + 'T15:00:00Z'); };
+  const D = '2026-10-18', ends = [0, 1, 2, 3, 4, 5, 6].map((k) => `2026-10-${18 + k}`), fk = (who) => `fairweek-key-${who.replace(/\W/g, '')}-`.padEnd(24, 'x');
+  const post = async (date, who, p, x = {}) => { at(date); return (await day({ date, key: fk(who), p, spots: [0], name: who, ...x })).json(); };
+  const wk = async (e) => (await call('GET', null, { path: `/week?date=${e}` })).json(), rows = (w) => w.top.map((x) => [x.name, x.pts]);
+  const total = (e) => store.get(`wk:${e}`).hist.reduce((a, c) => a + c, 0), dkOf = async (who) => `dk:${D}:${await sha256hex(fk(who))}`;
+  const ours = (k) => /^(wk|day):2026-10-[12]\d$|^dk:2026-10-18:/.test(k) || (k.startsWith('wn:') && Object.keys(store.get(k).d || {}).some((x) => x >= '2026-10-12' && x <= '2026-10-24'));
+  const kept = new Map([...store].filter(([k]) => ours(k)));        // (the tests above post on today, whatever it is: theirs set aside, back after)
+  for (const k of kept.keys()) store.delete(k);
+  // as stored before the fix: every Oct 18 result counted in the weeks (posted here as g: 2, then the old-way ones'
+  // device records and the fair list made as they were: no g, not on it)
+  await post('2026-10-15', 'Earl', 0.7);
+  await post('2026-10-16', 'Fran', 0.4);
+  await post('2026-10-17', 'Olga', 0.6);
+  const old = ['Olga', 'Otto', 'Duo', ...Array.from({ length: 100 }, (_, i) => `Hi ${i}`)];
+  for (const [who, p] of [['Olga', 1], ['Otto', 0.99], ['Duo', 0.9], ...old.slice(3).map((x) => [x, 0.96]), ['Fran', 0.55], ['Fern', 0.3]]) await post(D, who, p, { g: 2 });
+  await post(D, 'Rex', 0.99, { g: 2, restarted: true });
+  await post(D, 'Anon', 0.97, { name: undefined });
+  for (const who of old) { const k = await dkOf(who), x = store.get(k); delete x.g; store.set(k, x); }
+  const dd = store.get(`day:${D}`);
+  dd.f.top = [{ name: 'Fran', p: 0.55, kh: await sha256hex(fk('Fran')) }];         // (Fern: a fair result past the fair list's 25)
+  store.set(`day:${D}`, dd);
+  store.set(`dk:${D}:${'d'.repeat(64)}`, { p: 0.4, spots: [0], g: 2, name: 'Duo' });     // (Duo's other phone, signed in: fair, but not the one listed)
+  let g = await wk(D);
+  assert.deepStrictEqual([g.n, g.top[0].name, g.top[0].pts, store.get(`wk:${D}`).top.some((x) => x.name === 'Fran')], [106, 'Olga', 160, false], 'the inflated week, as it was kept');
+  const before17 = store.get('wk:2026-10-17');
+  // the board's first start since: once, the old-way points out of the names' records and the 7 weeks made again
+  store.delete(`fairweek:${D}`);
+  board = new Board({ storage }, board.env);
+  g = await wk(D);
+  assert.deepStrictEqual([rows(g), g.n, g.old], [[['Fran', 95], ['Earl', 70], ['Olga', 60], ['Fern', 30]], 4, undefined], 'old-way points out; fair ones in, back from past the 100 kept');
+  assert.ok(store.get(`fairweek:${D}`), 'done once');
+  assert.deepStrictEqual(ends.map(total), ends.map((e) => store.get(`wk:${e}`).n), 'each week\'s histogram adds up to its count');
+  assert.deepStrictEqual([rows(await wk('2026-10-22')), rows(await wk('2026-10-24'))], [[['Fran', 95], ['Olga', 60], ['Fern', 30]], [['Fran', 55], ['Fern', 30]]], 'all 7 weeks');
+  assert.ok(ends.every((e) => !store.get(`wk:${e}`).top.some((x) => (old.includes(x.name) && x.name !== 'Olga') || x.name === 'Rex')), 'no old-way name in any');
+  assert.deepStrictEqual(store.get('wk:2026-10-17'), before17, 'a week without the day: as it was');
+  assert.deepStrictEqual(['olga', 'otto', 'duo', 'hi 7', 'fran', 'fern'].map((n) => store.get(`wn:${n}`).d[D]), [null, null, null, null, 55, 30], 'the names\' own records');
+  assert.strictEqual(store.get('wn:olga').d['2026-10-17'], 60, 'their other days kept');
+  let w = await (await call('GET', null, { path: `/daily?date=${D}` })).json();
+  assert.ok(w.top.some((x) => x.name === 'Olga') && w.fair.top.some((x) => x.name === 'Fran') && !w.fair.top.some((x) => x.name === 'Olga'), 'the day\'s lists as they were');
+  // a name's own week line (the end card's This week): its points without the old way, and the day it left out
+  w = await post(D, 'Olga', 0.2);
+  assert.deepStrictEqual([w.counted, w.week.you, w.week.old], [false, { pts: 60, days: 1, rank: 3 }, [D]], 'Olga: her Oct 17 only');
+  w = await post(D, 'Otto', 0.2);
+  assert.deepStrictEqual([w.week.you, w.week.old], [undefined, [D]], 'Otto: nothing in the week');
+  w = await post(D, 'Duo', 0.2);
+  assert.deepStrictEqual([w.week.you, w.week.old], [undefined, [D]], 'Duo: the result listed was the old way');
+  w = await post(D, 'Fran', 0.2, { g: 2 });
+  assert.deepStrictEqual([w.week.you, w.week.old], [{ pts: 95, days: 2, rank: 1 }, undefined], 'Fran: hers counts');
+  // once only, and the same again if it ran twice
+  const snap = ends.map((e) => store.get(`wk:${e}`));
+  store.delete(`fairweek:${D}`);
+  board = new Board({ storage }, board.env);
+  await wk(D);
+  assert.deepStrictEqual(ends.map((e) => store.get(`wk:${e}`)), snap, 'run again: the same');
+  // from now on: an old-way post of the day on its whole list, in no week, and a fair one later never replaces it
+  w = await post(D, 'Nova', 0.98);
+  assert.deepStrictEqual([w.counted, w.top.some((x) => x.name === 'Nova'), w.week.you, w.week.old, w.week.n], [true, true, undefined, [D], 4], 'a fresh old-way post: listed, not in the week');
+  assert.ok(ends.every((e) => !store.get(`wk:${e}`).top.some((x) => x.name === 'Nova')) && store.get('wn:nova').d[D] === null, 'in none of its weeks');
+  w = await post(D, 'Nova', 0.99, { g: 2 });
+  assert.deepStrictEqual([w.counted, w.you.g, w.week.you, w.week.n], [false, undefined, undefined, 4], 'nor later, fair or not');
+  await post(D, 'Neil', 0.5, { name: undefined });
+  w = await post(D, 'Neil', 0.5);
+  assert.deepStrictEqual([w.counted, w.week.you, w.week.old, store.get('wn:neil').d[D]], [false, undefined, [D], null], 'named afterwards: the same');
+  w = await post(D, 'Gina', 0.8, { g: 2 });
+  assert.deepStrictEqual([w.week.you, w.week.old, w.week.n, w.fair.top.some((x) => x.name === 'Gina')], [{ pts: 80, days: 1, rank: 2 }, undefined, 5, true], 'a fair post of the day counts');
+  assert.deepStrictEqual(rows(await wk('2026-10-24')), [['Gina', 80], ['Fran', 55], ['Fern', 30]], 'in all its weeks');
+  w = await post(D, 'Rhea', 0.99, { g: 2, restarted: true });
+  assert.deepStrictEqual([w.counted, w.you.restarted, w.week.you, w.week.old, w.week.n], [true, true, undefined, undefined, 5], 'restarted: still out');
+  // every other day as ever: the old way before the day, and after it
+  w = await post('2026-10-17', 'Olive', 0.5);
+  assert.deepStrictEqual([w.week.you, w.week.old], [{ pts: 50, days: 1, rank: 3 }, undefined], 'Oct 17: counted');
+  assert.ok((await wk(D)).top.some((x) => x.name === 'Olive' && x.pts === 50));
+  w = await post('2026-10-19', 'Nova', 0.7);
+  assert.deepStrictEqual([w.counted, w.week.you, w.week.old, w.week.n], [true, { pts: 70, days: 1, rank: 3 }, [D], 7], 'Oct 19: counted, Oct 18 still out');
+  // the commissioner's DELETE /week as ever
+  r = await call('DELETE', null, { path: '/week?name=olga', auth: `Bearer ${env.ADMIN_TOKEN}` });
+  assert.deepStrictEqual([r.status, (await r.json()).removed > 0], [200, true]);
+  g = await wk(D);
+  assert.deepStrictEqual([g.n, g.top.some((x) => x.name === 'Olga'), (await wk('2026-10-17')).top.some((x) => x.name === 'Olga')], [5, false, false], 'off the weeks');
+  assert.ok(!store.get(`day:${D}`).top.some((x) => x.name === 'Olga'), 'and off the day\'s whole list');
+  r = await call('DELETE', null, { path: '/week?name=nova', auth: `Bearer ${env.ADMIN_TOKEN}` });
+  assert.strictEqual(r.status, 200);
+  g = await wk('2026-10-19');
+  assert.deepStrictEqual([g.n, g.top.some((x) => x.name === 'Nova'), store.get(`day:${D}`).top.some((x) => x.name === 'Nova')], [5, false, false], 'Nova: off the week she counted in and the day she didn\'t');
+  assert.deepStrictEqual(['2026-10-17', ...ends].map(total), ['2026-10-17', ...ends].map((e) => store.get(`wk:${e}`).n), 'the counts still add up');
+  for (const k of [...store.keys()]) if (ours(k)) store.delete(k);
+  for (const [k, v] of kept) store.set(k, v);
+  Date.now = realNow;
+}
 // Accounts, continued: stats that follow the account, usernames on the boards, friend leagues, the daily email
 {
   const realFetch = globalThis.fetch;
@@ -964,11 +1057,11 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   r = await call('POST', { name: 'Not Amy', best: 1, key: kB, session: sa });
   assert.strictEqual(r.status, 200, 'another name: claimed by the device, as ever');
   assert.strictEqual(store.get('claim:not amy'), await sha256hex(kB));
-  b = await (await day({ date: today, key: kB, p: 0.77, spots: [0.1], name: 'Amy Hawk', session: sa })).json();
+  b = await (await day({ date: today, key: kB, p: 0.77, spots: [0.1], name: 'Amy Hawk', session: sa, g: 2 })).json();    // (g: 2: in the week on any day, OLD_WAY_DAYS too)
   assert.ok(!b.taken && b.top.some((x) => x.name === 'Amy Hawk'), 'the day\'s list: her name from the new phone');
   b = await (await day({ date: today, key: 'stranger-key-000000000004', p: 0.9, spots: [0.1], name: 'Amy Hawk' })).json();
   assert.strictEqual(b.taken, true, 'and nobody else\'s');
-  b = await (await day({ date: today, key: kA, p: 0.95, spots: [0.1], name: 'Amy Hawk', session: sa })).json();
+  b = await (await day({ date: today, key: kA, p: 0.95, spots: [0.1], name: 'Amy Hawk', session: sa, g: 2 })).json();
   assert.strictEqual(b.counted, true, 'her other phone\'s result counts in the day');
   assert.deepStrictEqual([b.top.filter((x) => x.name === 'Amy Hawk').map((x) => x.p), b.week.you.pts], [[0.77], 77], 'listed once a day: her first result');
 

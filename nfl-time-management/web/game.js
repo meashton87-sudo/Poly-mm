@@ -7639,7 +7639,8 @@
   // Every call of the day graded the fair way (g: 2, decisionFrom): the post says so, and the board also counts it in
   // the day's fair set (worker.js: day.f). On the day the fair score came in (Oct 18, 2026) the scores posted before it
   // were worked out the old way and ran high; where a day has both, the fair set is the one you are compared with
-  // (dayFor), with a line saying why. A result scored the old way is compared with the day's whole set, as it was.
+  // (dayFor), with a line saying why. A result scored the old way is compared with the day's whole set, as it was, and
+  // counts in no week (worker.js OLD_WAY_DAYS, the same day: the week's old says so, leaders).
   const OLD_WAY_DAYS = [7];              // (Oct 18, 2026: Super Bowl LI, down 25, where the old way paid noise)
   const fairDay = () => { const ds = allDecisions(); return ds.length > 0 && ds.every((x) => x.g === 2); };
   const mixedDay = (d) => !!(d && d.fair && d.fair.n < d.n);
@@ -7774,7 +7775,9 @@
         const y = wk.you;
         panel.append(list(wk.top.map((r) => ({ name: r.name, score: String(r.pts), sub: `${r.days}d` })), y ? [y.rank, wk.n, String(y.pts), `${y.days}d`] : null));
         if (!wk.top.length) panel.append(el('p', 'note', 'Nobody on this week’s list yet.'));
-        if (!y) panel.append(el('p', 'note', myName() ? 'Your days this week count once your name is on today’s list.' : 'Put a name on today’s list to be on the week’s.'));
+        // (old: your days in the week scored the old way, on OLD_WAY_DAYS: on that day's list, in no week; worker.js listed)
+        if (Array.isArray(wk.old) && wk.old.length) panel.append(el('p', 'note', `Your ${wk.old.map((x) => md(x)).join(' and ')} score was worked out the old way, before the fair-score fix, so it doesn’t count toward the week.`));
+        else if (!y) panel.append(el('p', 'note', myName() ? 'Your days this week count once your name is on today’s list.' : 'Put a name on today’s list to be on the week’s.'));
       },
     };
     const tab = (k, label) => {

@@ -9,6 +9,7 @@
 //   POST   /daily  { date, key, p, spots: [w, ...], name?, g?, restarted? }  -> the same, after counting your result
 //                                                             (1-3 spots: the day's drive, or the three spots days had
 //                                                             before), and week: the week to that date with your own line
+//                                                             (you; old: your days in it scored the old way, in no week)
 //   GET    /week?date=2026-10-17                          -> the week to that date: { from, to, best, n, top: [{ name, pts, days }] }
 //   DELETE /week?name=Eli  (Authorization: Bearer <ADMIN_TOKEN>)          a name off the day and week lists, for good
 // The daily game: every device's first result of a day counts once (a replay of the day changes nothing). p is the
@@ -23,6 +24,9 @@
 // posted before it were worked out the old way (inflated on that day's drive) and stay as they were: a device's first
 // result still counts once, so a device that posted the old way never enters the fair set, and nothing replaces a
 // result. g only says which set a post also counts in: the same checks as any post, and no more trust than one.
+// The weeks count no old-way result of that day (OLD_WAY_DAYS): it goes on the day's whole list but into no week (the
+// name's day is kept as null, so it stays the name's one result of the day and a fair one never replaces it); a fair
+// one counts as on any day. The weeks kept before that counted them: fairWeeks takes them out, once.
 // A restarted drive (restarted: true; game.js restartAsk: the player started the day's drive over, so may have seen
 // the day's draws play out once) is still the device's first result of the day (a later post changes nothing), but
 // it stays out of the day's numbers: not in n, the histogram, the spots' averages, the day's list or the weeks, and
@@ -183,9 +187,10 @@ async function days(storage, h) {
 // only go up, so a name that falls off a top list never belongs back on it until its own next result puts it there.
 // Your rank (the poster's own) comes from the histogram: 1 + the names with more points.
 const WEEK_DAYS = 7, WEEK_BEST = 5, WEEK_KEEP = 100, WEEK_TOP = 10, DAY_KEEP = 25;    // DAY_KEEP: kept past the 10 shown, so a name taken off leaves the next in line
+const OLD_WAY_DAYS = ['2026-10-18'];     // game.js OLD_WAY_DAYS (day 7): the day the fair score came in (above)
 const addDays = (date, k) => new Date(Date.parse(date + 'T12:00:00Z') + k * 864e5).toISOString().slice(0, 10);
-function weekOf(d, end) {
-  const from = addDays(end, 1 - WEEK_DAYS), s = Object.entries(d || {}).filter(([k]) => k >= from && k <= end).map(([, v]) => v).sort((a, b) => b - a);
+function weekOf(d, end) {       // (a null day: an old-way result of an OLD_WAY day, in no week)
+  const from = addDays(end, 1 - WEEK_DAYS), s = Object.entries(d || {}).filter(([k, v]) => v != null && k >= from && k <= end).map(([, v]) => v).sort((a, b) => b - a);
   return { pts: s.slice(0, WEEK_BEST).reduce((a, x) => a + x, 0), days: s.length };
 }
 const emptyWeek = () => ({ n: 0, hist: new Array(WEEK_BEST * 100 + 1).fill(0), top: [] });
@@ -213,7 +218,8 @@ async function listed(storage, day, date, name, nk, p, fair) {
   if (wn.out || date in wn.d) return;
   addTop(day, name, p, nk);
   if (fair && day.f) addTop(day.f, name, p, nk);         // (fair: a fair-scored result, on the fair set's list too)
-  await weekAdd(storage, wn, date, name, Math.round(p * 100));
+  if (fair || !OLD_WAY_DAYS.includes(date)) await weekAdd(storage, wn, date, name, Math.round(p * 100));
+  else { wn.d[date] = null; wn.name = name; await storage.put(`wn:${lower}`, wn); }    // (the old way on its day: listed, in no week)
 }
 // the week to `end` as shown: the top WEEK_TOP (never a blocked() name, never a key hash), and with a name, its own line
 async function weekFor(storage, end, name) {
@@ -222,7 +228,43 @@ async function weekFor(storage, end, name) {
   const wn = name ? await storage.get(`wn:${name.toLowerCase()}`) : null;
   const m = wn && !wn.out ? weekOf(wn.d, end) : null;
   if (m && m.days) v.you = { pts: m.pts, days: m.days, rank: 1 + w.hist.slice(m.pts + 1).reduce((a, c) => a + c, 0) };
+  const old = m ? Object.keys(wn.d).filter((k) => wn.d[k] === null && k >= v.from && k <= end).sort() : [];
+  if (old.length) v.old = old;                             // (its days in the week scored the old way: in no week, above)
   return v;
+}
+// The weeks kept before this counted an OLD_WAY day's old-way results too. Once (fairweek:<day> marks it done), at the
+// board's first start since: a name's result of that day becomes null unless it was fair (the name on the day's fair
+// list, or a g: 2 device record under it with those points and no old-way one with the same; anything else is taken as
+// the old way), then the day's 7 weeks (wk:<D>..<D+6>) are made again from every name's record (wn:, the one scan: each
+// still held its two weeks), as if those results had never counted; a name whose points stay keeps its place in a tie
+async function fairWeeks(storage) {
+  for (const D of OLD_WAY_DAYS) {
+    if (await storage.get(`fairweek:${D}`)) continue;
+    const day = (await storage.get(`day:${D}`)) || emptyDay(), onFair = new Set(((day.f && day.f.top) || []).map((r) => String(r.name).toLowerCase()));
+    const seen = { fair: new Set(), old: new Set() }, wns = await storage.list({ prefix: 'wn:' }), at = Date.now();
+    for (const [, x] of await storage.list({ prefix: `dk:${D}:` })) if (x && x.name && !x.restarted) seen[x.g === 2 ? 'fair' : 'old'].add(`${String(x.name).toLowerCase()}:${Math.round(x.p * 100)}`);
+    for (const [k, wn] of wns) {
+      const pt = wn && wn.d ? wn.d[D] : null, lower = k.slice(3), was = `${lower}:${pt}`;
+      if (typeof pt !== 'number' || onFair.has(lower) || (seen.fair.has(was) && !seen.old.has(was))) continue;
+      wn.d[D] = null;
+      await storage.put(k, wn);
+    }
+    for (let i = 0; i < WEEK_DAYS; i++) {
+      const k = `wk:${addDays(D, i)}`, was = await storage.get(k), w = emptyWeek();
+      if (!was) continue;
+      for (const [nk, wn] of wns) {
+        const m = wn && !wn.out ? weekOf(wn.d, k.slice(3)) : null;
+        if (!m || !m.days) continue;
+        const prev = was.top.find(sameName(nk.slice(3)));
+        w.n += 1; w.hist[m.pts] += 1;
+        w.top.push({ name: wn.name, pts: m.pts, days: m.days, at: prev && prev.pts === m.pts ? prev.at : at });
+      }
+      w.top.sort((a, b) => b.pts - a.pts || a.at - b.at);
+      w.top = w.top.slice(0, WEEK_KEEP);
+      await storage.put(k, w);
+    }
+    await storage.put(`fairweek:${D}`, true);
+  }
 }
 // the commissioner takes a name off the lists (a score that can't be real): off every week and day list it is on, out
 // of the weeks' counts, and kept off (wn.out); its results stay in the days' histograms
@@ -1434,8 +1476,12 @@ async function versus(req, env, url) {
 }
 
 export class Board {
-  constructor(ctx, env) { this.ctx = ctx; this.env = env; this.hits = new Map(); }
+  constructor(ctx, env) {
+    this.ctx = ctx; this.env = env; this.hits = new Map();
+    this.ready = fairWeeks(ctx.storage).catch((e) => console.error('fair weeks failed', e && e.message));      // (once; tried again at the next start)
+  }
   async fetch(req) {
+    await this.ready;                          // (every request after it: fairWeeks)
     if (new URL(req.url).pathname === CRON_PATH) return json(await reminders(this.env, this.ctx.storage, String(((await readBody(req)) || {}).date || '')), 200, {});
     return handle(req, this.env, this.ctx.storage, this.hits);
   }
