@@ -41,14 +41,26 @@
 //                                                            completed, paid session gets its code here too, so a
 //                                                            buyer who never lands back on the site (closed the tab,
 //                                                            a bank payment that cleared later) still has one to claim
+//   POST   /recover { email }        -> { ok }               a lost code: the codes bought with that email are mailed to
+//                                                            it (Resend), with a one-tap ?claim= link each. The same
+//                                                            answer, after at least RECOVER_MIN_MS, whether or not the
+//                                                            address bought anything (never the code itself); at most
+//                                                            RECOVER_MAX an hour an address, RECOVER_IP_MAX an IP. Off
+//                                                            (503) without RESEND_KEY and MAIL_FROM. The purchases are
+//                                                            found by pro:buyer:<HMAC of the address> (written by the
+//                                                            webhook and /claim: session ids, never the address) and
+//                                                            asked of Stripe too (Checkout Sessions read: purchases from
+//                                                            before the lookup was kept): complete, paid sessions
+//                                                            tagged tmd_pro_ only
 // A code is 12 letters and digits (no 0/O, 1/I/L) drawn at random: about 60 bits, posted at RATE_PER_MIN an IP.
-// Nothing about the buyer is kept here (Stripe has the receipt); only the session id behind each code (and, for a
-// purchase made signed in, the account it belongs to: see Accounts below).
+// Nothing about the buyer is kept here in plain (Stripe has the receipt); only the session id behind each code (and, for a
+// purchase made signed in, the account it belongs to: see Accounts below), and a keyed hash of the buyer's email -> its
+// session ids (for /recover). Neither an address nor a code is ever logged.
 // The daily email (reminders, below) takes an optional var REMIND_CAP: the most emails one cron run sends (1000 by
 // default; three runs a morning, wrangler.toml [triggers]); the accounts past it go in the next run.
 const TOP = 25, KEEP = 500, RATE_PER_MIN = 30, DAY_TOP = 10;
 const RACE_PATHS = ['/race', '/race/me', '/race/join', '/race/start', '/race/pass', '/race/admin', '/race/admin/void'];
-const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/stripe-webhook', '/pro/data', '/pro/reset', '/pro/gift'];
+const PRO_PATHS = ['/pro', '/pay', '/claim', '/restore', '/recover', '/stripe-webhook', '/pro/data', '/pro/reset', '/pro/gift'];
 const PRO_FILE_RE = /^(drives|runs|d\d{1,3}|r\d{1,3})\.json$/;
 const STRIPE_VERSION = '2026-08-26.dahlia', WEBHOOK_TOLERANCE = 300;   // the API version pinned; a signature older than this is refused
 const PRO_PRICE = '$4.99', PRO_CENTS = 499, PRO_TAX_CODE = 'txcd_10201001',    // video games, downloaded, non-subscription: the product's category; Managed Payments refuses a line without one
@@ -511,10 +523,10 @@ async function attachCode(storage, acct, code) {
   if (a.code !== code) await storage.put(`acct:${acct}`, { ...a, code });
   return 'ok';
 }
-// at most MAIL_MAX in MAIL_WINDOW for one key (kept in storage, so the limit holds across restarts)
-async function mailLimited(storage, key) {
-  const now = Date.now(), k = `auth:rl:${key}`, hitsAt = ((await storage.get(k)) || []).filter((t) => now - t < MAIL_WINDOW);
-  if (hitsAt.length >= MAIL_MAX) return true;
+// at most max in win for one key (kept in storage, so the limit holds across restarts)
+async function mailLimited(storage, key, max = MAIL_MAX, win = MAIL_WINDOW) {
+  const now = Date.now(), k = `auth:rl:${key}`, hitsAt = ((await storage.get(k)) || []).filter((t) => now - t < win);
+  if (hitsAt.length >= max) return true;
   hitsAt.push(now);
   await storage.put(k, hitsAt);
   return false;
@@ -932,9 +944,13 @@ async function pro(req, env, storage, hits, h, url) {
     try { ev = JSON.parse(raw); } catch (e) { return json({ error: 'bad json' }, 400, h); }
     const sess = ev && ev.data && ev.data.object;
     if (['checkout.session.completed', 'checkout.session.async_payment_succeeded'].includes(ev && ev.type) && sess && SESSION_RE.test(String(sess.id || ''))
-        && sess.payment_status && sess.payment_status !== 'unpaid') await codeFor(storage, sess.id, sess.client_reference_id);
+        && sess.payment_status && sess.payment_status !== 'unpaid') {
+      await codeFor(storage, sess.id, sess.client_reference_id);
+      await noteBuyer(env, storage, sess.customer_details && sess.customer_details.email, sess.id);
+    }
     return json({ received: true }, 200, h);
   }
+  if (url.pathname === '/recover') return recover(req, env, storage, hits, h);
   if (!proOn(env)) return json({ error: 'payments are not set up yet' }, 503, h);
   if (limited(req, hits)) return json({ error: 'slow down' }, 429, h);
   let body = {};
@@ -983,6 +999,7 @@ async function pro(req, env, storage, hits, h, url) {
     if (!r.ok) return json({ error: 'no such session' }, 404, h);
     if (sess.payment_status === 'unpaid') return json({ error: 'not paid' }, 402, h);     // 'no_payment_required' counts as paid
     const minted = await codeFor(storage, s, sess.client_reference_id);
+    await noteBuyer(env, storage, sess.customer_details && sess.customer_details.email, s);
     if (KEY_RE.test(String(body.key || ''))) await bindDevice(storage, minted, String(body.key));    // the buyer's device is the first
     return json({ code: minted }, 200, h);
   }
@@ -1028,6 +1045,85 @@ async function pro(req, env, storage, hits, h, url) {
     return new Response(file.body, { status: 200, headers: { ...h, 'Content-Type': 'application/json', 'Cache-Control': 'private, no-store' } });
   }
   return json({ error: 'not found' }, 404, h);
+}
+
+// ---- A lost code (/recover): the buyer's email in, the codes out by email only. The address is used for the lookup and
+// the email and then dropped: stored only as an HMAC (mailSecret), never logged, never in an answer.
+const RECOVER_MAX = 3, RECOVER_IP_MAX = 10, RECOVER_WINDOW = 3600e3;   // an hour: 3 asks an address (a typo, a second try), 10 an IP (a family's)
+const RECOVER_MIN_MS = 1500, RECOVER_CODES = 5, BUYER_KEEP = 20;      // every answer takes at least this (a buyer's Stripe and Resend calls take no longer than an unknown address's); codes in one email; sessions kept an address
+const PRO_TAG = 'tmd_pro_';                                           // /pay's integration_identifier: this site's Pro sessions, not anything else sold on the account
+const normEmail = (x) => { const e = String(x ?? '').trim().toLowerCase(); return e.length <= 198 && EMAIL_RE.test(e) ? e : ''; };
+const buyerKey = async (env, storage, email) => (await hmacHex(await mailSecret(env, storage), `buyer:${email}`)).slice(0, 40);
+// a paid session joins its buyer's lookup (pro:buyer:<key> -> [session ids], the newest BUYER_KEEP)
+async function noteBuyer(env, storage, email, s) {
+  const e = normEmail(email);
+  if (!e || !SESSION_RE.test(String(s))) return;
+  const k = `pro:buyer:${await buyerKey(env, storage, e)}`, have = (await storage.get(k)) || [];
+  if (!have.includes(s)) await storage.put(k, [...have, s].slice(-BUYER_KEEP));
+}
+const proSession = (x) => !!x && SESSION_RE.test(String(x.id || '')) && x.mode === 'payment' && x.status === 'complete'
+  && String(x.integration_identifier || '').startsWith(PRO_TAG) && ['paid', 'no_payment_required'].includes(x.payment_status);    // (no_payment_required: a 100% promotion code, as /claim counts it)
+// Stripe's own record (purchases from before the lookup): the address's complete Checkout Sessions (Checkout Sessions
+// read). Stripe may match the address only as the buyer typed it there, so the lowercased one is asked, and the one typed
+// here too (a purchase from before the lookup typed in other capitals than both is not found: the owner sends it by hand).
+async function stripeBuyer(env, email, typed) {
+  const out = [];
+  for (const e of [...new Set([email, typed])]) {
+    let r;
+    try { r = await stripe(env, `checkout/sessions?${new URLSearchParams({ 'customer_details[email]': e, status: 'complete', limit: '100' })}`); } catch (x) { r = null; }
+    if (!r || !r.ok) { console.error('stripe refused the recovery lookup', r ? r.status : 'unreachable'); continue; }
+    const d = await r.json().catch(() => ({}));
+    for (const x of (d && Array.isArray(d.data) ? d.data : [])) if (proSession(x) && !out.some((y) => y.id === x.id)) out.push(x);
+  }
+  return out;
+}
+// the codes for the address (nothing when it bought nothing), mailed; the caller answers the same either way
+async function recoverSend(req, env, storage, email, typed) {
+  const key = await buyerKey(env, storage, email), bk = `pro:buyer:${key}`, ids = new Set((await storage.get(bk)) || []);
+  if (proOn(env)) {
+    for (const x of await stripeBuyer(env, email, typed)) {
+      await codeFor(storage, x.id, x.client_reference_id);              // (a paid session never claimed gets its code now, as /claim would)
+      await noteBuyer(env, storage, email, x.id);
+      ids.add(x.id);
+    }
+  }
+  const found = [];
+  for (const s of ids) {
+    const code = await storage.get(`pro:sess:${s}`);
+    if (code && await storage.get(`pro:code:${code}`) && !found.some((f) => f.code === code)) found.push({ s, code });   // (a code taken off, a refund: not sent)
+  }
+  if (!found.length) return;
+  const site = siteFor(req, env), list = found.slice(-RECOVER_CODES).reverse(), many = list.length > 1;
+  const link = (f) => `${site}/?claim=${f.s}&r=1`;
+  const text = `Your Two-Minute Drill Pro code${many ? 's' : ''}:\n\n${list.map((f) => `${f.code}\nOpen Pro on this device: ${link(f)}`).join('\n\n')}\n\n`
+    + `On any other device, open the Pro tab, tap "Already have Pro?", enter the code and tap Restore. A code works on up to ${DEV_MAX} devices.\n\n`
+    + "You (or someone who typed your address) asked for this on the site. If it wasn't you, ignore this email: nothing changes.";
+  const html = `<p>Your Two-Minute Drill Pro code${many ? 's' : ''}:</p>${list.map((f) => `<p><b style="font-size:18px;letter-spacing:1px">${f.code}</b><br><a href="${link(f)}">Open Pro on this device</a></p>`).join('')}`
+    + `<p>On any other device, open the Pro tab, tap "Already have Pro?", enter the code and tap Restore. A code works on up to ${DEV_MAX} devices.</p>`
+    + "<p style=\"color:#5a675e;font-size:13px\">You (or someone who typed your address) asked for this on the site. If it wasn't you, ignore this email: nothing changes.</p>";
+  let r;
+  try {
+    r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${env.RESEND_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: env.MAIL_FROM, to: [email], subject: `Your Two-Minute Drill Pro code${many ? 's' : ''}`, text, html }) });
+  } catch (e) { r = null; }
+  if (!r || !r.ok) console.error('resend refused the recovery email', r ? r.status : 'unreachable');
+}
+async function recover(req, env, storage, hits, h) {
+  if (!emailOn(env)) return json({ error: 'code recovery is not set up' }, 503, h);
+  if (limited(req, hits)) return json({ error: 'slow down' }, 429, h);
+  const body = await readBody(req);
+  if (body === null) return json({ error: 'bad json' }, 400, h);
+  if (body === false) return json({ error: 'too big' }, 413, h);
+  const typed = String(body.email ?? '').trim(), email = normEmail(typed);
+  if (!email) return json({ error: 'That does not look like an email address.' }, 400, h);
+  const ip = req.headers.get('CF-Connecting-IP') || 'local';
+  if (await mailLimited(storage, `rc:ip:${await sha256(ip)}`, RECOVER_IP_MAX, RECOVER_WINDOW)
+      || await mailLimited(storage, `rc:em:${await buyerKey(env, storage, email)}`, RECOVER_MAX, RECOVER_WINDOW)) return json({ error: 'Too many requests for a code. Try again in an hour.' }, 429, h);
+  const t0 = Date.now();
+  try { await recoverSend(req, env, storage, email, typed.length <= 198 ? typed : email); } catch (e) { console.error('the recovery failed', e && e.name); }
+  const min = env.RECOVER_MIN_MS === undefined ? RECOVER_MIN_MS : Number(env.RECOVER_MIN_MS), wait = min - (Date.now() - t0);
+  if (wait > 0) await new Promise((res) => setTimeout(res, wait));
+  return json({ ok: true }, 200, h);
 }
 
 // The board itself: `storage` is the Durable Object's (get/put), `hits` its in-memory per-IP counts.

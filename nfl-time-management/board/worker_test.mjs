@@ -1066,4 +1066,172 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   unset('GOOGLE_CLIENT_ID', 'SITE', 'API_URL');
   globalThis.fetch = realFetch;
 }
+// A lost code (/recover): the email the buyer paid with in, the code out by email only (Resend and Stripe stubbed).
+// The same answer for any address; the lookup the webhook and /claim keep (a keyed hash, never the address); Stripe's
+// own record for purchases from before it; only complete, paid Pro sessions; limits per address and per IP; no address
+// or code in any log
+{
+  const realFetch = globalThis.fetch, realErr = console.error, realLog = console.log, realWarn = console.warn;
+  const envs = [env, board.env];
+  const set = (o) => { for (const e of envs) Object.assign(e, o); };
+  const unset = (...ks) => { for (const e of envs) for (const k of ks) delete e[k]; };
+  const logs = [];
+  console.error = (...a) => logs.push(a.join(' ')); console.log = (...a) => logs.push(a.join(' ')); console.warn = (...a) => logs.push(a.join(' '));
+  const mails = [], lists = [];
+  let resendDown = false, stripeDown = false;
+  const S = (id, email, o = {}) => ({ id, object: 'checkout.session', mode: 'payment', status: 'complete', payment_status: 'paid', integration_identifier: 'tmd_pro_abcdefgh',
+    customer_details: { email }, client_reference_id: null, ...o });
+  // Stripe's record: matched on the address exactly as typed at checkout (as Stripe may)
+  const stripeSessions = [
+    S('cs_live_oldbuyer000000001', 'old@example.com'),                                       // bought before the lookup was kept
+    S('cs_live_oldunpaid00000001', 'unpaid@example.com', { payment_status: 'unpaid' }),     // a bank payment never cleared
+    S('cs_live_oldother000000001', 'other@example.com', { integration_identifier: null }),   // something else sold on the account
+    S('cs_live_oldopen0000000001', 'open@example.com', { status: 'open', payment_status: 'unpaid' }),
+    S('cs_live_oldcaps0000000001', 'Caps.Buyer@Example.com'),
+  ];
+  globalThis.fetch = async (u, init = {}) => {
+    u = String(u);
+    if (u === 'https://api.resend.com/emails') {
+      if (resendDown) return new Response('{"message":"down"}', { status: 500 });
+      mails.push([init.headers, JSON.parse(init.body)]); return new Response(JSON.stringify({ id: 'mail_r' }), { status: 200 });
+    }
+    if (u.startsWith('https://api.stripe.com/v1/checkout/sessions?')) {
+      assert.strictEqual(init.method || 'GET', 'GET');
+      if (stripeDown) return new Response('{"error":{"message":"down"}}', { status: 500 });
+      const q = new URL(u).searchParams;
+      lists.push(q);
+      const data = stripeSessions.filter((x) => x.customer_details.email === q.get('customer_details[email]') && (!q.get('status') || x.status === q.get('status')));
+      return new Response(JSON.stringify({ object: 'list', data, has_more: false }), { status: 200 });
+    }
+    const m = u.match(/checkout\/sessions\/(cs_live_[A-Za-z0-9]+)$/);
+    if (m && m[1] === 'cs_live_claimed000000001') return new Response(JSON.stringify(S(m[1], 'Claimer@Example.com')), { status: 200 });
+    return new Response('{"error":{"message":"No such checkout.session"}}', { status: 404 });
+  };
+  const rc = (email, o = {}) => call('POST', email === undefined ? {} : { email }, { path: '/recover', ...o });
+  // off without Resend: 503 (and the page hides the option: GET /auth says email: false)
+  assert.strictEqual((await rc('a@example.com')).status, 503, 'no Resend: off');
+  set({ STRIPE_SECRET: 'rk_live_x', STRIPE_WEBHOOK_SECRET: 'whsec_test_recover', RESEND_KEY: 're_test', MAIL_FROM: 'Two-Minute Drill <hello@nfl2mindrill.com>',
+    SITE: 'https://nfl2mindrill.com', RECOVER_MIN_MS: '0' });
+  // the webhook keeps the lookup: a keyed hash of the address -> the session, never the address
+  const signW = async (body, t = Math.floor(Date.now() / 1000)) => {
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('whsec_test_recover'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    return `t=${t},v1=${Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${t}.${body}`))), (b) => b.toString(16).padStart(2, '0')).join('')}`;
+  };
+  const hook = async (obj) => { const body = JSON.stringify({ id: 'evt_r', type: 'checkout.session.completed', data: { object: obj } });
+    return worker.fetch(new Request('https://w.example/stripe-webhook', { method: 'POST', body, headers: { 'Stripe-Signature': await signW(body) } }), env); };
+  const buyerKeys = () => [...store.keys()].filter((k) => k.startsWith('pro:buyer:'));
+  const before = buyerKeys().length;
+  assert.strictEqual((await hook(S('cs_live_newbuyer000000001', 'New.Buyer@Example.com'))).status, 200);
+  const newCode = store.get('pro:sess:cs_live_newbuyer000000001');
+  assert.match(newCode || '', /^TMD-/);
+  assert.strictEqual(buyerKeys().length, before + 1, 'the webhook stores the lookup');
+  const k1 = buyerKeys().find((k) => (store.get(k) || []).includes('cs_live_newbuyer000000001'));
+  assert.match(k1, /^pro:buyer:[0-9a-f]{40}$/);
+  assert.deepStrictEqual(store.get(k1), ['cs_live_newbuyer000000001']);
+  const noPlain = (addr) => { const all = JSON.stringify([...store]).toLowerCase(); return !all.includes(addr.toLowerCase()); };
+  assert.ok(noPlain('new.buyer@example.com'), 'the address is not stored');
+  assert.ok(!k1.includes(await sha256hex('new.buyer@example.com')), 'not a bare hash of the address either (keyed)');
+  await hook(S('cs_live_newbuyer000000001', 'new.buyer@example.com'));              // Stripe retries: kept once
+  assert.deepStrictEqual(store.get(k1), ['cs_live_newbuyer000000001']);
+  await hook(S('cs_live_newunpaid0000001', 'New.Buyer@Example.com', { payment_status: 'unpaid' }));
+  assert.deepStrictEqual(store.get(k1), ['cs_live_newbuyer000000001'], 'an unpaid session is not kept for the address');
+  // a known buyer (any case, spaces): one email with the right code and a one-tap link; the answer never has the code
+  let r = await rc('  NEW.buyer@example.com ');
+  assert.strictEqual(r.status, 200);
+  const known = await r.text();
+  assert.deepStrictEqual(JSON.parse(known), { ok: true });
+  assert.ok(!known.includes('TMD-'), 'never the code in the answer');
+  assert.strictEqual(mails.length, 1, 'one email');
+  let [mh, mail] = mails[0];
+  assert.deepStrictEqual(mail.to, ['new.buyer@example.com']);
+  assert.strictEqual(mail.from, 'Two-Minute Drill <hello@nfl2mindrill.com>', 'the sign-in emails\' sender');
+  assert.strictEqual(mh.Authorization, 'Bearer re_test');
+  assert.strictEqual(mail.subject, 'Your Two-Minute Drill Pro code');
+  assert.ok(mail.text.includes(newCode) && mail.html.includes(newCode), 'the code');
+  assert.ok(mail.text.includes('https://nfl2mindrill.com/?claim=cs_live_newbuyer000000001&r=1') && mail.html.includes('href="https://nfl2mindrill.com/?claim=cs_live_newbuyer000000001&r=1"'), 'the one-tap link');
+  assert.ok(!/<img|track|utm_/i.test(mail.html), 'no tracking');
+  // an unknown address: the same answer, no email (Stripe asked all the same)
+  const nl = lists.length;
+  r = await rc('nobody@example.com');
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(await r.text(), known, 'the same answer for an address that bought nothing');
+  assert.strictEqual(mails.length, 1, 'no email');
+  assert.ok(lists.length > nl, 'Stripe is asked for an unknown address too');
+  // a purchase from before the lookup: found on Stripe (complete, paid, this site's tag), its code minted, the lookup kept
+  r = await rc('old@example.com');
+  assert.strictEqual(await r.text(), known);
+  const oldCode = store.get('pro:sess:cs_live_oldbuyer000000001');
+  assert.match(oldCode || '', /^TMD-/, 'the old purchase gets its code');
+  assert.strictEqual(mails.length, 2);
+  assert.ok(mails[1][1].text.includes(oldCode) && mails[1][1].to[0] === 'old@example.com');
+  const q = lists[lists.length - 1];
+  assert.deepStrictEqual([q.get('customer_details[email]'), q.get('status'), q.get('limit')], ['old@example.com', 'complete', '100'], 'Stripe asked by the address, complete sessions');
+  assert.ok(buyerKeys().some((k) => (store.get(k) || []).includes('cs_live_oldbuyer000000001')), 'and kept for next time');
+  stripeDown = true;                                  // the lookup alone finds it now
+  await rc('old@example.com');
+  assert.strictEqual(mails.length, 3);
+  assert.ok(mails[2][1].text.includes(oldCode), 'the same code again');
+  assert.ok(logs.some((x) => /stripe refused the recovery lookup 500/.test(x)), 'Stripe down is logged');
+  stripeDown = false;
+  // unpaid, open, or another product's sessions: no code, no email
+  for (const a of ['unpaid@example.com', 'open@example.com', 'other@example.com']) {
+    r = await rc(a);
+    assert.strictEqual(await r.text(), known, a);
+  }
+  assert.strictEqual(mails.length, 3, 'no email for unpaid, open or other sessions');
+  for (const s of ['cs_live_oldunpaid00000001', 'cs_live_oldopen0000000001', 'cs_live_oldother000000001']) assert.ok(!store.has(`pro:sess:${s}`), `${s}: no code minted`);
+  // Stripe matched as typed: the address typed in the same capitals is found
+  await rc('Caps.Buyer@Example.com');
+  assert.strictEqual(mails.length, 4);
+  assert.deepStrictEqual(mails[3][1].to, ['caps.buyer@example.com']);
+  // /claim keeps the lookup too: found afterwards with Stripe's list knowing nothing (other capitals)
+  r = await call('POST', { s: 'cs_live_claimed000000001' }, { path: '/claim' });
+  const claimed = (await r.json()).code;
+  assert.match(claimed, /^TMD-/);
+  await rc('claimer@example.com');
+  assert.strictEqual(mails.length, 5);
+  assert.ok(mails[4][1].text.includes(claimed), '/claim kept the lookup');
+  // two purchases on one address: both codes, one email
+  await hook(S('cs_live_newbuyer000000002', 'new.buyer@example.com'));
+  const code2 = store.get('pro:sess:cs_live_newbuyer000000002');
+  await rc('new.buyer@example.com', { ip: '10.9.0.1' });
+  assert.strictEqual(mails.length, 6);
+  mail = mails[5][1];
+  assert.strictEqual(mail.subject, 'Your Two-Minute Drill Pro codes');
+  assert.ok(mail.text.includes(newCode) && mail.text.includes(code2) && mail.text.includes('?claim=cs_live_newbuyer000000002&r=1'));
+  // a code taken off (a refund): not sent
+  store.delete(`pro:code:${code2}`);
+  await rc('new.buyer@example.com', { ip: '10.9.0.2' });
+  assert.ok(!mails[6][1].text.includes(code2) && mails[6][1].text.includes(newCode), 'a removed code is not sent');
+  // the limit per address: 3 an hour (whatever the IP; any case), then 429, and nothing sent
+  r = await rc('New.Buyer@example.com', { ip: '10.9.0.3' });
+  assert.strictEqual(r.status, 429, 'the 4th ask of the hour for one address');
+  assert.match((await r.json()).error, /Try again in an hour/);
+  assert.strictEqual(mails.length, 7, 'nothing sent over the limit');
+  // the limit per IP: 10 an hour, any addresses
+  const ipx = { ip: '10.8.8.8' };
+  for (let i = 0; i < 10; i++) assert.strictEqual((await rc(`p${i}@example.com`, ipx)).status, 200);
+  assert.strictEqual((await rc('p10@example.com', ipx)).status, 429, 'the 11th ask from one IP');
+  // bad input
+  for (const bad of [undefined, '', 'not-an-email', 'a@b', `${'x'.repeat(200)}@example.com`, 42]) assert.strictEqual((await rc(bad)).status, 400, String(bad));
+  assert.strictEqual((await call('GET', null, { path: '/recover' })).status, 405);
+  // Resend down: the same answer (logged, without the address)
+  resendDown = true;
+  r = await rc('old@example.com', { ip: '10.9.0.9' });
+  assert.strictEqual(await r.text(), known, 'Resend down: the same answer');
+  assert.ok(logs.some((x) => /resend refused the recovery email 500/.test(x)));
+  resendDown = false;
+  // every answer takes at least RECOVER_MIN_MS (a buyer's is no slower to tell apart)
+  set({ RECOVER_MIN_MS: '120' });
+  let t0 = Date.now();
+  await rc('timing@example.com', { ip: '10.9.1.1' });
+  assert.ok(Date.now() - t0 >= 110, 'an unknown address waits the floor');
+  unset('RECOVER_MIN_MS');
+  // no address and no code in any log
+  const leaked = logs.filter((x) => /@|TMD-/i.test(x));
+  assert.deepStrictEqual(leaked, [], 'no PII in the logs');
+  console.error = realErr; console.log = realLog; console.warn = realWarn;
+  unset('STRIPE_SECRET', 'STRIPE_WEBHOOK_SECRET', 'RESEND_KEY', 'MAIL_FROM', 'SITE');
+  globalThis.fetch = realFetch;
+}
 console.log('board worker ok');
