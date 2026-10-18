@@ -265,7 +265,7 @@
   const seedKey = () => (VS ? `vs${vs.seed}` : SURV ? `s${state.run}:${state.games.length}` : PRACTICE ? `p${state.run}` : DRIVE ? `drive${DRIVE}` : RUN_N ? `run${RUN_N}` : dayN);    // what the engine's draws are seeded by
   let G = null;                   // the spot being played
   let ui = { step: null, fam: null, oob: false };
-  let busy = false, lastFocus = null, tick = null, lastBall = null;
+  let busy = false, lastFocus = null, deepFocus = null, tick = null, lastBall = null;
   const CALL = {};
 
   // ------------------------------------------------------------- helpers ---
@@ -306,11 +306,33 @@
   const code = (i) => (i === 0 ? G.scen.home : G.scen.away);
   const teamOf = (i) => (i === 0 ? G.scen.game.home : G.scen.game.away);
   const markOf = (cost) => (cost < 0.005 ? 'g' : cost < 0.02 ? 'y' : cost < 0.05 ? 'o' : 'r');
-  function rate(o) {          // an overall rating as a color: red (below a starter) -> yellow (typical, 77) -> green (elite)
+  function rate(o, dl = 0) {          // an overall rating as a color: red (below a starter) -> yellow (typical, 77) -> green (elite)
     const v = clip(o, 55, 95);
     const h = v < 77 ? 2 + ((v - 55) / 22) * 43 : 45 + ((v - 77) / 18) * 90;
-    const l = v < 77 ? 52 : 50 - ((v - 77) / 18) * 4;
+    const l = (v < 77 ? 52 : 50 - ((v - 77) / 18) * 4) - dl;          // (dl: a shade darker, rateChip)
     return `hsl(${h.toFixed(0)} ${v > 72 && v < 82 ? 88 : 80}% ${l.toFixed(0)}%)`;
+  }
+  // big text on a team's color (its badge on the intro, its end zone): white, or the ink where white reads under 3 to 1
+  // (the Steelers' gold, the Saints', the Raiders' silver)
+  const darkOn = (c) => 1.05 / (lum(c) + 0.05) < 3;
+  // a rating's chip, its number in it (the ratings list, a player's card): the ink on the yellows and greens, white on
+  // the reds and oranges a shade darker (on the oranges neither read at 4.5 to 1)
+  function rateChip(ch, o) {
+    const ink = (lum(rate(o)) + 0.05) / 0.059 >= 4.5;
+    ch.classList.toggle('dk', ink);
+    ch.style.background = ink ? rate(o) : rate(o, 6);
+  }
+  // a color's relative luminance (WCAG): '#rrggbb' or rate()'s hsl; 0.059 with 0.05 is the ink's (#121a15)
+  function lum(c) {
+    const h = /^hsl\((\S+) (\S+)% (\S+)%\)$/.exec(c), x = /^#(..)(..)(..)$/.exec(c);
+    let rgb = [0, 0, 0];
+    if (x) rgb = x.slice(1).map((v) => parseInt(v, 16) / 255);
+    else if (h) {
+      const [hh, ss, ll] = h.slice(1).map(Number), a = (ss / 100) * Math.min(ll / 100, 1 - ll / 100);
+      rgb = [0, 8, 4].map((n) => { const k = (n + hh / 30) % 12; return ll / 100 - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); });
+    }
+    const lin = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
   }
   const groupOf = (label) => (OL.includes(label) || label === 'T' || label === 'G' ? 'OL' : label);
   function shortName(n) {
@@ -820,6 +842,9 @@
   const BCAST_YARDS = 42;          // yards of field the broadcast view shows before the snap, between scoreboard and calls
   // a phone playing (game.html): the field is the whole screen, under the scoreboard and the calls' sheet
   const bcast = () => document.body.classList.contains('bcast') && !(window.matchMedia && window.matchMedia('(min-width: 1000px)').matches);
+  // the timeout a button on the field (a phone's broadcast view), unless the page is zoomed so narrow that the chips on
+  // the field run under the calls' sheet (game.html, max-width 299px): then a key with the calls, as on a computer
+  const toOnField = () => bcast() && !window.matchMedia('(max-width: 299px)').matches;
   // what covers the field in the broadcast view, in px: the scoreboard and the chips under it at the top, the calls'
   // sheet (or its bar, when it is down) at the bottom
   function covers() {
@@ -996,7 +1021,7 @@
     [[100, 110, code(1 - G.me)], [-10, 0, code(G.me)]].forEach(([a, b, c]) => {
       const e = put(S('rect', { x: 0, width: 360, fill: color(c), opacity: 0.92 }), (Y) => { e.setAttribute('y', Y(b)); e.setAttribute('height', Math.max(0, Y(a) - Y(b))); });
       // (dy: nudged along its end zone, clear of the buttons over the field: ezClear)
-      const t = put(S('text', { x: 180, class: 'ez', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, teamName(c).toUpperCase()), (Y) => {
+      const t = put(S('text', { x: 180, class: `ez${darkOn(color(c)) ? ' dk' : ''}`, 'text-anchor': 'middle', 'dominant-baseline': 'central' }, teamName(c).toUpperCase()), (Y) => {
         const lo = Math.min(Y(a), Y(b)), hi = Math.max(Y(a), Y(b)), dy = +t.dataset.dy || 0;
         t.setAttribute('y', (dy ? clip((lo + hi) / 2 + dy, lo + 10, Math.max(lo + 10, hi - 10)) : (lo + hi) / 2).toFixed(1));
       });
@@ -1209,6 +1234,7 @@
       const head = [[e[0], e[1]], [e[0] - 6 * Math.cos(ang - 0.5), e[1] - 6 * Math.sin(ang - 0.5)], [e[0] - 6 * Math.cos(ang + 0.5), e[1] - 6 * Math.sin(ang + 0.5)]];
       g.append(S('path', { class: `route-head${tgt ? ' tgt' : ''}${dr ? ' drawn' : ''}`, d: `M${head.map((h) => h.map((v) => v.toFixed(1)).join(' ')).join('L')}Z` }));
       if (tgt) a.g.classList.add('target');
+      a.g.setAttribute('aria-label', `${a.g.getAttribute('aria-label')}: ${dr ? `a drawn ${routeName(a.label, rt)}` : routeName(a.label, rt)}${tgt ? ', the target' : ''}${P.draw ? '' : '. Enter: his next route'}`);
     });
     sc.svg.insertBefore(g, sc.layer);
   }
@@ -1615,11 +1641,14 @@
     redrawPass();
   }
   function redrawPass() {
-    const y = window.scrollY;
+    const y = window.scrollY, fi = scene ? eligibles(scene).findIndex((a) => a.g === document.activeElement) : -1;
     lastBall = null;                  // the same snap: no fade-in, no ball move
     drawField();
     drawDock();
     window.scrollTo(0, y);
+    // (his route changed from the keyboard: the focus stays on him, on the field drawn again)
+    const a = fi >= 0 && scene && eligibles(scene)[fi];
+    if (a) a.g.focus({ preventScroll: true });
   }
   // the engine call a pick stands for (its pools hold the real plays): a screen, play action, a rollout, a deep shot
   // (the post down the middle), a throw over the middle (dig, crosser, angle) or a quick throw, to the receiver's side
@@ -3711,7 +3740,7 @@
       list.forEach((p) => {
         const li = el('li'), b = el('button');
         b.type = 'button';
-        const ch = el('span', 'chipn', String(p.ovr)); ch.style.background = rate(p.ovr);
+        const ch = el('span', 'chipn', String(p.ovr)); rateChip(ch, p.ovr);
         const nm = el('span', 'nm', p.name);
         if (p.kind) nm.append(el('small', '', p.kind));
         b.append(ch, el('span', 'ps', p.pos), nm);
@@ -3728,11 +3757,11 @@
       unit(`${teamName(code(1 - offI))} defense`, lineup(1 - offI).def, code(1 - offI)),
       unit('Kickers and punters', [...spec(G.me).map((p) => ({ ...p, name: `${p.name} (${code(G.me)})` })),
         ...spec(1 - G.me).map((p) => ({ ...p, name: `${p.name} (${code(1 - G.me)})` }))], null));
-    lastFocus = document.activeElement;
+    deepFocus = document.activeElement;           // (its own: a player's sheet opened over it keeps lastFocus)
     $('deep').hidden = false;
     $('deepClose').focus();
   }
-  function closeDeep() { $('deep').hidden = true; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
+  function closeDeep() { $('deep').hidden = true; if (deepFocus && deepFocus.focus) deepFocus.focus(); }
 
   // ------------------------------------------------------------ chrome ---
   function drawTiles() {
@@ -3852,11 +3881,62 @@
     const d = $('dock');
     d.textContent = '';
     d.append(el('p', 'err', msg));
+    say(msg);
+  }
+  // what a screen reader hears (game.html #say, the one live region): a play's result, a warning, a toast. Said once:
+  // a key (the warning drawn again with the dock, the same spot) says it only the first time
+  function say(text, key) {
+    const s = $('say');
+    if (!s || !text || (key && key === say.key)) return;
+    say.key = key || null;
+    s.textContent = '';
+    setTimeout(() => { s.textContent = text; }, 50);           // (emptied first: the same words again are news again)
+  }
+  // Played from a keyboard: the dock redraws under the key just pressed (a call, Next play), and focus fell back to the
+  // top of the page, the 22 players on the field between it and the next call. It goes on to the dock's next step
+  // instead: the final card's button or Next play, else the receivers or the first call; the day's score, its top.
+  // And the first row of big keys gets its numbers (1 to 4 make those calls: boot's keydown)
+  let kbd = false;
+  function dockKeys() {
+    addEventListener('keydown', (e) => {
+      if (!(e.key === 'Tab' || e.key === 'Enter' || e.key === ' ' || /^[1-9]$/.test(e.key))) return;
+      kbd = true;
+      // (a first Tab from nowhere, after a tap or a click that went away: to the calls, not the top of the page)
+      if (e.key === 'Tab' && !e.shiftKey && document.activeElement === document.body && !$('play').hidden && $('modal').hidden && $('deep').hidden) {
+        refocus.at = null; refocus();
+        if (document.activeElement !== document.body) e.preventDefault();
+      }
+    }, true);
+    addEventListener('pointerdown', () => { kbd = false; }, true);
+    const d = $('dock');
+    let q = 0;
+    const soon = () => { if (!q) q = requestAnimationFrame(() => { q = 0; refocus(); }); };
+    new MutationObserver(() => {
+      const row = [...d.querySelectorAll('.keys')].find((k) => k.querySelector('.key.big'));
+      if (row) row.querySelectorAll('.key.big').forEach((b, i) => { if (i < 9) { b.dataset.n = String(i + 1); b.setAttribute('aria-keyshortcuts', String(i + 1)); } });
+      soon();
+    }).observe(d, { childList: true });
+    new MutationObserver(soon).observe($('done'), { attributes: true, attributeFilter: ['hidden'] });
+  }
+  function refocus() {
+    const a = document.activeElement;
+    // (where it put focus itself, untouched since, is picked again: a result card's Replay while the next calls load)
+    if (!kbd || !$('modal').hidden || !$('deep').hidden || (a && a !== document.body && a !== refocus.at && a.isConnected && a.getClientRects().length)) return;
+    if (!$('done').hidden) {
+      const h = $('done').firstElementChild;
+      if (h) { h.tabIndex = -1; h.focus({ preventScroll: true }); }
+      return;
+    }
+    if ($('play').hidden) return;
+    const d = $('dock'), to = d.querySelector('.endcard > .btn, .result > .btn') || d.querySelector('.rcv') || d.querySelector('.key')
+      || [...d.querySelectorAll('button')].find((x) => !x.closest('.result'));
+    if (to && to !== a) { to.focus({ preventScroll: true }); refocus.at = to; }
   }
   // low: at the foot of the screen, out of the way (a new badge, while the end card is read)
   function toast(msg, low) {
     const t = $('toast');
     t.textContent = msg; t.hidden = false;
+    say(msg);
     t.removeAttribute('style');
     t.classList.toggle('low', !!low);
     if (bcast() && !low) requestAnimationFrame(placeToast);          // (once what called it has drawn the sheet)
@@ -4054,7 +4134,7 @@
     const mu = el('div', 'matchup');
     const t = (c, i) => {
       const d = el('div', 't');
-      const sw = el('span', 'sw', c); sw.style.background = color(c);
+      const sw = el('span', `sw${darkOn(color(c)) ? ' dk' : ''}`, c); sw.style.background = color(c);
       d.append(sw, el('span', 'nm', teamName(c)));
       if (i === G.me) d.append(el('span', 'you', 'YOU'));
       return d;
@@ -4401,7 +4481,7 @@
       let fitTo = fam;
       if (r.clock_running) {
         // (a phone: the timeout is the button on the field, toButton, not a key here too)
-        clockOptions(r).filter((k) => !TEMPOS.includes(k) && !(k === 'timeout' && bcast())).forEach((k) => extra.push([k, k === 'rundown' ? 'Run it down' : CLOCK[k].label,
+        clockOptions(r).filter((k) => !TEMPOS.includes(k) && !(k === 'timeout' && toOnField())).forEach((k) => extra.push([k, k === 'rundown' ? 'Run it down' : CLOCK[k].label,
           k === 'timeout' ? `${r.to[me]} left` : k === 'rundown' ? `timeout at 0:0${RUNDOWN_AT}, then kick` : null]));
       }
       const { specials, calls: avail2 } = callOptions(r);
@@ -4764,8 +4844,8 @@
     const b = $('toBtn'), r = G && G.root;
     if (!b) return;
     // (on a phone it is the only timeout control, so it shows whenever a timeout can be called, late or not)
-    const off = !!(r && bcast() && ui.step === 'family' && r.phase === SNAP && r.pos === G.me && r.clock_running && !G.over && clockOptions(r).includes('timeout'));
-    const def = !!(r && bcast() && !VS && (ui.step === 'vdef' || ui.step === 'defense') && defTimeoutOk(r));
+    const off = !!(r && toOnField() && ui.step === 'family' && r.phase === SNAP && r.pos === G.me && r.clock_running && !G.over && clockOptions(r).includes('timeout'));
+    const def = !!(r && toOnField() && !VS && (ui.step === 'vdef' || ui.step === 'defense') && defTimeoutOk(r));
     b.hidden = !(off || def) || busy;
     if (b.hidden) return;
     b.classList.toggle('on', def && !!ui.to);
@@ -4941,7 +5021,9 @@
     w.append(seg);
     if (allRunOut(r) && wantsTime(r)) {
       const o = clockOptions(r), to = o.includes('timeout'), sp = o.includes('spike');
-      w.append(el('p', 'warn', `⏱ The clock runs out before the snap${to || sp ? `: use ${[to && 'a timeout', sp && 'a spike'].filter(Boolean).join(' or ')}` : ''}.`));
+      const warn = `⏱ The clock runs out before the snap${to || sp ? `: use ${[to && 'a timeout', sp && 'a spike'].filter(Boolean).join(' or ')}` : ''}.`;
+      w.append(el('p', 'warn', warn));
+      say(warn.slice(2), `warn${r.t}`);
     }
     return w;
   }
@@ -4990,7 +5072,7 @@
     G.pending = pend;
     const graded = gradeSpecs(pend);
     graded.catch(() => {});
-    status('Snap…', reduced() ? null : 'Tap the field to skip');
+    status('Snap…', reduced() ? null : TOUCH ? 'Tap the field to skip' : 'Click the field or press Space to skip');
     const res = await stepWith(action);                // saves the spot, the grading job with it
     let done = false;
     graded.then(() => { done = true; }, () => { done = true; });
@@ -5207,7 +5289,7 @@
     custom.append(cs, box);
     if (!VS && share) custom.append(el('p', 'vdeftip', 'NFL %: how often NFL defenses lined up each way in this spot. It starts on the most common.'));
     d.append(presets, sum, tip, custom);
-    if (!VS && defTimeoutOk(r) && !bcast()) {          // (a phone: the button on the field, toButton)
+    if (!VS && defTimeoutOk(r) && !toOnField()) {          // (a phone: the button on the field, toButton)
       const tg = el('div', 'toggle');
       const lab = el('div', 'lab', 'Timeout first');
       lab.append(el('small', '', `Stop the clock before their snap · ${r.to[G.me]} left`));
@@ -5272,7 +5354,7 @@
     });
     d.append(keys);
     fitDock(keys);
-    if (defTimeoutOk(r) && (VS || !bcast())) {          // (a phone: the button on the field, toButton)
+    if (defTimeoutOk(r) && (VS || !toOnField())) {          // (a phone: the button on the field, toButton)
       const tg = el('div', 'toggle');
       const lab = el('div', 'lab', 'Timeout first');
       lab.append(el('small', '', `Stop the clock before their snap · ${r.to[G.me]} left`));
@@ -5588,7 +5670,8 @@
         sq.setAttribute('aria-label', `Your win chance ${shown >= 0 ? 'up' : 'down'} ${Math.abs(shown)} point${Math.abs(shown) === 1 ? '' : 's'}`);
         wc.textContent = `Win chance ${Math.round(before * 100)}% → ${Math.round(after * 100)}%`;
         fitDock(fitKeys);          // (the line it adds, on top of the next call already shown)
-      }).catch(() => { sq.className = `sq ${m}`; sq.textContent = GLYPH[m]; });
+        sayResult(`Win chance ${Math.round(before * 100)} to ${Math.round(after * 100)} percent`);
+      }).catch(() => { sq.className = `sq ${m}`; sq.textContent = GLYPH[m]; sayResult(''); });
     }
     // the call, graded apart from how the play turned out: a small chip, and the better call when there was one
     const v = el('div', 'verdict');
@@ -5604,6 +5687,10 @@
       if (xm !== 'g' && whyLine(x)) v.append(el('span', 'why', ` ${whyLine(x)}`));
     });
     wrap.append(v);
+    // said once, with the win chance when it is in (the card itself stays on as the next call's banner)
+    const sayResult = (wcs) => say([txt.querySelector('.yd').textContent, txt.querySelector('.pl').textContent, wcs,
+      [...v.childNodes].filter((n) => !(n.classList && n.classList.contains('chip-g'))).map((n) => (n.nodeName === 'BR' ? ' ' : n.textContent)).join('')].filter(Boolean).join('. '));
+    if (!played) sayResult('');
     const acts = el('div', 'res-acts');
     const det = el('details', 'more');
     det.append(el('summary', '', 'How every option scored'));
@@ -5655,10 +5742,10 @@
     } else if (r.phase === SNAP && r.clock_running && r.pos === G.me && halfLeft(r.t) < 1) text = 'Under a second left with the clock running: only a timeout stops it before it runs out.';
     if (!text) return;
     const n = el('div', 'stopnote');
-    n.setAttribute('role', 'status');
     if (c) { const sw = el('span', 'tsw'); sw.style.background = color(c); n.append(sw); }
     n.append(el('span', '', text));
     d.append(n);
+    say(text, `stop${r.t}${text}`);
   }
 
   // ------------------------------------------------- who you coached like ---
@@ -5901,6 +5988,7 @@
     const mu = main ? matchupLine(main, res.action) : null;
     if (mu) wrap.append(el('div', `mline ${mu.good ? 'won' : 'lost'}`, mu.text));
     wrap.append(el('div', 'note', 'Overtime calls aren’t graded.'));
+    say(`${txt.firstChild.textContent}. ${lines.length ? lines[0][0] : ''}`);          // (said once: showResult)
     const btn = el('button', 'btn', G.root.phase === DONE ? 'Final' : 'Next play');
     btn.type = 'button';
     let went = false;
@@ -6030,6 +6118,7 @@
       inOT ? `Tie ${res.mine}–${res.theirs} after overtime` :
       SURV && res.ot ? `Tied ${res.mine}–${res.theirs}: you ${res.ot > 0 ? 'win' : 'lose'} in overtime` : `Tied ${res.mine}–${res.theirs}: overtime`;
     card.append(el('h2', '', head.replace(/(\d)–(\d)/g, '$1\u2060–\u2060$2')));      // (the score never splits at its dash)
+    say(head, `end${G.si}${head}`);
     if (SURV && res.ot) card.append(el('p', 'note', `Your overtime win chance was ${wpTxt(res.wp)}.`));
     else if (inOT && tie) card.append(el('p', 'note', 'Nobody won it. A tie keeps your run alive, but it doesn’t count as a win.'));
     else if (res.half === 1 || (tie && !inOT)) card.append(el('p', 'note', `Your win chance from here: ${wpTxt(res.wp)}.`));
@@ -7580,7 +7669,7 @@
     if (p.xol) { label = 'XOL'; p = { ...p, pct: null, kind: null }; }      // a jumbo snap's extra lineman: rated as a lineman isn't known here
     const ol = OL.includes(label) || label === 'T' || label === 'G';
     const top = el('div', 'pinfo');
-    const ch = el('div', 'chip-big', String(p.ovr)); ch.style.background = rate(p.ovr);
+    const ch = el('div', 'chip-big', String(p.ovr)); rateChip(ch, p.ovr);
     top.append(ch);
     const nm = el('div'), g = groupOf(label);
     nm.append(el('div', 'nm', p.num != null ? `#${p.num} ${p.name}` : p.name), el('div', 'ps', `${team ? teamName(team) + ' · ' : ''}${POS_NAME[label] || label}`));
@@ -7807,6 +7896,7 @@
       'Every snap is a real NFL play. Read the defense: a blitz loses to quick throws, a loaded box to play action.',
       SURV ? 'Survivor: win each real game to keep going. One loss ends your run; put your name on the board.'
         : 'Beat the real coach, and see how you rank against everyone who played today.',
+      ...(TOUCH ? [] : ['On a keyboard: 1 to 4 make the big calls, Tab and Enter the rest, Space skips a play.']),
     ].forEach((t) => ul.append(el('li', '', t)));
     const more = el('details', 'more');
     more.append(el('summary', '', 'More about the game'));
@@ -9341,6 +9431,7 @@
     wrap.append(top, el('div', 'vscalls', vsCalls(x.d, before)));
     const mu = main ? defenseLine(main, before.pos !== G.me) : null;
     if (mu) wrap.append(el('div', `mline ${mu.good ? 'won' : 'lost'}`, mu.text));
+    say(`${txt.firstChild.textContent}. ${lines.length ? lines[0][0] : ''}`);          // (said once: showResult)
     const btn = el('button', 'btn', G.root.phase === DONE || vs.result ? 'Final' : 'Next play');
     btn.type = 'button';
     let went = false;
@@ -9524,11 +9615,32 @@
     $('mClose').addEventListener('click', closeModal);
     $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeModal(); });
     document.addEventListener('keydown', (e) => {
-      if (e.key !== 'Escape') return;
-      if (!$('modal').hidden) closeModal();
-      else if (!$('deep').hidden) closeDeep();
-      else if (tip) tipDone();               // the tour's tip: Escape is Got it
+      // a sheet over the game keeps Tab inside it, last to first and back
+      const box = !$('modal').hidden ? qs('#modal .box') : !$('deep').hidden ? $('deep') : null;
+      if (e.key === 'Tab' && box) {
+        const fs = [...box.querySelectorAll('button, a[href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')].filter((x) => !x.disabled && x.getClientRects().length);
+        const a = fs[0], z = fs[fs.length - 1], on = document.activeElement;
+        if (a && (!box.contains(on) || (e.shiftKey ? on === a : on === z))) { e.preventDefault(); (e.shiftKey ? z : a).focus(); }
+        return;
+      }
+      if (e.key === 'Escape') {
+        if (!$('modal').hidden) closeModal();
+        else if (!$('deep').hidden) closeDeep();
+        else if (!$('bmenu').hidden) { $('menuBtn').click(); $('menuBtn').focus(); }
+        else if (tip) tipDone();               // the tour's tip: Escape is Got it
+        return;
+      }
+      if (box || e.ctrlKey || e.metaKey || e.altKey || (e.target.closest && e.target.closest('input, textarea, select'))) return;
+      if ($('play').hidden) return;
+      // a play running: Space or Enter cuts to its end, as a tap on the field does
+      if ($('field').classList.contains('playing') && cutAnim && (e.key === ' ' || e.key === 'Enter') && !(e.target.closest && e.target.closest('button, a'))) {
+        e.preventDefault(); cutAnim(); return;
+      }
+      // a keyboard: 1 to 4 make the big calls (the number on each key, game.html)
+      const big = /^[1-9]$/.test(e.key) && [...$('dock').querySelectorAll('.key[data-n]')].find((b) => b.dataset.n === e.key);
+      if (big && !big.disabled) { e.preventDefault(); big.focus({ preventScroll: true }); big.click(); }
     });
+    dockKeys();
     let rz = null;
     // (not while a play runs: the redraw would wipe the animation; the next draw picks up the new size)
     window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); fitDock(fitKeys); }, 150); });
