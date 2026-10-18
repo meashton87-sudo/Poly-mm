@@ -15,6 +15,11 @@
  *   - ahead after both teams have had the ball wins; a defense that scores on the first possession wins at once; a
  *     touchdown that puts the second team ahead ends it (no try)
  * Teams are seats: team 0 (the home side) is seat 0's team, team 1 seat 1's.
+ *
+ * opt (start, apply, after, possRoot; Coach mode): opt.twoYl, the yard line a two-point try is snapped from (the rules'
+ * twoYl: the 3 in college and high school), and opt.ot, an overtime format (engine.js RULE_BOOK.OT, rules.py OT: the
+ * NCAA's, the NFHS "Kansas plan" from the 10, a state's), with opt.regTo the timeouts left in regulation for a format
+ * that carries them. Without opt, Versus plays as it always has.
  */
 (function (global) {
   'use strict';
@@ -47,17 +52,31 @@
       home_coach: H.coach, away_coach: A.coach, season: pool.season };
   }
 
-  // a possession: at the other team's 25, or (3rd overtime on) a two-point play from the 3
-  function possRoot(team, round, score, to) {
-    const base = { t: COT_T, pos: team, score: score.slice(), down: 1, ytg: 10, yl: 25, to: to.slice(), clock_running: false, phase: SNAP, credit: 0, free_kick: false };
-    if (round < 3) return base;
+  // Versus's format (as EA Sports College Football has it): from the 25, two-point tries from the 2nd overtime, one-play
+  // two-point possessions from the 3rd, a timeout each in the first two
+  const VS_OT = { yl: 25, yl3: null, must2From: 2, alt2From: 3, altYl: 3, to: 1, toFrom3: 'none' };
+  const fmtOf = (opt) => (opt && opt.ot) || VS_OT;
+  const twoYlOf = (opt) => (opt && opt.twoYl) || 2;
+  // each team's timeouts for an overtime period (to: theirs as the last one ended)
+  function otTo(F, round, to, opt) {
+    const k = F.to;
+    if (round === 1) return F.toCarry && opt && opt.regTo ? [k + opt.regTo[0], k + opt.regTo[1]] : [k, k];
+    if (round < 3) return [k, k];
+    return F.toFrom3 === 'none' ? [0, 0] : F.toFrom3 === 'carry' ? (round === 3 ? [k, k] : to.slice()) : [k, k];
+  }
+  // a possession: at the format's spot (the other team's 25), or (from its alternating period: the 3rd overtime on) a
+  // two-point play from its yard line (the 3)
+  function possRoot(team, round, score, to, opt) {
+    const F = fmtOf(opt), yl = round >= 3 && F.yl3 != null ? F.yl3 : F.yl;
+    const base = { t: COT_T, pos: team, score: score.slice(), down: 1, ytg: Math.min(10, yl), yl, to: to.slice(), clock_running: false, phase: SNAP, credit: 0, free_kick: false };
+    if (F.alt2From == null || round < F.alt2From) return base;
     const pat = { ...base, phase: PAT };
-    return { ...pat, phase: SNAP, down: 1, ytg: 3, yl: 3, try2: pat };
+    return { ...pat, phase: SNAP, down: 1, ytg: F.altYl, yl: F.altYl, try2: pat };
   }
   // the coin toss (toss: the team that won it, 0 or 1, the server's coin); the winner chooses first
-  function start(toss) {
+  function start(toss, opt) {
     toss = toss ? 1 : 0;
-    return { root: possRoot(toss, 1, [0, 0], [1, 1]), seq: 0, over: false, winner: -1, tricks: [0, 0],
+    return { root: possRoot(toss, 1, [0, 0], otTo(fmtOf(opt), 1, [0, 0], opt), opt), seq: 0, over: false, winner: -1, tricks: [0, 0],
       cot: { round: 1, idx: 0, order: [toss, 1 - toss], score0: [0, 0], toss, pick: { team: toss, end: false } } };
   }
   const chooser = (c) => (c.round % 2 ? c.toss : 1 - c.toss);
@@ -123,14 +142,14 @@
   }
   // after each snap: the clock held; a touchdown from the 2nd overtime on goes for two; the possession over, the next
   // one, the next overtime or the end
-  function after(ms, notes) {
-    const c = ms.cot, P = c.order[c.idx], D = 1 - P;
+  function after(ms, notes, opt) {
+    const c = ms.cot, P = c.order[c.idx], D = 1 - P, F = fmtOf(opt), y2 = twoYlOf(opt);
     let r = ms.root;
     if (r.phase !== DONE) r = ms.root = { ...r, t: COT_T, clock_running: false };
     // a touchdown that puts the second team ahead: over, no try
     if (r.phase === PAT && r.pos === P && c.idx === 1 && r.score[P] > r.score[D]) return end(ms, notes, 'walkoff');
-    if (r.phase === PAT && r.pos === P && c.round >= 2) {
-      ms.root = { ...r, phase: SNAP, down: 1, ytg: 2, yl: 2, clock_running: false, try2: { ...r } };
+    if (r.phase === PAT && r.pos === P && F.must2From != null && c.round >= F.must2From) {
+      ms.root = { ...r, phase: SNAP, down: 1, ytg: y2, yl: y2, clock_running: false, try2: { ...r } };
       notes.push({ k: 'must2', team: P });
       return;
     }
@@ -141,14 +160,14 @@
     if (c.idx === 0 && sc[D] > c.score0[D]) return end(ms, notes, 'defense');     // the defense scored on the first possession
     if (c.idx === 0) {
       c.idx = 1;
-      ms.root = possRoot(c.order[1], c.round, sc, r.to);
+      ms.root = possRoot(c.order[1], c.round, sc, r.to, opt);
       notes.push({ k: 'poss', team: c.order[1], round: c.round });
       return;
     }
     if (sc[0] !== sc[1]) return end(ms, notes, 'score');
     c.round += 1; c.idx = 0; c.score0 = sc.slice();
     c.pick = { team: chooser(c), end: false };
-    ms.root = possRoot(c.pick.team, c.round, sc, c.round >= 3 ? [0, 0] : [1, 1]);
+    ms.root = possRoot(c.pick.team, c.round, sc, otTo(F, c.round, r.to, opt), opt);
     notes.push({ k: 'round', round: c.round, score: sc, chooser: c.pick.team });
   }
 
@@ -156,7 +175,7 @@
   // (step(root, action, seed) -> {root, log, done}) and the snap's seed (a uint32). Returns the new state (ms is not
   // changed), the engine's result (null when no play was run), what kind of decision it was and notes for the
   // play-by-play.
-  function apply(ms0, halves, step, seed) {
+  function apply(ms0, halves, step, seed, opt) {
     const ms = copy(ms0), notes = [];
     if (ms.over) throw new Error('the match is over');
     const c = ms.cot, r = ms.root;
@@ -173,7 +192,7 @@
       const first = ch === 'offense' ? P : 1 - P;             // out of time: defense, the usual pick
       notes.push({ k: 'pick', team: P, choice: ch || 'defense', auto: !ch, first });
       c.pick = null; c.order = [first, 1 - first]; c.idx = 0;
-      ms.root = possRoot(first, c.round, r.score, r.to);
+      ms.root = possRoot(first, c.round, r.score, r.to, opt);
       return { ms, res: null, kind: 'pick', notes };
     }
     const off = h(r.pos), def = h(1 - r.pos);
@@ -184,7 +203,7 @@
       return { ms, res: null, kind: 'timeout', notes };
     }
     if (r.phase === PAT && off && off.two) {
-      ms.root = { ...r, phase: SNAP, down: 1, ytg: 2, yl: 2, clock_running: false, try2: { ...r } };
+      ms.root = { ...r, phase: SNAP, down: 1, ytg: twoYlOf(opt), yl: twoYlOf(opt), clock_running: false, try2: { ...r } };
       notes.push({ k: 'two', team: r.pos });
       return { ms, res: null, kind: 'two', notes };
     }
@@ -208,7 +227,7 @@
     if (a.philly) res.log.forEach((x) => { if (x.ev === 'pat') x.philly = true; });
     ms.root = res.root;
     if (res.done) ms.root.phase = DONE;
-    after(ms, notes);
+    after(ms, notes, opt);
     return { ms, res, kind: 'play', notes };
   }
 
@@ -298,7 +317,7 @@
     return walk(JSON.parse(new TextDecoder().decode(u8.subarray(8, base))));
   }
 
-  const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, hash, rng, buildGame, possRoot, start, chooser, need, role,
+  const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, VS_OT, hash, rng, buildGame, possRoot, start, chooser, need, role,
     cleanAction, cleanDef, cleanHalf, apply, after, describe, called, stepper, unpack };
   if (typeof module !== 'undefined' && module.exports) module.exports = VSCore;
   else global.VSCore = VSCore;

@@ -1,5 +1,6 @@
 /* Web Worker for the daily game: hosts the nflclock engine plus the call-level playbook.
- *   init  -> loads engine_data.json and playbook.json
+ *   init  -> loads engine_data.json and playbook.json ({level: 'cfb'}: engine_data_cfb, the playbook packed on its own
+ *            or playbook.json, and cfb_overlay.json, the playbook's pools re-leveled to college)
  *   info  -> per-call facts for the current spot (NFL call mix, out-of-bounds rates, FG / conversion odds,
  *            the usual tempo and seconds between snaps by tempo)
  *   eval  -> win probability of a list of options (same seed for all: common random numbers), with its standard error
@@ -14,11 +15,13 @@ importScripts(at('vs_core.js'));    // a full defensive call, shown as called (V
 let eng = null, lastInfo = null;
 const sims = new Map();
 
+// scen.rules: the rulebook the spot is played under (engine.js rulesOf: 'ncaa2026', 'nfhs:GA', ...; else the game's own)
 function simFor(scen) {
-  let s = sims.get(scen.id);
+  const key = `${scen.id}|${JSON.stringify(scen.rules || null)}`;
+  let s = sims.get(key);
   if (!s) {
-    s = eng.simulator(eng.makeContext(scen.game, { receive2h: scen.start.receive2h }));
-    sims.set(scen.id, s);
+    s = eng.simulator(eng.makeContext(scen.game, { receive2h: scen.start.receive2h, ...(scen.rules ? { rules: scen.rules } : {}) }));
+    sims.set(key, s);
     if (sims.size > 4) sims.delete(sims.keys().next().value);
   }
   return s;
@@ -40,7 +43,7 @@ function fineKey(mode, down, ytg, yl) {
 }
 
 function info(sim, root) {
-  const P = eng.pb, o = root.pos, half = root.t > 1800 ? 1 : 2, tHalf = root.t - (half === 1 ? 1800 : 0);
+  const g = sim._geom({ ...root, phase: 0 }), P = eng.pb, o = root.pos, half = g.half, tHalf = root.t - g.halfEnd;
   const margin = root.score[o] - root.score[1 - o];
   const fk = fineKey(gameMode(half, tHalf, margin), root.down, root.ytg, root.yl);
   // per-call odds for this offense against this defense: the same tilted weights the plays are drawn with
@@ -110,11 +113,18 @@ self.onmessage = async (ev) => {
       // Packed (scripts/site.py pack, gunzipped by the page): VSCore.unpack, the engine's first (the playbook's refers to it)
       const get = (buf, url, what, ref) => (buf ? Promise.resolve(m.packed ? VSCore.unpack(buf, ref) : JSON.parse(new TextDecoder().decode(buf)))
         : fetch(url).then((r) => { if (!r.ok) throw new Error(what + ' ' + r.status); return r.json(); }));
+      // college (m.level 'cfb'): its own engine data; the playbook packed on its own (no reference to the NFL's engine
+      // data) or playbook.json; and the overlay that re-levels its pools, loaded before any simulator is built
+      const cfb = m.level === 'cfb';
       const pbGet = m.playbook ? null : get(null, at('playbook.json'), 'playbook');        // (fetched alongside the engine's)
-      const d = await get(m.engine, at('engine_data.json'), 'engine data');
-      const pb = await (pbGet || get(m.playbook, at('playbook.json'), 'playbook', d));
+      // (the overlay is plain JSON, handed over as bytes or fetched)
+      const ovGet = !cfb ? null : m.overlay ? Promise.resolve(JSON.parse(new TextDecoder().decode(m.overlay)))
+        : fetch(at('cfb_overlay.json')).then((r) => { if (!r.ok) throw new Error('overlay ' + r.status); return r.json(); });
+      const d = await get(m.engine, at(cfb ? 'engine_data_cfb.json' : 'engine_data.json'), 'engine data');
+      const pb = await (pbGet || get(m.playbook, at('playbook.json'), 'playbook', cfb ? undefined : d));
       eng = new NFLClockEngine(d);
       eng.loadPlaybook(pb);
+      if (cfb) eng.loadOverlay(await ovGet);
       self.postMessage({ type: 'ready' });
     } else if (m.type === 'info') {
       // the last answer is kept: the page asks for the first call's facts while the intro is up (game.js renderIntro),
@@ -130,7 +140,7 @@ self.onmessage = async (ev) => {
       });
       self.postMessage({ type: 'eval', id: m.id, out }, out.map((o) => o.values.buffer));
     } else if (m.type === 'odds') {         // each pick's odds here (a receiver's route): caught, yards a throw, picks
-      const sim = simFor(m.scen), r = m.root, half = r.t > 1800 ? 1 : 2, ht = r.t - (half === 1 ? 1800 : 0);
+      const sim = simFor(m.scen), r = m.root, g = sim._geom({ ...r, phase: 0 }), half = g.half, ht = r.t - g.halfEnd;
       const fk = fineKey(gameMode(half, ht, r.score[r.pos] - r.score[1 - r.pos]), r.down, r.ytg, r.yl);
       const out = m.picks.map((q) => sim.routeOdds(r.pos, eng.pb.callIndex[q.call], fk, q.looks || 0, q.route, q.who, r.yl));
       self.postMessage({ type: 'odds', id: m.id, out });

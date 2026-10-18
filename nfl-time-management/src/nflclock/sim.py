@@ -1,4 +1,5 @@
-"""Vectorised Monte-Carlo simulator for the rest of a half, with explicit NFL clock rules.
+"""Vectorised Monte-Carlo simulator for the rest of a half, with explicit NFL clock rules (or another level's:
+GameContext.rules, rules.py; the NFL's are today's, bit for bit).
 
 N rollouts advance in lock-step as numpy arrays. Every rollout carries the full
 game state (clock, score, possession, down/distance/field position, timeouts,
@@ -28,6 +29,7 @@ import numpy as np
 
 from . import library as L
 from .ratings import fg_logit
+from .rules import LEVEL_OK, rules_of
 
 RUN, PASS, KNEEL, SPIKE, FG, PUNT = range(6)
 PLAY_NAMES = {"run": RUN, "pass": PASS, "kneel": KNEEL, "spike": SPIKE, "fg": FG, "punt": PUNT}
@@ -102,6 +104,7 @@ class GameContext:
     # 4th-down decision style per team: None = sound (WP look-ahead), or {"model": tendency model, "shift": go logit
     # shift} to play like a typical NFL coach (shift 0) or a specific coach's measured tendencies.
     coach4th: list = field(default_factory=lambda: [None, None])
+    rules: object = "nfl"             # the rulebook: a name (rules.py RULES, 'nfhs:GA') or {"base": name, **overrides}
 
     def spread_for(self, team):
         return np.where(np.asarray(team) == 0, self.home_spread, -self.home_spread)
@@ -118,6 +121,7 @@ class RootState:
     to: tuple = (3, 3)        # timeouts (home, away)
     clock_running: bool = False
     phase: int = SNAP
+    running_clock: bool = False   # a state's sticky running clock already on (rules runClock)
 
     def with_(self, **kw) -> "RootState":
         return replace(self, **kw)
@@ -138,6 +142,7 @@ class _S:
         self.credit = np.zeros(n)
         self.phase = np.full(n, int(root.phase), dtype=np.int64)
         self.free_kick = np.zeros(n, dtype=bool)
+        self.rc = np.full(n, bool(root.running_clock))
 
 
 class Simulator:
@@ -181,6 +186,22 @@ class Simulator:
         self.oob_credit = c["oob_restart_credit"]
         self.pen_credit = c["penalty_restart_credit"]
         self.onside_p = max(c["onside"], 0.05)
+        # the rulebook, and the level's own constants (the NFL bundle carries none of them: today's values; the
+        # first-down credit, never used under NFL rules, falls back to the ready-for-play restart on out-of-bounds plays)
+        self.R = R = rules_of(ctx.rules)
+        if (R["fieldYards"], R["firstDownYards"], R["fgPoints"], tuple(R["tryPoints"])) != (100, 10, 3, (1, 2)):
+            raise ValueError("only 11-player football is supported")   # 8- and 6-player rules are not in this version
+        level = c.get("level", "nfl")
+        if LEVEL_OK[level] is not None and R["level"] not in LEVEL_OK[level]:
+            raise ValueError(f"{R['level']} rules on {level} data")
+        self.kickoff_start = float(c.get("kickoff_start_yl", KICKOFF_START_YL))
+        self.ko_tb = c.get("ko_touchback_yl", 65)
+        self.xp_logit = c.get("xp_logit", XP_LOGIT)
+        self.onside_yl = c.get("onside_yl", (54.0, 46.0))
+        self.fg_long = tuple(c.get("fg_long", FG_LONG))
+        self.fg_max = c.get("fg_max", 68)
+        self.fd_credit = (R["fdStop"]["credit"] if R["fdStop"] and R["fdStop"]["credit"] is not None
+                          else c.get("fd_restart_credit", c["oob_restart_credit"]))
         self.F = self.lib.arr
         fb = lambda k: self.F[k].astype(bool)
         self.live_gain = ~(fb("incomplete") | fb("oob") | fb("penalty") | fb("td_off") | fb("td_def") | fb("turnover")
@@ -191,12 +212,16 @@ class Simulator:
         dist = np.asarray(dist, float)
         z = fg_logit(self.b.fg_model, np.minimum(dist, 70.0), self.ctx.indoor, self.ctx.wind,
                      self.ctx.temp, self.ctx.season) + self.ctx.kicker_shift[np.asarray(team)]
-        z = z - FG_LONG[1] * np.maximum(0.0, dist - FG_LONG[0]) - FG_LONG[3] * np.maximum(0.0, dist - FG_LONG[2])
-        return np.where(dist > 68, 0.0, 1.0 / (1.0 + np.exp(-z)))
+        FL = self.fg_long
+        z = z - FL[1] * np.maximum(0.0, dist - FL[0]) - FL[3] * np.maximum(0.0, dist - FL[2])
+        return np.where(dist > self.fg_max, 0.0, 1.0 / (1.0 + np.exp(-z)))
 
     def wp(self, team, margin, t, down, ytg, yl, off_to, def_to):
         """Win probability for ``team`` when it has the ball (vectorised)."""
         team = np.asarray(team)
+        q = self.R["quarter"]
+        if q != 900:   # shorter quarters: the model's game, scaled
+            t = np.asarray(t, float) * 900 / q
         return self.b.wp.predict(
             margin=margin, t=np.maximum(t, 1.0), down=down, ydstogo=np.clip(ytg, 1, 99),
             yardline_100=np.clip(yl, 1, 99), off_to=off_to, def_to=def_to,
@@ -209,7 +234,8 @@ class Simulator:
         k = np.clip(4 - np.asarray(down), 0, 3)
         gaps = k + np.asarray(clock_running).astype(int)
         stops = np.asarray(def_to) + np.asarray(tmw_pending).astype(int)
-        gap = 0.5 * (KNEEL_RUNOFF[0] + KNEEL_RUNOFF[1])   # the average kneel runoff (QA: 38 s undercounted it)
+        KR = self.R["kneelRunoff"]
+        gap = 0.5 * (KR[0] + KR[1])   # the average kneel runoff (QA: 38 s undercounted it)
         burn = k * self.kneel_dur + np.maximum(gaps - stops, 0) * gap + np.minimum(gaps, stops) * 1.0
         return np.asarray(t_half) <= burn + 1.0
 
@@ -229,13 +255,7 @@ class Simulator:
                                       root offense for the rest of its possession
         """
         action = action or {}
-        # 0:00 of the 2nd quarter is t = 1800, which otherwise reads as the start of the second half; a try at that
-        # moment (a touchdown on the last play of the first half) still belongs to the first half, which ends after it
-        self.half_end = 1800.0 if root.t > 1800 or (root.t == 1800 and root.phase == PAT) else 0.0
-        self.half = 1 if self.half_end > 0 else 2
-        self.q_end = self.half_end + 900.0
-        self.tmw = self.half_end + 120.0
-        self.oob_window = 120.0 if self.half == 1 else 300.0
+        self._geom(root)
         S = _S(root, n)
         S.plays = np.zeros(n, dtype=np.int64)
         S.strategy = action.get("h1")
@@ -265,6 +285,37 @@ class Simulator:
         v = self._value(S, perspective)
         return (v, S) if return_state else v
 
+    def _geom(self, root):
+        """The half's clock geometry. 0:00 of the 2nd quarter is t = H (two quarters), which otherwise reads as the start
+        of the second half; a try at that moment (a touchdown on the last play of the first half) still belongs to the
+        first half, which ends after it. No two-minute stoppage: tmw = +inf, which no clock ever crosses."""
+        R = self.R
+        H = 2.0 * R["quarter"]
+        self.half_end = H if root.t > H or (root.t == H and root.phase == PAT) else 0.0
+        self.half = 1 if self.half_end > 0 else 2
+        self.q_end = self.half_end + float(R["quarter"])
+        self.tmw = np.inf if R["tmw"] is None else self.half_end + float(R["tmw"])
+        self.oob_window = float(R["oob"][0] if self.half == 1 else R["oob"][1])
+
+    def _rc(self, S, ix):
+        """A state's running clock at this score and time (rules runClock), kept on once it starts when sticky."""
+        rc = self.R["runClock"]
+        if not rc:
+            return np.zeros(ix.size, bool)
+        on = ((np.abs(S.score[ix, 0] - S.score[ix, 1]) >= rc["margin"]) & (S.t[ix] <= rc["from"] * self.R["quarter"])
+              & (S.t[ix] > self.half_end))
+        if rc["sticky"]:
+            S.rc[ix] |= on
+            return on | S.rc[ix]
+        return on
+
+    def _miss_yl(self, yl):
+        """Where a missed field goal from yl leaves the other team: the spot of the kick (NFL), the previous spot
+        (college), never inside its 20; or a touchback at the 20 (high school: a miss is a scrimmage kick)."""
+        if self.R["fgMissTb"] is not None:
+            return np.full(np.shape(yl), float(self.R["fgMissTb"]))
+        return 100 - np.maximum(yl + self.R["fgMissBack"], 20)
+
     @staticmethod
     def _uniforms(seed, step, n, k=8):
         """Latin-hypercube uniforms: each column is stratified across rollouts.
@@ -291,8 +342,8 @@ class Simulator:
         go2 = (self.half == 2) & (t_half <= 900) & np.isin(margin, [-2, -5, -9, -10, -13, 1, 5])
         if "pat" in act:
             go2[:] = act["pat"] == "two"
-        pk = np.clip(self.fg_prob(np.full(ix.size, 33.0), o), 1e-9, 1 - 1e-9)
-        p = np.where(go2, self.ctx.two_pt[o], 1.0 / (1.0 + np.exp(-(np.log(pk / (1 - pk)) + XP_LOGIT))))
+        pk = np.clip(self.fg_prob(np.full(ix.size, float(self.R["patKick"])), o), 1e-9, 1 - 1e-9)
+        p = np.where(go2, self.ctx.two_pt[o], 1.0 / (1.0 + np.exp(-(np.log(pk / (1 - pk)) + self.xp_logit))))
         made = u[ix, 3] < p
         S.score[ix, o] += np.where(made, np.where(go2, 2, 1), 0)
         S.phase[ix] = np.where(S.t[ix] <= self.half_end, DONE, KICKOFF)
@@ -310,23 +361,26 @@ class Simulator:
         onside = (self.half == 2) & (margin_k < 0) & (
             ((t_half <= 125) & (S.to[ix, kt] <= 1)) | (t_half <= 65) | ((t_half <= 160) & (margin_k <= -9)))
         onside &= ~S.free_kick[ix]
-        if "kick" in act:   # only a team behind may declare one (2024+ rules); a free kick after a safety is no kickoff
+        if "kick" in act:   # NFL: only a team behind may declare one (2024+ rules); a free kick after a safety is no kickoff
             onside[:] = act["kick"] == "onside"
-            onside &= (margin_k < 0) | S.free_kick[ix]
+            if self.R["onsideBehindOnly"]:
+                onside &= (margin_k < 0) | S.free_kick[ix]
         ko = self.b.kickoffs
         j = (u[ix, 4] * len(ko["start_yl"])).astype(int)
         start = ko["start_yl"][j]
         dur = ko["duration"][j]
         ret_td = ko["ret_td"][j] & ~onside
+        if self.R["koTouchback"] != self.ko_tb:   # the data's touchbacks start where these rules put them
+            start = np.where((dur == 0) & (start == self.ko_tb), float(self.R["koTouchback"]), start)
         start = np.where(S.free_kick[ix], np.clip(start - 8.0, 40.0, 75.0), start)
         rec = onside & (u[ix, 3] < self.onside_p)
         S.pos[ix] = np.where(rec, kt, rt)
-        S.yl[ix] = np.where(onside, np.where(rec, 54.0, 46.0), start)
+        S.yl[ix] = np.where(onside, np.where(rec, float(self.onside_yl[0]), float(self.onside_yl[1])), start)
         S.t[ix] = np.maximum(S.t[ix] - np.where(onside, 3.0, dur), self.half_end)
         S.t[ix] = np.where(S.t[ix] <= self.half_end + CLOCK_EPS, self.half_end, S.t[ix])
         S.down[ix] = 1
         S.ytg[ix] = np.minimum(10.0, S.yl[ix])
-        S.running[ix] = False
+        S.running[ix] = self._rc(S, ix) & (S.t[ix] > self.half_end)
         S.credit[ix] = 0.0
         S.free_kick[ix] = False
         S.phase[ix] = SNAP
@@ -334,6 +388,7 @@ class Simulator:
             r = ix[ret_td]
             S.score[r, S.pos[r]] += 6
             S.phase[r] = PAT
+            S.running[r] = False
         over = (S.t[ix] <= self.half_end) & (S.phase[ix] == SNAP)
         S.phase[ix[over]] = DONE
         self._no_try(S, ix)
@@ -405,7 +460,7 @@ class Simulator:
         # out of the half: one called with time left keeps a snap)
         t_c = S.t[ix[called]]
         S.t[ix[called]] = np.maximum(np.maximum(t_c - self.to_react, np.minimum(t_c, half_end + 0.5)),
-                                     np.where(t_c > half_end + 120.0, np.minimum(t_c, half_end + 120.01), half_end))
+                                     np.where(t_c > self.tmw, np.minimum(t_c, self.tmw + 0.01), half_end))
         run_c &= ~called
         # kick to win: with the clock running and little left, let it run down, then timeout and kick
         free = not any(k in act for k in ("tempo", "play", "runoff"))
@@ -455,7 +510,8 @@ class Simulator:
             if m.any():
                 runoff[m] = arr[(u[ix[m], 0] * len(arr)).astype(int)]
         mk = tempo == T_KNEEL
-        runoff[mk] = KNEEL_RUNOFF[0] + (KNEEL_RUNOFF[1] - KNEEL_RUNOFF[0]) * u[ix[mk], 0]
+        KR = self.R["kneelRunoff"]
+        runoff[mk] = KR[0] + (KR[1] - KR[0]) * u[ix[mk], 0]
         mf = tempo == T_FIRE
         runoff[mf] = FIRE_DRILL[0] + (FIRE_DRILL[1] - FIRE_DRILL[0]) * u[ix[mf], 0]
         # the last minute's hurry-up is faster
@@ -464,6 +520,8 @@ class Simulator:
             f = np.clip(t_half / URGENT_LATE[0], 0.0, 1.0)
             runoff = np.where(late, np.minimum(runoff * (URGENT_LATE[1] + (1 - URGENT_LATE[1]) * f),
                                                URGENT_LATE[2] + (URGENT_LATE[3] - URGENT_LATE[2]) * f), runoff)
+        if self.R["maxGap"] is not None:   # a short play clock: no longer gaps
+            runoff = np.minimum(runoff, float(self.R["maxGap"]))
         runoff = np.where(run_c, np.maximum(runoff - S.credit[ix], 0.0), 0.0)
         if free and closing.any():   # running it down: never past the point where the kick is still safe
             cap = closing & run_c & (tempo == MILK)
@@ -529,7 +587,7 @@ class Simulator:
         # (4) execute
         scr = np.isin(kind, [RUN, PASS, KNEEL, SPIKE])
         if scr.any():
-            self._scrimmage(S, u, ix[scr], o[scr], kind[scr], margin[scr], aware[scr], closing[scr])
+            self._scrimmage(S, u, ix[scr], o[scr], kind[scr], margin[scr], aware[scr], closing[scr], running_at_snap[scr])
         m = kind == FG
         if m.any():
             self._field_goal(S, u, ix[m], o[m], fire[m])
@@ -585,8 +643,8 @@ class Simulator:
         q_team = np.concatenate([o, d, d, d, d, d])
         q_margin = np.concatenate([margin, -margin, -(margin + 7), -(margin + 3), -margin, -margin])
         q_t = np.maximum(np.concatenate([t - 6, t - 6, t - 6, t - 5, t - 5, t - 9]), self.half_end + 1.0)
-        q_yl = np.concatenate([new_yl, 100 - yl, np.full(n, KICKOFF_START_YL), np.full(n, KICKOFF_START_YL),
-                               100 - np.maximum(yl + 8, 20),
+        q_yl = np.concatenate([new_yl, 100 - yl, np.full(n, self.kickoff_start), np.full(n, self.kickoff_start),
+                               self._miss_yl(yl),
                                self._punt_receive_yl(yl, o)])
         q_ytg = np.minimum(10.0, q_yl)
         q_ytg[:n] = np.minimum(10.0, new_yl)
@@ -647,8 +705,9 @@ class Simulator:
         S.running[ix] = ~(stop_flags | cross_tmw | cross_q)
         S.credit[ix] = np.where(S.running[ix], credit, 0.0)
 
-    def _scrimmage(self, S, u, ix, o, kind, margin, aware=None, closing=None):
+    def _scrimmage(self, S, u, ix, o, kind, margin, aware=None, closing=None, running_at_snap=None):
         d = 1 - o
+        R = self.R
         n = ix.size
         yl0 = S.yl[ix]
         ytg0 = S.ytg[ix]
@@ -728,14 +787,51 @@ class Simulator:
         change = turnover | on_downs
         score_play = td_off | td_def | safety
         # the out-of-bounds window is judged where the play ends, not at the snap
-        in_win = (S.t[ix] - dur - self.half_end) <= self.oob_window
-        stop = incomplete | (oob & in_win) | (penalty & in_win) | change | score_play
-        credit = np.where(oob, self.oob_credit, np.where(penalty, self.pen_credit, 0.0))
+        left = S.t[ix] - dur - self.half_end
+        in_win = left <= self.oob_window
+        # a foul: NFL, the clock stopped till the snap inside the oob window; college and high school (penStop), on the
+        # ready-for-play, unless late in the half the offended team (behind or tied: it wants the clock stopped) takes
+        # the snap start
+        fouler = np.where(yards < 0, o, d)
+        off_m = S.score[ix, 1 - fouler] - S.score[ix, fouler]
+        pen_stop = penalty & ((left <= R["penStop"]["window"]) & (off_m <= 0) if R["penStop"] else in_win)
+        # a first down (college late in the half, high school always): stopped for the chains, restarted on the
+        # ready-for-play: the clock runs for the next snap, its seconds stopped given back (the credit)
+        fd_stop = (fd & ~change & ~score_play & (left <= R["fdStop"]["window"])) if R["fdStop"] else np.zeros(n, bool)
+        stop = incomplete | (oob & in_win) | pen_stop | change | score_play
+        credit = np.where(oob, self.oob_credit, np.where(penalty, self.pen_credit, np.where(fd_stop, self.fd_credit, 0.0)))
         t0 = S.t[ix].copy()
+        # college (3-4-4): late in the half, a foul that stops a running clock (a pre-snap foul: none of it runs) takes 10
+        # seconds off at the offended team's option (ahead; tied, the defense), the clock then starting on the ready; the
+        # fouling team (behind or tied) spends a timeout to keep them, and a runoff declined or kept by a timeout starts
+        # the clock on the snap
+        ro10 = np.zeros(n, bool)
+        if R["runoff10"] and running_at_snap is not None:
+            elig = (penalty & (dur == 0) & running_at_snap & ~change & ~score_play
+                    & ((t0 - self.half_end) <= R["runoff10"]["window"]))
+            wants = elig & ((off_m > 0) | ((off_m == 0) & (fouler == o)))
+            has_to = S.to[ix, fouler] > 0
+            spend = wants & has_to
+            if spend.any():
+                S.to[ix[spend], fouler[spend]] -= 1
+            ro10 = wants & ~has_to
+            stop = (stop | elig) & ~ro10
+            credit = np.where(ro10, self.pen_credit, credit)
+        # a state's running clock (runClock): only a score stops it; 'wide' gives penalty enforcement its ready restart
+        rc = self._rc(S, ix)
+        if rc.any():
+            stop = np.where(rc, score_play, stop)
+            credit = np.where(rc, np.where(penalty & (R["runClock"]["stops"] == "wide"), self.pen_credit, 0.0), credit)
         self._clock_after_play(S, ix, dur, stop, credit)
-        # a half cannot end on an accepted defensive foul: an untimed down
-        untimed = penalty & (yards > 0) & ~change & ~score_play & (S.t[ix] <= self.half_end)
+        run1 = S.running[ix].copy()
+        # a half cannot end on an accepted foul (NFL: a defensive one): an untimed down
+        untimed = (penalty & ((R["untimed"] == "any") | (yards > 0)) & ~change & ~score_play & ~ro10
+                   & (S.t[ix] <= self.half_end))
         S.t[ix] = np.where(untimed, np.minimum(t0, self.half_end + 0.5), S.t[ix])
+        if ro10.any():
+            t10 = S.t[ix] - 10.0
+            S.t[ix] = np.where(ro10, np.where(t10 <= self.half_end + CLOCK_EPS, self.half_end, t10), S.t[ix])
+            S.running[ix] = np.where(ro10, S.running[ix] & (S.t[ix] > self.half_end), S.running[ix])
 
         # state transitions
         keep = ~change & ~score_play
@@ -762,6 +858,9 @@ class Simulator:
             S.score[ix[m], d[m]] += 2
             S.phase[ix[m]] = KICKOFF   # pos stays with the conceding team, which free-kicks
             S.free_kick[ix[m]] = True
+        m = rc & change
+        if m.any():
+            S.running[ix[m]] = run1[m]
         self._end_half_check(S, ix)
 
     def _field_goal(self, S, u, ix, o, fire=None):
@@ -772,13 +871,17 @@ class Simulator:
             z = np.log(np.clip(p, 1e-9, 1 - 1e-9) / np.clip(1 - p, 1e-9, 1)) + FIRE_DRILL_LOGIT
             p = np.where(fire, np.where(p > 0, 1 / (1 + np.exp(-z)), 0.0), p)
         made = u[ix, 3] < p
-        self._clock_after_play(S, ix, np.full(ix.size, 5.0), np.ones(ix.size, bool), 0.0)
+        rc = self._rc(S, ix) & ~made
+        self._clock_after_play(S, ix, np.full(ix.size, 5.0), ~rc, 0.0)
+        run1 = S.running[ix].copy()
         if made.any():
             S.score[ix[made], o[made]] += 3
             S.phase[ix[made]] = KICKOFF
         miss = ~made
         if miss.any():
-            self._flip(S, ix[miss], 100 - np.maximum(yl0[miss] + 8, 20))
+            self._flip(S, ix[miss], self._miss_yl(yl0[miss]))
+        if rc.any():
+            S.running[ix[rc]] = run1[rc]
         self._end_half_check(S, ix)
 
     def _punt(self, S, u, ix, o):
@@ -794,10 +897,14 @@ class Simulator:
         net = np.where(normal, net + self.ctx.punter_shift[o], net)
         spot = yl0 - net
         recv_yl = np.where(P["touchback"][j] | (spot <= 0), 80.0, np.clip(100 - spot, 1, 99))
-        self._clock_after_play(S, ix, P["duration"][j], np.ones(ix.size, bool), 0.0)
         ret = P["ret_td"][j]
+        rc = self._rc(S, ix) & ~ret
+        self._clock_after_play(S, ix, P["duration"][j], ~rc, 0.0)
+        run1 = S.running[ix].copy()
         if (~ret).any():
             self._flip(S, ix[~ret], recv_yl[~ret])
+        if rc.any():
+            S.running[ix[rc]] = run1[rc]
         if ret.any():
             S.score[ix[ret], d[ret]] += 6
             S.pos[ix[ret]] = d[ret]
@@ -822,12 +929,15 @@ class Simulator:
 
     def _no_try(self, S, ix):
         """A touchdown as the fourth quarter runs out: no try when it cannot change the result (NFL since 2018), a lead
-        or a deficit of 3 or more (a try is worth 2 at most, to either team: the defense can return one for 2)."""
+        or a deficit of 3 or more (a try is worth 2 at most, to either team: the defense can return one for 2); college
+        and high school (tryForego) nor a lead of 1-2 (college: the option to forego it; high school: the defense cannot
+        score)."""
         if self.half != 2 or not ix.size:
             return
         p = S.pos[ix]
-        m = np.abs(S.score[ix, p] - S.score[ix, 1 - p])
-        S.phase[ix[(S.phase[ix] == PAT) & (S.t[ix] <= self.half_end) & (m >= 3)]] = DONE
+        m = S.score[ix, p] - S.score[ix, 1 - p]
+        skip = (np.abs(m) >= 3) | ((m > 0) & self.R["tryForego"])
+        S.phase[ix[(S.phase[ix] == PAT) & (S.t[ix] <= self.half_end) & skip]] = DONE
 
     # --------------------------------------------------------------- value ---
     def _value(self, S, perspective):
@@ -839,8 +949,9 @@ class Simulator:
             r = self.ctx.receive_2h
             m_r = home_margin if r == 0 else -home_margin
             n = len(home_margin)
-            w = self.wp(np.full(n, r), m_r, np.full(n, 1800.0), np.ones(n), np.full(n, 10.0),
-                        np.full(n, KICKOFF_START_YL), np.full(n, 3), np.full(n, 3))
+            tph = self.R["toPerHalf"]
+            w = self.wp(np.full(n, r), m_r, np.full(n, 2.0 * self.R["quarter"]), np.ones(n), np.full(n, 10.0),
+                        np.full(n, self.kickoff_start), np.full(n, tph), np.full(n, tph))
             v_home = w if r == 0 else 1 - w
         if live.any():  # truncated rollouts (should be rare): fall back to the WP model
             ix = np.flatnonzero(live)

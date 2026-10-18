@@ -89,6 +89,12 @@ jobs:
           node web/motion_test.js
           node board/worker_test.mjs
           node web/game_sweep.js
+          # the browser engine is the Python simulator, rollout for rollout, under the NFL's rules and the college and
+          # high-school rulebooks (scripts/parity_exact.py, about 2 minutes), and the rulebook's two copies agree
+          python -m pytest -q tests/test_rules.py
+          python scripts/parity_exact.py 300 200 && node web/parity_exact_test.js
+          python scripts/parity_exact.py 150 200 --rules ncaa2026 && node web/parity_exact_test.js ncaa2026
+          python scripts/parity_exact.py 150 200 --rules nfhs && node web/parity_exact_test.js nfhs
 
       # bots play daily drives and survivor runs in a real browser on the same files, with no leaderboard and no
       # analytics (so they never show up in the real stats), and fail on any script error, freeze or stuck game

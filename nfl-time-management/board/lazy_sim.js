@@ -132,5 +132,6 @@ export function lazySimulator(eng, ctx) {
   sim.oobCredit = c.oob_restart_credit; sim.penCredit = c.penalty_restart_credit;
   sim.onsideP = Math.max(c.onside, 0.05);
   sim.x = new Float64Array(13);
+  sim._rules(ctx);
   return sim;
 }
