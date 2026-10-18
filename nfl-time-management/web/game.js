@@ -8035,7 +8035,7 @@
   }
   // back from Stripe's page: ?claim=<session> (the address is tidied either way; ?pro=cancel is a cancelled purchase)
   async function proClaimFromUrl() {
-    const q = new URLSearchParams(location.search), s = q.get('claim');
+    const q = new URLSearchParams(location.search), s = q.get('claim'), again = q.get('r') === '1';     // r=1: the link in a lost-code email (/recover), not a new purchase
     if (!s && !q.has('pro')) return;
     history.replaceState(null, '', location.pathname + location.hash);
     if (!s || !PRO_BUILT) return;                // (a purchase is claimed whenever it comes back, launched or not)
@@ -8043,6 +8043,7 @@
       const d = await proApi('/claim', { s, key: deviceKey() });
       save(PRO_KEY, { code: d.code, at: Date.now() });
       PRO_LIVE = true;
+      if (again) { track('pro_recovered'); toast('Pro restored'); if (location.hash === '#archive') location.reload(); else location.hash = '#archive'; return; }
       track('pro_unlocked');
       track('purchase', { currency: 'USD', value: 4.99, transaction_id: d.code, items: [{ item_id: 'pro', item_name: 'Two-Minute Drill Pro', price: 4.99, quantity: 1 }] });
       toast('Pro unlocked');
@@ -8662,9 +8663,51 @@
       }
     });
     rs.append(inp, go);
-    box.append(el('p', 'note', 'Already have Pro? Enter your code.'), rs);
+    box.append(el('p', 'note', 'Already have Pro? Enter your code.'), rs, recoverNodes());
     if (!BOARD.api) { buy.disabled = true; go.disabled = true; }
     return [box];
+  }
+  // "Lost your code?": the email the purchase was paid with, and the board emails the code(s) bought with it (POST
+  // /recover; the same answer whoever the address is). Shown only where the board can send email (GET /auth: email).
+  function recoverNodes() {
+    const wrap = el('div', 'recover'), open = el('button', 'linkbtn', 'Lost your code?');
+    const form = el('form', 'rcform'), lab = el('label', 'note', 'Enter the email you paid with and we’ll email your code.');
+    const rowEl = el('div', 'row'), inp = el('input'), go = el('button', 'btn', 'Email my code'), err = el('p', 'err');
+    wrap.hidden = true; form.hidden = true; err.hidden = true; form.noValidate = true;     // (our own message, read out: role=alert)
+    const id = `rc${Math.random().toString(36).slice(2, 8)}`;
+    inp.id = `${id}e`; lab.htmlFor = inp.id; form.id = `${id}f`;
+    inp.type = 'email'; inp.placeholder = 'you@example.com'; inp.autocomplete = 'email'; inp.required = true; inp.spellcheck = false; inp.setAttribute('inputmode', 'email');
+    err.setAttribute('role', 'alert');
+    open.type = 'button'; go.type = 'submit';
+    open.setAttribute('aria-expanded', 'false'); open.setAttribute('aria-controls', form.id);
+    open.addEventListener('click', () => {
+      form.hidden = !form.hidden;
+      open.setAttribute('aria-expanded', String(!form.hidden));
+      if (!form.hidden) inp.focus();
+    });
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const addr = inp.value.trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr)) { err.textContent = 'Enter the email address you paid with.'; err.hidden = false; inp.focus(); return; }
+      go.disabled = true; err.hidden = true; go.textContent = 'Sending…';
+      try {
+        await proApi('/recover', { email: addr });
+        track('recover_request');
+        const done = el('p', 'sent', 'If that email bought Pro, your code is on its way. Check your inbox (and spam) in a minute: the email has a link that turns Pro on here in one tap.');
+        done.setAttribute('role', 'status');
+        form.replaceWith(done);
+        open.hidden = true;
+      } catch (e) {
+        err.textContent = /not set up/.test(e.message) ? 'Code recovery is not available right now. Try again later.'
+          : /Failed to fetch|NetworkError|Load failed/i.test(e.message) ? 'Could not reach the server. Check your connection and try again.' : e.message;
+        err.hidden = false; go.disabled = false; go.textContent = 'Email my code';
+      }
+    });
+    rowEl.append(inp, go);
+    form.append(lab, rowEl, err);
+    wrap.append(open, form);
+    authCfg().then((c) => { wrap.hidden = !(c && c.email); }).catch(() => { /* no board: hidden */ });
+    return wrap;
   }
   // The Pro data (nflclock.pro: drives.json, d{k}.json, runs.json, r{k}.json) is not on the site: the board serves
   // each file to a valid Pro code (POST /pro/data). null where the board has none or refuses the code.

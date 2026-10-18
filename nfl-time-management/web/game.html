@@ -256,6 +256,12 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .pro p { margin: 0; }
 .pro .row { display: flex; gap: 6px; flex-wrap: wrap; }
 .pro input { flex: 1; min-width: 160px; font: 600 14px var(--body); padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
+.pro .recover { display: grid; gap: 6px; }
+.pro .recover .linkbtn { justify-self: start; font-size: 13px; padding: 12px 0; margin-block: -10px -6px; }      /* (a finger-sized target) */
+.pro .rcform { display: grid; gap: 6px; }
+.pro .rcform input { min-height: 44px; font-size: 16px; }      /* (16px: iOS does not zoom into the field) */
+.pro .recover .sent { font-weight: 600; font-size: 14px; }
+.pro .recover .err { font-size: 13px; }
 .modes { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
 .modes a { font: 700 12px var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); text-decoration: none;
   padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); }
