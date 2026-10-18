@@ -61,7 +61,8 @@ def freeze(game_json=WEB / "game.json", out=FROZEN) -> dict:
     feat = {k for f in g.get("featured", {}).values() for k in [f["spot"]]}
     frozen = {"launch": g["launch"], "spots": [[sp["id"], sp["category"]] for k, sp in enumerate(g["spots"]) if k not in feat],
               "schedule": g["schedule"],
-              "featured": {d: {"id": g["spots"][f["spot"]]["id"], "category": g["spots"][f["spot"]]["category"], "note": f["note"]}
+              "featured": {d: {"id": g["spots"][f["spot"]]["id"], "category": g["spots"][f["spot"]]["category"], "note": f["note"],
+                               **({"title": f["title"]} if f.get("title") else {})}
                            for d, f in g.get("featured", {}).items()}}
     out.write_text(json.dumps(frozen, separators=(",", ":")) + "\n")
     return {"spots": len(frozen["spots"]), "days": len(frozen["schedule"])}
@@ -241,7 +242,9 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
     out = {"launch": LAUNCH.isoformat(), "categories": CATEGORIES, "calls": calls, "models": models,
            "schedule": schedule,
            # a day can feature one spot (a famous one) in place of its scheduled drive: day -> spot index, with its story
-           "featured": {d: {"spot": next(k for k, sp in enumerate(spots) if sp["id"] == f["id"]), "note": f.get("note", "")}
+           # and an optional title ("28–3 · Super Bowl LI")
+           "featured": {d: {"spot": next(k for k, sp in enumerate(spots) if sp["id"] == f["id"]), "note": f.get("note", ""),
+                            **({"title": f["title"]} if f.get("title") else {})}
                         for d, f in featured.items()} if frozen else {},
            "spots": spots, "spot_chunk": SPOT_CHUNK, "league": league,
            "coaches": CO.fingerprints(),

@@ -4148,6 +4148,11 @@
   const matchLine = (sc) => (sc.neutral ? `${teamName(sc.away)} vs ${teamName(sc.home)}${sc.site ? ` · ${sc.site}` : ''}` : `${teamName(sc.away)} at ${teamName(sc.home)}`);
   // the kind of spot, as this one is: "Tied, or end of the half" says which ("End of the half" above "Down by 4")
   const catLabel = (sc) => (sc.category !== 'tight' ? idx.categories[sc.category] : sc.start.qtr <= 2 ? 'End of the half' : 'Tied game');
+  // a featured day's title ("28–3 · Super Bowl LI", src/nflclock/daily_schedule.json), or ''; playTitle: the one of the
+  // drive being played, only on a daily (today's or an archive day's) and only on that day's featured spot
+  const dayTitle = (n) => { const f = idx.featured && idx.featured[n]; return (f && f.title) || ''; };
+  const playTitle = (sc) => { const f = !SURV && !PRACTICE && !DRIVE && !RUN_N && !VS && idx.featured && idx.featured[dayN];
+    return f && f.title && idx.spots[f.spot] && idx.spots[f.spot].id === (sc || G.scen || {}).id ? f.title : ''; };
   function renderIntro() {
     const sc = G.scen, r = G.root, box = $('intro');
     box.textContent = '';
@@ -4163,6 +4168,7 @@
     box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : PRACTICE ? `Practice drive · ${catLabel(sc)}` : DRIVE ? 'Historic drive'
       : RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · Game ${G.si + 1} of ${today.length} · ${PRO_RUNS.runs[RUN_N - 1].games[G.si].round}`
         : (today.length > 1 ? `Spot ${G.si + 1} of ${today.length} · ` : ARCH_DAY ? `No. ${dayN}, from the archive · ` : 'Today’s drive · ') + catLabel(sc)),
+      ...(playTitle(sc) ? [el('h2', 'title', playTitle(sc))] : []),
       el('div', 'game', `${gameTag(sc)} · ${matchLine(sc)}`), big);
     const mu = el('div', 'matchup');
     const t = (c, i) => {
@@ -6156,6 +6162,7 @@
       res.mine > res.theirs ? `You win ${res.mine}–${res.theirs}${ot}` : res.mine < res.theirs ? `You lose ${res.mine}–${res.theirs}${ot}` :
       inOT ? `Tie ${res.mine}–${res.theirs} after overtime` :
       SURV && res.ot ? `Tied ${res.mine}–${res.theirs}: you ${res.ot > 0 ? 'win' : 'lose'} in overtime` : `Tied ${res.mine}–${res.theirs}: overtime`;
+    if (playTitle(sc)) card.append(el('div', 'kick', playTitle(sc)));      // a featured day's title over the result
     card.append(el('h2', '', head.replace(/(\d)–(\d)/g, '$1\u2060–\u2060$2')));      // (the score never splits at its dash)
     say(head, `end${G.si}${head}`);
     if (SURV && res.ot) card.append(el('p', 'note', `Your overtime win chance was ${wpTxt(res.wp)}.`));
@@ -6852,7 +6859,7 @@
       box.append(driveCard(p, driveRec, drivePrev), driveActions(driveRec));
     }
     else {
-      box.append(el('div', 'note', RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · your run` : `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
+      box.append(el('div', 'note', RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · your run` : (dayTitle(dayN) && !SURV ? `Day ${dayN} · ${dayTitle(dayN)}` : `Day ${dayN} · your score`)), el('div', 'big-pct', `${Math.round(p * 100)}`),
         el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers${resultScored() ? ', the calls and the result' : ''}`),
         ...(scoreWhy(p) ? [el('p', 'pct-why', scoreWhy(p))] : []),
         Object.assign(el('div', 'pct-lab brag'), { hidden: true }),
@@ -6911,7 +6918,7 @@
         el('span', 'sub', `${rec[0]} better, ${rec[1]} worse${rec[2] ? `, ${rec[2]} the same` : ''}`));
       box.insertBefore(v, box.children[k3] || null);
     }
-    const text = `${DRIVE ? `Two-Minute Drill · ${PRO.drives[DRIVE - 1].title}\nGrade ${gradeOf(Math.round(p * 100)).L}${p * 100 >= PASS_AT - 0.5 ? ' ✅ passed' : ''}` : RUN_N ? `Two-Minute Drill · the ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Two-Minute Drill #${dayN}`}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
+    const text = `${DRIVE ? `Two-Minute Drill · ${PRO.drives[DRIVE - 1].title}\nGrade ${gradeOf(Math.round(p * 100)).L}${p * 100 >= PASS_AT - 0.5 ? ' ✅ passed' : ''}` : RUN_N ? `Two-Minute Drill · the ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Two-Minute Drill #${dayN}${dayTitle(dayN) ? ` · ${dayTitle(dayN)}` : ''}`}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
       `${streak >= 2 ? `\n🔥 ${streak}-day streak` : ''}\n${rows.join('\n')}\nCan you beat me? ${!DRIVE && !RUN_N && !ARCH_DAY ? chLink(p) : SITE}`;
     // sharing is how new players find the game: the button sits right under the result, not below the standings
     const chc = challengeCard(p);
@@ -6949,7 +6956,7 @@
     const img = el('button', 'btn ghostbtn', 'Share as a picture');
     img.type = 'button';
     img.addEventListener('click', () => shareImage({
-      title: DRIVE ? PRO.drives[DRIVE - 1].title : RUN_N ? `The ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Daily #${dayN}`,
+      title: DRIVE ? PRO.drives[DRIVE - 1].title : RUN_N ? `The ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Daily #${dayN}${dayTitle(dayN) ? ` · ${dayTitle(dayN)}` : ''}`,
       score: Math.round(p * 100), grade: DRIVE ? gradeOf(Math.round(p * 100)).L : null,
       line: `Better than ${Math.round(p * 100)}% of NFL play-callers`, brag: share.brag || null,
       coach: () => (share.text.match(/Coached like ([^\n]+)/) || [])[1] || null,
@@ -7359,7 +7366,7 @@
     for (let y = 90; y < H; y += 110) { x.beginPath(); x.moveTo(0, y); x.lineTo(W, y); x.stroke(); }
     x.textAlign = 'center'; x.fillStyle = '#fff';
     x.font = `900 64px ${DISP}`; x.fillText('TWO-MINUTE DRILL', W / 2, 130);
-    x.font = `700 34px ${BODY}`; x.fillStyle = 'rgba(255,255,255,.75)'; x.fillText(o.title.toUpperCase(), W / 2, 185);
+    x.font = `700 34px ${BODY}`; x.fillStyle = 'rgba(255,255,255,.75)'; x.fillText(o.title.toUpperCase(), W / 2, 185, W - 80);
     x.fillStyle = '#fff'; x.font = `900 300px ${DISP}`; x.fillText(o.grade || String(o.score), W / 2, 470);
     x.font = `600 38px ${BODY}`; x.fillText(o.grade ? `${o.score} \u00b7 ${o.line}` : o.line, W / 2, 545);
     if (o.brag) { x.font = `800 36px ${BODY}`; x.fillStyle = '#ffb547'; x.fillText(o.brag, W / 2, 595, W - 80); x.fillStyle = '#fff'; }
@@ -8955,6 +8962,7 @@
     const top = el('div', 'hk');
     top.append(el('span', '', `Today’s drive · No. ${n}`), el('span', 'tag', done ? 'Done ✓' : going ? 'In progress' : feat ? 'Featured' : catLabel(sp)));
     card.append(top);
+    if (dayTitle(n)) card.append(el('div', 'httl', dayTitle(n)));
     if (done && rec) {
       const p = Math.round(rec.p * 100), sc = el('div', 'hscore');
       sc.append(el('b', '', String(p)), el('span', '', `Better than ${p}% of NFL play‑callers`));
@@ -9116,7 +9124,7 @@
       const a = el('a', 'day');
       a.href = `#day-${n}`;
       a.append(el('b', '', `No. ${n}`), el('span', 'd', dayDate(n).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })),
-        el('span', 'm', `${teamName(sp.player)} vs ${teamName(opp)}${feat ? ' · featured' : ''}`),
+        el('span', 'm', feat && feat.title ? `${feat.title} · ${teamName(sp.player)} vs ${teamName(opp)}` : `${teamName(sp.player)} vs ${teamName(opp)}${feat ? ' · featured' : ''}`),
         st.days[n] ? (() => { const g = el('span', 'gr'); g.append(gradeBadge(Math.round(st.days[n].p * 100)), el('small', '', String(Math.round(st.days[n].p * 100)))); return g; })() : el('span', 'sc', 'Play'));
       list.append(a);
     }
