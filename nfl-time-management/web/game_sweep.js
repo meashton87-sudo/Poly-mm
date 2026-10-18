@@ -41,6 +41,9 @@ function check(before, r, tag) {
     if (b.ytg > b.yl + 1e-9) flag('distance beyond goal', `${tag} ytg ${b.ytg} yl ${b.yl}`);
   }
   b.to.forEach((x) => { if (!(x >= 0 && x <= 3)) flag('bad timeouts', `${tag} ${b.to}`); });
+  // no call is asked for with the scoreboard at 0:00 (game.js clockOf: the seconds left, rounded up), unless it is an
+  // untimed down (a defensive foul as time ran out): the clock's tenths once summed to 1e-14 s left, a snap at 0:00
+  if (b.phase === 0 && !r.done && Math.ceil(b.t - halfEnd - 1e-6) <= 0 && !r.log.some((e) => e.untimed)) flag('a snap to call at 0:00', `${tag} t ${b.t} ${JSON.stringify(r.log.map((e) => e.ev))}`);
   // the clock rules: a timeout is spent only when one is logged for that team, with the clock running, and it
   // never ends the half or skips the two-minute warning; incompletions, scores, changes of possession and kicks stop it
   const tmw = halfEnd + 120, tos = r.log.filter((e) => e.ev === 'timeout');

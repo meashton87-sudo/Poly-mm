@@ -300,6 +300,10 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .bar .tos { display: flex; gap: 2px; margin-top: 3px; }
 .bar .tos i { width: 9px; height: 3px; border-radius: 2px; background: var(--chain); display: inline-block; }
 .bar .tos i.used { background: var(--line); }
+/* the timeout just called: it flashes, then stays lit while the clock is stopped for it (game.js drawBar) */
+#bar .tos i.used.just, body.bcast #bar .tos i.used.just { background: var(--sq-o); animation: tojust .4s ease-in-out 6 alternate; }
+@keyframes tojust { to { transform: scaleY(2.4); opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { #bar .tos i.used.just, body.bcast #bar .tos i.used.just { animation: none; } }
 .bar .sc { font: 900 28px/1 var(--display); font-variant-numeric: tabular-nums; margin-left: auto; }
 .bar .tm.r .sc { margin-left: 0; margin-right: auto; }
 .bar .poss { width: 10px; height: 7px; border-radius: 50%; background: var(--ball); flex: none; }
@@ -637,6 +641,9 @@ a.chip { color: var(--ink); text-decoration: none; display: inline-block; }
 .spin { width: 18px; height: 18px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--ink); animation: spin .8s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .feedline { font-size: 13.5px; font-weight: 600; }
+/* above your call: the other team's timeout, a snap with no time left (game.js stopNote) */
+.stopnote { display: flex; gap: 8px; margin: 0 0 10px; padding: 7px 10px; border-radius: 8px; background: var(--ink); color: var(--paper); font-size: 13.5px; font-weight: 600; line-height: 1.35; }
+.stopnote .tsw { width: 5px; flex: none; border-radius: 3px; }
 .result { display: grid; gap: 8px; animation: rise .35s ease both; }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 .res-top { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: center; }
