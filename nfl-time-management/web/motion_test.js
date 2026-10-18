@@ -1,6 +1,7 @@
 // Player motion checks (motion.js): every planned path and every steering behavior stays inside the envelope
 // measured from tracking, timed arrivals arrive on time, catches are made at the depth of the throw, man coverage
-// never crosses the line, and a go route matches the tracking (about 19 yards downfield 3.5 s after the snap).
+// never crosses the line, a go route matches the tracking (about 19 yards downfield 3.5 s after the snap), zones fit a
+// short field and nobody runs off the ground (past an end line, off the drawn sideline).
 //   node web/motion_test.js
 const M = require('./motion.js');
 
@@ -70,7 +71,44 @@ for (let n = 0; n < 60; n++) {
   });
 }
 
-// 4) calibration: a go route at route speed after the release (tracking: 19.4 yards deep at 3.5 s)
+// 4) short fields: a shell's zones squeezed into the room to the end line, the deepest a yard short of it, every
+// zone in the same order, nothing near the line moved, nothing moved at all when the shell fits
+Object.entries(M.SHELLS).forEach(([name, S]) => {
+  const ds = S.deep.concat(S.under).map((m) => m[1]), deepest = Math.max(0, ...ds);
+  for (let room = 10; room <= 45; room += 0.5) {
+    const q = ds.map((d) => M.squeeze(d, deepest, room));
+    q.forEach((v, i) => {
+      check(v <= room - 1 + 1e-9 && v >= 0, `${name} with ${room} yards to the end line: a zone ${v.toFixed(1)} deep`);
+      if (deepest <= room - 1 || ds[i] <= 2) check(Math.abs(v - ds[i]) < 1e-9, `${name} at ${room}: a zone that fits moved`);
+      ds.forEach((d, j) => { if (d < ds[i]) check(q[j] <= v + 1e-9, `${name} at ${room}: zones out of order`); });
+    });
+  }
+});
+
+// 5) the ground: with the end lines and sidelines set, nobody's track leaves it, whatever he was told (a go route
+// into the end zone from the 3 and on past the end line, a deep man carrying him with a cushion over the top, a
+// chase out the side and the back), at either end of the field
+[1, -1].forEach((dir) => {
+  for (let n = 0; n < 40; n++) {
+    const ends = [-9.5, 109.5], sides = [-0.8, 53.33 + 0.8], W = new M.World({ field: [0, 53.33], ends, sides });
+    const los = dir > 0 ? 97 - rnd() * 20 : 3 + rnd() * 20, ox = 3 + rnd() * 47;
+    const wr = W.add({ g: 'WR', x: ox, y: los - dir }), r = M.routeOnField(['go', 'corner', 'post', 'wheel'][n % 4], 30, ox, 1, dir, los, 1, 0.5);
+    W.leg(wr, 0.18, 'path', { plan: M.planPath([[wr.x, wr.y]].concat(r.pts), 'WR', { eff: 0.95 }) });
+    const s = W.add({ g: 'S', x: 26, y: los + dir * M.squeeze(18, 18, dir > 0 ? 110 - los : los + 10) });
+    W.leg(s, 0.3, 'mirror', { who: wr, lag: 0.2, dir, los, floor: 0.8, y0: s.y, pedal: 0.8, pedalMax: 2, cush: 2.2, dx0: s.x - wr.x, dx: 0.6, tau: 0.8, eff: 0.95 });
+    const cb = W.add({ g: 'CB', x: ox + 1, y: los + dir * 6 });
+    W.leg(cb, 0.3, 'go', { x: n % 2 ? -5 : 60, y: los + dir * 40, eff: 1 });
+    const lb = W.add({ g: 'LB', x: 26, y: los + dir * 4 });
+    W.leg(lb, 0.3, 'chase', { who: wr, eff: 1 });
+    W.run(7);
+    [wr, s, cb, lb].forEach((b) => {
+      const outY = b.hy.some((y) => y < ends[0] - 1e-9 || y > ends[1] + 1e-9), outX = b.hx.some((x) => x < sides[0] - 1e-9 || x > sides[1] + 1e-9);
+      check(!outY && !outX, `${b.g} off the ground (los ${los.toFixed(1)}, dir ${dir}): y ${Math.min(...b.hy).toFixed(1)}..${Math.max(...b.hy).toFixed(1)}, x ${Math.min(...b.hx).toFixed(1)}..${Math.max(...b.hx).toFixed(1)}`);
+    });
+  }
+});
+
+// 6) calibration: a go route at route speed after the release (tracking: 19.4 yards deep at 3.5 s)
 const go = M.planPath([[0, -1], [0.7, 3], [1.1, 40]], 'WR', { eff: 0.9 });
 const d35 = go.at(3.5 - 0.18)[1];
 check(d35 > 17 && d35 < 23, `go route ${d35.toFixed(1)} yards deep at 3.5 s (tracking 19.4)`);

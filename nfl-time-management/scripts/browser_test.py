@@ -10,7 +10,9 @@ then the bot opens the help, the stats, the game details or the player ratings m
 an animation instead of skipping it, or reloads the page mid-drive (the drive must pick up where it was). Every
 other daily episode starts its drive over (Start over: the ☰ menu on a phone, the button under the field elsewhere)
 after its first call: never mid-play, asked first, the day's state a new try marked restarted that a reload keeps, and the
-end card saying it is off the leaderboard. Survivor never offers it.
+end card saying it is off the leaderboard. Survivor never offers it. Every play shown keeps everyone and the ball on
+the ground (inside the end lines, at most a step past a sideline), and the first episode draws a sweep of short fields
+(the red zone, the goal line, backed up on its own 1 to 5) against every coverage and shell to the same test.
 Needs Playwright with Chromium (pip install playwright; python -m playwright install chromium).
 """
 from __future__ import annotations
@@ -62,6 +64,52 @@ DOTS = """() => {
 DAYSTATE = """() => { const k = Object.keys(localStorage).find((x) => /:day:\\d+$/.test(x)), st = k && JSON.parse(localStorage.getItem(k));
   return st ? { restarts: st.restarts || 0, calls: st.spots.reduce((a, x) => a + ((x && x.decisions) || []).length, 0), done: !!st.done } : null; }"""
 SNAP = "() => [document.getElementById('dock').innerText, document.getElementById('bar').innerText].join('|')"
+# short fields (game.js offField): from the 20 in to the 1, and backed up on its own 5 to 1, for both teams, every
+# coverage you can call (as it lines up) and every shell the plays are drawn against (a run, quick, screen, deep,
+# play-action, rollout and Hail Mary pass, and a field goal or a punt), nobody is ever off the ground (past an end line
+# into the stands, off the drawn sideline), before the snap or at any moment of the play, and neither is the ball
+SHORT_FIELD = """(yl) => {
+  const D = window.__draw, { G, ui } = D.get(), calls = Object.values(D.CALL);     // (in the order of the play log's call)
+  // (the logs the plays write for the rest of the test keep only the real plays)
+  const logs = ['__sepLog', '__tackleLog', '__fpLog'], kept = logs.map((k) => (window[k] || []).length);
+  const ids = ['rb_middle', 'qb_sneak', 'quick_strong', 'screen', 'deep_strong', 'pa_deep', 'roll_strong', 'hail_mary', 'trick_flea'];
+  const shells = Object.keys(D.Motion.SHELLS), covers = ['c0', 'c1', 'c2', 'c3', 'c4', 'c6', '2man', 'prevent'];
+  const step0 = ui.step, dc0 = ui.dc, look0 = G.look, bad = [];
+  let plays = 0;
+  for (const mine of [true, false]) {
+    const r = { ...G.root, phase: 0, down: 4, ytg: Math.min(yl, 10), yl, pos: mine ? G.me : 1 - G.me, try2: false };
+    for (const side of [1, -1]) {
+      // before the snap: your defense as you call it, theirs in each look it shows you
+      ui.step = mine ? 'x' : 'vdef';
+      for (const v of mine ? [0, 1, 2, 3] : covers) {
+        if (mine) G.look = v; else ui.dc = { pers: 'nickel', front: 'even', cover: v, rush: v === 'c0' ? 6 : 4 };
+        D.offField(D.makeScene(r, side), null).forEach((b) => bad.push({ yl, mine, side, pre: v, ...b }));
+      }
+      ui.step = 'x';
+      if (side < 0) continue;
+      for (const shell of shells) {
+        ids.forEach((id, i) => {
+          const ci = calls.findIndex((c) => c.id === id), run = calls[ci].kind === 'run', far = Math.min(yl, 40);
+          const es = run ? [{ yards: 2 }, { yards: yl, td: true }, { yards: -3 }]
+            : [{ air: far, yards: far, td: yl <= 40 }, { air: Math.min(yl, 12), incomplete: true }, { air: 5, yards: 8 },
+              { air: far, incomplete: true, evt: 'interception', yards: 0 }];
+          if (!i) es.push(...(yl >= 90 ? [{ ev: 'punt', net: 42 }, { ev: 'punt', blocked: true }] : yl <= 10 ? [{ ev: 'fg', made: true, dist: yl + 17 }, { ev: 'fg', blocked: true, retTd: true, dist: yl + 17 }] : []));
+          es.forEach((o) => {
+            const e = { ev: 'play', team: r.pos, call: ci, row: -1, t: r.t, shell, kind: run ? 0 : 1, ...o };
+            const sc = D.makeScene(r, side), P = D.choreograph(sc, e, { action: null, log: [e], root: { ...r, yl: Math.max(1, yl - (o.yards || 0)) } }, false);
+            if (!P) return;
+            plays++;
+            D.offField(sc, P, e.ev === 'fg' && !e.blocked).slice(0, 2).forEach((b) => bad.push({ yl, mine, side, shell, id, ev: e.ev, ...o, ...b }));
+          });
+        });
+      }
+    }
+  }
+  ui.step = step0; ui.dc = dc0; G.look = look0;
+  logs.forEach((k, i) => { if (window[k]) window[k].length = kept[i]; });
+  D.drawField();
+  return { plays, bad: bad.slice(0, 12), n: bad.length };
+}"""
 BAD_TEXT = re.compile(r"undefined|NaN|\[object|Infinity")
 # how long a screen may sit unchanged before it counts as frozen (s); a play's animation runs ~5-15 s
 LIMIT = {"animating": 60, "wait": 45, "loading": 60}
@@ -142,7 +190,7 @@ async def visit_home(page, base: str, stored: bool) -> list[str]:
 
 
 async def episode(browser, base: str, name: str, mode: str, seed: int, target: int, out: Path, mobile: bool, quirk: str = "",
-                  stamped: tuple = ([], {}), first: bool = False) -> dict:
+                  stamped: tuple = ([], {}), first: bool = False, sweep: bool = False) -> dict:
     rnd = random.Random(seed)
     vp = {"width": 390, "height": 844} if mobile else {"width": 1280, "height": 900}
     ctx = await browser.new_context(viewport=vp, is_mobile=mobile, has_touch=mobile)
@@ -307,6 +355,16 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         problems.append(f"after Start over the day's state is not a new, marked try: {ds}")
                     restarted = True
                     print(f"{name}: started over (asked first, a new try marked restarted)")
+                elif st == "choose" and sweep and "short_field" not in chaos_done:
+                    chaos_done.add("short_field"); act("short-field sweep")
+                    plays, off = 0, []
+                    for yl in (20, 10, 5, 3, 1, 95, 97, 99):     # (one spot at a time: a page drawing them all at once ran out of memory)
+                        sf = await page.evaluate(SHORT_FIELD, yl)
+                        plays += sf["plays"]; off += sf["bad"] if sf["n"] else []
+                    since = time.time()
+                    print(f"{name}: short fields, {plays} plays drawn, {len(off)} off the ground")
+                    if off:
+                        problems.append(f"off the field on a short field: {off[:4]}")
                 elif st == "choose":
                     if first_call:
                         first_call = False
@@ -401,9 +459,10 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             seps = await page.evaluate("() => window.__sepLog || []")
             tackles = await page.evaluate("() => window.__tackleLog || []")
             fps = await page.evaluate("() => window.__fpLog || []")
+            offs = await page.evaluate("() => window.__offLog || []")
             kept = await page.evaluate("() => (window.__drawLog || []).length")
         except Exception:
-            seps, tackles, fps, kept = [], [], [], 0
+            seps, tackles, fps, offs, kept = [], [], [], [], 0
         if problems:
             status = "fail"
             shot = out / f"{name}.png"
@@ -413,7 +472,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 pass
         await ctx.close()
     return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
-            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "trail": trail if problems else []}
+            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "trail": trail if problems else []}
 
 
 async def main(a) -> int:
@@ -435,7 +494,7 @@ async def main(a) -> int:
             async with sem:
                 quirk = ("", "", "nopack", "", "nostore")[i % 5]
                 r = await episode(browser, base, f"{mode}-{seed}" + (f"-{quirk}" if quirk else ""), mode, seed, target, out,
-                                  mobile=i % 3 != 2, quirk=quirk, stamped=stamped, first=first)
+                                  mobile=i % 3 != 2, quirk=quirk, stamped=stamped, first=first, sweep=i == 0)
             print(f"{r['status']:5s} {r['name']:24s} games {r['finished']}  reloads {r['reloads']}  {r['secs']} s"
                   + "".join(f"\n      {x}" for x in r["problems"]) + "".join(f"\n        {x}" for x in r["trail"]), flush=True)
             return r
@@ -479,6 +538,13 @@ async def main(a) -> int:
     if past:
         print("FAIL: forward progress", past[:5])
         bad.append({"name": "forward-progress"})
+    # every play shown on the field keeps everyone on the ground (game.js offField): inside the end lines, at most a
+    # step past a sideline
+    offs = [x for r in results for x in r.get("offs", [])]
+    print(f"plays with a man or the ball off the field: {len(offs)}")
+    if offs:
+        print("FAIL: off the field", offs[:5])
+        bad.append({"name": "off-field"})
     # a short throw with a man running free deep reads as a QB who missed him (players saw it): report how often
     sh = [x for r in results for x in r.get("seps", []) if x.get("caught") and x.get("air", 99) <= 6]
     print(f"short completions: {len(sh)}, with a deep man 5+ yards clear: {sum(1 for x in sh if x.get('openDeep', 0) > 0)}")

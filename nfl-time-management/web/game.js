@@ -1108,6 +1108,13 @@
       const offI = r.pos, f = formation(offLineup(offI).slice(), lineup(1 - offI).def.slice(), s, fxBall);
       if (mode === 'snap' && look != null) showLook(f.def, LOOKS[look], s, fxBall);
       else if (mode === 'snap' && r.pos !== G.me && ui.step === 'vdef' && ui.dc) showDc(f.def, ui.dc, s, fxBall);
+      // a short field: the defense lines up inside its end zone, the offense inside its own (the dots are drawn a step
+      // off the ball, GAP, as well)
+      const gapYd = GAP / ((H - 6) / (sc.cam.hi - sc.cam.lo));
+      [[f.def, dir > 0 ? FULL.hi - L : L - FULL.lo], [f.off, dir > 0 ? L - FULL.lo : FULL.hi - L]].forEach(([list, room]) => {
+        const deepest = Math.max(...list.map((o) => o.d));
+        list.forEach((o) => { o.d = Motion.squeeze(o.d, deepest, room - gapYd); });
+      });
       const add = (o, teamI, off) => {
         const team = code(teamI), mine = teamI === G.me;
         const num = o.p.num != null ? String(o.p.num) : '';
@@ -1187,7 +1194,9 @@
   function place(sc) {
     const Y = camY(sc);
     sc.parts.forEach((f) => f(Y));
-    sc.actors.forEach((a) => a.g.setAttribute('transform', `translate(${a.x.toFixed(1)},${(Y(a.L) + a.side * GAP * a.w).toFixed(1)})`));
+    // (on the field, inside both end lines: never drawn over the stands behind them)
+    const yIn = [Y(FULL.hi - 0.5), Y(FULL.lo + 0.5)];
+    sc.actors.forEach((a) => a.g.setAttribute('transform', `translate(${a.x.toFixed(1)},${clip(Y(a.L) + a.side * GAP * a.w, yIn[0], yIn[1]).toFixed(1)})`));
     const b = sc.ball;
     if (b) {
       b.g.setAttribute('transform', `translate(${b.x.toFixed(1)},${Y(b.L).toFixed(1)}) scale(${(1 + 0.35 * b.z).toFixed(2)})`);
@@ -1667,7 +1676,7 @@
   // (browser tests only, window.__sepLog: the drawing and the play, for bots that draw thousands of lines and plays)
   if (window.__sepLog) {
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
-      DRAWN_RANGE, CALL, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, get: () => ({ G, ui, scene }) };
+      DRAWN_RANGE, CALL, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, get: () => ({ G, ui, scene }) };
   }
   // who gets the ball, by his place in the list (the field may be redrawn under the buttons: a resize, the phone's
   // address bar)
@@ -1813,11 +1822,29 @@
     const w = k.hold ? k.w0 : k.w0 * clip(1 - (t - k.wt) / 0.3, 0, 1);
     return { x: k.x[j] + (k.x[j2] - k.x[j]) * u, L: k.L[j] + (k.L[j2] - k.L[j]) * u, w };
   }
+  // (browser tests) every man off the ground at any moment of a play, before the snap as drawn (a step off the ball,
+  // GAP) and on his track every 0.1 s, and the ball when it is not a kick through the uprights: inside both end lines,
+  // at most a step past a sideline (the drawn turf)
+  function offField(sc, P, kick) {
+    const bad = [], k = (sc.H - 6) / (sc.cam0.hi - sc.cam0.lo), x0 = SX0 - XYD, x1 = SX1 + XYD;
+    const out = (x, L) => x < x0 || x > x1 || L < FULL.lo || L > FULL.hi;
+    sc.actors.forEach((a) => {
+      const L = a.L0 - (a.side * GAP * (a.w0 ?? 1)) / k;
+      if (out(a.x0, L)) bad.push({ who: a.label, off: a.off, t: -1, x: +a.x0.toFixed(1), L: +L.toFixed(2) });
+    });
+    for (let t = 0; P && t <= P.T + 1e-9; t += 0.1) {
+      sc.actors.forEach((a) => { const p = at(a, t); if (out(p.x, p.L)) bad.push({ who: a.label, off: a.off, t: +t.toFixed(1), x: +p.x.toFixed(1), L: +p.L.toFixed(2) }); });
+      const b = ballAt(sc, P, t);
+      if (!kick && b.show && out(b.x, b.L)) bad.push({ who: 'ball', t: +t.toFixed(1), x: +b.x.toFixed(1), L: +b.L.toFixed(2) });
+    }
+    return bad;
+  }
   function ballAt(sc, P, t) {
     let seg = null;
     for (const s of P.segs) if (s.t0 <= t + 1e-9) seg = s;
     if (!seg) return { x: sc.bx, L: sc.losL, z: 0, show: true };
-    if (seg.kind === 'hold') { const p = at(seg.a, t); return { x: p.x + 5, L: p.L, z: 0, show: true }; }
+    // (in his arms: at his side, on the drawn turf when he is out of bounds)
+    if (seg.kind === 'hold') { const p = at(seg.a, t); return { x: Math.min(p.x + 5, SX1 + XYD), L: p.L, z: 0, show: true }; }
     if (seg.kind === 'fly') {
       const u = clip((t - seg.t0) / Math.max(seg.t1 - seg.t0, 1e-6), 0, 1);
       const w = seg.d ? dragU(u, seg.d) : u;
@@ -1858,7 +1885,8 @@
     // a route that runs out at a sideline or the end line: he pulls up there (a route's end at full speed carries him on)
     // (a route not thrown to ends at a jog: the receiver settles where it ends instead of gliding on at full speed)
     const edgeStop = (pts) => { const q = pts[pts.length - 1]; return q[0] < 3 || q[0] > FW - 3 || q[1] < -7 || q[1] > 107 ? { v1: 0 } : { v1: 2.5 }; };
-    const Wd = new Motion.World({ field: [0, FW] });
+    // (the ground: inside the end lines, and no more than a step out of bounds, on the drawn sideline)
+    const Wd = new Motion.World({ field: [0, FW], ends: [FULL.lo + 0.5, FULL.hi - 0.5], sides: [-0.8, FW + 0.8] });
     sc.actors.forEach((a) => { a.trk = null; a.endAt = null; a.b = Wd.add({ id: a.label + (a.p && a.p.num), g: GROUP[a.label] || 'LB', x: yx(a.x0), y: a.L0, spd: 1 + jit(0.035), team: a.off ? 1 : 0 }); });
     const BX = yx(bx);
     let snapAt = 0, frozen = false;            // frozen: the play never started (a flag before the snap)
@@ -2407,9 +2435,13 @@
       for (const [s, p] of Motion.SHELL_SHARE) { acc += p; if (u <= acc) return s; }
       return 'cover3';
     }
-    // a field landmark ([x from the offense's left, depth]) on the drawn field
-    // (inside the end line: a deep spot from near the goal is at the back of the end zone, not past it)
-    const mark = (m) => [dir > 0 ? m[0] : FW - m[0], clip(fwd(L0, m[1]), -9, 109)];
+    // a field landmark ([x from the offense's left, depth]) on the drawn field; on a short field the shell squeezed
+    // into the room to the end line (Motion.squeeze: the deep men at the back of the end zone, the rest in proportion)
+    const room = dir > 0 ? FULL.hi - L0 : L0 - FULL.lo;
+    const markIn = (S_) => {
+      const deepest = Math.max(0, ...S_.deep.concat(S_.under).map((m) => m[1]));
+      return (m) => [dir > 0 ? m[0] : FW - m[0], fwd(L0, Motion.squeeze(m[1], deepest, room))];
+    };
     // the rushers: as many as charted (default four; a blitz look sends five), linemen first
     function rushersOf(n) {
       const order = K.rush.concat(K.def.filter((d) => d.label === 'LB'), K.def.filter((d) => d.label === 'S'), K.def.filter((d) => d.label === 'CB'));
@@ -2472,7 +2504,7 @@
       const cover = K.def.filter((d) => !rushers.includes(d));
       const rbOut = K.rb && K.rb !== tgt && (rushers.length < 5 || drewFor(K.rb));
       const recvs = K.recv.concat(rbOut ? [K.rb] : []).concat(K.rb === tgt ? [K.rb] : []).concat(backs.filter((a) => a !== o.passer));
-      const S_ = Motion.SHELLS[shell] || Motion.SHELLS.cover3;
+      const S_ = Motion.SHELLS[shell] || Motion.SHELLS.cover3, mark = markIn(S_);
       const assigned = new Map(), carry = new Map();         // carry: a deep man running with a vertical
       // the deep men and the verticals: each vertical to the deep man whose lane it runs in, by where it is across the
       // field at his depth, all of them matched at once (one at a time, by straight distance, sent a safety across the
@@ -3430,9 +3462,10 @@
     }
 
     function punt() {
-      // punt formation: seven on the line, gunners split wide, an up-back, the punter 14 yards deep;
-      // the return team: two jammers on the gunners, a returner deep, the rest at the line
-      const T0 = 0.8, pL = fwd(L0, -14), Lnew = clip(losOf(res.root), -9, 109);
+      // punt formation: seven on the line, gunners split wide, an up-back, the punter 14 yards deep (backed up, at
+      // the back of his end zone); the return team: two jammers on the gunners, a returner deep, the rest at the line
+      const back = dir > 0 ? L0 - FULL.lo : FULL.hi - L0;
+      const T0 = 0.8, pL = fwd(L0, -Math.min(14, back - 1.2)), Lnew = clip(losOf(res.root), -9, 109);
       const punter = qb || K.off[0], upback = K.rb && K.rb !== punter ? K.rb : null;
       const gunners = K.recv.filter((a) => a.label === 'WR').slice(0, 2);
       const line = K.off.filter((a) => a !== punter && a !== upback && !gunners.includes(a));
@@ -3471,7 +3504,7 @@
           bakeSpecial(P.T + 0.2);
           return;
         }
-        const bp = [inX(yx(bx) + jit(3)), fwd(pL, -4)];
+        const bp = [inX(yx(bx) + jit(3)), inL(fwd(pL, -4))];
         fly(tK, tK + 0.35, bx, kL, px(bp[0]), bp[1], 0.2);
         rest(tK + 0.35, px(bp[0]), bp[1]);
         say(tK + 0.05, 'Blocked!', 'hit', { x: bx, L: pL });
@@ -3707,6 +3740,10 @@
         P = choreograph(sc, e, res, false);
       }
     } catch (err) { console.warn('animation skipped:', err); P = null; }
+    if (window.__sepLog && P) {
+      const bad = offField(sc, P, (e.ev === 'fg' || (e.ev === 'pat' && !two)) && !e.blocked);
+      if (bad.length) (window.__offLog = window.__offLog || []).push({ ev: e.ev, call: e.call, yl: before.yl, mine: e.team === G.me, bad: bad.slice(0, 5) });
+    }
     scene = sc;
     if (!P) return false;
     sc.svg.querySelectorAll('.nm').forEach((t) => t.classList.add('gone'));     // the names drop at the snap
