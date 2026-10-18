@@ -187,57 +187,6 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 /* Pro grades: a letter in its color, green (A) is a pass */
 .grade { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; font: 900 17px/1 var(--display); color: var(--sq-ink); background: var(--muted); }
 .grade.g { background: var(--sq-g); } .grade.y { background: var(--sq-y); } .grade.o { background: var(--sq-o); } .grade.r { background: var(--sq-r); }
-.race { display: grid; gap: 10px; padding: 16px; border-radius: 14px; border: 2px solid var(--sq-g); background: linear-gradient(160deg, color-mix(in srgb, var(--sq-g) 14%, var(--card)), var(--card) 60%); }
-.race .rhead { display: flex; justify-content: space-between; align-items: center; }
-.race .rk { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
-.race .rchip { font: 800 11px var(--body); letter-spacing: .12em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); font-variant-numeric: tabular-nums; }
-.race .rchip.live { background: var(--sq-r); border-color: var(--sq-r); color: var(--sq-ink); }
-.race .rchip.live::before { content: '● '; animation: rpulse 1.4s ease-in-out infinite; }
-.race .rchip.won { background: var(--sq-y); border-color: var(--sq-y); color: var(--sq-ink); }
-@keyframes rpulse { 50% { opacity: .35; } }
-.race .rtitle { margin: 0; font: 900 34px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; color: var(--ink); }
-.race .rlead { margin: 0; font-size: 14.5px; line-height: 1.45; }
-/* the results (a winner, or past the end): the champion across the top, 2nd and 3rd under it, then what's next */
-.race .rpod { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.race .rpod li { display: grid; gap: 2px; align-content: start; min-width: 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); }
-.race .rpod li.rp1 { grid-column: 1 / -1; padding: 14px; border: 2px solid var(--sq-y); background: color-mix(in srgb, var(--sq-y) 20%, var(--card)); }
-.race .rpod li.open { border-style: dashed; background: transparent; }
-.race .rpod .rpk { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
-.race .rpod .rpn { font: 900 20px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; overflow-wrap: anywhere; }
-.race .rpod li.rp1 .rpn { font-size: 30px; }
-.race .rpod li.open .rpn { color: var(--muted); }
-.race .rpod .rps { font: 700 12.5px var(--body); color: var(--muted); font-variant-numeric: tabular-nums; }
-.race .rpod .rpz { font-size: 12.5px; }
-.race .rmefin { margin: 0; font-weight: 700; }
-.race .rnext { display: grid; gap: 4px; padding: 12px; border-radius: 10px; border: 2px solid var(--ink); background: var(--card); }
-.race .rnext p { margin: 0; font-size: 14.5px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
-.race .rsharetxt { margin: 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; user-select: all; }
-.arch .gtodrives { display: flex; align-items: center; justify-content: center; text-decoration: none; margin-top: 12px; }
-.race .rstats { display: flex; flex-wrap: wrap; gap: 6px 14px; font: 700 12.5px var(--body); color: var(--muted); font-variant-numeric: tabular-nums; }
-.race .ryou { display: grid; gap: 6px; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); }
-.race .rme { font: 900 20px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; }
-.race .rme2 { font: 700 13px var(--body); font-variant-numeric: tabular-nums; }
-.race .ryou .note { margin: 0; font-size: 12.5px; color: var(--muted); }
-.race a.btn { display: flex; align-items: center; justify-content: center; text-decoration: none; }
-.race .rjoin { display: flex; gap: 8px; }
-.race .rjoin input { flex: 1 1 auto; min-width: 0; text-transform: none; letter-spacing: 0; }
-.race .rjoin .btn { flex: 0 0 auto; width: auto; }
-.race .rbar, .race .rb { position: relative; height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
-.race .rbar i, .race .rb i { position: absolute; inset: 0 auto 0 0; background: var(--sq-g); border-radius: 999px; transition: width .6s ease; }
-.race .rboard { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-.race .rboard li { display: grid; grid-template-columns: 26px minmax(0, 1fr) minmax(60px, 34%) 44px; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 8px; font-size: 13.5px; }
-.race .rboard li:nth-child(odd) { background: color-mix(in srgb, var(--line) 35%, transparent); }
-.race .rboard li.mine { outline: 2px solid var(--sq-g); }
-.race .rboard li.done .rb i { background: var(--sq-y); }
-.race .rboard .rr { font: 800 13px var(--display); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
-.race .rboard .rn { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.race .rboard .rc { font: 800 13px var(--body); text-align: right; font-variant-numeric: tabular-nums; }
-.race .rrules summary { cursor: pointer; font: 700 12px var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
-.race .rrules ul { margin: 8px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.45; display: grid; gap: 4px; }
-.racenote { margin: 0; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--sq-g) 16%, transparent); font: 700 13px var(--body); }
-.racebar { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 8px; margin: 8px 0 0; padding: 8px 12px; border-radius: 10px; background: var(--ink); color: var(--paper); text-decoration: none; font-size: 13px; text-align: center; }
-.racebar b { font-weight: 900; letter-spacing: .02em; }
-.racebar.slim { flex-wrap: nowrap; padding: 5px 12px; font-size: 12px; background: none; color: var(--muted); border: 1px solid var(--line); }
 .prohead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; padding: 14px; border: 2px solid var(--ink); border-radius: 12px; }
 .prohead .phl { display: grid; gap: 2px; }
 .prohead .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
