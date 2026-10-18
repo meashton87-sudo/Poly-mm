@@ -6883,6 +6883,10 @@
     }
     if (cc) box.append(cc.el);
     box.append(el('p', 'verdict', callsLine(decs)));
+    // a day finished before the fair score came in keeps the score it was given; on the day the old way ran high, it says so
+    if (!DRIVE && !RUN_N && !PRACTICE && !ARCH_DAY && OLD_WAY_DAYS.includes(dayN) && decs.some((x) => x.g !== 2)) {
+      box.append(el('p', 'note old-way', 'Scored before the fair-score fix. On this drive almost nothing anyone called changed the win chance, and the old way let the simulation’s noise count, so scores ran high; scored the fair way, it would come down mostly to the result.'));
+    }
     const dbox = dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0)));
     box.append(dbox);
     if (!DRIVE && !RUN_N && !ARCH_DAY) box.append(practiceNodes());
@@ -7597,7 +7601,7 @@
     if (SURV || PRACTICE || VS || DRIVE || RUN_N || ARCH_DAY || G.si || G.started || state.done) return line;
     (BOARD.ready || Promise.resolve()).then(async () => {
       if (BOARD.mode !== 'api') return;
-      const d = await (await fetch(`${BOARD.api}/daily?date=${driveDate()}`)).json();
+      const d0 = await (await fetch(`${BOARD.api}/daily?date=${driveDate()}`)).json(), d = d0 && dayFor(d0, true);    // (yours will be fair-scored)
       if (!d || !(d.n >= 3) || !Array.isArray(d.hist)) return;
       let run = 0, med = 0, hi = 0;
       d.hist.forEach((c, k) => { if (c > 0) hi = k; });
@@ -7608,12 +7612,22 @@
     }).catch(() => { /* offline or the stats are down: no line */ });
     return line;
   }
+  // Every call of the day graded the fair way (g: 2, decisionFrom): the post says so, and the board also counts it in
+  // the day's fair set (worker.js: day.f). On the day the fair score came in (Oct 18, 2026) the scores posted before it
+  // were worked out the old way and ran high; where a day has both, the fair set is the one you are compared with
+  // (dayFor), with a line saying why. A result scored the old way is compared with the day's whole set, as it was.
+  const OLD_WAY_DAYS = [7];              // (Oct 18, 2026: Super Bowl LI, down 25, where the old way paid noise)
+  const fairDay = () => { const ds = allDecisions(); return ds.length > 0 && ds.every((x) => x.g === 2); };
+  const mixedDay = (d) => !!(d && d.fair && d.fair.n < d.n);
+  const dayFor = (d, fair) => (d.fair && d.fair.n && fair ? { ...d, n: d.fair.n, hist: d.fair.hist, spots: d.fair.spots, top: d.fair.top } : d);
+  const OLD_WAY_NOTE = 'Scores posted today before the fair-score fix were worked out the old way, which let the simulation’s noise count and ran them high on this drive.';
   function dailyBox(p, spotW) {
     const box = el('div', 'board daily');
     box.hidden = true;
     if (ARCH_DAY || DRIVE || RUN_N) return box;        // the archive, a historic drive, a run: nothing to post
     const post = async () => {
-      const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: driveDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)), ...(myName() ? { name: myName(), ...withSession() } : {}) }));
+      const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: driveDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)),
+        ...(fairDay() ? { g: 2 } : {}), ...(myName() ? { name: myName(), ...withSession() } : {}) }));
       if (!res.ok) throw new Error(`daily ${res.status}`);
       return res.json();
     };
@@ -7627,20 +7641,24 @@
     (BOARD.ready || Promise.resolve()).then(() => { if (BOARD.mode === 'api') refresh(false); });
     return box;
   }
-  function fillDaily(box, d, p, spotW, again) {
+  function fillDaily(box, d0, p, spotW, again) {
     box.textContent = '';
     box.hidden = false;
+    // (your first result's own set: fair-scored, the day's fair set; the old way, the whole day as it was)
+    const youFair = d0.you ? d0.you.g === 2 : fairDay(), d = dayFor(d0, youFair);
     // one big number on the screen (your score against NFL play-callers); here, where you rank among today's players
     const you = d.you ? d.you.p : p, pt = Math.round(you * 100), others = d.n - 1;
     let above = 0, ties = -1;
     d.hist.forEach((c, k) => { if (k > pt) above += c; else if (k === pt) ties += c; });
-    box.append(el('div', 'k', 'Everyone today'));
+    box.append(el('div', 'k', mixedDay(d0) && youFair ? 'Everyone today, scored the fair way' : 'Everyone today'));
     // the brag: how many of today's other players you outcalled (the rank's own number, so the card has one)
     const beat = others > 0 ? Math.round((100 * Math.max(0, others - above - Math.max(ties, 0))) / others) : null;
-    box.append(el('p', 'daily-head', others <= 0 ? 'You’re the first to finish today. Check back later to see how you stack up.'
-      : `You outcalled ${beat}% of today’s players · #${(above + 1).toLocaleString()} of ${d.n.toLocaleString()}${ties > 0 ? ` (tied with ${ties.toLocaleString()})` : ''}`));
+    const fairSet = mixedDay(d0) && youFair;
+    box.append(el('p', 'daily-head', others <= 0 ? `You’re the first to finish today${fairSet ? ' scored the fair way' : ''}. Check back later to see how you stack up.`
+      : `You outcalled ${beat}% of today’s ${fairSet ? 'fair-scored ' : ''}players · #${(above + 1).toLocaleString()} of ${d.n.toLocaleString()}${ties > 0 ? ` (tied with ${ties.toLocaleString()})` : ''}`));
     if (beat != null && others >= 4 && onRank) onRank(beat, d.n);
     if (d.counted === false && d.you && Math.abs(d.you.p - p) > 0.005) box.append(el('p', 'note', `Your first finish today counts: ${Math.round(d.you.p * 100)}.`));
+    if (mixedDay(d0)) box.append(el('p', 'note', `${OLD_WAY_NOTE} ${youFair ? `You’re compared with the ${d0.fair.n.toLocaleString()} scored the fair way since.` : 'Yours was too, so it’s compared with everyone who played today.'}`));
     // the day's scores, in the buckets your own stats use; yours highlighted
     const dist = el('div', 'dist');
     dist.setAttribute('role', 'img');

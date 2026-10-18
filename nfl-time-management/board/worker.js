@@ -7,7 +7,7 @@
 //   GET    /daily?date=2026-10-14                         -> that day's players: { n, hist, spots, top }
 //   GET    /days                                           -> every day played: { days: [{ date, n, avg, best }] }
 //   GET    /madden                                         -> every John Madden found: { odds, finds: [{ date, at, code }] }
-//   POST   /daily  { date, key, p, spots: [w, ...], name? }  -> the same, after counting your result (1-3 spots: the
+//   POST   /daily  { date, key, p, spots: [w, ...], name?, g? }  -> the same, after counting your result (1-3 spots: the
 //                                                             day's drive, or the three spots days had before), and
 //                                                             week: the week to that date with your own line
 //   GET    /week?date=2026-10-17                          -> the week to that date: { from, to, best, n, top: [{ name, pts, days }] }
@@ -18,6 +18,12 @@
 // in points of win chance (-50..50, clipped) and its average, and the top 10 named players (name optional; a name
 // is claimed the same way as on the survivor board, one claim across both). date is the player's local date, so
 // one within a day of the server's.
+// The fair score (g: 2, the page's grading since Oct 18, 2026): a post whose every call was graded that way says so
+// (g: 2) and also counts in the day's fair set (day.f: its own n, histograms and top list), shown beside the day's
+// whole set wherever both exist (GET /daily's fair, GET /days' n2, avg2, best2). On the day of the change, scores
+// posted before it were worked out the old way (inflated on that day's drive) and stay as they were: a device's first
+// result still counts once, so a device that posted the old way never enters the fair set, and nothing replaces a
+// result. g only says which set a post also counts in: the same checks as any post, and no more trust than one.
 // Players are identified by name (a game among friends): trimmed, control characters dropped, 1-24 characters,
 // matched case-insensitively. The first post under a name claims it for that device's key (a random string the page
 // keeps; only its SHA-256 is stored), so nobody else can overwrite your score. Signed in ({ session } with the post:
@@ -148,8 +154,16 @@ async function ownerOf(storage, lower) {
 }
 const claim = (storage, lower, kh) => storage.put(`claim:${lower}`, kh);
 const emptyDay = () => ({ n: 0, hist: new Array(101).fill(0), spots: [0, 1, 2].map(() => ({ n: 0, sum: 0, hist: new Array(101).fill(0) })), top: [] });
-const dayView = (d) => ({ n: d.n, hist: d.hist, spots: d.spots.map((x) => ({ n: x.n, avg: x.n ? x.sum / x.n : 0, hist: x.hist })),
+const setView = (d) => ({ n: d.n, hist: d.hist, spots: d.spots.map((x) => ({ n: x.n, avg: x.n ? x.sum / x.n : 0, hist: x.hist })),
   top: shown(d.top).slice(0, DAY_TOP).map(({ name, p }) => ({ name, p })) });
+// (fair: the day's fair-scored set, when any post was: above)
+const dayView = (d) => ({ ...setView(d), ...(d.f ? { fair: setView(d.f) } : {}) });
+const addTop = (set, name, p, kh) => {
+  if (set.top.some(sameName(name.toLowerCase()))) return;
+  set.top.push({ name, p, kh });
+  set.top.sort((a, b) => b.p - a.p);
+  set.top = set.top.slice(0, DAY_KEEP);
+};
 function dateOk(date, now = Date.now()) {
   if (!DATE_RE.test(date)) return false;
   const t = Date.parse(date + 'T12:00:00Z');
@@ -162,9 +176,9 @@ async function days(storage, h) {
   const out = [];
   for (const [k, d] of all) {
     if (!d || !d.n) continue;
-    let sum = 0, best = 0;
-    d.hist.forEach((c, pt) => { sum += c * pt; if (c) best = pt; });
-    out.push({ date: k.slice(4), n: d.n, avg: sum / d.n / 100, best: best / 100 });
+    const st = (x) => { let sum = 0, best = 0; x.hist.forEach((c, pt) => { sum += c * pt; if (c) best = pt; }); return { avg: sum / Math.max(1, x.n) / 100, best: best / 100 }; };
+    const a = st(d), f = d.f && d.f.n ? st(d.f) : null;
+    out.push({ date: k.slice(4), n: d.n, avg: a.avg, best: a.best, ...(f ? { n2: d.f.n, avg2: f.avg, best2: f.best } : {}) });
   }
   out.sort((a, b) => a.date.localeCompare(b.date));
   return json({ days: out }, 200, h);
@@ -205,14 +219,11 @@ async function weekAdd(storage, wn, date, name, pt) {
   await storage.put(`wn:${lower}`, wn);
 }
 // a named result on the day's list and in the name's weeks: once a name a day; never a name taken off (DELETE /week)
-async function listed(storage, day, date, name, nk, p) {
+async function listed(storage, day, date, name, nk, p, fair) {
   const lower = name.toLowerCase(), wn = (await storage.get(`wn:${lower}`)) || { name, d: {} };
   if (wn.out || date in wn.d) return;
-  if (!day.top.some(sameName(lower))) {
-    day.top.push({ name, p, kh: nk });
-    day.top.sort((a, b) => b.p - a.p);
-    day.top = day.top.slice(0, DAY_KEEP);
-  }
+  addTop(day, name, p, nk);
+  if (fair && day.f) addTop(day.f, name, p, nk);         // (fair: a fair-scored result, on the fair set's list too)
   await weekAdd(storage, wn, date, name, Math.round(p * 100));
 }
 // the week to `end` as shown: the top WEEK_TOP (never a blocked() name, never a key hash), and with a name, its own line
@@ -241,7 +252,12 @@ async function weekRemove(storage, lower) {
   }
   for (const d of Object.keys(wn.d)) {
     const day = await storage.get(`day:${d}`);
-    if (day && day.top.some(sameName(lower))) { day.top = day.top.filter((r) => !sameName(lower)(r)); await storage.put(`day:${d}`, day); removed += 1; }
+    if (day && (day.top.some(sameName(lower)) || (day.f && day.f.top.some(sameName(lower))))) {
+      removed += day.top.some(sameName(lower)) ? 1 : 0;
+      day.top = day.top.filter((r) => !sameName(lower)(r));
+      if (day.f) day.f.top = day.f.top.filter((r) => !sameName(lower)(r));
+      await storage.put(`day:${d}`, day);
+    }
   }
   await storage.put(`wn:${lower}`, { name: wn.name, d: {}, out: true });
   return removed;
@@ -272,6 +288,7 @@ async function daily(req, env, storage, hits, h, url) {
   const date = String((body && body.date) || ''), p = body && body.p, devKey = String((body && body.key) || '');
   const spots = Array.isArray(body && body.spots) ? body.spots : null, raw = clean(body && body.name);
   const refused = !!raw && blocked(raw), name = refused ? '' : raw;   // a refused name: the result counts, unnamed
+  const fair = body.g === 2;                                          // every call graded the fair way (above)
   if (!dateOk(date)) return json({ error: 'date (YYYY-MM-DD, today) wanted' }, 400, h);
   if (!(typeof p === 'number' && p >= 0 && p <= 1)) return json({ error: 'p (0-1) wanted' }, 400, h);
   if (!spots || spots.length < 1 || spots.length > 3 || !spots.every((w) => typeof w === 'number' && w >= -1 && w <= 1)) return json({ error: 'spots (1-3, each -1 to 1) wanted' }, 400, h);
@@ -292,20 +309,24 @@ async function daily(req, env, storage, hits, h, url) {
   if (prev) {           // the day's first result stands; a name given afterwards puts that result on the list
     if (name && !prev.name && !taken) {
       prev.name = name;
-      await listed(storage, day, date, name, nk, prev.p);
+      await listed(storage, day, date, name, nk, prev.p, prev.g === 2);
       await storage.put(mine, prev);
       await storage.put(`day:${date}`, day);
       if (unclaimed) await claim(storage, name.toLowerCase(), nk);
     }
-    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots }, week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}),
+    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots, ...(prev.g === 2 ? { g: 2 } : {}) }, week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}),
       ...(prev.madden ? { madden: prev.madden } : {}) }, 200, h);
   }
   const pt = Math.round(p * 100);
-  day.n += 1;
-  day.hist[pt] += 1;
-  spots.forEach((w, i) => { const x = day.spots[i]; x.n += 1; x.sum += w; x.hist[Math.max(0, Math.min(100, Math.round(w * 100) + 50))] += 1; });
-  if (name && !taken) await listed(storage, day, date, name, nk, p);
-  const you = { p, spots };
+  const count = (set) => {
+    set.n += 1;
+    set.hist[pt] += 1;
+    spots.forEach((w, i) => { const x = set.spots[i]; x.n += 1; x.sum += w; x.hist[Math.max(0, Math.min(100, Math.round(w * 100) + 50))] += 1; });
+  };
+  count(day);
+  if (fair) { day.f = day.f || emptyDay(); count(day.f); }
+  if (name && !taken) await listed(storage, day, date, name, nk, p, fair);
+  const you = { p, spots, ...(fair ? { g: 2 } : {}) };
   const madden = await maddenDraw(env, storage, kh, date);
   if (madden) {
     const list = (await storage.get('madden:list')) || [];
