@@ -43,7 +43,6 @@ a.play { font-weight: 700; color: var(--ink); text-decoration: none; border: 1px
 .tile span { font-size: 12px; color: var(--muted); }
 .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
 section { display: grid; gap: 8px; }
-section[hidden] { display: none; }      /* (the #HuntForMadden card until there is something to show) */
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 10px; }
 /* players per day: one bar a day, the picked day in the first-down yellow */
 .days { display: flex; align-items: flex-end; gap: 2px; height: 120px; border-bottom: 1px solid var(--line); overflow-x: auto; padding-top: 14px; }
@@ -100,10 +99,6 @@ ol.top b { font: 900 18px var(--display); }
   </section>
   <section>
     <div class="card" id="day"><p class="empty">Loading…</p></div>
-  </section>
-  <section id="maddenSec" hidden>
-    <p class="k">#HuntForMadden</p>
-    <div class="card" id="madden"></div>
   </section>
   <p class="note">Each player’s first finish of the day counts. The score is how the calls on that day’s drive compare with
     NFL play-callers in the same spot (better than that share of them).</p>
@@ -216,27 +211,6 @@ ol.top b { font: 900 18px var(--display); }
       box.append(ol);
     } else box.append(el('p', 'note', mixed ? 'Nobody with a name on the board has finished this day since the fix.' : 'Nobody with a name on the board finished this day.'));
   }
-  // every John Madden found (about one first daily finish in 50,000), earliest first: the first claim code wins
-  async function hunt() {
-    if (!API) return;               // (built without the backend: nothing to ask, and the site itself has no /madden)
-    let x;
-    try { x = await get('/madden'); } catch (e) { return; }
-    const finds = (x.finds || []).slice().sort((a, b) => String(a.at).localeCompare(String(b.at)));
-    const box = $('madden');
-    box.textContent = '';
-    box.append(el('p', 'note', finds.length ? `Found ${finds.length.toLocaleString()} time${finds.length === 1 ? '' : 's'}. Each find gets a claim code on its card; the earliest is first.`
-      : `Nobody has found John Madden yet. About 1 in ${Number(x.odds || 50000).toLocaleString()} finished daily drives.`));
-    if (finds.length) {
-      const ol = el('ol', 'top');
-      finds.slice(0, 20).forEach((f, k) => {
-        const li = el('li'), t = new Date(f.at);
-        li.append(el('span', 'n', String(k + 1)), el('span', 'nm', f.code), el('b', '', `${t.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${t.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`));
-        ol.append(li);
-      });
-      box.append(ol);
-    }
-    $('maddenSec').hidden = false;
-  }
   async function boot() {
     if (!API) { $('day').textContent = ''; $('day').append(el('p', 'empty', 'Stats show on the website (nfl2mindrill.com/stats).')); return; }
     try { days = (await get('/days')).days || []; } catch (e) {
@@ -253,7 +227,6 @@ ol.top b { font: 900 18px var(--display); }
     const t = days.findIndex((d) => d.date === localToday());
     show(t >= 0 ? t : days.length - 1);
   }
-  hunt();
   boot();
   // an ad below the stats (AdSense; only when the site was built with an ad unit: site.py --adsense --ad-slot)
   (() => {
