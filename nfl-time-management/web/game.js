@@ -4165,7 +4165,7 @@
     const hot = oobMatters(G.root);
     const tg = el('div', `toggle${hot ? ' urgent' : ''}`);
     const lab = el('div', 'lab', hot ? '⏱ Get out of bounds' : 'Get out of bounds');
-    lab.append(el('small', '', hot ? 'Going out stops the clock now. The ball carrier tries to; turn it off to fight for yards.' : 'The ball carrier tries to stop the clock. No guarantee.'));
+    lab.append(el('small', '', hot ? 'Going out stops the clock now. Turn it off to stay in bounds and keep the clock running.' : 'The ball carrier tries to stop the clock. No guarantee.'));
     const sw = el('button', 'sw2');
     sw.type = 'button'; sw.id = 'oobSwitch';
     sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(ui.oob)); sw.setAttribute('aria-label', 'Get out of bounds');

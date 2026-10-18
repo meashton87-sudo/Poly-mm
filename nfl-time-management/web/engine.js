@@ -1480,10 +1480,10 @@
       else {
         let pbRow = -1, callIdx = -1, match = 0, why = null;
         const oobWant = half === 2 && tHalf <= 300 && margin > 0 ? -1 : 0;
-        // your own call without "get out of bounds": the carrier plays to stay in unless the clock gives him a reason to
-        // go out (trailing or tied, inside the window where going out stops it). Real late-game plays are full of
-        // carriers stepping out on purpose; a player who didn't ask for it saw his man walk out in open field
-        const mineOob = act && act.oob ? 1 : margin <= 0 && tHalf <= g.oobWindow ? oobWant : -1;
+        // your own call without "get out of bounds": the carrier plays to stay in. Real late-game plays are full of
+        // carriers stepping out on purpose; a player who didn't ask for it saw his man walk out in open field, and a
+        // player tied late, running the clock down with the other team out of timeouts, saw it stop
+        const mineOob = act && act.oob ? 1 : -1;
         if (act && act.call !== undefined && this.pbCdf && (kind === RUN || kind === PASS)) {
           // your call, against the look the defense showed (Versus: the defense's whole call): the matchup tilts the draw
           callIdx = this.e.pb.callIndex[act.call];
