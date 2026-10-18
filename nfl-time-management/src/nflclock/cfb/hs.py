@@ -22,6 +22,7 @@ Method (every number below is either MEASURED in the college data or an ASSUMPTI
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -182,11 +183,18 @@ def _ctx(bundle, home: dict, away: dict, rng) -> GameContext:
     return make_context(bundle, h, a, home_spread=0.0, receive_2h=int(rng.random() < 0.5), season=2025)
 
 
+def _nfhs() -> bool:
+    """The simulator has rulebooks (WS1): whole games play under nfhs, 12-minute quarters."""
+    from dataclasses import fields
+    return "rules" in {f.name for f in fields(GameContext)}
+
+
 def simulate_games(bundle, sd: dict, scale: float, mu: float = 0.0, n_matchups: int = 30, per: int = 30, seed: int = 9) -> dict:
     """Whole high-school games: two 24-minute halves (12-minute quarters) from kickoffs. Each team has one strength
     z ~ N(0, scale^2) (a good team is good on both sides of the ball), its units z x the lower-division rating spread
     (offense up, defense down: lower EPA allowed). Until the nfhs ruleset is in the simulator the halves run under its
-    NFL clock rules (a two-minute warning, out-of-bounds windows): an approximation for the scoring level."""
+    NFL clock rules (a two-minute warning, out-of-bounds windows): an approximation for the scoring level; with it,
+    the nfhs rulebook and its 12-minute quarters."""
     rng = np.random.default_rng(seed)
     scores = []
     for m in range(n_matchups):
@@ -195,10 +203,13 @@ def simulate_games(bundle, sd: dict, scale: float, mu: float = 0.0, n_matchups: 
             return {"off_pass": z * sd["off_pass"] + mu, "off_rush": z * sd["off_rush"] + mu,
                     "def_pass": -z * sd["def_pass"], "def_rush": -z * sd["def_rush"]}
         ctx = _ctx(bundle, team(), team(), rng)
+        if _nfhs():
+            ctx = replace(ctx, rules="nfhs")
         sim = Simulator(bundle, ctx)
         first = int(rng.random() < 0.5)
         tot = np.zeros((per, 2))
-        for half, t0 in ((0, 1800.0 + 2 * HS_QUARTER), (1, 2 * HS_QUARTER)):
+        halves = ((0, 4 * HS_QUARTER), (1, 2 * HS_QUARTER)) if _nfhs() else ((0, 1800.0 + 2 * HS_QUARTER), (1, 2 * HS_QUARTER))
+        for half, t0 in halves:
             kick = first if half == 0 else 1 - first
             root = RootState(t=t0, pos=kick, score=(0, 0), phase=KICKOFF, to=(3, 3))
             _, S = sim.run(root, n=per, perspective=0, seed=seed * 1000 + m * 2 + half, return_state=True)

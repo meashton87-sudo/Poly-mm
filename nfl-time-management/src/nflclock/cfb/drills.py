@@ -332,7 +332,7 @@ def _with_rules(ctx: GameContext, rules: str | None) -> GameContext:
 def _root(sp: dict, ctx: GameContext, teams_rev: dict) -> tuple[RootState, int]:
     st = sp["start"]
     home = sp["home"]
-    t = (4 - st["qtr"]) * 900 + st["clock"]
+    t = (4 - st["qtr"]) * (720 if sp.get("level") == "hs" and _G.get("rules") else 900) + st["clock"]
     pos = 0 if st["pos"] == home else 1
     phase = {"snap": SNAP, "pat": PAT, "kickoff": KICKOFF}[st["phase"]]
     root = RootState(t=float(t), pos=pos, score=(st["score"][1], st["score"][0]), down=int(st["down"]), ytg=float(st["ytg"]),
