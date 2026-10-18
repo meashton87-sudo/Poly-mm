@@ -112,6 +112,12 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   worker var, 1000 by default; a capped run keeps where it stopped, remind:from, and the next run goes on from there,
   round to the first), an HMAC unsubscribe link; only with RESEND_KEY + MAIL_FROM). Never put an address or account id
   in anything another account can read.
+- Lost Pro codes (board/worker.js /recover, game.js recoverNodes): the email paid with in, the code(s) out by email only
+  (Resend, MAIL_FROM), each with a ?claim=<session>&r=1 link (r=1: no purchase event). Always the same { ok } answer, at least
+  RECOVER_MIN_MS, whether or not the address bought anything; RECOVER_MAX an hour an address, RECOVER_IP_MAX an IP. The
+  webhook and /claim keep pro:buyer:<HMAC(mailSecret, address)> -> session ids; Stripe's Checkout Sessions list
+  (customer_details[email], complete, paid, tagged tmd_pro_) finds purchases from before. Never log or return an address
+  or a code.
 - Streaks and badges (game.js streakOf, BADGES): the streak is worked out from the days played (the same on every phone); every 7 days in a
   row earn a freeze (2 held at most), spent on a missed day once the next day is played (stats.frozen keeps the day: the
   ❄️, the one note and event). A league board's streak is worked out the same way (worker.js streakOf, the same
