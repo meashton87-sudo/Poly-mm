@@ -12,7 +12,9 @@ other daily episode starts its drive over (Start over: the ☰ menu on a phone, 
 after its first call: never mid-play, asked first, the day's state a new try marked restarted that a reload keeps, and the
 end card saying it is off the leaderboard. Survivor never offers it. Every play shown keeps everyone and the ball on
 the ground (inside the end lines, at most a step past a sideline), and the first episode draws a sweep of short fields
-(the red zone, the goal line, backed up on its own 1 to 5) against every coverage and shell to the same test.
+(the red zone, the goal line, backed up on its own 1 to 5) against every coverage and shell to the same test, then
+thousands of drawn runs, RPOs, defenses, kicks and kick rushes (DRAW_FUZZ). The bots also draw plays as they go (a run,
+an RPO, the defense, a kick), mostly calling what the drawing reads as.
 Needs Playwright with Chromium (pip install playwright; python -m playwright install chromium).
 """
 from __future__ import annotations
@@ -63,6 +65,19 @@ DOTS = """() => {
 # the day's saved drive (the daily's own state): its restarts and the calls made so far
 DAYSTATE = """() => { const k = Object.keys(localStorage).find((x) => /:day:\\d+$/.test(x)), st = k && JSON.parse(localStorage.getItem(k));
   return st ? { restarts: st.restarts || 0, calls: st.spots.reduce((a, x) => a + ((x && x.decisions) || []).length, 0), done: !!st.done } : null; }"""
+# the men a drawing starts from now (game.js drawFrom), on the page, and the line of scrimmage: where a bot draws a
+# run, an RPO, the defense or a kick
+SKETCH = """() => {
+  const D = window.__draw;
+  if (!D) return null;
+  const ctx = D.drawCtx(), { scene: sc } = D.get();
+  if (!ctx || ctx === 'pass') return null;
+  const M = document.getElementById('field').getScreenCTM(), Y = D.camY(sc);
+  const q = (x, y) => { const p = new DOMPoint(x, y).matrixTransform(M); return [p.x, p.y]; };
+  const men = D.drawFrom(sc, ctx).map((a) => [...q(a.x0, Y(a.L0) + D.dotOff(a)), a.label]);
+  const los = q(sc.bx, Y(sc.losL)), ahead = q(sc.bx, Y(sc.losL + sc.dir * 5));
+  return { ctx, men, los, up: Math.sign(ahead[1] - los[1]) || -1, ppy: Math.abs(ahead[1] - los[1]) / 5 };
+}"""
 SNAP = "() => [document.getElementById('dock').innerText, document.getElementById('bar').innerText].join('|')"
 # short fields (game.js offField): from the 20 in to the 1, and backed up on its own 5 to 1, for both teams, every
 # coverage you can call (as it lines up) and every shell the plays are drawn against (a run, quick, screen, deep,
@@ -109,6 +124,128 @@ SHORT_FIELD = """(yl) => {
   logs.forEach((k, i) => { if (window[k]) window[k].length = kept[i]; });
   D.drawField();
   return { plays, bad: bad.slice(0, 12), n: bad.length };
+}"""
+# Drawing every kind of call (game.js readRun, readQb, readDef, readKick): thousands of random lines from the men a
+# drawing starts from, on spots from the goal line to backed up on the 1, against every look and full call. Every
+# drawing is read as a call the keys make here (a run or an RPO callOptions offers, a defensive look or a full call
+# whose parts are all real, a kick the spot allows: onside only when behind) or refused with a message; every one read
+# is played out on the field with the drawing (a drawn run, an RPO's route, your defenders' lines) and nobody leaves the
+# ground (offField); and a sample of them goes to the simulator, where the call drawn is the call run
+DRAW_FUZZ = """async ([kind, n, seed]) => {
+  const D = window.__draw, { G, ui } = D.get(), calls = Object.values(D.CALL);
+  let s = seed >>> 0;
+  const R = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const pick = (a) => a[Math.floor(R() * a.length)];
+  const logs = ['__sepLog', '__tackleLog', '__fpLog', '__drawLog'], kept = logs.map((k) => (window[k] || []).length);
+  const ui0 = { ...ui }, look0 = G.look;
+  const out = { n: 0, taps: 0, mapped: {}, faults: {}, bad: [], off: [], plays: 0, real: 0, realBad: [] };
+  const FAULTS = new Set(Object.keys(D.SKETCH_FAULT)), PERS = ['heavy', 'base', 'nickel', 'dime'], FR = ['light', 'even', 'loaded'];
+  const COV = ['c0', 'c1', '2man', 'c2', 'c3', 'c4', 'c6', 'prevent'];
+  const bad = (o) => { if (out.bad.length < 8) out.bad.push(o); };
+  // a finger's line from man a: one to four legs, wobbles, the offense's way (fw 1) or either way
+  const line = (a, sc, fw, reach) => {
+    let x = (a.x0 - D.SX0) / D.XYD, L = a.L0;
+    const pts = [], legs = 1 + Math.floor(R() * 4);
+    for (let k = 0; k < legs; k++) {
+      x += (R() * 2 - 1) * (reach || 9); L += sc.dir * (fw ? fw * (R() * 15 - 3) : (R() * 2 - 1) * 14);
+      pts.push([x, L]);
+      if (R() < 0.3) pts.push([x + R() - 0.5, L + R() - 0.5]);
+    }
+    return pts;
+  };
+  const real = [];
+  for (let it = 0; it < n; it++) {
+    const yl = pick([1, 2, 3, 4, 5, 8, 12, 20, 35, 50, 65, 80, 90, 95, 97, 99]), side = R() < 0.5 ? 1 : -1, off = kind === 'run' || kind === 'rpo';
+    const lead = pick([-9, -3, 0, 3, 9]), sc0 = [21, 21 + lead], kick = kind === 'kick', free = kick && R() < 0.25;
+    const r = { ...G.root, phase: kick ? 2 : 0, down: 1 + Math.floor(R() * 4), ytg: Math.min(yl, 1 + Math.floor(R() * 12)), yl, pos: off || kick ? G.me : 1 - G.me,
+      try2: false, free_kick: free, clock_running: false, untimed: false, score: G.me ? [sc0[1], sc0[0]] : sc0, t: pick([3500, 1830, 600, 90, 25]) };
+    if (kick) r.yl = free ? 80 : 65;
+    G.look = off && R() < 0.7 ? Math.floor(R() * 4) : null;
+    const full = kind === 'def' && R() < 0.6;
+    ui.step = kind === 'def' ? (full ? 'vdef' : 'defense') : kind === 'stdef' ? 'st' : 'x';
+    ui.dc = full ? { ...pick(Object.values(D.PRESET)).dc } : null;
+    ui.st = kind === 'stdef' ? pick(['fgdef', 'puntdef']) : kick ? (free ? 'freekick' : 'kick') : null;
+    const sc = D.makeScene(r, side), me = sc.actors.filter((a) => a.teamI === G.me);
+    let res, act = null, what = null;
+    if (off) {
+      const a = pick(me.filter((a) => a.off && (kind === 'run' ? ['QB', 'RB', 'FB', 'WR'] : ['RB', 'FB']).includes(a.label)));
+      if (!a) continue;
+      res = D.readRun(sc, a, line(a, sc, 1), kind === 'rpo');
+      if (res && !res.fault) {
+        const ok = D.callOptions(r).calls.includes(res.call) && (kind === 'rpo') === res.call.startsWith('rpo') && (kind === 'rpo' || /^(rb_|qb_|trick_reverse)/.test(res.call));
+        if (!ok) bad({ kind, call: res.call, yl });
+        what = res.call; act = { to_off: false, play: D.CALL[res.call].kind, call: res.call, oob: R() < 0.2, looks: G.look != null ? 1 << G.look : 0, path: res.path, carrier: res.carrier, shape: res.shape };
+        // Versus: the room gets the call only, never the drawing
+        const sealed = D.vsSealed({ action: act }).action;
+        if (sealed.call !== act.call || ['path', 'carrier', 'shape', 'drawn', 'ddraw', 'qbPath'].some((k) => k in sealed)) bad({ kind, sealed });
+        if (kind === 'rpo' && R() < 0.5) {
+          const E = D.eligibles(sc), k = Math.floor(R() * E.length), d = D.shapeDrawn(sc, E[k], line(E[k], sc, 1));
+          if (d && !d.fault) { act.target = k; act.drawn = E.map((_, j) => (j === k ? { pts: d.pts, at: d.at, minD: d.minD } : null)); act.routes = E.map((_, j) => (j === k ? d.name : null)); }
+        }
+      }
+    } else if (kind === 'def' || kind === 'stdef') {
+      const defs = me.filter((a) => !a.off), m = new Map();
+      for (let k = 1 + Math.floor(R() * 4); k > 0; k--) {
+        const a = pick(defs), l = D.readDefLine(sc, a, line(a, sc, 0, 7));
+        if (l && l.fault) { if (!FAULTS.has(l.fault)) bad({ kind, fault: l.fault }); out.faults[l.fault] = (out.faults[l.fault] || 0) + 1; }
+        else if (l) m.set(a, l);
+      }
+      if (!m.size) { out.taps++; continue; }
+      if (kind === 'stdef') { const thru = [...m.values()].some((l) => l.through); res = { key: ui.st === 'fgdef' ? (thru ? 'block' : 'safe') : thru ? 'rush' : 'return' }; what = res.key; }
+      else {
+        res = D.readDef(sc, m, full ? ui.dc : null);
+        if (!res.fault) {
+          const dc = res.dc;
+          if (full && !(PERS.includes(dc.pers) && FR.includes(dc.front) && COV.includes(dc.cover) && [3, 4, 5, 6].includes(dc.rush))) bad({ kind, dc });
+          if (!full && !D.DEFS.includes(res.call)) bad({ kind, call: res.call });
+          what = full ? `${dc.front}/${dc.cover}/${dc.rush}` : res.call;
+          const all = sc.actors.filter((a) => !a.off);
+          act = { to_def: false, ...(full ? { dc, read: true } : { def: res.call }), ddraw: [...m.entries()].map(([a, l]) => ({ k: all.indexOf(a), pts: l.path })) };
+        }
+      }
+    } else {
+      const K = me.find((a) => a.label === 'K');
+      if (!K) continue;
+      res = D.readKick(sc, K, line(K, sc, 1, 12).map((p, k, A) => (k === A.length - 1 ? [p[0], p[1] + sc.dir * R() * 60] : p)), ui.st);
+      if (res && !res.fault) {
+        what = res.key;
+        if (res.key === 'onside' && !(free || r.score[G.me] < r.score[1 - G.me])) bad({ kind, onside: 'not behind' });
+        act = { kick: res.key };
+      }
+    }
+    out.n++;
+    if (!res) { out.taps++; continue; }
+    if (res.fault) { if (!FAULTS.has(res.fault)) bad({ kind, fault: res.fault }); out.faults[res.fault] = (out.faults[res.fault] || 0) + 1; continue; }
+    out.mapped[what] = (out.mapped[what] || 0) + 1;
+    if (!act) continue;
+    // on the field: the drawn call's outcomes (a stop behind the line, short, a first down, a touchdown; an RPO thrown)
+    const id = off ? act.call : pick(['rb_inside_strong', 'quick_weak', 'deep_strong', 'rpo_weak']), team = off ? G.me : 1 - G.me, ci = calls.findIndex((c) => c.id === id);
+    const isRun = calls[ci].kind === 'run' || (calls[ci].id.startsWith('rpo') && R() < 0.5);
+    if (!kick && !(kind === 'stdef')) for (const o of isRun ? [{ yards: -2 }, { yards: Math.min(3, yl) }, { yards: yl, td: true }, { yards: Math.min(yl, 12), oob: R() < 0.3 }] : [{ air: Math.min(yl, 9), yards: Math.min(yl, 11) }, { air: Math.min(yl, 20), incomplete: true }]) {
+      const e = { ev: 'play', team, call: ci, row: -1, t: r.t, kind: isRun ? 0 : 1, ...o, td: !!o.td || (o.yards || 0) >= yl };
+      const sc2 = D.makeScene(r, side), P = D.choreograph(sc2, e, { action: act, log: [e], root: { ...r, yl: Math.max(1, yl - (o.yards || 0)) } }, false);
+      if (!P) continue;
+      out.plays++;
+      D.offField(sc2, P, false).slice(0, 2).forEach((b) => { if (out.off.length < 10) out.off.push({ kind, what, yl, side, ...o, ...b }); });
+    }
+    if (real.length < 30 && !(kind === 'stdef')) real.push({ r, act, what, ci });
+  }
+  // the simulator: the drawn call is the call run, a real play
+  const off = kind === 'run' || kind === 'rpo', kick = kind === 'kick';
+  for (const x of real) {
+    try {
+      const res = (await D.send({ type: 'step', scen: D.simScen(), root: x.r, action: x.act, seed: (seed * 7919 + out.real) >>> 0 }, true)).res;
+      out.real++;
+      const e = res.log.find((y) => ['play', 'kickoff'].includes(y.ev));
+      if (kind === 'kick') { if (!e || e.ev !== 'kickoff') out.realBad.push({ kind, what: x.what, log: res.log.map((y) => y.ev) }); }
+      else if (off && e && e.ev === 'play' && !e.penalty && e.call !== x.ci) out.realBad.push({ kind, what: x.what, ran: (calls[e.call] || {}).id });
+    } catch (err) { out.realBad.push({ kind, what: x.what, err: String(err) }); }
+  }
+  Object.keys(ui).forEach((k) => { if (!(k in ui0)) delete ui[k]; });
+  Object.assign(ui, ui0); G.look = look0;
+  logs.forEach((k, i) => { if (window[k]) window[k].length = kept[i]; });
+  D.drawField();
+  return out;
 }"""
 BAD_TEXT = re.compile(r"undefined|NaN|\[object|Infinity")
 # how long a screen may sit unchanged before it counts as frozen (s); a play's animation runs ~5-15 s
@@ -228,7 +365,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             await page.goto(url)
     else:
         await page.goto(url)
-    finished = reloads = steps = rundowns = drawn = 0
+    finished = reloads = steps = rundowns = drawn = sketched = 0
     last_key, since, chaos_done = None, time.time(), set()
     trail: list[str] = []            # the last screens and actions, printed with a failure
     first_q = None                   # the quarter a daily drive starts in: a first-half drive ends at halftime
@@ -365,6 +502,26 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     print(f"{name}: short fields, {plays} plays drawn, {len(off)} off the ground")
                     if off:
                         problems.append(f"off the field on a short field: {off[:4]}")
+                elif st == "choose" and sweep and "draw_fuzz" not in chaos_done:
+                    # thousands of drawings of every kind (runs, RPOs, the defense, kicks, the rush on theirs)
+                    chaos_done.add("draw_fuzz"); act("drawing fuzz")
+                    tot = {"n": 0, "taps": 0, "plays": 0, "real": 0}
+                    for k, kind in enumerate(("run", "rpo", "def", "kick", "stdef")):
+                        fz = await page.evaluate(DRAW_FUZZ, [kind, 700, seed * 31 + k])
+                        for f in tot:
+                            tot[f] += fz[f]
+                        top = sorted(fz["mapped"].items(), key=lambda kv: -kv[1])[:6]
+                        print(f"{name}: drawn {kind}: {fz['n']} lines, {sum(fz['mapped'].values())} read as calls {dict(top)}, refused {fz['faults']}, "
+                              f"{fz['plays']} plays shown, {fz['real']} run by the simulator")
+                        if fz["bad"]:
+                            problems.append(f"a {kind} drawing read as a call that isn't one: {fz['bad'][:3]}")
+                        if fz["off"]:
+                            problems.append(f"off the field on a drawn {kind}: {fz['off'][:3]}")
+                        if fz["realBad"]:
+                            problems.append(f"a drawn {kind} ran another call in the simulator: {fz['realBad'][:3]}")
+                        since = time.time()
+                    since = time.time()
+                    print(f"{name}: drawing fuzz, {tot['n']} drawings, {tot['plays']} plays on the field, {tot['real']} simulated")
                 elif st == "choose":
                     if first_call:
                         first_call = False
@@ -406,7 +563,31 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                                 break
                         else:
                             problems.append("a call tapped during a replay did nothing")
-                    elif await page.locator("#drawBtn:visible").count() and rnd.random() < 0.45:
+                    elif rnd.random() < 0.5 and (sk := await page.evaluate(SKETCH)) and sk["men"]:
+                        # draw the play: a run or an RPO through the line, the defense (a rush or a drop), a kick; then
+                        # mostly call what it reads as
+                        x, y = rnd.choice(sk["men"])[:2]
+                        up, ppy, ly = sk["up"], sk["ppy"], sk["los"][1]
+                        if sk["ctx"] in ("play", "run", "rpo"):
+                            pts = [(x + rnd.uniform(-8, 8) * ppy, ly - up * rnd.uniform(0, 3) * ppy), (x + rnd.uniform(-12, 12) * ppy, ly + up * rnd.uniform(1, 12) * ppy)]
+                            if rnd.random() < 0.3:
+                                pts.append((pts[-1][0] + rnd.uniform(-6, 6) * ppy, pts[-1][1] + up * rnd.uniform(0, 8) * ppy))
+                        elif sk["ctx"] == "st" and len(sk["men"]) == 1:
+                            pts = [(x + rnd.uniform(-10, 10) * ppy, y + up * rnd.uniform(8, 75) * ppy)]
+                        else:
+                            pts = [(x + rnd.uniform(-6, 6) * ppy, y + rnd.choice([-1, 1]) * rnd.uniform(2, 14) * ppy)]
+                        act(f"draw ({sk['ctx']})")
+                        await page.mouse.move(x, y); await page.mouse.down()
+                        for nx, ny in pts:
+                            for t in range(1, 7):
+                                await page.mouse.move(x + (nx - x) * t / 6, y + (ny - y) * t / 6)
+                            x, y = nx, ny
+                        await page.mouse.up()
+                        sketched += 1
+                        await page.wait_for_timeout(120)
+                        if rnd.random() < 0.85 and await page.locator("#drawGo:visible").count():
+                            act("call it as drawn"); await page.click("#drawGo", timeout=3000)
+                    elif await page.locator("#drawBtn:visible").count() and await page.evaluate("() => !!(window.__draw && window.__draw.drawCtx() === 'pass')") and rnd.random() < 0.45:
                         # draw a route: drawing on, a receiver, a line of one to three legs from him (the field takes the drag)
                         act("draw a route")
                         if await page.get_attribute("#drawBtn", "aria-pressed") != "true":
@@ -461,8 +642,9 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             fps = await page.evaluate("() => window.__fpLog || []")
             offs = await page.evaluate("() => window.__offLog || []")
             kept = await page.evaluate("() => (window.__drawLog || []).length")
+            snaps = await page.evaluate("() => window.__drawSnaps || []")
         except Exception:
-            seps, tackles, fps, offs, kept = [], [], [], [], 0
+            seps, tackles, fps, offs, kept, snaps = [], [], [], [], 0, []
         if problems:
             status = "fail"
             shot = out / f"{name}.png"
@@ -472,7 +654,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 pass
         await ctx.close()
     return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
-            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "trail": trail if problems else []}
+            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "trail": trail if problems else []}
 
 
 async def main(a) -> int:
@@ -549,6 +731,11 @@ async def main(a) -> int:
     sh = [x for r in results for x in r.get("seps", []) if x.get("caught") and x.get("air", 99) <= 6]
     print(f"short completions: {len(sh)}, with a deep man 5+ yards clear: {sum(1 for x in sh if x.get('openDeep', 0) > 0)}")
     print(f"routes drawn: {sum(r.get('drawn', 0) for r in results)} drags, {sum(r.get('kept', 0) for r in results)} kept as routes (since the last reload)")
+    by = {}
+    for r in results:
+        for x in r.get("snaps", []):
+            by[x["kind"]] = by.get(x["kind"], 0) + 1
+    print(f"plays drawn: {sum(r.get('sketched', 0) for r in results)} drags (runs, RPOs, defense, kicks), snapped as drawn: {by} (since the last reload)")
     late = sum(1 for r in results for x in r.get("seps", []) if x.get("late"))
     print(f"cover man too far to break it up (shown as a bad ball instead): {late} of {len(inc)} incompletions")
     lonely = [x for r in results for x in r.get("seps", []) if x.get("label") == "Broken up" and x.get("ballD", 0) > 3]

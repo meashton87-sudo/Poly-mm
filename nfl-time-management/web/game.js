@@ -1122,7 +1122,7 @@
           'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${num ? `#${num} ` : ''}${o.p.name}, rated ${o.p.ovr}` });
         g.append(S('circle', { class: 'hit', r: 11 }), S('circle', { class: 'c', r: 7.2, fill: rate(o.p.ovr) }));
         if (num) { const t = S('text', { class: 'jn', y: 2.6 }); t.textContent = num; g.append(t); }
-        const open = () => { if (passing() && (Date.now() - routeTapAt < 600 || (off && (o.label === 'WR' || o.label === 'TE' || o.label === 'RB')))) return; playerInfo(o.p, o.label, team); };
+        const open = () => { if (Date.now() - routeTapAt < 600 || (passing() && off && (o.label === 'WR' || o.label === 'TE' || o.label === 'RB'))) return; playerInfo(o.p, o.label, team); };
         g.addEventListener('click', open);
         g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); if (!passTap(a)) open(); } });
         sc.layer.append(g);
@@ -1303,6 +1303,7 @@
     if (busy || !passing()) return;
     const P = ui.pass, h = P && P.hist && P.hist.pop();
     if (!h) return;
+    if (h[0] === 'qb') { P.qb = h[1]; P.roll = h[2]; P.rollSide = h[3]; redrawPass(); return; }      // (his drop or rollout)
     P.routes[h[0]] = h[1];
     (P.drawn = P.drawn || [])[h[0]] = h[2] || null;
     redrawPass();
@@ -1482,8 +1483,10 @@
     const u = [b[0] - a[0], b[1] - a[1]], v = [c[0] - b[0], c[1] - b[1]], lu = Math.hypot(...u), lv = Math.hypot(...v);
     return lu && lv ? (Math.acos(clip((u[0] * v[0] + u[1] * v[1]) / (lu * lv), -1, 1)) * 180) / Math.PI : 0;
   };
-  function drawFault(raw, d0) {
-    const fine = simplify(raw, 0.8), main = simplify(raw, DRAW_TOL), legs = simplify(raw, 1.8);
+  // a line that crosses itself, or turns one way all along (winds into a loop): 'loop'; one that zigzags, turning back
+  // and forth more than DRAW_TURN degrees in all (its turns cancel): 'cuts'. Every drawing (a route, a run, a drop)
+  function windOf(raw) {
+    const fine = simplify(raw, 0.8), main = simplify(raw, DRAW_TOL);
     const crosses = (p, q, r, t) => {
       const d = (q[0] - p[0]) * (t[1] - r[1]) - (q[1] - p[1]) * (t[0] - r[0]);
       if (Math.abs(d) < 1e-9) return false;
@@ -1491,15 +1494,18 @@
       return a > 0 && a < 1 && b > 0 && b < 1;
     };
     for (let i = 0; i < fine.length - 1; i++) for (let j = i + 2; j < fine.length - 1; j++) if (crosses(fine[i], fine[i + 1], fine[j], fine[j + 1])) return 'loop';
-    // turning one way all along winds into a loop; a zigzag turns back and forth (its turns cancel): too many cuts
     let turn = 0, net = 0;
     for (let k = 1; k < main.length - 1; k++) {
       const a = main[k - 1], b = main[k], c = main[k + 1], t = turnOf(a, b, c);
       turn += t;
       net += Math.sign((b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])) * t;
     }
-    if (Math.abs(net) > DRAW_TURN) return 'loop';
-    if ((legs.length > 4 && simplify(raw, 2.6).length > 4) || turn > DRAW_TURN) return 'cuts';
+    return Math.abs(net) > DRAW_TURN ? 'loop' : turn > DRAW_TURN ? 'cuts' : null;
+  }
+  function drawFault(raw, d0) {
+    const legs = simplify(raw, 1.8), w = windOf(raw);
+    if (w === 'loop') return 'loop';
+    if ((legs.length > 4 && simplify(raw, 2.6).length > 4) || w === 'cuts') return 'cuts';
     for (let k = 1; k < legs.length - 1; k++) {
       const last = k === legs.length - 2, len = Math.hypot(legs[k + 1][0] - legs[k][0], legs[k + 1][1] - legs[k][1]);
       if (turnOf(legs[k - 1], legs[k], legs[k + 1]) > 150 && !(last && len <= DRAW_BACK + 1)) return 'back';
@@ -1581,53 +1587,63 @@
   function drawTaps() {
     const svg = $('field');
     const at = (ev) => { const m = svg.getScreenCTM(); return m ? new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse()) : null; };
-    const near = (q) => {
+    const near = (q, list) => {
       const Y = camY(scene);
-      let best = -1, bd = 24;
-      eligibles(scene).forEach((a, i) => { const d = Math.hypot(q.x - a.x0, q.y - Y(a.L0) - dotOff(a)); if (d < bd) { bd = d; best = i; } });
+      let best = null, bd = 24;
+      list.forEach((a) => { const d = Math.hypot(q.x - a.x0, q.y - Y(a.L0) - dotOff(a)); if (d < bd) { bd = d; best = a; } });
       return best;
     };
     svg.addEventListener('pointerdown', (ev) => {
-      if (busy || !passing() || !scene || (ev.pointerType === 'mouse' && ev.button !== 0)) return;
-      const q = at(ev);
+      if (busy || !scene || (ev.pointerType === 'mouse' && ev.button !== 0)) return;
+      const ctx = drawCtx(), q = ctx && at(ev);
       if (!q) return;
-      // without drawing on, a drag that starts on a receiver draws his route all the same (players dragged him and
-      // nothing happened); a tap is still a tap (his next route). Outside Pro games, the drag says where it is
-      const direct = !ui.pass.draw, hit = near(q);
-      if (direct && hit < 0) return;
-      const i = hit >= 0 ? hit : ui.pass.sel;
-      ev.preventDefault();
-      drawing = { i: i == null ? -1 : i, hit, direct, locked: !drawOK(), x: ev.clientX, y: ev.clientY, pts: [[q.x, q.y]], el: null, id: ev.pointerId };
+      let hit = near(q, drawFrom(scene, ctx));
+      if (ctx === 'st' && ST_DRAW[ui.st] === 'kick') hit = hit || drawFrom(scene, ctx)[0];      // (a kick: from anywhere, the kicker's)
+      if (ctx === 'pass' && !(hit && hit.label === 'QB')) {
+        // a route: without drawing on, a drag that starts on a receiver draws his route all the same (players dragged
+        // him and nothing happened); a tap is still a tap (his next route)
+        const E = eligibles(scene), direct = !ui.pass.draw, k = hit ? E.indexOf(hit) : -1;
+        if (direct && k < 0) return;
+        const i = k >= 0 ? k : ui.pass.sel;
+        ev.preventDefault();
+        drawing = { ctx, i: i == null ? -1 : i, hit: k, direct, x: ev.clientX, y: ev.clientY, pts: [[q.x, q.y]], el: null, id: ev.pointerId };
+      } else {
+        if (!hit) return;
+        ev.preventDefault();
+        drawing = { ctx, a: hit, x: ev.clientX, y: ev.clientY, pts: [[q.x, q.y]], el: null, id: ev.pointerId };
+      }
       try { svg.setPointerCapture(ev.pointerId); } catch (e) { /* the line still follows inside the field */ }
     });
     svg.addEventListener('pointermove', (ev) => {
       const D = drawing;
-      if (!D || ev.pointerId !== D.id || D.i < 0 || !scene) return;
+      if (!D || ev.pointerId !== D.id || !scene || (!D.a && D.i < 0)) return;
       const q = at(ev), p = D.pts[D.pts.length - 1];
-      if (D.locked) { if (q && Math.hypot(q.x - D.pts[0][0], q.y - D.pts[0][1]) > 14) D.dragged = true; return; }
       if (!q || Math.hypot(q.x - p[0], q.y - p[1]) < 2.5) return;
       D.pts.push([q.x, q.y]);
-      const a = eligibles(scene)[D.i], Y = camY(scene);
+      const a = D.a || eligibles(scene)[D.i], Y = camY(scene);
       if (!D.el) { D.el = S('path', { class: 'route drawing' }); svg.append(D.el); }
-      // a line that can't be a route turns red as it goes wrong
-      const { raw, d0 } = rawDrawn(scene, a, lineYards(scene, a, D.pts));
-      D.el.classList.toggle('bad', !!drawFault(raw, d0));
+      // a line that can't be what it is drawn for turns red as it goes wrong
+      const f = lineYards(scene, a, D.pts);
+      const runner = D.ctx === 'run' || ((D.ctx === 'rpo' || D.ctx === 'play') && ['RB', 'FB', 'QB'].includes(a.label));
+      let bad;
+      if (runner) { const rd = readRun(scene, a, f, D.ctx === 'rpo'); bad = !!(rd && rd.fault && rd.fault !== 'line'); }
+      else if (!D.a || ((D.ctx === 'rpo' || D.ctx === 'play') && eligibles(scene).includes(a))) { const { raw, d0 } = rawDrawn(scene, a, f); bad = !!drawFault(raw, d0); }
+      else bad = windOf(lineOf(scene, a, f).pts) === 'loop';
+      D.el.classList.toggle('bad', bad);
       D.el.setAttribute('d', `M${a.x0.toFixed(1)} ${(Y(a.L0) + dotOff(a)).toFixed(1)}${D.pts.map((v) => `L${v[0].toFixed(1)} ${v[1].toFixed(1)}`).join('')}`);
     });
     const end = (ev, cancel) => {
       const D = drawing;
       if (!D || ev.pointerId !== D.id) return;
       drawing = null;
-      routeTapAt = Date.now();                // (the dot under the finger stays shut)
       if (D.el) D.el.remove();
-      if (cancel || busy || !passing() || !scene) return;
+      const tap = Math.hypot(ev.clientX - D.x, ev.clientY - D.y) <= 10 && D.pts.length <= 3;
+      if (!tap || D.ctx === 'pass') routeTapAt = Date.now();                // (the dot under the finger stays shut)
+      if (cancel || busy || !scene || drawCtx() !== D.ctx) return;
+      if (D.a) { if (!tap) commitSketch(D.ctx, D.a, D.pts); return; }
       const P = ui.pass;
-      if (D.locked) {
-        if (D.dragged && PRO_ON) { toast('Drawing your own routes is in Pro games for now: coming to every mode soon. Tap him to change his route'); track('draw_locked', { mode: modeName(), how: 'drag' }); }
-        return;
-      }
-      if (D.direct && Math.hypot(ev.clientX - D.x, ev.clientY - D.y) <= 10 && D.pts.length <= 3) return;     // (a tap: his next route)
-      if (Math.hypot(ev.clientX - D.x, ev.clientY - D.y) <= 10 && D.pts.length <= 3) {
+      if (D.direct && tap) return;     // (a tap: his next route)
+      if (tap) {
         // a tap: pick that receiver (him again: let him go); off them all, let go of whoever was picked
         P.sel = D.hit >= 0 && P.sel !== D.hit ? D.hit : null;
         redrawPass();
@@ -1645,9 +1661,10 @@
     const k = (sc.H - 6) / (sc.cam.hi - sc.cam.lo);
     return line.map(([x, y]) => [(x - SX0) / XYD, sc.cam.lo + (sc.H - 3 - y + dotOff(a)) / k]);
   }
-  function commitDraw(i, line) {
+  // (field: the line already in field yards, drawn on another step's framing)
+  function commitDraw(i, line, field) {
     const sc = scene, a = eligibles(sc)[i], P = ui.pass;
-    const d = shapeDrawn(sc, a, lineYards(sc, a, line));
+    const d = shapeDrawn(sc, a, field || lineYards(sc, a, line));
     if (!d || d.fault) {
       P.sel = i; redrawPass();                // he stays picked: draw it again
       if (d) { toast(`${DRAW_FAULT[d.fault]}. Try again.`); track('route_refused', { why: d.fault }); }
@@ -1663,20 +1680,424 @@
     track('route_drawn', { route: d.name, depth: d.depth, legs: d.pts.length - 1 });
     if (window.__sepLog) (window.__drawLog = window.__drawLog || []).push({ i, label: a.label, ...d });      // (browser tests)
   }
-  // drawing plays: Pro games for now (a historic drive, a playoff run, a past day), every mode later
-  const drawOK = () => isPro() && !!(DRIVE || RUN_N || ARCH_DAY);
+  // drawing plays: every mode (Versus included: only the call it reads as goes to the room, vsSealed)
+  const drawPref = () => !!load(DRAW_KEY, false);
   function setDraw(on) {
-    if (on && !drawOK()) return;
-    const P = ui.pass;
-    P.draw = on; P.sel = null;
     save(DRAW_KEY, on);
-    redrawPass();
+    if (passing()) { const P = ui.pass; P.draw = on; P.sel = null; redrawPass(); } else sketchRedraw();
     track('draw_mode', { on });
   }
+
+  // ---- drawing the rest of the play: the ball carrier's path on a run or an RPO, the quarterback's drop, your defense
+  // (rushers through the line, men up into the box, drops deep) and the kicks. A drawing is read as a call the playbook
+  // has, the one the keys would make: the snap is a real play of that call, graded exactly as that call (the drawing
+  // only goes with it to the field, where the players run it as drawn as far as the play allows). One that can't be
+  // read says why, in place; the keys stay for a tap and the keyboard.
+  // Where a run crosses the line picks it, in yards from the ball as the field draws the line (guards 4 yards out,
+  // tackles 8, the tight end 12): over the center, up the middle; the guard and tackle gaps, inside; outside the tackle
+  // to the tight end's edge, off tackle; wider, outside
+  const RUN_GAPS = [[1.4, 'middle'], [6.8, 'inside'], [12.7, 'tackle']];
+  const RUN_LEAD = 2;           // yards one way behind the line before crossing on the other side of the ball: a counter
+  const RUN_SWEEP = 8;          // yards out from the ball behind the line before turning up outside: a sweep or a toss
+  const RUN_NEAR = 6, RUN_BOUNCE = 4.5;     // this far outside within RUN_NEAR yards past the line: bounced outside
+  const RUN_CUT = 4;            // this far back across within RUN_NEAR yards past the line: a cutback (the gap he hit)
+  const RUN_BACK = 3;           // yards back toward his own goal once through the line: not a run
+  const SNEAK_W = 2.2;          // a quarterback straight ahead within this of the ball: a sneak (3 yards or less to go)
+  const ROLL_W = 4;             // a quarterback this far to one side behind the line: a rollout that way
+  const RE_WR = 12;             // yards across behind the line a receiver goes on an end-around (or past the ball)
+  // the defense: the box is within BOX_D yards of the line and BOX_W of the ball (as the field draws it: the line's
+  // ends 8-9 yards out, the linebackers 8, a light box's wide man 11); a drop this deep (DEEP_AT, or most of the room
+  // to the end line on a short field) is a deep zone
+  const BOX_D = 8, BOX_W = 10, DEEP_AT = 10;
+  const KICK_ONSIDE = 22, KICK_MIN = 10;   // yards: an onside kick goes 10 and is short (22 at most); shorter is no kick
+  const KICK_MAX = 90;          // yards a kick may be drawn (a touchback from the 35 is 65 past the ball and more)
+  const SKETCH_FAULT = {
+    loop: 'No loops: draw one line',
+    rcuts: 'Too many cuts: a run has a cut or two',
+    line: 'Draw from the back through a gap in the line',
+    rback: 'He can’t run back the way he came once he’s through the line',
+    deep: 'Too deep: draw him toward the line, not away from it',
+    wr: 'A receiver carries it only on an end-around: draw him back across behind the line',
+    rpoqb: 'On an RPO the back carries it: draw his path (or a receiver’s route)',
+    none: 'That run isn’t on here: draw another, or tap one below',
+    qbline: 'On a pass he stays behind the line: draw his drop or a rollout (a QB run is under Run)',
+    def: 'Draw a rusher through the line to blitz, men up into the box to load it, or drops deep to play soft',
+    kdir: 'Kick it downfield, toward their end zone',
+    kshort: 'A kick has to go 10 yards',
+    onside: 'Onside only when you’re behind: kick it deep or to the returner',
+  };
+  const SHAPE_SAY = { counter: 'a counter', sweep: 'a sweep', bounce: 'bounced outside', cutback: 'a cutback', keep: 'a keeper', sneak: 'a sneak', reverse: 'an end-around' };
+  // what a drag on the field draws now (null: nothing), and the men a drawing starts from there: receivers (a route),
+  // the backs and the quarterback (a run, an RPO's run, his drop), your defenders, the kicker
+  const ST_DRAW = { kick: 'kick', freekick: 'kick', fgdef: 'rush', puntdef: 'rush' };
+  function drawCtx() {
+    if (!G || !ui || !scene || !G.root || (VS && vs.ui !== 'prompt')) return null;
+    const r = G.root, mine = r.pos === G.me;
+    if (passing()) return 'pass';
+    if (ui.step === 'st' && ST_DRAW[ui.st] && scene.r === r) return 'st';
+    if (r.phase !== SNAP || scene.r !== r) return null;
+    if (mine && ui.step === 'family') return 'play';
+    if (mine && ui.step === 'detail' && (ui.fam === 'run' || ui.fam === 'rpo')) return ui.fam;
+    if (!mine && (ui.step === 'defense' || ui.step === 'vdef')) return 'def';
+    return null;
+  }
+  function drawFrom(sc, ctx) {
+    const off = sc.actors.filter((a) => a.off && a.teamI === G.me), def = sc.actors.filter((a) => !a.off && a.teamI === G.me);
+    const has = (...l) => (a) => l.includes(a.label);
+    if (ctx === 'pass') return eligibles(sc).concat(off.filter(has('QB')));
+    if (ctx === 'play') return off.filter(has('QB', 'RB', 'FB', 'WR', 'TE'));
+    if (ctx === 'run') return off.filter(has('QB', 'RB', 'FB', 'WR'));
+    if (ctx === 'rpo') return off.filter(has('RB', 'FB', 'WR', 'TE'));
+    if (ctx === 'st') return ST_DRAW[ui.st] === 'kick' ? sc.actors.filter((a) => a.label === 'K' && a.teamI === G.me) : def;
+    return ctx === 'def' ? def : [];
+  }
+  // a line from man a ([x across, L] field yards, as drawn) in [x across, d past the line of scrimmage the offense's
+  // way], from where he lines up, kept on the field and inside both end lines (a short field: it clips at the end line),
+  // cut at DRAW_MAX yards; run: its length
+  function lineOf(sc, a, field, max = DRAW_MAX) {
+    const fwd = sc.dir > 0 ? FULL.hi - 0.5 - sc.losL : sc.losL - FULL.lo - 0.5, back = sc.dir > 0 ? sc.losL - FULL.lo - 0.5 : FULL.hi - 0.5 - sc.losL;
+    const loc = (q) => [clip(q[0], 0.7, 52.6), clip(sc.dir * (q[1] - sc.losL), -back, fwd)];
+    const pts = [loc([(a.x0 - SX0) / XYD, a.L0])];
+    let run = 0;
+    for (const q of field.map(loc)) {
+      const p = pts[pts.length - 1], l = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      if (l < 0.25) continue;
+      if (run + l > max) { const w = (max - run) / l; pts.push([p[0] + (q[0] - p[0]) * w, p[1] + (q[1] - p[1]) * w]); run = max; break; }
+      pts.push(q); run += l;
+    }
+    return { pts, run, room: fwd };
+  }
+  const r1 = (p) => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10];
+  const strongOf = (sc) => sc.s * sc.dir || 1;               // the strong side, on screen: +1 right, -1 left
+  const sideAt = (sc, x) => ((Math.sign(x - (sc.bx - SX0) / XYD) || strongOf(sc)) === strongOf(sc) ? 'strong' : 'weak');
+  // a ball carrier's line read as a run: the call (one callOptions offers here), its shape, and the path he runs
+  // ([across, past the line] yards); rpo: the RPO to that side. { fault } when it can't be one, null for a tap
+  function readRun(sc, a, field, rpo) {
+    const { pts, run } = lineOf(sc, a, field);
+    if (run < DRAW_MIN) return null;
+    const d0 = -pts[0][1], bx = (sc.bx - SX0) / XYD, ax = pts[0][0], w = windOf(pts);
+    if (w) return { fault: w === 'loop' ? 'loop' : 'rcuts' };
+    if (simplify(pts, 1.8).length > 6 && simplify(pts, 2.6).length > 5) return { fault: 'rcuts' };
+    const ci = pts.findIndex((p) => p[1] >= 0);
+    if (ci < 1 || Math.max(...pts.map((p) => p[1])) < 1) return { fault: 'line' };
+    if (Math.min(...pts.map((p) => p[1])) < -Math.max(d0, 0) - 4) return { fault: 'deep' };
+    let top = -Infinity;
+    for (const p of pts.slice(ci)) { if (p[1] < top - RUN_BACK || p[1] < -1) return { fault: 'rback' }; top = Math.max(top, p[1]); }
+    const p0 = pts[ci - 1], p1 = pts[ci], u = p1[1] > p0[1] ? -p0[1] / (p1[1] - p0[1]) : 0, xc = p0[0] + (p1[0] - p0[0]) * u;
+    // (where he is RUN_NEAR yards on, or where the line ends)
+    const xAt = (d) => {
+      for (let k = ci; k < pts.length; k++) if (pts[k][1] >= d) { const q = pts[k - 1], s = pts[k]; return q[0] + (s[0] - q[0]) * (s[1] > q[1] ? (d - q[1]) / (s[1] - q[1]) : 0); }
+      return pts[pts.length - 1][0];
+    };
+    const off = xc - bx, xn = xAt(Math.min(RUN_NEAR, top)), drift = xn - xc;
+    const behind = pts.slice(1, ci), first = behind.find((p) => Math.abs(p[0] - ax) >= RUN_LEAD);
+    const wide = Math.max(0, ...behind.map((p) => (Math.sign(off) || 1) * (p[0] - bx)));
+    const gapOf = (x) => (RUN_GAPS.find(([g]) => Math.abs(x - bx) < g) || [0, 'out'])[1];
+    const avail = callOptions(sc.r).calls;
+    let call, shape = 'downhill', side = sideAt(sc, xc), gap = gapOf(xc);
+    if (a.label === 'QB') {
+      if (rpo) return { fault: 'rpoqb' };
+      call = Math.abs(off) <= SNEAK_W && Math.abs(drift) < RUN_BOUNCE && avail.includes('qb_sneak') ? 'qb_sneak' : 'qb_run';
+      shape = call === 'qb_sneak' ? 'sneak' : 'keep';
+    } else if (a.label === 'WR' || a.label === 'TE') {
+      if (rpo || a.label === 'TE' || !(Math.sign(xc - bx) !== Math.sign(ax - bx) || Math.abs(xc - ax) >= RE_WR)) return { fault: 'wr' };
+      call = 'trick_reverse'; shape = 'reverse';
+    } else {
+      if (first && Math.sign(first[0] - ax) !== Math.sign(off) && gap !== 'middle') shape = 'counter';
+      else if (wide >= RUN_SWEEP && gap !== 'middle' && gap !== 'inside') { shape = 'sweep'; gap = 'out'; }
+      else if (Math.abs(drift) >= RUN_BOUNCE && (Math.sign(drift) === Math.sign(off) || gap === 'middle') && gapOf(xn) === 'out') { shape = 'bounce'; gap = 'out'; side = sideAt(sc, xn); }
+      else if (Math.abs(drift) >= RUN_CUT && Math.sign(drift) === -Math.sign(off)) shape = 'cutback';
+      call = rpo ? `rpo_${gap === 'middle' ? sideAt(sc, xn) : side}` : gap === 'middle' ? 'rb_middle' : `rb_${gap}_${side}`;
+    }
+    if (!avail.includes(call)) return { fault: 'none' };
+    return { call, shape, side, gap, carrier: a.label, path: simplify(pts, 0.3).map(r1) };
+  }
+  // the quarterback's line on a pass: his drop, or a rollout (ROLL_W yards or more to one side) to that side
+  function readQb(sc, a, field) {
+    const { pts, run } = lineOf(sc, a, field);
+    if (run < DRAW_MIN) return null;
+    if (windOf(pts)) return { fault: 'loop' };
+    if (Math.max(...pts.map((p) => p[1])) > 0.5) return { fault: 'qbline' };
+    const ax = pts[0][0], far = pts.reduce((b, p) => (Math.abs(p[0] - ax) > Math.abs(b - ax) ? p[0] : b), ax);
+    const roll = Math.abs(far - ax) >= ROLL_W;
+    return { roll, side: roll ? sideAt(sc, far) : null, path: simplify(pts, 0.3).map(r1) };
+  }
+  // a defender's line: through the line (a rusher) or a drop, and where it ends ([across, depth on the defense's side])
+  function readDefLine(sc, a, field) {
+    const { pts, run } = lineOf(sc, a, field);
+    if (run < DRAW_MIN) return null;
+    if (windOf(pts) === 'loop') return { fault: 'loop' };
+    const e = pts[pts.length - 1], k = pts.findIndex((p) => p[1] <= -0.5);       // (the defense lines up at a positive d)
+    return { through: k >= 0, cross: k >= 0 ? pts[k] : null, start: pts[0], end: e, path: simplify(pts, 0.3).map(r1) };
+  }
+  // your defense as drawn: who rushes (the line, or as many as the call has, nearest the line, unless drawn
+  // otherwise), how many end up in the box and how many deep. Simple: blitz (five or more rushing), load the box (seven
+  // or more in it, men brought up), play soft (three rushing, or more men deep); full: the call's rush, front and
+  // coverage each moved by what was drawn (personnel as called), the rest as called
+  const FRONTS = ['light', 'even', 'loaded'];
+  function readDef(sc, lines, base) {
+    const D = sc.actors.filter((a) => !a.off), bx = (sc.bx - SX0) / XYD;
+    const at = (a) => lineOf(sc, a, []).pts[0];
+    const n0 = base ? +base.rush : D.filter((a) => a.label === 'DL' || a.label === 'EDGE').length;
+    const byLine = D.slice().sort((a, b) => at(a)[1] - at(b)[1] || Math.abs(at(a)[0] - bx) - Math.abs(at(b)[0] - bx));
+    const dflt = new Set(byLine.slice(0, n0));
+    const room = sc.dir > 0 ? FULL.hi - 0.5 - sc.losL : sc.losL - FULL.lo - 0.5, deepAt = Math.min(DEEP_AT, room * 0.7);
+    const inBox = (p) => p[1] <= BOX_D && Math.abs(p[0] - bx) <= BOX_W;
+    let rushers = 0, extra = 0, boxB = 0, boxA = 0, deepB = 0, deepA = 0, coverT = false;
+    D.forEach((a) => {
+      const l = lines.get(a), s = at(a), rush = l ? l.through : dflt.has(a), end = l ? (l.through ? l.cross : l.end) : s;
+      if (rush) rushers++;
+      if (rush && !dflt.has(a)) extra++;
+      if (inBox(s)) boxB++;
+      if (inBox(end)) boxA++;
+      if (!dflt.has(a) && s[1] >= deepAt) deepB++;
+      if (!rush && end[1] >= deepAt) deepA++;
+      if (l && !l.through && (l.end[1] >= deepAt || s[1] >= deepAt)) coverT = true;
+    });
+    const out = { rushers, box: boxA, deep: deepA };
+    if (!base) {
+      // (a man sent who doesn't rush on the call: a blitz, with a three-man line too)
+      const call = rushers >= 5 || (extra && rushers >= 4) ? 'blitz' : boxA >= 7 && boxA > boxB ? 'load' : rushers <= 3 || (coverT && (deepA > deepB || deepA >= 3)) ? 'soft' : null;
+      return call ? { ...out, call } : { fault: 'def' };
+    }
+    const man = ['c0', 'c1', '2man'].includes(base.cover);
+    const coverOf = (n) => (n <= 0 ? 'c0' : n === 1 ? (man ? 'c1' : 'c3') : n === 2 ? (man ? '2man' : ['c4', 'c6'].includes(base.cover) ? base.cover : 'c2')
+      : n === 3 ? (base.cover === 'c6' ? 'c6' : 'c3') : n === 4 ? 'c4' : 'prevent');
+    const dc = { ...base, rush: rushers !== n0 ? clip(rushers, 3, 6) : +base.rush,
+      front: boxA !== boxB ? FRONTS[clip(FRONTS.indexOf(base.front) + boxA - boxB, 0, 2)] : base.front, cover: coverT ? coverOf(deepA) : base.cover };
+    return { ...out, dc };
+  }
+  // the kick drawn from the kicker: through the end zone (a touchback), short (onside, when behind) or to the returner;
+  // a free kick deep or onside
+  function readKick(sc, a, field, kind) {
+    const { pts, run } = lineOf(sc, a, field, KICK_MAX);
+    if (run < DRAW_MIN) return null;
+    const e = pts[pts.length - 1], dist = e[1], goal = sc.dir > 0 ? 100 - sc.losL : sc.losL;      // (yards past the ball, and to their goal line)
+    if (dist < -1) return { fault: 'kdir' };
+    if (dist < KICK_MIN) return { fault: 'kshort' };
+    const behind = sc.r.score[G.me] < sc.r.score[1 - G.me];
+    if (kind === 'freekick') return { key: dist <= KICK_ONSIDE ? 'onside' : 'deep', path: [pts[0], e].map(r1) };
+    if (dist <= KICK_ONSIDE) return behind ? { key: 'onside', path: [pts[0], e].map(r1) } : { fault: 'onside' };
+    return { key: e[1] >= goal ? 'touchback' : 'return', path: [pts[0], e].map(r1) };
+  }
+  // what the drawing on the field reads as, for the dock: { label, kind, call or key or dc, draw (what goes with the
+  // snap) } or null
+  function sketchRead(ctx) {
+    const sk = ui.sk, sc = scene;
+    if (!sk || !sc) return null;
+    const line = (kind) => sk.lines.find((l) => l.kind === kind);
+    if (ctx === 'run' || ctx === 'rpo') {
+      const l = line('run'), rt = ctx === 'rpo' ? line('route') : null;
+      if (!l || (ctx === 'rpo') !== l.read.call.startsWith('rpo')) return null;
+      const rd = l.read, a = sc.actors[rt ? rt.i : -1], ei = a ? eligibles(sc).indexOf(a) : -1;
+      const draw = { path: rd.path, carrier: rd.carrier, shape: rd.shape };
+      if (ei >= 0) { draw.target = ei; draw.drawn = eligibles(sc).map((_, k) => (k === ei ? { pts: rt.read.pts, at: rt.read.at, minD: rt.read.minD } : null)); draw.routes = eligibles(sc).map((_, k) => (k === ei ? rt.read.name : null)); }
+      const say = SHAPE_SAY[rd.shape] ? ` · ${SHAPE_SAY[rd.shape]}` : '';
+      return { kind: ctx, call: rd.call, draw, label: `${CALL[rd.call].label}${say}${ei >= 0 ? ` · ${routeName(a.label, rt.read.name)} to ${shortName(a.p ? a.p.name : '') || a.label}` : ''}` };
+    }
+    if (ctx === 'def') {
+      const ls = sk.lines.filter((l) => l.kind === 'def');
+      if (!ls.length) return null;
+      const m = new Map(ls.map((l) => [sc.actors[l.i], l.read])), full = ui.step === 'vdef';
+      const rd = readDef(sc, m, full ? ui.dc : null);
+      if (rd.fault) return { kind: 'def', fault: rd.fault };
+      const ddraw = ls.map((l) => ({ k: sc.actors.filter((a) => !a.off).indexOf(sc.actors[l.i]), pts: l.read.path }));
+      return { kind: 'def', ...(full ? { dc: rd.dc } : { call: rd.call }), draw: { ddraw },
+        label: full ? vdefText(rd.dc) : `${DEF[rd.call].label} · ${rd.rushers} rushing, ${rd.box} in the box, ${rd.deep} deep` };
+    }
+    if (ctx === 'st') {
+      if (ST_DRAW[ui.st] === 'kick') { const l = line('kick'); return l ? { kind: 'st', key: l.read.key } : null; }
+      const ls = sk.lines.filter((l) => l.kind === 'def');
+      if (!ls.length) return null;
+      const thru = ls.some((l) => l.read.through);
+      return { kind: 'st', key: ui.st === 'fgdef' ? (thru ? 'block' : 'safe') : thru ? 'rush' : 'return' };
+    }
+    return null;
+  }
+  // a line drawn on the field (SVG units, from man a) taken in: read, kept (one line a man; Undo takes it back), or
+  // refused with why
+  function commitSketch(ctx, a, line) {
+    const sc = scene, field = lineYards(sc, a, line), i = sc.actors.indexOf(a), lab = a.label, ei = eligibles(sc).indexOf(a);
+    const sk = ui.sk = ui.sk || { lines: [], hist: [] };
+    const keep = (kind, read) => {
+      sk.hist.push(sk.lines.slice());
+      const solo = kind === 'run' || kind === 'route' || kind === 'kick';
+      sk.lines = sk.lines.filter((l) => l.i !== i && !(solo && l.kind === kind)).concat([{ i, kind, field, at: [(a.x0 - SX0) / XYD, a.L0], read }]);
+      sk.bad = null;
+    };
+    const refuse = (kind, why, text) => { sk.bad = text || SKETCH_FAULT[why]; toast(`${sk.bad}. Try again.`); track('draw_refused', { kind, why }); sketchRedraw(); };
+    const toPass = (fn) => { openPass(); fn(); };
+    const at = [(a.x0 - SX0) / XYD, a.L0];
+    if (ctx === 'pass' || ctx === 'play') {
+      // (the first call: a back or the quarterback through the line is a run, a receiver back across it the end-around;
+      // a receiver, a back's route that never gets there, or the quarterback's drop, a pass)
+      const rd = ctx === 'play' && lab !== 'TE' ? readRun(sc, a, field, false) : null;
+      if (rd && !rd.fault) { ui.step = 'detail'; ui.fam = 'run'; keep('run', rd); sketchSaid(); sketchRedraw(); return; }
+      if (ctx === 'play' && rd && rd.fault !== 'line' && rd.fault !== 'wr') return refuse('run', rd.fault);
+      if (lab === 'QB') {
+        const q = readQb(sc, a, field);
+        if (!q) return;
+        if (q.fault) return refuse('qb', q.fault);
+        return ctx === 'play' ? toPass(() => qbDrawn(q, field, at)) : qbDrawn(q, field, at);
+      }
+      if (ei < 0) return rd ? refuse('run', rd.fault) : undefined;
+      if (ctx === 'play') return toPass(() => commitDraw(ei, null, field));
+      return commitDraw(ei, line);
+    }
+    if (ctx === 'run' || ctx === 'rpo') {
+      if (ctx === 'rpo' && (lab === 'WR' || lab === 'TE')) {
+        const d = shapeDrawn(sc, a, field);
+        if (!d) return;
+        if (d.fault) return refuse('route', d.fault, DRAW_FAULT[d.fault]);
+        keep('route', d);
+      } else {
+        const rd = readRun(sc, a, field, ctx === 'rpo');
+        if (!rd) return;
+        if (rd.fault) return refuse(ctx, rd.fault);
+        keep('run', rd);
+      }
+      sketchSaid(); sketchRedraw();
+      return;
+    }
+    const kickNow = ctx === 'st' && ST_DRAW[ui.st] === 'kick';
+    const rd = kickNow ? readKick(sc, a, field, ui.st) : readDefLine(sc, a, field);
+    if (!rd) return;
+    if (rd.fault) return refuse(ctx, rd.fault);
+    keep(kickNow ? 'kick' : 'def', rd);
+    const s = sketchRead(ctx);
+    if (s && s.fault) { sk.bad = SKETCH_FAULT[s.fault]; track('draw_refused', { kind: ctx, why: s.fault }); }
+    sketchSaid(); sketchRedraw();
+  }
+  // what the drawing reads as now, said (a toast; the dock shows it too)
+  function sketchSaid() {
+    const s = sketchRead(drawCtx());
+    if (s && !s.fault) toast(`✏️ ${s.label || stLabel(s.key)}`, true);
+  }
+  function undoSketch() {
+    const sk = ui.sk, h = sk && sk.hist.pop();
+    if (!h || busy) return;
+    sk.lines = h; sk.bad = null;
+    sketchRedraw();
+  }
+  function clearSketch() {
+    const sk = ui.sk;
+    if (!sk || busy || !sk.lines.length) return;
+    sk.hist.push(sk.lines.slice()); sk.lines = []; sk.bad = null;
+    sketchRedraw();
+  }
+  // the field and the calls again, the page where it is (a phone's sheet keeps its scroll)
+  function sketchRedraw() {
+    const y = window.scrollY;
+    lastBall = null;
+    drawField();
+    if (ui.step === 'vdef') drawFullDefDock(); else if (ui.step === 'defense') drawDefDock(); else if (ui.step === 'st') promptChoice(ui.st); else drawDock();
+    window.scrollTo(0, y);
+    if ($('drawGo')) $('dock').scrollTop = 0;          // (a phone's sheet: up top, where the drawing's call is)
+  }
+  // the pass picker, from a drawing on the first call
+  function openPass() {
+    save(`${STORE}:usedpass`, true);
+    ui.fam = 'pass'; ui.step = 'pass';
+    ui.pass = { target: null, routes: null, drawn: [], draw: drawPref(), sel: null, pa: false, roll: false, fresh: true };
+    drawField(); drawDock();
+  }
+  // the quarterback's line on a pass: a rollout to its side (or his drop: no rollout), Undo takes it back
+  function qbDrawn(q, field, at) {
+    const P = ui.pass;
+    (P.hist = P.hist || []).push(['qb', P.qb || null, P.roll, P.rollSide || null]);
+    P.qb = { field, path: q.path, at };
+    P.roll = q.roll; P.rollSide = q.side;
+    if (q.roll) P.pa = false;
+    redrawPass();
+    toast(q.roll ? `QB: rolls out to the ${q.side} side` : 'QB: drops back', true);
+    track('draw_qb', { roll: q.roll ? q.side : 'drop' });
+  }
+  // the drawing over the field: each man's line from where he lines up now, an arrow at its end; the men a drawing
+  // starts from marked (drawing on) and told so (screen readers: the keys make the same calls)
+  function drawSketch(sc) {
+    const ctx = drawCtx(), sk = ui.sk;
+    if (!ctx) return;
+    sc.svg.classList.toggle('drawing', ctx !== 'play' || bcast() || !TOUCH);
+    const Y = camY(sc), g = S('g', { class: 'routes sketch' });
+    const show = { pass: ['qb'], run: ['run'], rpo: ['run', 'route'], def: ['def'], st: ['kick', 'def'] }[ctx] || [];
+    const lines = (sk ? sk.lines : []).filter((l) => show.includes(l.kind)).concat(ctx === 'pass' && ui.pass.qb ? [{ ...ui.pass.qb, kind: 'qb', i: sc.actors.findIndex((a) => a.off && a.label === 'QB') }] : []);
+    lines.forEach((l) => {
+      const a = sc.actors[l.i];
+      if (!a) return;
+      if (l.kind === 'run' && (ctx === 'rpo') !== l.read.call.startsWith('rpo')) return;      // (a run drawn for the other key)
+      const ox = (a.x0 - SX0) / XYD - l.at[0], oL = a.L0 - l.at[1];
+      const pts = [[a.x0, Y(a.L0) + dotOff(a)]].concat(l.field.map((p) => [clip(SX0 + (p[0] + ox) * XYD, SX0 + 1, SX1 - 1), Y(clip(p[1] + oL, FULL.lo + 0.5, FULL.hi - 0.5))]));
+      if (pts.length < 2) return;
+      const d = pts.map((q, k) => `${k ? 'L' : 'M'}${q[0].toFixed(1)} ${q[1].toFixed(1)}`).join('');
+      const cls = l.kind === 'def' ? (l.read.through ? ' rush' : ' drop') : l.kind === 'kick' ? ' kick' : '';
+      g.append(S('path', { class: 'route halo', d }), S('path', { class: `route drawn${cls}`, d }));
+      const e = pts[pts.length - 1], q = pts[pts.length - 2], ang = Math.atan2(e[1] - q[1], e[0] - q[0]);
+      const head = [[e[0], e[1]], [e[0] - 6 * Math.cos(ang - 0.5), e[1] - 6 * Math.sin(ang - 0.5)], [e[0] - 6 * Math.cos(ang + 0.5), e[1] - 6 * Math.sin(ang + 0.5)]];
+      g.append(S('path', { class: `route-head drawn${cls}`, d: `M${head.map((h) => h.map((v) => v.toFixed(1)).join(' ')).join('L')}Z` }));
+    });
+    const what = { pass: 'his drop or a rollout', play: 'a run through the line, or a route', run: 'his run', rpo: 'the run or a route', def: 'his rush or his drop', st: ST_DRAW[ui.st] === 'kick' ? 'the kick' : 'a rush' }[ctx];
+    drawFrom(sc, ctx).forEach((a) => {
+      if (ctx === 'pass' && a.label !== 'QB') return;
+      if (drawPref() && ctx !== 'play' && ctx !== 'pass' && !lines.some((l) => sc.actors[l.i] === a)) g.append(S('circle', { class: 'selring soft', cx: a.x0, cy: Y(a.L0) + dotOff(a), r: 12 }));
+      if (a.g.hasAttribute('aria-label')) a.g.setAttribute('aria-label', `${a.g.getAttribute('aria-label')}. Drag on the field to draw ${what}; the keys make the same calls`);
+    });
+    sc.svg.insertBefore(g, sc.layer);
+  }
+  // the drawing's part of the dock: what it reads as (or why it can't be read) and its key, Undo and Clear; a line
+  // saying it can be drawn
+  const SKETCH_HINT = {
+    play: 'Or draw it: drag the back through the line for a run, a receiver for a pass.',
+    run: 'Draw it: drag the back (or the quarterback) through the line. Where he crosses picks the run.',
+    rpo: 'Draw it: drag the back through the line (the side), and a receiver’s route if you like.',
+    def: 'Draw it: drag defenders through the line to rush, up into the box, or back into deep zones.',
+    kick: 'Draw it: drag from the kicker where the ball goes.',
+    rush: 'Draw it: drag defenders through the line to rush the kick.',
+  };
+  function sketchChips(head, ctx) {
+    const sk = ui.sk;
+    if (sk && sk.hist.length) {
+      const u = el('button', 'chip', '↶ Undo');
+      u.type = 'button';
+      u.setAttribute('aria-label', 'Undo the last line drawn');
+      u.addEventListener('click', undoSketch);
+      head.append(u);
+    }
+    const on = drawPref(), pen = el('button', `chip pen${on ? ' on' : ''}`, on ? '✓ Drawing' : '✏️ Draw');
+    pen.type = 'button'; pen.id = 'drawBtn';
+    pen.setAttribute('aria-label', on ? 'Drawing on: turn it off' : 'Draw the play');
+    pen.setAttribute('aria-pressed', String(on));
+    pen.dataset.ctx = ctx;
+    pen.addEventListener('click', () => { if (!busy) setDraw(!on); });
+    head.append(pen);
+  }
+  function sketchPanel(d, ctx, go) {
+    const sk = ui.sk, s = sketchRead(ctx), kind = ctx === 'st' ? ST_DRAW[ui.st] : ctx;
+    const p = el('p', `hint${drawPref() || s || (sk && sk.bad) ? ' draw' : ''}${sk && sk.bad ? ' bad' : ''}`, sk && sk.bad ? `${sk.bad}. Try again.` : s && !s.fault ? `✏️ Drawn: ${s.label || stLabel(s.key)}` : SKETCH_HINT[kind]);
+    p.setAttribute('role', 'status');
+    if (sk && sk.lines.length) {
+      const c = el('button', 'linkbtn', 'Clear');
+      c.type = 'button';
+      c.addEventListener('click', clearSketch);
+      p.append(' ', c);
+    }
+    d.append(p);
+    if (!s || s.fault || !go) return null;
+    const keys = el('div', 'keys');
+    keys.style.setProperty('--cols', 1);
+    const b = key(ctx === 'run' ? 'Run it' : ctx === 'rpo' ? 'Run the RPO' : ctx === 'st' ? stLabel(s.key) : 'Call it', `Drawn: ${s.label || stLabel(s.key)}`, 'big drawn', 0);
+    b.id = 'drawGo';
+    b.addEventListener('click', () => { if (!busy) go(s); });
+    keys.append(b);
+    d.append(keys);
+    return keys;
+  }
+  const stLabel = (k) => ({ return: 'To the returner', touchback: 'Through the end zone', onside: 'Onside', deep: 'Kick deep', block: 'Go for the block', safe: 'Stay home', rush: 'Rush the punt' }[k] || k);
   // (browser tests only, window.__sepLog: the drawing and the play, for bots that draw thousands of lines and plays)
   if (window.__sepLog) {
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
-      DRAWN_RANGE, CALL, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, get: () => ({ G, ui, scene }) };
+      DRAWN_RANGE, CALL, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, get: () => ({ G, ui, scene }),
+      readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
+      promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k) };
   }
   // who gets the ball, by his place in the list (the field may be redrawn under the buttons: a resize, the phone's
   // address bar)
@@ -1699,32 +2120,34 @@
   // (the post down the middle), a throw over the middle (dig, crosser, angle) or a quick throw, to the receiver's side
   // A drawn route: deep (15 yards or more, as the play-by-play splits it) or short by its depth, over the middle
   // (within 9 yards of the middle of the field) or to the side it is caught on
-  function passCallOf(sc, a, rt, pa, roll, dr) {
+  // A rollout drawn (the quarterback's line, rollSide) goes to the side he rolls to
+  function passCallOf(sc, a, rt, pa, roll, dr, rollSide) {
     if (dr && rt !== 'screen') {
       const deep = dr.depth >= 15, mid = Math.abs(dr.cx - 53.333 / 2) < 9;
       const side = (Math.sign(dr.cx - (sc.bx - SX0) / XYD) || outOf(sc, a)) === sc.s * sc.dir ? 'strong' : 'weak';
       if (pa) return deep ? 'pa_deep' : 'pa_short';
-      if (roll) return `roll_${side}`;
+      if (roll) return `roll_${rollSide || side}`;
       return mid ? (deep ? 'deep_middle' : 'quick_middle') : `${deep ? 'deep' : 'quick'}_${side}`;
     }
     const side = outOf(sc, a) === sc.s * sc.dir ? 'strong' : 'weak';
     if (rt === 'screen') return 'screen';
     if (pa) return DEEP_ROUTES.has(rt) ? 'pa_deep' : 'pa_short';
-    if (roll) return `roll_${side}`;
+    if (roll) return `roll_${rollSide || side}`;
     if (DEEP_ROUTES.has(rt)) return rt === 'post' ? 'deep_middle' : `deep_${side}`;
     if (rt === 'in' || rt === 'cross' || rt === 'angle') return 'quick_middle';
     return `quick_${side}`;
   }
   // the option your pick is graded as, and the action the engine plays it with
   function passOption(sc, i, oob) {
-    const P = ui.pass, a = eligibles(sc)[i], rt = P.routes[i], dr = P.drawn && P.drawn[i], call = passCallOf(sc, a, rt, P.pa, P.roll, dr);
+    const P = ui.pass, a = eligibles(sc)[i], rt = P.routes[i], dr = P.drawn && P.drawn[i], call = passCallOf(sc, a, rt, P.pa, P.roll, dr, P.roll && P.rollSide);
     const name = a.p ? a.p.name : a.label;
     // what you drew goes with the call: the target's depth (the real throws it draws from) and every drawn line
     const drawn = P.drawn && P.drawn.some(Boolean) ? { drawn: eligibles(sc).map((_, k) => { const d = P.drawn[k]; return d ? { pts: d.pts, at: d.at, minD: d.minD } : null; }) } : {};
-    return { key: `pass:${i}:${rt}${dr ? `@${dr.depth}` : ''}${P.pa ? ':pa' : P.roll ? ':roll' : ''}${oob ? '+oob' : ''}`,
+    const qbp = P.qb ? { qbPath: P.qb.path } : {};
+    return { key: `pass:${i}:${rt}${dr ? `@${dr.depth}` : ''}${P.pa ? ':pa' : P.roll ? `:roll${P.rollSide ? `-${P.rollSide}` : ''}` : ''}${oob ? '+oob' : ''}`,
       label: `${routeName(a.label, rt)}${dr ? ` (drawn, ${dr.depth} yds)` : ''} to ${shortName(name) || a.label}${P.pa ? ', play action' : P.roll ? ', rollout' : ''}${oob ? ', get out of bounds' : ''}`,
       action: withTempo({ to_off: false, play: 'pass', call, oob: !!oob, looks: G.look != null ? 1 << G.look : 0, route: rt, who: a.label,
-        target: i, routes: P.routes.slice(), targetName: name, targetPos: a.label, pa: !!P.pa, roll: !!P.roll, ...(dr ? { depth: dr.depth } : {}), ...drawn }) };
+        target: i, routes: P.routes.slice(), targetName: name, targetPos: a.label, pa: !!P.pa, roll: !!P.roll, ...(dr ? { depth: dr.depth } : {}), ...drawn, ...qbp }) };
   }
   function drawField() {
     const sc = makeScene(G.root, G.side);
@@ -1735,6 +2158,7 @@
       if (!ui.pass.routes || ui.pass.routes.length !== eligibles(sc).length) { ui.pass.routes = defaultRoutes(sc); ui.pass.drawn = []; ui.pass.sel = null; }
       drawRoutes(sc);
     }
+    drawSketch(sc);
     if (fadeNext || lastBall) sc.layer && sc.layer.classList.add('movefade');
     fadeNext = false;
     // (a finished half or game: no snap to come, so no play speed or personnel chip on it)
@@ -1813,6 +2237,7 @@
   // seconds after the snap before the first step: the offense knows the count, the defense reacts to the ball
   // (tracking: receivers are still within half a yard of their stance half a second after the snap)
   const REACT_OFF = 0.18, REACT_DEF = 0.3;
+  const DDRAW_T = 1.1;          // seconds a defender you drew runs your line before the play takes him (choreograph)
 
   // where actor a is at play time t: on its simulated track, or (kickoff alignment, before a play) where it stands
   function at(a, t) {
@@ -1891,9 +2316,28 @@
     const BX = yx(bx);
     let snapAt = 0, frozen = false;            // frozen: the play never started (a flag before the snap)
     const busy = new Set();                    // players with a part in the outcome
-    const leg = (a, t, kind, o) => { if (a) Wd.leg(a.b, t, kind, o); };
+    // your defense drawn (act.ddraw): each man you drew runs your line from the snap for up to DDRAW_T seconds (as
+    // fast as he can, within his envelope); what the play gives him to do waits for that (drawnT), except a set path
+    // (the man the outcome needs: the tackler, the sacker) or a block
+    const drawnT = new Map();
+    const leg = (a, t, kind, o) => {
+      if (!a) return;
+      const te = drawnT.get(a);
+      Wd.leg(a.b, te && t < te && kind !== 'path' && kind !== 'stick' ? te : t, kind, o);
+    };
     const plan = (a, pts, o) => Motion.planPath(pts, a.b.g, { spd: a.b.spd, ...(o || {}) });
     const follow = (a, t, pl) => { leg(a, t, 'path', { plan: pl }); return pl; };
+    if (!mine && e.ev === 'play' && act && Array.isArray(act.ddraw)) {
+      const D = sc.actors.filter((a) => !a.off);
+      act.ddraw.forEach((l) => {
+        const a = D[l.k];
+        if (!a || !Array.isArray(l.pts) || l.pts.length < 2) return;
+        const p0 = l.pts[0], pts = [[a.b.x, a.b.y]].concat(l.pts.slice(1).map((p) => [inX(a.b.x + p[0] - p0[0]), inL(a.b.y + dir * (p[1] - p0[1]))]));
+        const pl = plan(a, pts, { eff: 0.92 });
+        Wd.leg(a.b, REACT_DEF, 'path', { plan: pl });
+        drawnT.set(a, REACT_DEF + Math.min(pl.T, DDRAW_T));
+      });
+    }
     const here = (a) => [a.b.x, a.b.y];
     const vel = (a) => Math.hypot(a.b.vx, a.b.vy);
     const dist = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
@@ -2142,7 +2586,10 @@
       // (forward progress: nothing in his run goes past the spot)
       const fd = car.off ? dir : -dir;          // his forward (a return goes the other way)
       const short = (y) => (o.td ? y : fd > 0 ? Math.min(y, endPt[1]) : Math.max(y, endPt[1]));
-      if (span > 7 && !o.straight) {
+      if (o.via) {
+        // (a drawn run: on along its line, short of the spot)
+        o.via.forEach((p) => { if (fd * (p[1] - start[1]) > 0.5 && fd * (endPt[1] - p[1]) > 0.5) pts.push([inX(p[0]), short(p[1])]); });
+      } else if (span > 7 && !o.straight) {
         const tm = Math.min(1.2, span / 14), mid = [start[0] + (endPt[0] - start[0]) * 0.55, start[1] + (endPt[1] - start[1]) * 0.55];
         const [ux, uy] = unit(endPt[0] - start[0], endPt[1] - start[1]);
         let best = mid, bs = -1;
@@ -2155,7 +2602,7 @@
         });
         pts.push(best);
       }
-      const ref = pts.length ? pts[0] : start;
+      const ref = pts.length ? pts[pts.length - 1] : start;
       let [ex, ey] = unit(endPt[0] - ref[0], endPt[1] - ref[1]);
       // forward progress: once he is hit he is driven forward to the spot or goes down sideways at it, never back
       // (the ball is spotted where his forward progress stopped), and he is never met behind where he already got to
@@ -2216,7 +2663,7 @@
       // (where across the field he goes down is the animation's to choose; a back slowing in open space is not football)
       // A man who is there a beat late is not open space: he gathers himself and takes the hit (players saw a catch at
       // the sideline with a defender on him turn into a run across the field to no gain)
-      if (tackled && reach.length && reach[0].T > tC - t0 + 0.5 && !o.straight) {
+      if (tackled && reach.length && reach[0].T > tC - t0 + 0.5 && !o.straight && !o.via) {
         const lean = Math.sign(contact[0] - start[0]) || (contact[0] < FW / 2 ? -1 : 1);
         let done = false;
         for (const side of o.out ? [o.out] : [lean, -lean]) {   // (his own side first, all the way out: a cutback is the last resort)
@@ -2679,6 +3126,8 @@
       else if (kind === 'tpass') qpts = [q0, [q0[0] + side * 1.2, fwd(L0, -5.4)]];
       else if (kind === 'rpo') qpts = [q0, [q0[0] + jit(0.4), fwd(L0, -5.6)]];
       else qpts = [q0, [q0[0] + jit(0.3), fwd(L0, -deepDrop)]];
+      // his drop or rollout as you drew it (act.qbPath), at least three yards behind the line
+      if (mine && act && Array.isArray(act.qbPath) && act.qbPath.length > 1 && kind !== 'tpass' && kind !== 'flea') qpts = [q0].concat(act.qbPath.slice(1).map((p) => [inX(p[0]), fwd(L0, Math.min(p[1], -3))]));
       const qPlan = plan(qb, qpts, { eff: kind === 'roll' ? 0.75 : 0.52, v1: kind === 'roll' ? 2.5 : 0 });
       if (!philly) follow(qb, T_SNAP, qPlan);
       const tSet = T_SNAP + qPlan.T;
@@ -2948,7 +3397,8 @@
       Wd.run(tThrow);
       const qT = here(passer);
       // (a throwaway sails out past the sideline it is thrown to: 2.5 yards beyond it, never landing in bounds)
-      if (thrownAway) { const sx = sidelineX(qT[0] + side * 10); catchPt = [sx + Math.sign(sx - FW / 2) * 2.5, inL(fwd(L0, Math.max(3, air)))]; }
+      // (over the sideline, on the drawn turf: never into the stands)
+      if (thrownAway) { const sx = sidelineX(qT[0] + side * 10); catchPt = [sx + Math.sign(sx - FW / 2) * 0.3, inL(fwd(L0, Math.max(3, air)))]; }
       // (a lofted ball, higher and slowing more; a line drive, flatter)
       fly(tThrow, tCatch, px(qT[0]) + 4, qT[1], px(catchPt[0]), catchPt[1], Math.min(2.4, 0.3 + Math.max(0, air) * 0.055), air >= 20 ? 0.22 : air > 0 ? 0.14 : 0.08);
       ring(tThrow, passer, false);
@@ -3035,7 +3485,7 @@
         // a bad ball misses where you can see it: long past him on a deep throw, behind him or at his feet short
         const g = thrownAway ? catchPt : overthrow ? (air >= 15 ? [inX(catchPt[0] + out * 1.5 + jit(1)), inL(catchPt[1] + dir * 4)]
           : [inX(catchPt[0] - out * 2.2 + jit(0.8)), inL(catchPt[1] - dir * 1.5)])
-          : [inX(catchPt[0] + jit(1.5)), catchPt[1] + dir * 1.4];
+          : [inX(catchPt[0] + jit(1.5)), inL(catchPt[1] + dir * 1.4)];
         fly(tCatch, tCatch + 0.2, px(catchPt[0]), catchPt[1], px(g[0]), g[1], 0.15);
         rest(tCatch + 0.2, px(g[0]), g[1]);
         rest(tCatch + 1.0, px(g[0]), g[1], true);
@@ -3090,7 +3540,23 @@
       // going out: an outside or off-tackle run keeps to its side; one inside, with the other sideline the nearer (the
       // short side), is cut back at the line toward it (the line still flows the way it was called)
       const hs = outTry && gap < 40 && sg === (BX < FW / 2 ? 1 : -1) ? -sg : sg;
-      const hole = [inX(BX + (hs * gap) / XYD), fwd(L0, Math.min(0.6, cap))];
+      let hole = [inX(BX + (hs * gap) / XYD), fwd(L0, Math.min(0.6, cap))];
+      // your run as drawn (act.path: [across, past the line] yards, from where he lined up): the hole where it crosses the
+      // line, his way there (a counter's step, a sweep's width) and on along it as far as the play went
+      const dp = mine && act && Array.isArray(act.path) && act.path.length > 1 ? act.path.slice(1).map((p) => [inX(p[0]), p[1]]) : null;
+      const dk = dp ? dp.findIndex((p) => p[1] >= 0) : -1;
+      let dBehind = [], dVia = [], dEndX = null;
+      if (dk >= 0) {
+        const q = dk ? dp[dk - 1] : [here(carrier)[0], -5], p = dp[dk], u = p[1] > q[1] ? -q[1] / (p[1] - q[1]) : 0;
+        hole = [inX(q[0] + (p[0] - q[0]) * u), hole[1]];
+        dBehind = dp.slice(0, dk).filter((x) => x[1] < -0.3).map((x) => [x[0], fwd(L0, Math.max(x[1], -9))]);
+        const reach = e.td ? Infinity : (e.yards || 0) - 0.8;
+        dVia = dp.slice(dk).filter((x) => x[1] > 1 && x[1] < reach - 0.5).map((x) => [x[0], inL(fwd(L0, x[1]))]);
+        for (let k = dk; k < dp.length; k++) {
+          if (k && dp[k][1] >= (e.yards || 0) && dp[k - 1][1] < (e.yards || 0)) { const a = dp[k - 1], b = dp[k]; dEndX = a[0] + (b[0] - a[0]) * ((e.yards - a[1]) / (b[1] - a[1] || 1)); break; }
+        }
+        if (dEndX == null && (e.yards || 0) > 0) dEndX = dp[dp.length - 1][0];
+      }
       if (direct) { fly(0, T_SNAP, bx, L0, carrier.x0, carrier.L0, 0.15); hold(T_SNAP, carrier); } else snapToQb();
       busy.add(carrier);
       // one continuous run from his stance through the mesh to the hole, flat out: across the QB's face when the
@@ -3100,21 +3566,23 @@
       let tMesh = T_SNAP + 0.05, tLos;
       if (direct) {
         // the direct snap: he takes it himself and goes; the quarterback slides out as a decoy
-        const pl = follow(carrier, T_SNAP + 0.05, plan(carrier, [c0, hole], { eff: 0.92 }));
+        const pl = follow(carrier, T_SNAP + 0.05, plan(carrier, [c0, ...dBehind, hole], { eff: 0.92 }));
         tLos = T_SNAP + 0.05 + pl.T;
         if (qb) leg(qb, T_SNAP, 'go', { x: inX(q0[0] - (sg || 1) * 6), y: fwd(L0, -2.5), eff: 0.6 });
         say(T_SNAP + 0.2, 'Direct snap', 'info', { follow: carrier });
       } else if (carrier === qb) {
-        const pl = follow(qb, T_SNAP + 0.05, plan(qb, [q0, id === 'qb_sneak' ? [BX, fwd(L0, Math.min(0.4, cap))] : hole], { eff: 0.92 }));
+        const pl = follow(qb, T_SNAP + 0.05, plan(qb, [q0, ...dBehind, id === 'qb_sneak' && dk < 0 ? [BX, fwd(L0, Math.min(0.4, cap))] : hole], { eff: 0.92 }));
         tLos = T_SNAP + 0.05 + pl.T;
       } else {
         const across = sg === 0 || Math.sign(hole[0] - q0[0]) !== Math.sign(c0[0] - q0[0]);
-        const meshPt = carrier.label === 'WR' ? [q0[0] + (c0[0] > q0[0] ? 1.2 : -1.2), fwd(L0, md + 0.1)]
-          : across ? [q0[0] + (c0[0] - q0[0]) * 0.3, fwd(L0, md)] : [c0[0] + (hole[0] - c0[0]) * 0.15, fwd(L0, md)];
+        // (drawn: the handoff where his line passes nearest the quarterback)
+        const meshPt = dBehind.length ? dBehind.reduce((b, x) => (dist(x, q0) < dist(b, q0) ? x : b))
+          : carrier.label === 'WR' ? [q0[0] + (c0[0] > q0[0] ? 1.2 : -1.2), fwd(L0, md + 0.1)]
+            : across ? [q0[0] + (c0[0] - q0[0]) * 0.3, fwd(L0, md)] : [c0[0] + (hole[0] - c0[0]) * 0.15, fwd(L0, md)];
         const start = carrier.label === 'WR' ? 0.35 : REACT_OFF;
         // (at speed into the hole whatever the result: the contact, if it comes there, is runDown's; slowing into it
         // left a back jogging at the edge with nobody there)
-        const pl = follow(carrier, start, plan(carrier, [c0, meshPt, hole], { eff: carrier.label === 'WR' ? 0.95 : 0.9 }));
+        const pl = follow(carrier, start, plan(carrier, [c0, ...(dBehind.length ? dBehind : [meshPt]), hole], { eff: carrier.label === 'WR' ? 0.95 : 0.9 }));
         let best = 9, bt = 0.7;
         for (let s = 0; s <= pl.T; s += 0.05) { const p = pl.at(s), d = dist([p[0], p[1]], meshPt); if (d < best) { best = d; bt = s; } }
         tMesh = Math.max(T_SNAP + 0.35, start + bt);
@@ -3157,9 +3625,9 @@
       }
       const Lend = e.td ? tdL() : inL(fwd(L0, e.yards));
       const sx = sidelineX(hs ? (hs > 0 ? FW : 0) : hole[0]);
-      const xEnd = e.oob ? sx : outTry ? outShort(hole[0], sx, e.yards) : inX(hole[0] + sg * Math.min(9, Math.abs(e.yards) * 0.5) + jit(3));
+      const xEnd = e.oob ? sx : outTry ? outShort(hole[0], sx, e.yards) : dEndX != null ? inX(dEndX) : inX(hole[0] + sg * Math.min(9, Math.abs(e.yards) * 0.5) + jit(3));
       const tEnd = runDown(carrier, Math.max(tLos - 0.15, tMesh + 0.2), [xEnd, Lend], { td: e.td, oob: e.oob, bt: e.bt, eff: 0.95, after: e.yards < 2 ? 0.8 + R() : undefined, from: tMesh,
-        out: outTry ? Math.sign(sx - FW / 2) : 0 });
+        out: outTry ? Math.sign(sx - FW / 2) : 0, via: dVia.length && !e.oob ? dVia : null });
       finish(carrier, tEnd, [xEnd, Lend]);
     }
 
@@ -4537,6 +5005,7 @@
     d.append(head);
     if (ui.step === 'family') {
       head.append(el('h2', '', 'Your call'), el('span', 'sub', `${ddText(r)} · ${spotText(r)}`));
+      sketchChips(head, 'play');
       if (G.look != null) d.append(readLine(G.look));
       if (r.clock_running) d.append(tempoPicker(r));
       const fam = el('div', 'keys fam');          // (fam: what the first drive's tour points at)
@@ -4546,13 +5015,15 @@
         b.addEventListener('click', () => {
           if (busy) return;
           ui.fam = f;
-          if (f === 'pass') { save(`${STORE}:usedpass`, true); ui.step = 'pass'; ui.pass = { target: null, routes: null, drawn: [], draw: drawOK() && !!load(DRAW_KEY, false), sel: null, pa: false, roll: false, fresh: true }; drawField(); }
-          else ui.step = 'detail';
+          if (f === 'pass') { save(`${STORE}:usedpass`, true); ui.step = 'pass'; ui.pass = { target: null, routes: null, drawn: [], draw: drawPref(), sel: null, pa: false, roll: false, fresh: true }; drawField(); }
+          else { ui.step = 'detail'; drawField(); }
           drawDock();
         });
         fam.append(b);
       });
       d.append(fam);
+      // (drawing on, or a few calls in: drawing is there to find, under the keys)
+      if (drawPref() || load(`${STORE}:ncalls`, 0) <= 3) sketchPanel(d, 'play', null);
       if (oobMatters(r)) d.append(oobToggle());
       const nCalls = load(`${STORE}:ncalls`, 0);
       if (nCalls >= 2 && !load(`${STORE}:usedpass`, false)) {
@@ -4603,8 +5074,14 @@
     if (r.clock_running) head.append(el('span', 'sub', CLOCK[ui.tempo].short));
     const back = el('button', 'chip', '◀ Back');
     back.type = 'button';
-    back.addEventListener('click', () => { ui.step = 'family'; drawDock(); });
+    back.addEventListener('click', () => { ui.step = 'family'; drawField(); drawDock(); });
     head.append(back);
+    const drawable = ui.fam === 'run' || ui.fam === 'rpo';
+    if (drawable) {
+      sketchChips(head, ui.fam);
+      // the drawn call: graded and played exactly as the key for it (decideCall), the drawing going with it to the field
+      sketchPanel(d, ui.fam, (sk) => decideCall({ call: sk.call, draw: sk.draw, drawKind: ui.fam }));
+    }
     const avail = callOptions(r).calls;
     const dir = r.pos === G.me ? 1 : -1;
     const s = G.side * dir;                       // strong side on screen: +1 right, -1 left
@@ -4647,7 +5124,8 @@
     d.append(list);
     const tg = oobMatters(r) ? oobToggle() : null, last = tg || list.lastElementChild;
     if (tg) d.append(tg);
-    if (last) requestAnimationFrame(() => last.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' }));
+    // (a drawing read: the page stays on it and its key, the rest of the keys below)
+    if (last && !$('drawGo')) requestAnimationFrame(() => last.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' }));
   }
 
   // a pass: your receivers and their routes (tap one on the field or here), play action or a rollout, then throw
@@ -4701,26 +5179,18 @@
       undo.addEventListener('click', undoRoute);
       head.append(undo);
     }
-    if (drawOK()) {
-      const pen = el('button', `chip pen${P.draw ? ' on' : ''}`, P.draw ? '✓ Done' : '✏️ Draw');
-      pen.type = 'button'; pen.id = 'drawBtn';
-      pen.setAttribute('aria-label', P.draw ? 'Done drawing routes' : 'Draw routes');
-      pen.setAttribute('aria-pressed', String(!!P.draw));
-      pen.addEventListener('click', () => { if (!busy) setDraw(!P.draw); });
-      head.append(pen);
-    } else if (PRO_ON) {
-      // (elsewhere, while it is tried out in Pro: what it is, and that it is coming)
-      const lock = el('button', 'chip pen locked', '✏️ Draw · Pro');
-      lock.type = 'button'; lock.id = 'drawLock';
-      lock.addEventListener('click', () => { toast('Draw your own routes: in Pro games now, coming to every mode soon'); track('draw_locked', { mode: modeName() }); });
-      head.append(lock);
-    }
+    const pen = el('button', `chip pen${P.draw ? ' on' : ''}`, P.draw ? '✓ Done' : '✏️ Draw');
+    pen.type = 'button'; pen.id = 'drawBtn';
+    pen.setAttribute('aria-label', P.draw ? 'Done drawing routes' : 'Draw routes');
+    pen.setAttribute('aria-pressed', String(!!P.draw));
+    pen.addEventListener('click', () => { if (!busy) setDraw(!P.draw); });
+    head.append(pen);
     if (G.look != null) d.append(readLine(G.look));
     const E = eligibles(sc), selA = P.draw && P.sel != null ? E[P.sel] : null;
-    if (!P.draw) d.append(el('p', 'hint', `Tap a receiver on the field to change his route${drawOK() ? ', or drag him to draw your own' : ''}. Tap a name below to throw it to him.`));
+    if (!P.draw) d.append(el('p', 'hint', 'Tap a receiver on the field to change his route, or drag him to draw your own (drag the quarterback for his drop or a rollout). Tap a name below to throw it to him.'));
     else {
       const h = el('p', 'hint draw', selA ? `Now drag from ${shortName(selA.p ? selA.p.name : '') || selA.label} to where he should go.`
-        : 'Tap a receiver, then drag on the field where you want him to go. Each line plays as the real route it is closest to.');
+        : 'Tap a receiver, then drag on the field where you want him to go. Each line plays as the real route it is closest to; drag the quarterback to the side to roll out.');
       if (P.drawn && P.drawn.some(Boolean)) {
         const clr = el('button', 'linkbtn', 'Clear drawings');
         clr.type = 'button';
@@ -4760,8 +5230,9 @@
       return b;
     };
     const opts = el('div', 'opts-row');
-    opts.append(opt('Play action', 'Fake the handoff first: it freezes a loaded box.', P.pa, (v) => { P.pa = v; if (v) P.roll = false; }),
-      opt('Roll out', 'Move the pocket toward your receiver’s side.', P.roll, (v) => { P.roll = v; if (v) P.pa = false; }));
+    // (a toggle tapped takes back a rollout drawn: the quarterback's line goes with it)
+    opts.append(opt('Play action', 'Fake the handoff first: it freezes a loaded box.', P.pa, (v) => { P.pa = v; if (v) { P.roll = false; P.qb = null; P.rollSide = null; } }),
+      opt(P.roll && P.rollSide ? `Roll out ${P.rollSide === 'strong' ? 'strong' : 'weak'}` : 'Roll out', 'Move the pocket toward your receiver’s side (or drag the quarterback the way to go).', P.roll, (v) => { P.roll = v; P.qb = null; P.rollSide = null; if (v) P.pa = false; }));
     if (oobMatters(r)) opts.append(opt('⏱ Out of bounds', 'Going out stops the clock now.', ui.oob, setOob, 'oobSwitch'));
     d.append(opts, list);
     const avail = callOptions(r).calls, more = ['hail_mary'].filter((id) => avail.includes(id));
@@ -5142,6 +5613,7 @@
     return out;
   }
   async function snapThenGrade(specs, action) {
+    if (ui) ui.step = 'snapped';           // (the call is made: nothing more is drawn on this snap)
     if (cotDaily()) { const res = await cotPlay(action); cotShowResult(res); return; }
     if (VS) {
       const r = G.root;
@@ -5203,6 +5675,7 @@
     if (busy) return;
     if (VS) { vsSubmit({ timeout: true, rundown: !!rundown }); return; }
     busy = true;
+    if (ui) ui.step = 'snapped';
     const r = G.root;
     try {
       await simWait();
@@ -5259,6 +5732,10 @@
       remember(opts.find((o) => o.key === chosen).action.call);
       const cid = passPick ? passPick.action.call : pick.call;
       liveDrive.calls++;
+      // a drawn run or RPO: the same call, the same grading; its path (and route) only go to the field
+      if (pick.draw) track(`draw_${pick.drawKind}`, { mode: modeName(), call: cid, shape: pick.draw.shape || '', route: !!pick.draw.drawn });
+      if (pick.draw && window.__sepLog) (window.__drawSnaps = window.__drawSnaps || []).push({ kind: pick.drawKind, call: cid });      // (browser tests)
+      else if (passPick && (passPick.action.drawn || passPick.action.qbPath)) track('draw_pass', { mode: modeName(), call: cid });
       track('play_call', { mode: modeName(), family: pick.special || (passPick ? 'pass' : (CALL[cid] || {}).family || 'other'), call: cid || pick.special,
         routes_changed: passPick ? ((ui.pass && ui.pass.hist) || []).length : 0, oob: !!ui.oob });
       const q = {};
@@ -5283,7 +5760,8 @@
       if (r.clock_running) specs.push(clockSpec(r, tempo, seq));
       specs.push({ kind: 'call', family: r.down === 4 ? 'fourth_down' : 'play_select', r: r.try2 || r, opts, chosen, q, situation: situation(r),
         seed: hash('call', seedKey(), G.si, seq) });
-      await snapThenGrade(specs, opts.find((o) => o.key === chosen).action);
+      const act = opts.find((o) => o.key === chosen).action;
+      await snapThenGrade(specs, pick.draw ? { ...act, ...pick.draw } : act);
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
     busy = false;
   }
@@ -5317,7 +5795,18 @@
     takeBanner(d);
     const head = el('div', 'ask');
     head.append(el('h2', '', r.try2 ? 'Stop the two-point try' : 'Your defense'), el('span', 'sub', `${teamName(code(r.pos))} ball · ${ddText(r)} · ${spotText(r)}`));
+    sketchChips(head, 'def');
     d.append(head);
+    // drawn: the call it reads as (the parts as called, moved by what was drawn), graded as that call
+    sketchPanel(d, 'def', (sk) => {
+      if (busy || ui.step !== 'vdef') return;
+      track('draw_def', { mode: modeName(), call: `${sk.dc.pers}/${sk.dc.front}/${sk.dc.cover}/${sk.dc.rush}` });
+      if (window.__sepLog) (window.__drawSnaps = window.__drawSnaps || []).push({ kind: 'def', call: sk.dc.cover });
+      track('defense_call', { mode: modeName(), call: `${sk.dc.pers}/${sk.dc.front}/${sk.dc.cover}/${sk.dc.rush}` });
+      ui.step = 'sent';
+      if (VS) vsSubmit({ dc: { ...sk.dc } }, sk.draw);
+      else decideDefense({ ...sk.dc }, sk.draw);
+    });
     const presets = el('div', 'vpresets');
     presets.setAttribute('aria-label', 'Quick calls');
     const box = el('div', 'vdef');
@@ -5426,7 +5915,9 @@
     takeBanner(d);
     const head = el('div', 'ask');
     head.append(el('h2', '', 'Your defense'), el('span', 'sub', `${teamName(code(r.pos))} ball · ${ddText(r)} · ${spotText(r)}`));
+    sketchChips(head, 'def');
     d.append(head);
+    sketchPanel(d, 'def', (sk) => { if (!busy) decideDefenseLooks(sk.call, sk.draw); });
     const keys = el('div', 'keys fam def');
     keys.style.setProperty('--cols', 3);
     DEFS.forEach((k, i) => {
@@ -5455,11 +5946,13 @@
     auto.addEventListener('click', () => { if (busy) return; G.autoDef = true; advance(); });
     d.append(auto);
   }
-  async function decideDefenseLooks(k) {
+  async function decideDefenseLooks(k, draw) {
     if (busy) return;
     busy = true;
     liveDrive.calls++;
     track('defense_call', { mode: modeName(), call: k });
+    if (draw) track('draw_def', { mode: modeName(), call: k });
+    if (draw && window.__sepLog) (window.__drawSnaps = window.__drawSnaps || []).push({ kind: 'def', call: k });
     const r = G.root, me = G.me;
     try {
       const useTo = !!(ui.to && defTimeoutOk(r)), askTo = defTimeoutOk(r), seq = G.seq;
@@ -5473,7 +5966,7 @@
       }
       specs.push({ kind: 'defcall', family: 'def_call', r, opts, chosen: k, q: { blitz: L[1] + L[3], load: L[2], soft: L[0] }, situation: situation(r),
         seed: hash('def', seedKey(), G.si, seq) });
-      await snapThenGrade(specs, opts.find((o) => o.key === k).action);
+      await snapThenGrade(specs, { ...opts.find((o) => o.key === k).action, ...(draw || {}) });
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
     busy = false;
   }
@@ -5481,7 +5974,7 @@
   // your defense, graded: against the quick calls that fit the spot (and yours, when it is none of them), every one
   // played out from this snap (the offense reads your call and checks into what beats it); how often NFL defenses
   // line up like each, from the charting of the real plays here
-  async function decideDefense(dc) {
+  async function decideDefense(dc, draw) {
     if (busy) return;
     busy = true;
     liveDrive.calls++;
@@ -5506,7 +5999,7 @@
       }
       specs.push({ kind: 'defcall', family: 'def_call', r, opts, chosen: mine, q, situation: situation(r), seed: hash('def', seedKey(), G.si, seq),
         extra: { dc: { ...dc }, nfl } });
-      await snapThenGrade(specs, act(dc));
+      await snapThenGrade(specs, { ...act(dc), ...(draw || {}) });
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
     busy = false;
   }
@@ -5548,46 +6041,56 @@
         q: () => coachProbs('onside', r, me) || { deep: 0.85, onside: 0.15 } },
     }[kind];
     persChip();
+    // the kicks and the rush on theirs can be drawn (ST_DRAW): the field shows the kick or their kick formation
+    const drawn = !!ST_DRAW[kind];
+    if (drawn && !(ui.step === 'st' && ui.st === kind)) { ui = { step: 'st', st: kind, sk: null }; drawField(); }
     d.textContent = '';
     takeBanner(d);
     const head = el('div', 'ask');
     head.append(el('h2', '', spec.ask), el('span', 'sub', spec.sub));
+    if (drawn) sketchChips(head, 'st');
     d.append(head);
     const keys = el('div', 'keys');
     keys.style.setProperty('--cols', spec.opts.length);
-    spec.opts.forEach((o, i) => {
-      const b = key(o.label, o.sub || null, spec.opts.length > 2 || spec.opts.some((x) => x.label.length > 10) ? 'big def' : 'big', i);
-      b.addEventListener('click', async () => {
-        if (busy) return;
-        busy = true;
-        const sp = { kind, family: spec.family, r, opts: spec.opts.map((x) => ({ key: x.key, label: x.label, action: x.action })),
-          chosen: o.key, q: spec.q(), situation: `${clockOf(r.t).text} ${qLabel(r)}`, seed: hash(kind, seedKey(), G.si, G.seq) };
-        // going for two: graded as a choice, then you call the play, a snap from the 2 (root.try2 is the real try)
-        if (kind === 'pat' && o.key === 'two' && VS) { busy = false; vsSubmit({ two: true }); return; }
-        if (kind === 'pat' && o.key === 'two' && cotDaily()) {           // overtime: not graded
+    // a drawing reads as one of the same choices (an option the spot does not have is no choice: Onside only behind)
+    const choose = async (o, draw) => {
+      if (busy) return;
+      busy = true;
+      if (drawn) ui.step = 'sent';
+      if (draw) track('draw_st', { mode: modeName(), kind, call: o.key });
+      if (draw && window.__sepLog) (window.__drawSnaps = window.__drawSnaps || []).push({ kind: 'st', call: o.key });
+      const sp = { kind, family: spec.family, r, opts: spec.opts.map((x) => ({ key: x.key, label: x.label, action: x.action })),
+        chosen: o.key, q: spec.q(), situation: `${clockOf(r.t).text} ${qLabel(r)}`, seed: hash(kind, seedKey(), G.si, G.seq) };
+      // going for two: graded as a choice, then you call the play, a snap from the 2 (root.try2 is the real try)
+      if (kind === 'pat' && o.key === 'two' && VS) { busy = false; vsSubmit({ two: true }); return; }
+      if (kind === 'pat' && o.key === 'two' && cotDaily()) {           // overtime: not graded
+        G.root = { ...r, phase: SNAP, down: 1, ytg: 2, yl: 2, clock_running: false, try2: { ...r } };
+        addLog('Going for two', r.t, true);
+        persist();
+        busy = false;
+        return advance();
+      }
+      if (kind === 'pat' && o.key === 'two') {
+        try {
+          const x = (await gradeSpecs({ snap: G.snapN, specs: [sp] }))[0];
+          G.decisions.push(x);
+          G.snapN += 1;
           G.root = { ...r, phase: SNAP, down: 1, ytg: 2, yl: 2, clock_running: false, try2: { ...r } };
           addLog('Going for two', r.t, true);
           persist();
-          busy = false;
-          return advance();
-        }
-        if (kind === 'pat' && o.key === 'two') {
-          try {
-            const x = (await gradeSpecs({ snap: G.snapN, specs: [sp] }))[0];
-            G.decisions.push(x);
-            G.snapN += 1;
-            G.root = { ...r, phase: SNAP, down: 1, ytg: 2, yl: 2, clock_running: false, try2: { ...r } };
-            addLog('Going for two', r.t, true);
-            persist();
-          } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); busy = false; return; }
-          busy = false;
-          return advance();
-        }
-        try {
-          await snapThenGrade([sp], o.action);
-        } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
+        } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); busy = false; return; }
         busy = false;
-      });
+        return advance();
+      }
+      try {
+        await snapThenGrade([sp], draw ? { ...o.action, ...draw } : o.action);
+      } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
+      busy = false;
+    };
+    if (drawn) sketchPanel(d, 'st', (sk) => { const o = spec.opts.find((x) => x.key === sk.key); if (o) choose(o, {}); else toast(SKETCH_FAULT.onside); });
+    spec.opts.forEach((o, i) => {
+      const b = key(o.label, o.sub || null, spec.opts.length > 2 || spec.opts.some((x) => x.label.length > 10) ? 'big def' : 'big', i);
+      b.addEventListener('click', () => choose(o, null));
       keys.append(b);
     });
     d.append(keys);
@@ -9622,13 +10125,26 @@
     }, 250);
     vsDrawBar();
   }
+  // what goes to the room: the call only (what the room's cleanAction keeps, vs_core.js), never a drawing. The drawing
+  // stays on this phone, for the animation of its own play when the room plays that call (vsApply)
+  const VS_SEALED = ['to_off', 'to_def', 'play', 'call', 'oob', 'pers', 'route', 'who', 'philly', 'pat', 'tempo', 'looks'];
+  const DRAW_ONLY = ['path', 'carrier', 'shape', 'drawn', 'routes', 'target', 'targetName', 'targetPos', 'pa', 'roll', 'qbPath', 'ddraw'];
+  function vsSealed(half) {
+    if (!half || !half.action) return half;
+    const a = {};
+    VS_SEALED.forEach((k) => { if (half.action[k] !== undefined) a[k] = half.action[k]; });
+    return { ...half, action: a };
+  }
   // your half of the decision: once, sealed until the other side's is in
-  function vsSubmit(half) {
+  function vsSubmit(half, local) {
     const n = G.vsN;
     if (vs.waiting === n || vs.n !== n || vs.phase !== 'live') return;
     clearInterval(vs.timer);
     vs.waiting = n;
-    vs.last = { t: 'half', n, half };
+    const src = { ...(half.action || {}), ...(local || {}) }, draw = {};
+    DRAW_ONLY.forEach((k) => { if (src[k] !== undefined) draw[k] = src[k]; });
+    vs.drawn = Object.keys(draw).length ? { n, draw, call: half.action && half.action.call, dc: half.dc } : null;
+    vs.last = { t: 'half', n, half: vsSealed(half) };
     vsSend(vs.last);
     vs.ui = 'idle';
     status('Locked in. Waiting for your opponent…');
@@ -9647,7 +10163,9 @@
     let out = null;
     if (d.res) {
       await cutReplay();
-      const res = d.res, side = G.side;
+      const res = d.res, side = G.side, dw = vs.drawn;
+      // your own drawing, on the call the room played (not the default, when the call came in too late)
+      if (dw && dw.n === d.n && res.action && (dw.call ? res.action.call === dw.call : !!dw.dc && sameDc(res.action.dc, dw.dc))) res.action = { ...dw.draw, ...res.action };
       narrate(res.log, res.action).forEach(([text, t, m]) => addLog(text, t, m));
       G.root = { ...res.root };
       if (res.done) G.root.phase = DONE;

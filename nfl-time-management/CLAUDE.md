@@ -71,6 +71,12 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   calls that fit the spot (game.js PRESET). After changing any of it, run web/defense_calibration.js (every rush level,
   coverage, box and defensive-back count against the real plays, within a few standard errors; try a few seeds) and
   board/vs_balance_test.mjs.
+- Drawing the play (every mode; game.js readRun, readQb, readDef, readKick, commitSketch): a drawing is only ever read
+  as a call the keys make in that spot (callOptions, the three looks or the full call's parts, the kick choices) and is
+  graded as that call. What is drawn rides along for the field only (act.path, qbPath, drawn/routes/target, ddraw: the
+  engine never reads them; game_sweep.js checks the same seed plays the same with them). Never let a drawing reach the
+  engine's sampling or the grading; in Versus vsSealed sends the room only what its cleanAction keeps. A new kind of
+  drawing gets a fault message in SKETCH_FAULT and a case in browser_test.py's DRAW_FUZZ.
 - Pro data (src/nflclock/pro.py build: pro_drives.json, pro_runs.json -> web/pro/drives.json, runs.json, d*.json, r*.json;
   generated, never committed; the site workflow builds it and deploys it to the worker's assets). Each spot's teams come
   from history.History.teams with drive=True: the lineup of the real drive from the spot on, everyone who touched the

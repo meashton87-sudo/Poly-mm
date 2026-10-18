@@ -361,6 +361,42 @@ idx.spots.forEach((sp, si) => {
   else count(`overtime: ${end}`);
   otGames++;
 });
+// 4) drawn calls (game.js readRun, readDef, readKick: a drawing is read as a call the keys make): the drawing goes with
+// the call only to the field (a run's path, an RPO's route, the quarterback's drop, your defenders' lines), so every
+// drawn call plays exactly as the tapped one (the same seed, the same result) and is the call run
+const DRAW_X = (k) => {
+  const path = [[26, -5.2], [26 + (k % 7) - 3, -2], [26 + (k % 11) - 5, 0.4], [26 + (k % 13) - 6, 6 + (k % 9)]];
+  return { path, carrier: ['RB', 'QB', 'WR', 'FB'][k % 4], shape: ['downhill', 'counter', 'sweep', 'bounce', 'cutback'][k % 5], qbPath: [[26, -5], [26 + (k % 2 ? 6 : -6), -6.5]],
+    target: k % 4, routes: ['go', 'out', 'slant', 'flat'], drawn: [null, { pts: [[0, -1], [0, 8], [4, 10]], at: 'depth' }, null, null], ddraw: [{ k: k % 11, pts: [[20, 6], [22, -2]] }, { k: (k + 3) % 11, pts: [[30, 12], [34, 18]] }] };
+};
+let drawnN = 0;
+idx.spots.forEach((sp, si) => {
+  if (si % 2) return;
+  const sim = eng.simulator(eng.makeContext(scen(sp), { receive2h: sp.start.receive2h }));
+  const root = rootOf(sp), variants = [root, { ...root, yl: 2, ytg: 2, down: 1, try2: false }, { ...root, yl: 4, ytg: 4, down: 3 }, { ...root, yl: 96, ytg: 10, down: 2 }];
+  variants.forEach((rt, vi) => {
+    const ids = ['rb_out_strong', 'rb_out_weak', 'rb_tackle_strong', 'rb_tackle_weak', 'rb_inside_strong', 'rb_inside_weak', 'rb_middle', 'qb_sneak', 'qb_run',
+      'trick_reverse', 'rpo_strong', 'rpo_weak', 'roll_strong', 'roll_weak', 'quick_strong'];
+    ids.forEach((id, k) => {
+      const base = { to_off: false, play: P.calls[P.callIndex[id]].kind, call: id, oob: k % 3 === 0, looks: k % 2 ? 1 << (k % 4) : 0 };
+      const seed = si * 977 + vi * 131 + k * 17, tag = `drawn ${si} v${vi} ${id}`;
+      const r0 = sim.step(JSON.parse(JSON.stringify(rt)), { action: { ...base }, seed });
+      const r1 = sim.step(JSON.parse(JSON.stringify(rt)), { action: { ...base, ...DRAW_X(k + si) }, seed });
+      steps += 2; drawnN++;
+      if (JSON.stringify(r0.log) !== JSON.stringify(r1.log) || JSON.stringify(r0.root) !== JSON.stringify(r1.root)) flag('a drawn call played differently from the tapped one', tag);
+      check(rt, r1, tag); honored(rt, base, r1, tag);
+    });
+    // your defense drawn: the look or the full call it reads as, the defenders' lines with it
+    if (rt.yl > 2) for (let k = 0; k < 6; k++) {
+      const them = { ...rt, pos: 1 - rt.pos }, d = k % 2 ? { to_def: false, def: ['blitz', 'load', 'soft'][k % 3] } : { to_def: false, dc: fullDef(k + si + vi), read: true };
+      const seed = si * 331 + vi * 37 + k;
+      const r0 = sim.step(JSON.parse(JSON.stringify(them)), { action: { ...d }, seed }), r1 = sim.step(JSON.parse(JSON.stringify(them)), { action: { ...d, ddraw: DRAW_X(k).ddraw }, seed });
+      steps += 2; drawnN++;
+      if (JSON.stringify(r0.log) !== JSON.stringify(r1.log)) flag('a drawn defense played differently from the tapped one', `drawn def ${si} v${vi} ${k}`);
+    }
+  });
+});
+seen["drawn calls checked"] = drawnN;
 console.log(`${steps} steps, ${games} games (${stuck} never ended), ${otGames} overtimes in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
 console.log('seen:', JSON.stringify(seen));
 const keys = Object.keys(bad);

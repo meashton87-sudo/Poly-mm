@@ -351,6 +351,44 @@ sideline routes when trailing in the two-minute drill; quick throws on short yar
 yardage). His button shows his odds on that route from the very real plays the pick draws from (share caught, yards a
 throw, interceptions when they matter), and the last route tap can be undone.
 
+**Drawing the play** (every mode: the daily, archive days, survivor, Pro drives and playoff runs, practice, two-point
+tries, overtime and Versus). Every call can be drawn on the field instead of tapped; the keys stay (and the keyboard
+and screen readers use them). A drawing is read as a call the keys make in that spot, so the snap is a real play of
+that call, drawn from the same pool and graded exactly as the tapped call (the drawing goes with it only to the
+field, where the players run it as drawn as far as the play allows; `game_sweep.js` checks the same seed plays the
+same with and without it). `game.js` readRun, readQb, readDef and readKick:
+
+* **Runs**: drag the back from where he lines up through the line. Where the line crosses the line of scrimmage picks
+  the run (over the center: up the middle; the guard and tackle gaps: inside; outside the tackle to the tight end's
+  edge: off tackle; wider: outside; strong or weak by the side), and its shape can move it: a sweep or toss (8 yards
+  out from the ball before turning up) or a run that bounces outside (4.5 yards out within 6 past the line) is the
+  outside run that way; a counter (a step the other way first) and a cutback keep the gap they hit. The quarterback
+  straight ahead is a sneak (3 yards or less to go), anywhere else a designed run; a receiver back across behind the
+  line is the end-around. On the field the back takes the handoff where his line passes the quarterback, hits the hole
+  where it crosses and runs on along it as far as the play went.
+* **RPOs**: drag the back through the line (the side of the RPO) and, if you like, a receiver's route; he runs it, and
+  when the read is a throw it goes to him.
+* **Passes**: as above (a route for any receiver, the back included), plus the quarterback: dragged four yards or more
+  to one side behind the line he rolls out that way (the rollout to that side), straight back he drops; play action
+  and the rollout stay toggles.
+* **Defense**: drag defenders through the line to rush, up into the box, or back into deep zones. The three calls: five
+  or more rushing (the line rushes unless drawn dropping), or a man sent who doesn't rush on the call, is the blitz, seven or more in the box with men brought up
+  loads it, three rushing or more men deep plays soft. The full call: its rush is the rushers drawn (3 to 6), its front
+  moves by the men drawn into or out of the box, its coverage by how many end up deep (none: Cover 0; one: Cover 1 or 3;
+  two: 2-Man, Cover 2, 4 or 6 as called; three: Cover 3 or 6; four: Cover 4; more: prevent), personnel as called. The
+  men you drew run your lines for the first second of their snap.
+* **Special teams**: your kickoff drawn from the kicker: through the end zone is the touchback, a short one (22 yards at
+  most) onside (only when behind, the 2025 rule), anything else to the returner; a free kick deep or onside. Their
+  field goal or punt: drawing rushers through the line goes for the block (rushes the punt), lines that stay home stay
+  home (set up the return). Icing the kicker is a tap.
+
+A line may not loop, a run has a cut or two at most and never turns back once through the line, and every line stays
+on the field and clips at the end line on a short field. One that can't be read says why where the call's text is
+("Draw from the back through a gap in the line") and in a toast; Undo takes back each line drawn. In Versus only the
+call it reads as goes to the room (`vsSealed`: what the room's `cleanAction` keeps), never the drawing, which stays on
+the phone for its own play's animation; the play clock runs on while you draw. ✏️ Draw (remembered, `tmd:v3:draw`)
+marks who can be drawn and keeps the drawing hint up.
+
 **The website** (nfl2mindrill.com). `scripts/site.py` wraps `web/game.html` in a full page (the phone viewport
 and safe-area rules the claude.ai host otherwise adds; serve the built folder, never the bare `game.html`) with the
 scripts, the data and a `version.json` (build time and commit, for an uptime check). `.github/workflows/site.yml`
@@ -395,7 +433,9 @@ a refresh mid-drive picks it up where it was. Before the day's drive is done, `#
 
 **Analytics events** (the website's Google tag only; `track()` in `game.js`), for deciding what to improve:
 `drive_start` (mode, kind of spot, day), `play_call` (mode, family, call, routes changed, out of bounds),
-`defense_call` (call), `daily_finish` (day, kind, score, better/worse/same than the real coach, snaps),
+`defense_call` (call), `draw_run`, `draw_rpo`, `draw_pass`, `draw_def` and `draw_st` (a drawn call snapped: mode, the call
+it read as; a run's shape, the kick's kind), `draw_qb` (rollout side or drop), `draw_refused` (kind, why), `draw_mode`
+(on), `daily_finish` (day, kind, score, better/worse/same than the real coach, snaps),
 `survivor_game` (win/loss/tie, overtime, streak), `overtime`, `share` (daily or survivor; share sheet, copy or
 select), `help_open` (a tap on ?; auto: the three-line help a first visit to a Pro drive still gets),
 `onboard_step` (the first drive's tour: step, its number as shown), `onboard_done` (steps seen) or `onboard_skip`
