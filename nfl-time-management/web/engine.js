@@ -54,8 +54,25 @@
   // Kick-to-win endgame: trailing by 1-2 or tied, a makeable kick in hand and a timeout to stop the clock
   // for it. The offense runs the clock down (clock-killing plays, timeouts kept), takes a timeout with
   // ~3 s left and kicks. The defense spends its timeouts to save time for a reply.
-  const CLOSE_FG_P = 0.5, CLOSE_WINDOW = 180.0, CLOSE_END = 45.0, CLOSE_KICK_AT = 3.0;
+  // (CLOSE_FG_P: a ~52-yarder. NFL 2016-25, trailing by 1-2 or tied in the last 20-75 s with a timeout: 96% clock-
+  // killing runs inside the 25, 60% at the 30-35, 38% at the 35-40: from farther out they keep moving.)
+  const CLOSE_FG_P = 0.7, CLOSE_WINDOW = 180.0, CLOSE_END = 45.0, CLOSE_KICK_AT = 3.0;
   const CLOSE_SNAP_FLOOR = 12.0, CLOSE_DEF_WINDOW = 120.0;
+  // The defense saves time only if, stopping the clock after every down it has a timeout for (a play ~6 s, a gap run
+  // down ~39 s), it gets the ball back with this long left: a kickoff and a few throws to a long kick
+  const CLOSE_REPLY = 30.0, CLOSE_PLAY = 6.0, CLOSE_GAP = 39.0;
+  // A hurry-up from a running clock in the last minute is faster: the urgent draw is scaled and capped, from x0.75 and
+  // 18 s at 0:00 to as drawn and 26 s at 1:00 (NFL 2016-25 no-huddle snaps after the whistle: median 15.8 s over the
+  // whole pool, 13.4 s inside 0:30 and 11.8 s inside 0:20; the last minute's p99 26 s, inside 0:30 22 s)
+  const URGENT_LATE = [60.0, 0.75, 18.0, 26.0];
+  // 4th down, the sound choice (NFL coaches 2020-25): a go must beat the best kick by this much win probability (the
+  // one-step look-ahead overrates keeping the ball: up 10 at 5:00 its WP is 0.76-0.92 for a team that wins ~97%)
+  const FOURTH_GO_EDGE = 0.02;
+  // ... and coaches all but never go for it on 4th and 2+ in their own half (2-10%), or 4th and 1 inside their 20 (6%),
+  // unless trailing in the last 3:00 (by 4+ in the last 5:00, by 9+ in the last 7:00: then no edge either); trailing
+  // by 9+ in the last 5:00 nobody punts from the other half (0-2%); and a field goal that ties or takes the lead in the
+  // last 5:00 is kicked on 4th and 2+ when it is a good one (67-100%)
+  const FOURTH_KICK_P = 0.75;
   const KO_TOUCHBACK = 65;             // daily game: a kickoff through the end zone starts the receivers at their 35 (2025 rule)
   const PB_TD_SHARE = 0.6;            // daily game: a playbook touchdown drawn farther out scores only if it covered 60% of the way
   // daily game: matchups. Every call against the defense's call (a blitz, a loaded box, or playing soft / a light box):
@@ -1272,6 +1289,7 @@
 
     // ------------------------------------------------------------------ PAT ---
     _pat(S, g, u, act) {
+      if (this._noTry(S, g)) return;
       const o = S.pos, margin = S.s[o] - S.s[1 - o], tHalf = S.t - g.halfEnd;
       let go2 = g.half === 2 && tHalf <= 900 && TWO_PT_SET.has(margin);
       if (act && act.pat) go2 = act.pat === 'two';
@@ -1309,7 +1327,7 @@
       let onside = g.half === 2 && marginK < 0 &&
         ((tHalf <= 125 && S.to[kt] <= 1) || tHalf <= 65 || (tHalf <= 160 && marginK <= -9));
       onside = onside && !S.freeKick;
-      if (act && act.kick) onside = act.kick === 'onside';
+      if (act && act.kick) onside = act.kick === 'onside' && (marginK < 0 || S.freeKick);   // only a team behind may declare one (2024+)
       const K = this.e.ko;
       let j = Math.floor(u[4] * K.start.length);
       // daily game: kicked to the returner (a real landing-zone kick) or through the end zone (a touchback)
@@ -1328,6 +1346,7 @@
       if (retTd) { S.s[S.pos] += 6; S.phase = PAT; }
       if (S.log) S.log.push({ ev: 'kickoff', team: kt, onside, recovered: rec, retTd, yl: S.yl, tb: !onside && dur === 0, kick: act && act.kick || null });
       if (S.t <= g.halfEnd && S.phase === SNAP) S.phase = DONE;
+      this._noTry(S, g);
     }
 
     // ----------------------------------------------------------------- SNAP ---
@@ -1354,9 +1373,13 @@
         closing = margin >= -2 && margin <= 0 && tHalf <= CLOSE_WINDOW && offTo > 0 &&
           this.fgProb(yl + FG_SNAP_YARDS, o) >= CLOSE_FG_P;
         if (closing) offWants = false;                                   // timeouts are kept for the kick
-        // the defense saves time for a reply when a field goal would beat it, whatever timeouts the offense has left
-        // (players saw a defense let the clock run out on them with the offense in range and out of timeouts)
-        const defSaves = margin >= -2 && margin <= 0 && tHalf <= CLOSE_DEF_WINDOW && this.fgProb(yl + FG_SNAP_YARDS, o) >= CLOSE_FG_P;
+        // the defense saves time for a reply when a field goal would beat it: only when the offense can run the clock
+        // down to its kick (a timeout left: without one the running clock is the offense's problem, and a timeout
+        // would be a gift), and only if stopping the clock after every down it can still gets it the ball back with
+        // time to answer (QA saw a leading defense call them at 0:19, 0:06 and 0:01 for an offense out of timeouts)
+        const kickAt = tHalf - (4 - down) * CLOSE_PLAY - Math.max(5 - down - defTo, 0) * CLOSE_GAP;
+        const defSaves = margin >= -2 && margin <= 0 && tHalf <= CLOSE_DEF_WINDOW && offTo > 0 && kickAt >= CLOSE_REPLY &&
+          this.fgProb(yl + FG_SNAP_YARDS, o) >= CLOSE_FG_P;
         defWants = defWants || defSaves;
       } else {
         attempt = (yl - 35.0) <= 0.6 * (tHalf + 20.0 * offTo);
@@ -1422,6 +1445,10 @@
       if (tempo === T_KNEEL) runoff = KNEEL_RUNOFF[0] + (KNEEL_RUNOFF[1] - KNEEL_RUNOFF[0]) * u[0];
       else if (tempo === T_FIRE) runoff = FIRE_DRILL[0] + (FIRE_DRILL[1] - FIRE_DRILL[0]) * u[0];
       else { const arr = this.e.tempo[tempo]; runoff = arr[Math.floor(u[0] * arr.length)]; }
+      if (tempo === URGENT && tHalf <= URGENT_LATE[0]) {      // the last minute's hurry-up is faster
+        const f = clip(tHalf / URGENT_LATE[0], 0, 1);
+        runoff = Math.min(runoff * (URGENT_LATE[1] + (1 - URGENT_LATE[1]) * f), URGENT_LATE[2] + (URGENT_LATE[3] - URGENT_LATE[2]) * f);
+      }
       runoff = runC ? Math.max(runoff - S.credit, 0) : 0;
       // a kick you called always gets off (players saw the clock run out on a field goal they had called): with too
       // little time for the unit to run on, your timeout first when you have one; without, the rush beats the clock
@@ -1578,7 +1605,13 @@
         const ry = this.puntReceiveYl(yl, o);
         wpPunt = 1 - this.wpFull(d, -margin, t9, 1, Math.min(10, ry), ry, defTo, offTo);
       }
-      let choice = (wpGo >= wpFg && wpGo >= wpPunt) ? -1 : (wpFg >= wpPunt ? FG : PUNT);
+      // the sound choice, as NFL coaches make it (FOURTH_GO_EDGE, FOURTH_KICK_P)
+      const behindLate = half === 2 && margin < 0 && (tHalf <= 180 || (margin <= -4 && tHalf <= 300) || (margin <= -9 && tHalf <= 420));
+      if (half === 2 && margin <= -9 && tHalf <= 300 && yl < 50) wpPunt = -1;
+      const kick = Math.max(wpFg, wpPunt);
+      let choice = (kick < 0 || wpGo >= kick + (behindLate ? 0 : FOURTH_GO_EDGE)) ? -1 : (wpFg >= wpPunt ? FG : PUNT);
+      if (choice === -1 && wpPunt >= 0 && !behindLate && yl >= 50 && (ytg >= 2 || yl >= 80)) choice = PUNT;
+      if (half === 2 && tHalf <= 300 && margin >= -3 && margin <= 0 && ytg >= 2 && pFg >= FOURTH_KICK_P) choice = FG;
       const cm = this.ctx.coach4th && this.ctx.coach4th[o];
       if (cm && u5 !== undefined) choice = this._coachChoice(S, g, o, margin, tHalf, pFg, u5, cm);
       if (half === 2) {
@@ -1671,7 +1704,11 @@
       const inWin = (S.t - dur - g.halfEnd) <= g.oobWindow;
       const stop = incomplete || (oob && inWin) || (penalty && inWin) || change || scorePlay;
       const credit = oob ? this.oobCredit : (penalty ? this.penCredit : 0);
+      const t0 = S.t;
       this._clockAfterPlay(S, g, dur, stop, credit);
+      // a half cannot end on an accepted defensive foul: an untimed down (as on a roughed kick, _stRush)
+      const untimed = penalty && yards > 0 && !change && !scorePlay && S.t <= g.halfEnd;
+      if (untimed) S.t = Math.min(t0, g.halfEnd + 0.5);
       if (!change && !scorePlay) { S.yl = clip(newYl, 1, 99); S.down = newDown; S.ytg = Math.max(newYtg, 1); }
       if (turnover && !tdDef) this._flip(S, toYl);
       if (onDowns) this._flip(S, 100 - clip(newYl, 1, 99));
@@ -1681,7 +1718,8 @@
       if (S.log) {
         S.log.push({ ev: 'play', team: o, kind, call: callIdx === undefined ? -1 : callIdx, yards, down: down0, ytg: ytg0,
           yl: yl0, oob: oob && !penalty, incomplete, penalty, td: tdOff, tdDef, turnover, safety, fd: fd && !change,
-          onDowns, dur, t: S.t, running: S.running, row: pbRow === undefined ? -1 : pbRow, match: match || 0, ...(why ? { why } : {}) });
+          onDowns, dur, t: untimed ? g.halfEnd : S.t, running: S.running, row: pbRow === undefined ? -1 : pbRow, match: match || 0, ...(why ? { why } : {}),
+          ...(untimed ? { untimed } : {}) });
       }
       this._endHalfCheck(S, g);
     }
@@ -1779,6 +1817,15 @@
 
     _endHalfCheck(S, g) {
       if (S.t <= g.halfEnd && (S.phase === SNAP || S.phase === KICKOFF)) S.phase = DONE;
+      this._noTry(S, g);
+    }
+    // a touchdown as the fourth quarter runs out: no try when it cannot change the result (NFL since 2018), a lead or a
+    // deficit of 3 or more (a try is worth 2 at most, to either team: the defense can return one for 2)
+    _noTry(S, g) {
+      if (S.phase !== PAT || S.ot || g.half !== 2 || S.t > g.halfEnd || Math.abs(S.s[S.pos] - S.s[1 - S.pos]) < 3) return false;
+      S.phase = DONE;
+      if (S.log) S.log.push({ ev: 'notry', team: S.pos, t: S.t });
+      return true;
     }
 
     _value(S, g, persp) {

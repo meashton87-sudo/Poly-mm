@@ -124,15 +124,22 @@ for (let k = 0; k < 100; k++) {
   assert.ok(good / n > 0.38 && good / n < 0.6, `called two-point tries convert like the league: ${(good / n).toFixed(3)}`);
   console.log(`called two-point tries: ${(100 * good / n).toFixed(1)}% good`);
 }
-// in field goal range late, tied, the defense calls timeout to save time for a reply even when the offense has none left
+// in field goal range late, tied, the defense calls timeout to save time for a reply when the offense can run the clock
+// down to its kick (a timeout left) and stopping it after each down gets the ball back with time to answer; never for
+// an offense out of timeouts (the running clock is its problem: a timeout would be a gift)
 {
-  let calls = 0;
+  let calls = 0, gifts = 0;
   for (let k = 0; k < 60; k++) {
-    const at = { ...root, t: 55, phase: 0, score: [17, 17], pos: 0, down: 2, ytg: 6, yl: 18, to: [0, 2], clock_running: true };
+    const at = { ...root, t: 100, phase: 0, score: [17, 17], pos: 0, down: 3, ytg: 6, yl: 18, to: [2, 2], clock_running: true };
     const r = sim.step(at, { action: { to_off: false, play: 0 }, seed: 9500 + k });
     if (r.log.some((e) => e.ev === 'timeout' && e.team === 1)) calls++;
+    for (const t of [55, 19, 6]) {
+      const r2 = sim.step({ ...at, t, down: 2, to: [0, 2] }, { action: { to_off: false, play: 0 }, seed: 9500 + k });
+      if (r2.log.some((e) => e.ev === 'timeout' && e.team === 1)) gifts++;
+    }
   }
   assert.ok(calls > 50, `the defense saves time when a field goal would beat it: ${calls}/60`);
+  assert.ok(gifts === 0, `the defense gives an offense out of timeouts one: ${gifts}/180`);
 }
 // matchups (engine.js MATCH): a call that beats the defense's call does better than the real plays alone, one that
 // loses to it worse (mean EPA of the plays drawn, over every situation)

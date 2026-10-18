@@ -56,6 +56,14 @@ function check(before, r, tag) {
   const k0 = r.log.find((e) => e.ev === 'play' || e.ev === 'fg' || e.ev === 'punt');
   if (k0 && b.phase === 0 && !r.done && b.clock_running && (k0.ev !== 'play' || k0.incomplete || k0.td || k0.tdDef || k0.safety || k0.turnover || k0.onDowns))
     flag('the clock ran on after a play that stops it', `${tag} ${JSON.stringify(k0)}`);
+  // a half never ends on an accepted defensive foul (an untimed down); no try after a touchdown as the fourth quarter
+  // runs out when it cannot change the result (a margin of 3 or more); only a team behind declares an onside kick
+  const k1 = r.log.find((e) => e.ev === 'play');
+  if (k1 && k1.penalty && k1.yards > 0 && !k1.td && !k1.tdDef && !k1.turnover && !k1.safety && !k1.onDowns && (r.done || b.t <= halfEnd)) flag('a half ended on a defensive foul', `${tag} ${JSON.stringify(k1)}`);
+  if (k1 && k1.untimed) count('untimed downs');
+  if (b.phase === 1 && !r.done && !b.ot && halfEnd === 0 && b.t <= 0 && Math.abs(b.score[b.pos] - b.score[1 - b.pos]) >= 3) flag('a try that cannot change the result', `${tag} ${b.score}`);
+  if (r.log.some((e) => e.ev === 'notry')) count('no try after the last play');
+  r.log.forEach((e) => { if (e.ev === 'kickoff' && e.onside && !a.free_kick && !(a.score[e.team] < a.score[1 - e.team])) flag('an onside kick by a team not behind', `${tag} ${a.score}`); });
   const ds = [b.score[0] - a.score[0], b.score[1] - a.score[1]];
   ds.forEach((d) => { if (![0, 1, 2, 3, 6, 7, 8].includes(d)) flag('odd score change', `${tag} ${a.score} -> ${b.score}`); });
   for (const e of r.log) {
@@ -230,6 +238,9 @@ idx.spots.forEach((sp, si) => {
       if (sp.start.qtr <= 2 && r.root.t < 1800) flag('a first-half spot went on into the second half', `game ${si}.${g} step ${n} t ${r.root.t}`);
       attrib(before, r, `game ${si}.${g} step ${n}`);
       if (cur.pos === me) honored(before, action, r, `game ${si}.${g} step ${n}`);
+      // their defense, not behind, never gives our offense a timeout it has none of (the running clock is ours to beat)
+      if (before.phase === 0 && cur.pos === me && before.t <= 1800 && before.to[me] === 0 && before.score[1 - me] >= before.score[me] && r.log.some((e) => e.ev === 'timeout' && e.team !== me))
+        flag('their defense gave us a timeout', `game ${si}.${g} step ${n} ${before.score} t ${before.t}`);
       if (action.kick) kickCheck(r, action.kick, `game ${si}.${g} step ${n}`, before.free_kick);
       for (const e of r.log) if ((e.ev === 'fg' || e.ev === 'punt') && action.st) {     // your special teams on their kick
         const tag = `${e.ev} ${action.st}`;
@@ -263,6 +274,28 @@ idx.spots.forEach((sp, si) => {
     steps++;
     count('try at the end of the first half');
     if (!r.done || r.root.t !== 1800 || r.log.some((e) => e.ev === 'kickoff')) flag('a try at the end of the first half did not end it', `spot ${si} ${pat} ${JSON.stringify(r.root)}`);
+  }
+});
+// 2c) the last play of the game from every spot's two teams: a pass with 0:04 left (a defensive foul gives an untimed
+// down), and a touchdown at 0:00 (the try is played only when it can change the result)
+idx.spots.forEach((sp, si) => {
+  if (si % 3) return;
+  const sim = eng.simulator(eng.makeContext(scen(sp), { receive2h: sp.start.receive2h }));
+  for (let k = 0; k < 24; k++) {
+    const rt = { ...rootOf(sp), t: 4, pos: k % 2, score: [24, 20 + (k % 5)], down: 1, ytg: 10, yl: 30, to: [0, 0], clock_running: false, phase: 0 };
+    const before = JSON.parse(JSON.stringify(rt)), tag = `spot ${si} last play ${k}`;
+    const r = sim.step(rt, { action: { to_off: false, play: 'pass', call: ['deep_strong', 'deep_weak', 'hail_mary', 'quick_strong'][k % 4] }, seed: si * 131 + k });
+    steps++;
+    check(before, r, tag); attrib(before, r, tag);
+  }
+  for (const m of [-8, -3, -2, -1, 0, 1, 2, 3, 7]) {
+    const rt = { ...rootOf(sp), t: 0, pos: si % 2, score: [0, 0], down: 1, ytg: 2, yl: 2, clock_running: false, phase: 1 };
+    rt.score[rt.pos] = 20 + m; rt.score[1 - rt.pos] = 20;
+    const r = sim.step(rt, { action: { pat: 'xp' }, seed: si + m });
+    steps++;
+    const tried = r.log.some((e) => e.ev === 'pat');
+    if (tried !== (Math.abs(m) < 3) || !r.done) flag('the try after a touchdown at 0:00', `spot ${si} margin ${m} tried ${tried} done ${r.done}`);
+    count('try at 0:00 checked');
   }
 });
 // 3) overtime (survivor) from every other spot's two teams: tied, a 10-minute period (15 in the playoffs),
