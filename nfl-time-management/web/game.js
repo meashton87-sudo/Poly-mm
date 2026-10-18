@@ -409,7 +409,9 @@
   }
 
   // -------------------------------------------------------- worker pool ---
-  const pool = [], queue = [], pending = new Map();
+  const pool = [], queue = [], low = [], pending = new Map();
+  // (low: a snap's grading redone after a reload, behind everything else: regradeBg)
+  const lowRoots = new WeakSet();
   let reqId = 0, readyCount = 0;
   // The data downloads once here; the first worker starts at once and the rest once it is ready, so the first snap
   // isn't waiting on several workers parsing at the same time.
@@ -455,21 +457,34 @@
   // snap waits on, and the intro's few small files go alongside it. (Both packs at once: the engine's first, then the
   // playbook's, to set the engine up while the playbook's came in, was no faster: the second request's round trip ate
   // what it saved)
-  let fetched = false;
+  let fetched = false, hides = 0, shown = true, cutShort = false;
   function fetchData() {
     if (fetched) return;
     fetched = true;
+    const gen = hides, left = () => hides !== gen;        // the page was left (hidden) since this download began
     const json = () => Promise.all([fetchBytes(asset('engine_data.json'), 'engine data', 5.5e6), fetchBytes(asset('playbook.json'), 'playbook', 6.1e6)]);
     const pk = BUILD && typeof DecompressionStream === 'function'
       ? Promise.all([fetchPacked(asset('engine_data.pack'), 1.8e6), fetchPacked(asset('playbook.pack'), 1.3e6)]).then((b) => { packed = true; return b; })
       : Promise.reject(new Error('no pack'));
     // (not when the page is going away: a reload or a mode switch cuts the download short, and the call shows before
-    // it is done, so that is often now)
-    let leaving = false;
-    addEventListener('pagehide', () => { leaving = true; });
-    dataBytes = pk.catch((e) => { if (leaving) throw e; dl.got = 0; dl.total = 0; packed = false; return json(); });
-    dataBytes.catch((e) => { if (!leaving) fatal('The simulator could not load (' + e.message + '). Check your connection and reload.'); });
+    // it is done, so that is often now. Kept in the back-forward cache instead, the page comes back to it: refetch)
+    dataBytes = pk.catch((e) => { if (left()) throw e; dl.got = 0; dl.total = 0; packed = false; return json(); });
+    dataBytes.catch((e) => {
+      if (!left()) fatal('The simulator could not load (' + e.message + '). Check your connection and reload.');
+      else if (shown) refetch(); else cutShort = true;
+    });
   }
+  // back from the back-forward cache (a link followed, then Back) with the download cut short by leaving: it starts
+  // again, and the workers still waiting on it get the new one (the huddle's percentage starts over with it)
+  function refetch() {
+    cutShort = false;
+    if (readyCount) return;
+    fetched = false; dl.got = 0; dl.total = 0;
+    fetchData();
+    pool.forEach(initWorker);
+  }
+  addEventListener('pagehide', () => { hides++; shown = false; });
+  addEventListener('pageshow', (ev) => { shown = true; if (ev.persisted && cutShort) refetch(); });
   function startWorkers() {
     fetchData();
     startWorker();
@@ -486,15 +501,21 @@
     w.onmessage = (ev) => onMsg(slot, ev.data);
     w.onerror = (e) => fatal('The simulator could not start: ' + (e.message || 'worker error'));
     pool.push(slot);
-    dataBytes.then(([eng, pb]) => {
+    initWorker(slot);
+  }
+  function initWorker(slot) {
+    const got = dataBytes;
+    got.then(([eng, pb]) => {
+      if (slot.init || dataBytes !== got) return;          // (once: a refetch, pageshow, sends its own)
+      slot.init = true;
       const engine = eng.slice(0), playbook = pb.slice(0);      // a copy each, moved into the worker
-      w.postMessage({ type: 'init', engine, playbook, packed }, [engine, playbook]);
+      slot.w.postMessage({ type: 'init', engine, playbook, packed }, [engine, playbook]);
     }, () => {});
   }
   function pump() {
     for (const s of pool) {
       if (!s.ready || s.busy) continue;
-      const m = queue.shift();
+      const m = queue.shift() || low.shift();
       if (!m) return;
       s.busy = true;
       s.w.postMessage(m);
@@ -528,7 +549,11 @@
   }
   // urgent: the snap itself and the facts for a call go ahead of any grading still queued
   function send(msg, urgent) {
-    return new Promise((resolve, reject) => { msg.id = ++reqId; pending.set(msg.id, { resolve, reject }); if (urgent) queue.unshift(msg); else queue.push(msg); pump(); });
+    return new Promise((resolve, reject) => {
+      msg.id = ++reqId; pending.set(msg.id, { resolve, reject });
+      if (urgent) queue.unshift(msg); else if (msg.root && lowRoots.has(msg.root)) low.push(msg); else queue.push(msg);
+      pump();
+    });
   }
   const simScen = () => ({ id: G.scen.id, game: G.scen.game, start: { receive2h: G.scen.start.receive2h } });
   // The facts for a call (the worker's 'info'): on the website a spot's file carries them for its opening snap, worked
@@ -949,7 +974,12 @@
     }
     [[100, 110, code(1 - G.me)], [-10, 0, code(G.me)]].forEach(([a, b, c]) => {
       const e = put(S('rect', { x: 0, width: 360, fill: color(c), opacity: 0.92 }), (Y) => { e.setAttribute('y', Y(b)); e.setAttribute('height', Math.max(0, Y(a) - Y(b))); });
-      const t = put(S('text', { x: 180, class: 'ez', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, teamName(c).toUpperCase()), (Y) => t.setAttribute('y', (Y(a) + Y(b)) / 2));
+      // (dy: nudged along its end zone, clear of the buttons over the field: ezClear)
+      const t = put(S('text', { x: 180, class: 'ez', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, teamName(c).toUpperCase()), (Y) => {
+        const lo = Math.min(Y(a), Y(b)), hi = Math.max(Y(a), Y(b)), dy = +t.dataset.dy || 0;
+        t.setAttribute('y', (dy ? clip((lo + hi) / 2 + dy, lo + 10, Math.max(lo + 10, hi - 10)) : (lo + hi) / 2).toFixed(1));
+      });
+      t.upd = sc.parts[sc.parts.length - 1];
     });
     drawEnds(svg, put, code(1 - G.me), true);
     drawEnds(svg, put, code(G.me), false);
@@ -1604,6 +1634,10 @@
     }
     if (fadeNext || lastBall) sc.layer && sc.layer.classList.add('movefade');
     fadeNext = false;
+    // (a finished half or game: no snap to come, so no play speed or personnel chip on it)
+    if (speedOn) $('speedBtn').hidden = sc.mode === 'done';
+    if (sc.mode === 'done') persChip();
+    if ($('toBtn') && !$('toBtn').hidden) placeTo(); else ezClear(sc);
     const b = sc.ball;
     if (!b || sc.mode === 'done') { lastBall = null; return; }
     const y = camY(sc)(b.L);
@@ -1647,9 +1681,11 @@
   // the player's own speed-up (1x, 1.5x, 2x: the button on the field), kept on the device; a tap on the field skips
   const SPEEDS = [1, 1.5, 2], SPEED_KEY = `${STORE}:speed`;
   const playSpeed = () => { const v = Number(load(SPEED_KEY, 1)); return SPEEDS.includes(v) ? v : 1; };
+  let speedOn = false;
   function speedBtn() {
     const b = $('speedBtn');
     if (!b) return;
+    speedOn = true;
     const show = () => { b.textContent = `${playSpeed()}\u00d7`; b.setAttribute('aria-label', `Play speed ${playSpeed()} times. Tap to change`); };
     show();
     b.hidden = false;
@@ -3787,11 +3823,13 @@
     d.textContent = '';
     d.append(el('p', 'err', msg));
   }
-  function toast(msg) {
+  // low: at the foot of the screen, out of the way (a new badge, while the end card is read)
+  function toast(msg, low) {
     const t = $('toast');
     t.textContent = msg; t.hidden = false;
     t.removeAttribute('style');
-    if (bcast()) requestAnimationFrame(placeToast);          // (once what called it has drawn the sheet)
+    t.classList.toggle('low', !!low);
+    if (bcast() && !low) requestAnimationFrame(placeToast);          // (once what called it has drawn the sheet)
     clearTimeout(toast.h); toast.h = setTimeout(() => { t.hidden = true; }, Math.max(1800, msg.length * 45));
   }
   // a phone playing: over the field, under its buttons and above the calls' sheet, never on a control; with no room
@@ -3799,7 +3837,7 @@
   // leaves the broadcast view)
   function placeToast() {
     const t = $('toast');
-    if (t.hidden) return;
+    if (t.hidden || t.classList.contains('low')) return;
     t.removeAttribute('style');
     if (!bcast()) return;
     // (the sheet as it settles, not mid-slide: during a play, away but for the skip note; down, its bar)
@@ -3860,7 +3898,9 @@
     // the engine decides the score: a turnover it returned for a touchdown says so, whatever the real play's label
     if (e.tdDef && !/touchdown/.test(res)) res = e.kind === PASS && !/fumble|bad snap|strip/.test(res) ? 'intercepted and returned for a touchdown' : `${res.split(',')[0]}, returned for a touchdown`;
     const extra = [];
-    if (e.oob && !e.incomplete && !e.td && !e.tdDef) extra.push('out of bounds');      // (a touchdown is the score, wherever he ended up)
+    // (a touchdown is the score, wherever he ended up; after a turnover it is the return that went out: "intercepted,
+    // out of bounds" read as if the pass had been)
+    if (e.oob && !e.incomplete && !e.td && !e.tdDef) extra.push(e.turnover ? 'returned out of bounds' : 'out of bounds');
     else if (act && act.oob && mine && !e.incomplete && !e.penalty && !e.turnover && !e.onDowns && !e.td && !e.safety) extra.push('could not get out of bounds');
     if (e.fd && !e.td) extra.push(e.penalty ? 'automatic first down' : 'first down');
     if (e.onDowns) extra.push('turnover on downs');
@@ -3928,7 +3968,8 @@
   }
   function persist() {
     state.spots[G.si] = { id: G.scen.id, root: G.root, decisions: G.decisions, log: G.log, seq: G.seq, snapN: G.snapN, over: G.over,
-      result: G.result, started: G.started, pending: G.pending || null, pers: G.pers || null, persWho: G.persWho || null, vsN: G.vsN || 0, cot: G.cot || null };
+      result: G.result, started: G.started, pending: G.pending || null, regrade: G.regrade && G.regrade.length ? G.regrade : null,
+      pers: G.pers || null, persWho: G.persWho || null, vsN: G.vsN || 0, cot: G.cot || null };
     saveState();
   }
   function resumeSpot(i) {
@@ -3936,7 +3977,9 @@
     let s = state.spots[i];
     if (s && s.id && s.id !== G.scen.id) s = state.spots[i] = null;   // saved on another game (a changed schedule): start fresh
     if (s) Object.assign(G, { root: s.root, decisions: s.decisions || [], log: s.log || [], seq: s.seq || 0, snapN: s.snapN || 0,
-      over: s.over, result: s.result, started: !!s.started, pending: s.pending || null, pers: s.pers || null, persWho: s.persWho || null, vsN: s.vsN || 0, cot: s.cot || G.cot || null });
+      over: s.over, result: s.result, started: !!s.started, pers: s.pers || null, persWho: s.persWho || null, vsN: s.vsN || 0, cot: s.cot || G.cot || null,
+      // a snap left mid-play by a reload: its grading is redone in the background (regradeBg), with any still waiting
+      regrade: (s.regrade || []).concat(s.pending ? [s.pending] : []), pending: null });
     G.side = sideFor(G.seq);
     return G;
   }
@@ -4032,14 +4075,8 @@
     restoreLog();
     if (!G.log.length) addLog(`${teamName(code(G.root.pos))} ball, ${ddText(G.root)} ${onSpot(G.root)}`, G.root.t, G.root.pos === G.me);
     drawAll();
-    if (G.pending) {
-      busy = true;
-      // a saved grade that can't be redone (an error, or a call from an older build) is dropped, not retried on
-      // every reload: the drive goes on without that one call's grade
-      try { await finishPending(); } catch (e) { G.pending = null; persist(); }
-      finally { busy = false; }
-      drawTiles();
-    }
+    // back after a reload in the middle of a snap: the drive goes on at once, the call's grading in the background
+    regradeBg();
     if (G.over) finishSpot(); else advance();
   }
 
@@ -4096,6 +4133,7 @@
   async function theirTimeout(r) {
     const them = 1 - G.me;
     if (!(r.to[them] > 0)) return false;
+    await simWait();              // (back after a reload with the data still coming: the huddle, with how far along it is)
     const action = r.pos === G.me ? { to_off: false, tempo: 'normal' } : { to_def: false };
     const peek = (await send({ type: 'step', scen: simScen(), root: r, action, seed: hash('step', seedKey(), G.si, G.seq) }, true)).res;
     const e = peek.log[0];
@@ -4278,6 +4316,15 @@
     if (!r.clock_running && canKneel(r)) specials.push('kneel');
     return { calls, specials };
   }
+  // a field goal that can't change the result in your favour is a plain key, not the gold one (still there to call):
+  // down 4 or more with no time after it to get the ball back (a gold FIELD GOAL, rushed at 0:10, down 5), or ahead
+  // with none after it for them (up 7 at 0:03, where all a kick can add is a miss returned)
+  function fgIdle(r) {
+    if (r.t > 1800 || r.ot) return false;
+    const lead = r.score[G.me] - r.score[1 - G.me];
+    const after = r.untimed ? 0 : halfLeft(r.t) - (r.clock_running ? 10 : 4);      // (the kick: 7-12 s rushed on, engine.js FIRE_DRILL; about 4 s)
+    return (lead <= -4 && after < 10) || (lead > 0 && after < 2);
+  }
   const specialLabel = (k) => (k === 'fg' ? 'Field goal' : k === 'punt' ? 'Punt' : 'Kneel');
 
   function drawDock() {
@@ -4330,7 +4377,7 @@
         const row = el('div', 'keys');
         row.style.setProperty('--cols', Math.min(extra.length, 4));
         extra.forEach(([k, label, sub], i) => {
-          const b = key(label, sub, k === 'timeout' && !toHot(r) ? '' : 'alt', 3 + i);
+          const b = key(label, sub, (k === 'timeout' && !toHot(r)) || (k === 'fg' && fgIdle(r)) ? '' : 'alt', 3 + i);
           b.addEventListener('click', () => {
             if (busy) return;
             if (k === 'timeout') decideTimeout();
@@ -4613,10 +4660,66 @@
   function placeTo() {
     const b = $('toBtn'), fov = document.querySelector('.fieldbox .fov');
     if (!b || !fov) return;
-    if (!bcast()) { b.style.top = ''; return; }
+    b.style.left = ''; b.style.right = '';
+    if (!bcast()) { b.style.top = ''; ezClear(scene); return; }
     const fb = fov.parentElement.getBoundingClientRect(), last = [...fov.querySelectorAll('.btns > :not([hidden])')].pop();
-    const bottom = (last || fov).getBoundingClientRect().bottom;
-    b.style.top = `${Math.round(bottom - fb.top + 8)}px`;
+    const bottom = (last || fov).getBoundingClientRect().bottom, top0 = Math.round(bottom - fb.top + 8);
+    b.style.top = `${top0}px`;
+    // clear of the players' dots (it sat on a safety's): there, or beside the last row of chips, or further
+    // down the right side or on the left under the down and distance, the first place clear (and above the calls'
+    // sheet); else where it was
+    const dots = b.hidden ? [] : actorRects(scene), w = b.offsetWidth, h = b.offsetHeight;
+    if (dots.length && w) {
+      const fl = fov.querySelector('.fovl'), chips = [...fov.querySelectorAll('.fovl > *, .btns > *')].filter((e) => !e.hidden && e.getClientRects().length)
+        .map((e) => e.getBoundingClientRect()).filter((r) => r.width);
+      const sheet = $('sheet'), floor = sheet && !sheet.classList.contains('down') ? sheet.getBoundingClientRect().top - 6 : window.innerHeight - 72;
+      const topL = Math.round(Math.max(bottom, fl ? fl.getBoundingClientRect().bottom : 0) - fb.top + 8);
+      // (an end zone's name too, if it can be: ezClear moves it only as far as its end zone goes)
+      const names = [...(scene ? scene.svg.querySelectorAll('text.ez') : [])].map((t) => t.getBoundingClientRect()).filter((r) => r.width);
+      const free = (x, y, rs) => !rs.some((r) => r.left < x + w + 3 && r.right > x - 3 && r.top < y + h + 3 && r.bottom > y - 3);
+      const clear = (x, y) => y + h <= floor && x >= fb.left && free(x, y, dots.concat(chips));
+      const xr = fb.right - 8 - w, xl = fb.left + 8, lr = last && last.getBoundingClientRect();
+      const spots = [[xr, fb.top + top0]];
+      if (lr) spots.push([lr.left - 6 - w, lr.top]);
+      for (let i = 0; i <= 12; i++) spots.push([xr, fb.top + top0 + 8 * (i + 1)], [xl, fb.top + topL + 8 * i]);
+      const at = spots.find(([x, y]) => clear(x, y) && free(x, y, names)) || spots.find(([x, y]) => clear(x, y));
+      if (at) Object.assign(b.style, { top: `${Math.round(at[1] - fb.top)}px`, left: `${Math.round(at[0] - fb.left)}px`, right: 'auto' });
+    }
+    ezClear(scene);
+  }
+  // the players' dots on the screen (where the scene puts them: not mid-way through a move)
+  function actorRects(sc) {
+    if (!sc || !sc.svg.isConnected || $('field').classList.contains('playing')) return [];
+    const m = sc.svg.getScreenCTM(), Y = camY(sc);
+    if (!m) return [];
+    return sc.actors.map((a) => {
+      let bb;
+      try { bb = a.g.getBBox(); } catch (e) { return null; }
+      const x = a.x, y = Y(a.L) + a.side * GAP * a.w;
+      return { left: m.a * (x + bb.x) + m.e, right: m.a * (x + bb.x + bb.width) + m.e, top: m.d * (y + bb.y) + m.f, bottom: m.d * (y + bb.y + bb.height) + m.f };
+    }).filter(Boolean);
+  }
+  // the end zones' names clear of the buttons over the field (the 1× chip sat on the S of BROWNS): nudged along the
+  // end zone, away from them, as far as it goes
+  function ezClear(sc) {
+    if (!sc || !sc.svg.isConnected || $('field').classList.contains('playing')) return;
+    const sr = sc.svg.getBoundingClientRect();
+    if (!sr.height) return;
+    const k = sc.H / sr.height, Y = camY(sc);
+    const chips = [...document.querySelectorAll('.fieldbox .fov .dd, .fieldbox .fov .ramp, .fieldbox .fov .btns > *, #toBtn')]
+      .filter((e) => !e.hidden && e.getClientRects().length).map((e) => e.getBoundingClientRect()).filter((r) => r.width && r.height);
+    sc.svg.querySelectorAll('text.ez').forEach((t) => {
+      if (!t.upd) return;
+      t.dataset.dy = 0; t.upd(Y);
+      const r = t.getBoundingClientRect();
+      let need = 0;
+      chips.forEach((c) => {
+        if (c.left >= r.right || c.right <= r.left || c.top >= r.bottom || c.bottom <= r.top) return;
+        const n = c.top + c.height / 2 < r.top + r.height / 2 ? c.bottom + 4 - r.top : c.top - 4 - r.bottom;
+        if (Math.abs(n) > Math.abs(need)) need = n;
+      });
+      if (need) { t.dataset.dy = need * k; t.upd(Y); }
+    });
   }
   function toButton() {
     const b = $('toBtn'), r = G && G.root;
@@ -4630,8 +4733,10 @@
     b.textContent = off ? '⏱ Timeout' : `⏱ Timeout first${ui.to ? ' ✓' : ''}`;
     b.append(el('small', '', `${r.to[G.me]} left`));
     b.setAttribute('aria-pressed', String(def && !!ui.to));
-    // (the broadcast view: just under the chips on the field, however many rows they wrap to)
+    // (the broadcast view: just under the chips on the field, however many rows they wrap to; again once the sheet
+    // and the field have settled, where the players end up)
     placeTo();
+    clearTimeout(toButton.h); toButton.h = setTimeout(placeTo, 450);
     b.onclick = () => {
       if (busy) return;
       if (off) { b.hidden = true; decideTimeout(); return; }
@@ -4643,7 +4748,7 @@
   }
   // (the chips first, then the timeout under them: placed before the personnel chip showed, it sat over Ratings when
   // the chips wrapped to a second row on a 375-wide phone)
-  function persButton() { persChip(); toButton(); }
+  function persButton() { persChip(); toButton(); ezClear(scene); }
   function persChip() {
     const b = $('persBtn'), r = G && G.root;
     if (!b) return;
@@ -4696,6 +4801,7 @@
       else moves.forEach((m) => { if (m.drop) m.g.remove(); });
     };
     requestAnimationFrame(step);
+    placeTo();                // (where they end up: actorRects)
   }
   function openPers() {
     if (busy || !G || G.root.pos !== G.me) return;
@@ -4859,16 +4965,35 @@
     persist();
     showResult(decisions, res);
   }
-  // back after a reload in the middle of a snap: grade it now
-  async function finishPending() {
-    const pend = G.pending;
-    if (!pend) return;
-    status('Grading your last call…');
-    const ds = await gradeSpecs(pend);
-    if (G.pending !== pend) return;
-    ds.forEach((x) => G.decisions.push(x));
-    G.pending = null;
-    persist();
+  // back after a reload in the middle of a snap (its grading jobs saved with the spot: G.regrade): the next call shows
+  // at once and the grading runs behind it, after anything the next call needs (lowRoots: send), its grades joining
+  // the drive's in the order they were made. A grade that can't be redone (an error, a call from an older build) is
+  // dropped, not retried on every reload: the drive goes on without that one call's grade. The end of the drive waits
+  // for it (regradeWait)
+  function regradeBg() {
+    const g = G;
+    if (!g || g.regrading || !(g.regrade || []).length) return g && g.regrading;
+    g.regrading = (async () => {
+      while (g.regrade.length) {
+        const pend = g.regrade[0];
+        pend.specs.forEach((sp) => lowRoots.add(sp.r));
+        let ds = [];
+        try { ds = await gradeSpecs(pend); } catch (e) { /* dropped (above) */ }
+        if (G !== g) return;
+        g.regrade.shift();
+        ds.forEach((x) => { const i = g.decisions.findIndex((y) => (y.snap ?? -1) > x.snap); if (i < 0) g.decisions.push(x); else g.decisions.splice(i, 0, x); });
+        persist();
+        const x = ds.find((y) => y.kind === 'call') || ds[0];
+        if (x && !g.over && g.root.phase !== DONE && !$('play').hidden) { const m = markOf(x.cost); toast(`Your call before the reload: ${GLYPH[m]} ${m === 'g' && (x.cost < 0.0005 || x.best === x.chosen) ? 'the best one' : GRADE_WORD[m]}`); }
+      }
+    })().finally(() => { g.regrading = null; });
+    return g.regrading;
+  }
+  // the end of a drive: every call graded first (saying so, and how far along the simulator's data is if it is not in)
+  async function regradeWait() {
+    if (!G.regrading && !(G.regrade || []).length) return;
+    huddle('Grading your last call…');
+    await regradeBg();
   }
   // a timeout now, or (rundown) after letting the clock run down to 0:03 for the kick
   async function decideTimeout(rundown) {
@@ -5820,6 +5945,7 @@
   async function finishSpot() {
     if (VS) return vsEndCard();
     if (!G.result && needsOvertime(G.root)) return G.scen.college ? collegeOvertime() : overtime();
+    await regradeWait();
     if (!G.result || (G.result.half === 1 && G.result.v !== 2)) {      // v2: halftime valued at halftime
       status('Final whistle…');
       const r = G.root;
@@ -5835,6 +5961,7 @@
     const res = G.result, sc = G.scen, d = $('dock');
     // (res.ot: a result from before overtime was played, settled with the win chance)
     const inOT = !!G.root.ot || cotDaily(), tie = res.mine === res.theirs;
+    let newBadge = false;
     if (SURV && res.ot == null && !res.counted) {   // survivor: a win counts, a loss ends the run, a tie after overtime neither
       res.counted = true;
       const w = res.mine > res.theirs;
@@ -5845,7 +5972,7 @@
       const ev = [{ sc, r: res, decs: G.decisions, hh: headToHead(G.si, res) }], stt = load(`${STORE}:stats`, { days: {} });
       achCount(ev);
       res.badges = badgeAward(stt, ev);
-      if (res.badges.length) { save(`${STORE}:stats`, stt); statsSync(true); toast(`🏅 New badge: ${BADGES.find((b) => b.id === res.badges[res.badges.length - 1]).name}`); }
+      if (res.badges.length) { save(`${STORE}:stats`, stt); statsSync(true); newBadge = true; }
       liveDrive.on = false;
     track('survivor_game', { result: w ? 'win' : tie ? 'tie' : 'loss', overtime: inOT, streak: state.won });
       persist();
@@ -5902,6 +6029,7 @@
     if (SURV) { const ad = adBox(); if (ad) card.append(ad); }
     d.append(card);
     drawTiles();
+    if (newBadge) badgeToast(res.badges, bc);
   }
   // You against the real coach: the game result in the fourth quarter; in the second, the points the possession
   // was worth (his drive: touchdown 7, field goal 3, a defensive touchdown -7, a safety -2)
@@ -5920,12 +6048,16 @@
     if (!rl.final) return null;
     const hm = me === 0 ? rl.final.home : rl.final.away, ht = me === 0 ? rl.final.away : rl.final.home;
     const wl = (a, b) => (a > b ? 'Won' : a < b ? 'Lost' : 'Tied');
-    return { coach: rl.coach, who, v: Math.sign(Math.sign(result.mine - result.theirs) - Math.sign(hm - ht)),
+    // (v, what the record counts, is the result: won, lost or tied. Both won or both lost by different margins is the
+    // same result but not the same game, and the line says so: "Both lost: you by 7, Taylor by 1", never "Same as")
+    const mm = result.mine - result.theirs, hmm = hm - ht, v = Math.sign(Math.sign(mm) - Math.sign(hmm));
+    const both = v || mm === hmm ? null : `Both ${mm > 0 ? 'won' : 'lost'}: you by ${Math.abs(mm)}, ${who} by ${Math.abs(hmm)}`;
+    return { coach: rl.coach, who, v, both, like: both ? `${mm > 0 ? 'Won' : 'Lost'}, as ${rl.coach} did` : null,
       you: `${wl(result.mine, result.theirs)} ${result.mine}–${result.theirs}${G.root && G.root.ot ? ' (OT)' : ''}`, him: `${wl(hm, ht)} ${hm}–${ht}` };
   }
   function hhCard(h) {
     const box = el('div', `h2h ${h.v > 0 ? 'beat' : h.v < 0 ? 'lost' : 'tie'}`);
-    box.append(el('div', 'k', `You vs ${h.coach}`), el('div', 'res', h.v > 0 ? `You beat ${h.who}` : h.v < 0 ? `${h.who} did better` : `Same as ${h.who}`));
+    box.append(el('div', 'k', `You vs ${h.coach}`), el('div', `res${h.both ? ' both' : ''}`, h.v > 0 ? `You beat ${h.who}` : h.v < 0 ? `${h.who} did better` : h.both || `Same as ${h.who}`));
     const row = el('div', 'rows');
     [['You', h.you], [h.who, h.him]].forEach(([a, b]) => { const r = el('div', 'r'); r.append(el('span', 'a', a), el('span', 'b', b)); row.append(r); });
     box.append(row);
@@ -6510,7 +6642,7 @@
       vs_coach: rec[0] ? 'better' : rec[1] ? 'worse' : met ? 'same' : 'none', snaps: decs.length });
     // one drive: a sentence, not a record
     const hh0 = today.length === 1 && state.spots[0] ? headToHead(0, state.spots[0].result) : null;
-    const one = today.length === 1 ? (hh0 ? (rec[0] ? `Beat ${hh0.coach}` : rec[1] ? `${hh0.coach} did better` : `Matched ${hh0.coach}`)
+    const one = today.length === 1 ? (hh0 ? (rec[0] ? `Beat ${hh0.coach}` : rec[1] ? `${hh0.coach} did better` : hh0.like || `Matched ${hh0.coach}`)
       : rec[0] ? 'Beat the real coach' : rec[1] ? 'Lost to the real coach' : 'Matched the real coach') : null;
     const vs = met ? (one ? `\n${one}` : `\nVs the real coaches: ${recTxt}`) : '';
     if (met && one && hh0) box.insertBefore(hhCard(hh0), box.children[k3] || null);      // beating the real coach is the hook: say who
@@ -6767,7 +6899,22 @@
     if (old) old.remove();
     if (!c) return;
     box.insertBefore(c, box.querySelector('.coach, .verdict, .grid-share'));
-    if (fresh) toast(`🏅 New badge: ${BADGES.find((b) => b.id === ids[ids.length - 1]).name}`);
+    if (fresh) badgeToast(ids, c);
+  }
+  // a new badge: its card says so; the toast too only when the card is out of sight, and then at the foot of the
+  // screen (at the top it covered the end card's score and squares)
+  function badgeToast(ids, card) {
+    requestAnimationFrame(() => {
+      if (card && card.isConnected) {
+        let r = card.getBoundingClientRect(), top = Math.max(r.top, 0), bot = Math.min(r.bottom, window.innerHeight);
+        for (let e = card.parentElement; e && e !== document.body; e = e.parentElement) {
+          if (getComputedStyle(e).overflowY === 'visible') continue;
+          r = e.getBoundingClientRect(); top = Math.max(top, r.top); bot = Math.min(bot, r.bottom);
+        }
+        if (bot - top >= 24) return;                     // (in sight)
+      }
+      toast(`🏅 New badge: ${BADGES.find((b) => b.id === ids[ids.length - 1]).name}`, true);
+    });
   }
   // the stats sheet's badges: earned first (with the day), then the ones to get (greyed, with how)
   function badgesEl(st) {

@@ -801,6 +801,7 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 .h2h.beat { border-color: var(--sq-g); } .h2h.lost { border-color: var(--sq-r); }
 .h2h .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
 .h2h .res { font: 900 28px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; text-wrap: balance; }
+.h2h .res.both { font-size: 22px; line-height: 1.1; }      /* (the same result by different margins: a longer line) */
 .h2h.beat .res { color: var(--sq-g); } .h2h.lost .res { color: var(--sq-r); }
 .h2h .rows { display: grid; gap: 4px; }
 .h2h .r { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
@@ -935,6 +936,7 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; font-weight: 600; }
 .toast { position: fixed; left: 50%; top: calc(60px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); z-index: 30; background: var(--ink); color: var(--paper); font-weight: 700; padding: 10px 16px; border-radius: 6px; }
+.toast.low { top: auto; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); pointer-events: none; box-shadow: 0 4px 16px rgba(0, 0, 0, .25); }
 .err { color: var(--sq-r); font-weight: 600; }
 .siteinfo { max-width: 680px; margin: 28px auto 0; padding: 18px 16px 0; border-top: 1px solid var(--line); }
 .siteinfo h2 { font: 900 24px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; margin: 0 0 8px; }
