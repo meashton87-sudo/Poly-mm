@@ -1374,8 +1374,9 @@
       if (defCall) S.to[d] -= 1;
       if (offCall) S.to[o] -= 1;
       const called = defCall || offCall;
-      // (a timeout called before the two-minute warning never carries the clock past it: the warning still comes)
-      if (called) S.t = Math.max(S.t - this.toReact, halfEnd, S.t > g.tmw ? Math.min(S.t, g.tmw + 0.01) : halfEnd);
+      // (a timeout called before the two-minute warning never carries the clock past it: the warning still comes; nor
+      // out of the half: one called with time left keeps a snap)
+      if (called) S.t = Math.max(S.t - this.toReact, Math.min(S.t, halfEnd + 0.5), S.t > g.tmw ? Math.min(S.t, g.tmw + 0.01) : halfEnd);
       runC = runC && !called;
       // kick to win: with the clock running and little left, let it run down, then timeout and kick
       const free = !(act && (act.tempo !== undefined || act.play !== undefined || act.runoff !== undefined));
@@ -1422,7 +1423,9 @@
       runoff = runC ? Math.max(runoff - S.credit, 0) : 0;
       // a kick you called always gets off (players saw the clock run out on a field goal they had called): with too
       // little time for the unit to run on, your timeout first when you have one; without, the rush beats the clock
-      // (the page only offers it from 0:07)
+      // (the page only offers it from 0:07). Past the fire-drill window, the unit is set up in time: a tempo that would
+      // run the clock out snaps it with 0:03 left instead (players saw a kick called at 0:30 in the huddle never snapped)
+      if (forced === 'fg' && runC && !fire && act.runoff === undefined) runoff = Math.min(runoff, Math.max(tHalf - CLOSE_KICK_AT, 0));
       if (fire && forced === 'fg' && runC && runoff >= tHalf - 0.5) {
         if (S.to[o] > 0) {
           S.to[o] -= 1; runoff = 0; fire = false; tempo = NORMAL;

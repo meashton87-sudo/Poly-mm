@@ -4596,8 +4596,11 @@
       G.decisions.push(x);
       G.snapN += 1;
       const halfEnd = r.t > 1800 ? 1800 : 0;
+      // the second it takes to stop the clock never carries it past the two-minute warning (which still comes) or
+      // out of the half: a timeout called at 0:01 keeps the snap (engine.js the same at the warning)
+      const floor = Math.min(r.t, r.t > halfEnd + 120 ? halfEnd + 120.01 : halfEnd + 0.5);
       const t = rundown ? Math.min(r.t - 1, halfEnd + RUNDOWN_AT) : r.t - 1;
-      G.root = { ...r, to: r.to.slice(), clock_running: false, t: Math.max(halfEnd, t) };
+      G.root = { ...r, to: r.to.slice(), clock_running: false, t: Math.max(floor, t) };
       G.root.to[G.me] -= 1;
       if (rundown) addLog(`Ran the clock down to ${clockOf(G.root.t).text}`, G.root.t, true);
       addLog(`Timeout, ${teamName(code(G.me))}${rundown ? ' (to set up the kick)' : ''}`, G.root.t, true);

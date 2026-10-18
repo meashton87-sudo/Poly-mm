@@ -372,9 +372,10 @@ class Simulator:
         if off_call.any():
             S.to[ix[off_call], o[off_call]] -= 1
         called = def_call | off_call
-        # (a timeout called before the two-minute warning never carries the clock past it: the warning still comes)
+        # (a timeout called before the two-minute warning never carries the clock past it: the warning still comes; nor
+        # out of the half: one called with time left keeps a snap)
         t_c = S.t[ix[called]]
-        S.t[ix[called]] = np.maximum(np.maximum(t_c - self.to_react, half_end),
+        S.t[ix[called]] = np.maximum(np.maximum(t_c - self.to_react, np.minimum(t_c, half_end + 0.5)),
                                      np.where(t_c > half_end + 120.0, np.minimum(t_c, half_end + 120.01), half_end))
         run_c &= ~called
         # kick to win: with the clock running and little left, let it run down, then timeout and kick

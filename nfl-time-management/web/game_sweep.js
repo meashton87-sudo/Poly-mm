@@ -41,6 +41,18 @@ function check(before, r, tag) {
     if (b.ytg > b.yl + 1e-9) flag('distance beyond goal', `${tag} ytg ${b.ytg} yl ${b.yl}`);
   }
   b.to.forEach((x) => { if (!(x >= 0 && x <= 3)) flag('bad timeouts', `${tag} ${b.to}`); });
+  // the clock rules: a timeout is spent only when one is logged for that team, with the clock running, and it
+  // never ends the half or skips the two-minute warning; incompletions, scores, changes of possession and kicks stop it
+  const tmw = halfEnd + 120, tos = r.log.filter((e) => e.ev === 'timeout');
+  if (!r.log.some((e) => e.ev === 'period')) [0, 1].forEach((k) => { if (a.to[k] - b.to[k] !== tos.filter((e) => e.team === k).length) flag('timeouts gone without a timeout', `${tag} ${a.to} -> ${b.to} ${JSON.stringify(r.log)}`); });
+  if (tos.length && !a.clock_running) flag('a timeout with the clock stopped', tag);
+  tos.forEach((e) => {
+    if (e.why !== 'kick' && !(e.t > halfEnd)) flag('a timeout ran out the half', `${tag} ${a.t} -> ${e.t}`);
+    if (a.t > tmw && e.t < tmw - 1e-9 && e.why !== 'kick') flag('a timeout skipped the two-minute warning', `${tag} ${a.t} -> ${e.t}`);
+  });
+  const k0 = r.log.find((e) => e.ev === 'play' || e.ev === 'fg' || e.ev === 'punt');
+  if (k0 && b.phase === 0 && !r.done && b.clock_running && (k0.ev !== 'play' || k0.incomplete || k0.td || k0.tdDef || k0.safety || k0.turnover || k0.onDowns))
+    flag('the clock ran on after a play that stops it', `${tag} ${JSON.stringify(k0)}`);
   const ds = [b.score[0] - a.score[0], b.score[1] - a.score[1]];
   ds.forEach((d) => { if (![0, 1, 2, 3, 6, 7, 8].includes(d)) flag('odd score change', `${tag} ${a.score} -> ${b.score}`); });
   for (const e of r.log) {
@@ -93,6 +105,8 @@ function attrib(before, r, tag) {
 // the play called is the play run: unless the half ran out first, a spike is a spike, a kneel a kneel, a field goal a
 // field goal, a punt a punt, a call that call, and a timeout is taken when the clock is running and one is left
 function honored(before, action, r, tag) {
+  // a kick you called always gets off, whatever the tempo and however little time is left
+  if (before.phase === 0 && action.play === 'fg' && !r.log.some((e) => e.ev === 'fg')) flag('called fg, never kicked', `${tag} ${JSON.stringify(before)} ${JSON.stringify(action)} -> ${JSON.stringify(r.log)}`);
   if (before.phase !== 0 || r.log.some((e) => e.ev === 'end' || e.ev === 'period')) return;     // the clock ran out first
   const o = before.pos, e = r.log.find((x) => x.ev === 'play' || x.ev === 'fg' || x.ev === 'punt');
   if (action.to_off && before.clock_running && before.to[o] > 0 && !r.log.some((x) => x.ev === 'timeout'))
@@ -165,7 +179,7 @@ idx.spots.forEach((sp, si) => {
   });
   // the clock calls from late states in either half, where the defense may take a timeout before the snap (which
   // stops the clock): a spike must still be a spike
-  [3500, 1890, 1830, 1805, 500, 125, 115, 60, 25, 8].forEach((t, k) => {
+  [3500, 1890, 1830, 1805, 500, 125, 115, 60, 40, 30, 25, 8].forEach((t, k) => {
     [true, false].forEach((running) => {
       const rt = { ...root, t, clock_running: running, down: 1 + (k % 3), yl: [80, 50, 20, 70, 35][k % 5], ytg: 10, to: [k % 4, (k + 1) % 4] };
       rt.ytg = Math.min(rt.ytg, rt.yl);
@@ -174,6 +188,7 @@ idx.spots.forEach((sp, si) => {
           const before = JSON.parse(JSON.stringify(rt)), tag = `spot ${si} t${t} ${running ? 'running' : 'stopped'} ${p} s${s}`;
           const action = p === 'timeout' ? { to_off: true } : { to_off: false, play: p };
           if (s === 1 && running && p !== 'timeout') action.to_def = true;        // their timeout first
+          if (running && p === 'fg' && s !== 1) action.tempo = s ? 'milk' : 'normal';      // a kick called in the huddle
           const r = sim.step(rt, { action, seed: si * 7 + k * 131 + j * 17 + s });
           steps++;
           check(before, r, tag); attrib(before, r, tag); honored(before, action, r, tag);
