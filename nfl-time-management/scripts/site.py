@@ -21,6 +21,8 @@ import re
 import json
 import shutil
 import subprocess
+import tempfile
+from fnmatch import fnmatchcase
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -45,18 +47,64 @@ GFONTS = re.compile(r'(?:<link rel="preconnect" href="https://fonts\.(?:googleap
                     r'<link rel="stylesheet" href="https://fonts\.googleapis\.com/css2\?[^"]*">')
 
 
-def own_fonts(page: str) -> str:
+def own_fonts(page: str, stamps: dict) -> str:
     css = re.sub(r"/\*.*?\*/\s*", "", (WEB / "fonts" / "fonts.css").read_text(), flags=re.S).replace("\n", "")
+    css = re.sub(r"url\(/(fonts/[^)?]+)\)", lambda m: f"url(/{m.group(1)}?v={stamps[m.group(1)]})", css)     # (cached for good: _headers)
     return GFONTS.sub(lambda m: f"<style>{css}</style>", page, count=1)
 
 
-# Cloudflare Pages' headers (_headers). A stamped address (?v= the build's files, ?d= the data's: both named by what
-# is in them) never changes what it holds, so a phone keeps it and asks again only for a new address: a reload (every
-# mode switch is one) and the simulator's extra workers no longer wait on a round trip a file. Everything else keeps
-# Pages' default (asked again every time). The fonts' names carry their version.
+# Cloudflare Pages' headers (_headers). Every address below carries its file's stamp (?v=, named by what is in it), so
+# it never changes what it holds: a phone keeps it and asks again only for a new address: a reload (every mode switch
+# is one) and the simulator's extra workers no longer wait on a round trip a file. Each file has its own stamp (the
+# spots one for all of them), so a deploy that changes one file leaves the others' addresses, and the phone's copies,
+# as they were. Everything else keeps Pages' default (asked again every time). An address here without its stamp would
+# keep a phone on old bytes for a year: check_stamps fails the build on one.
 IMMUTABLE = ["/game.js", "/motion.js", "/engine.js", "/game_worker.js", "/vs_core.js", "/game.json", "/playbook.json",
              "/engine_data.json", "/teams.json", "/engine_data.pack", "/playbook.pack", "/spots/*", "/fonts/*"]
 HEADERS = "".join(f"{p}\n  Cache-Control: public, max-age=31536000, immutable\n" for p in IMMUTABLE)
+_stamp = lambda b: hashlib.sha256(b).hexdigest()[:12]
+
+
+def stamps_of(out: Path) -> dict:
+    """Each file's stamp (what is in it), by its path in the site; the spots share one ("spots/": a day's drive reads one
+    of them, and they change together, with the data)."""
+    st = {p.relative_to(out).as_posix(): _stamp(p.read_bytes()) for p in sorted(out.rglob("*"))
+          if p.is_file() and not p.relative_to(out).as_posix().startswith("spots/") and immutable(p.relative_to(out).as_posix())}
+    st["spots/"] = _stamp(b"".join(p.name.encode() + b"\0" + p.read_bytes() for p in sorted((out / "spots").iterdir())))
+    return st
+
+
+def immutable(path: str) -> bool:
+    return any(fnmatchcase("/" + path.lstrip("/"), p) for p in IMMUTABLE)
+
+
+def stamp_of(stamps: dict, path: str) -> str | None:
+    return stamps.get(path) or (stamps["spots/"] if path.startswith("spots/") else None)
+
+
+def check_stamps(out: Path, stamps: dict) -> None:
+    """Fail the build on any address cached for good (_headers) named without its stamp: in a page (src, href, url())
+    the stamp itself; in a shipped script, a name only as asset('...') (game.js) or at('...') (game_worker.js), the
+    two that stamp it."""
+    bad = []
+    for p in sorted(out.rglob("*.html")):
+        for u in re.findall(r'(?:src|href)\s*=\s*["\']([^"\']+)["\']|url\(\s*["\']?([^)"\']+)', p.read_text()):
+            u = u[0] or u[1]
+            if re.match(r"[a-z]+:|//|#", u):
+                continue
+            path, _, q = u.partition("?")
+            path = path.removeprefix("./").lstrip("/")
+            if immutable(path) and (not stamp_of(stamps, path) or f"v={stamp_of(stamps, path)}" not in q.split("&")):
+                bad.append(f"{p.name}: {u}")
+    alts = [re.escape(p.lstrip("/")[:-1]) if p.endswith("*") else re.escape(p.lstrip("/")) + r"(?=[?'\"`])" for p in IMMUTABLE]
+    named = re.compile(r"""['"`](?:\./|/)?(?:""" + "|".join(alts) + ")")
+    for f in SCRIPTS:
+        js = (out / f).read_text()
+        for m in named.finditer(js):
+            if not re.search(r"\b(?:asset|at)\(\s*$", js[max(0, m.start() - 12):m.start()]):
+                bad.append(f"{f}: ...{js[max(0, m.start() - 40):m.end() + 20]}...")
+    if bad:
+        raise SystemExit("site.py: addresses cached for good (_headers) named without their stamp:\n  " + "\n  ".join(bad[:20]))
 
 # The scripts shipped without their comments and indentation (esbuild, whitespace and syntax only: every name kept, so
 # an error still names its function): a third less to download and parse before the intro and the first call. The
@@ -74,6 +122,31 @@ def minify_scripts(out: Path) -> None:
         r, ok = e, False
     if not ok:
         print(f"site.py: scripts not minified ({getattr(r, 'stderr', r)!s:.300}); shipping them as written")
+
+
+# The first call's facts of every spot (web/spot_info.js: the site's own worker, scripts and packs, in node), shipped
+# in each spot's file so the first call shows before the simulator's data is in (game.js firstInfo). About half a
+# minute on 4 cores; kept (the temp folder) under a stamp of everything it reads, so the next build of the same files
+# (CI builds the site three times) takes it as it is. A spot whose facts differ between the two ways spot_info.js
+# works them out fails the build
+def spot_info(out: Path) -> dict:
+    reads = [out / f for f in (*SCRIPTS, *PACKED.values(), "game.json")] + sorted((out / "spots").glob("s*.json")) + [
+        WEB / "spot_info.js", WEB / "engine_data.json", WEB / "playbook.json", *(WEB / f for f in SCRIPTS)]
+    try:
+        node = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=60).stdout.encode()
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"site.py: no node ({e}); the first call waits on the simulator")      # (the page asks the worker)
+        return {}
+    key = _stamp(node + b"".join(p.name.encode() + b"\0" + p.read_bytes() for p in reads))
+    keep = Path(tempfile.gettempdir()) / f"nflclock-spot-info-{key}.json"
+    if keep.exists():
+        return json.loads(keep.read_text())
+    r = subprocess.run(["node", str(WEB / "spot_info.js"), str(out)], capture_output=True, text=True, timeout=1800)
+    if r.returncode:
+        raise SystemExit(f"site.py: the spots' first calls could not be worked out:\n{r.stderr[-2000:]}")
+    keep.with_suffix(".tmp").write_text(r.stdout)
+    keep.with_suffix(".tmp").replace(keep)
+    return json.loads(r.stdout)
 
 
 # The simulator's data (engine_data.json, playbook.json: typed arrays as base64 in JSON) re-packed for phones: the
@@ -397,44 +470,50 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         commit = ""
     for f in FILES:
         shutil.copy2(WEB / f, out / f)
+    # game.json without the time it was built (version.json keeps it): the data is rebuilt on every deploy, and that
+    # alone would give the file a new stamp each time
+    game = json.loads((WEB / "game.json").read_text())
+    built = game.pop("built", None) if isinstance(game, dict) else None
+    (out / "game.json").write_text(json.dumps(game, separators=(",", ":")))
     if (WEB / "teams.json").exists():           # Versus: the 32 teams as they line up now (nflclock.pro.versus_teams)
         shutil.copy2(WEB / "teams.json", out / "teams.json")
-    for f in sorted((WEB / "spots").glob("s*.json")):
+    chunks = sorted((WEB / "spots").glob("s*.json"))
+    for f in chunks:
         shutil.copy2(f, out / "spots" / f.name)
-        # and each spot on its own (game.js loadTeams, <meta name="spot1">): a day's drive downloads its one spot, not
-        # the other 19 of its chunk
-        for i, t in json.loads(f.read_text()).items():
-            (out / "spots" / f"p{i}.json").write_text(json.dumps({i: t}, separators=(",", ":")))
     shutil.copytree(WEB / "fonts", out / "fonts", ignore=shutil.ignore_patterns("*.css"))
     if minify:
         minify_scripts(out)
-    # every file the page loads carries the build stamp (game.js reads the meta), so phones never mix two builds. It is
-    # named by what those files hold (not the commit: the weekly data rebuild runs on the same one), so a stamped
-    # address always holds the same bytes and phones may keep it for good (_headers)
-    stamp = hashlib.sha256(b"".join(p.relative_to(out).as_posix().encode() + p.read_bytes()
-                                    for p in sorted(out.rglob("*")) if p.is_file())).hexdigest()[:12]
-    extra += f"<meta name=\"build\" content=\"{stamp}\"><meta name=\"spot1\" content=\"on\"><meta name=\"home\" content=\"{html.escape(home, quote=True)}\">" + canonical(site_url, "") + FOOT_CSS
-    # game.json (the intro needs it) downloads alongside game.js instead of after it: the same request game.js makes
-    # (fetch: cors, same-origin credentials), so the browser hands that one over
-    extra = f"<link rel=\"preload\" href=\"game.json?v={stamp}\" as=\"fetch\" crossorigin>" + extra
     eng = json.loads((WEB / "engine_data.json").read_text())
     for f, p in PACKED.items():
         pack(WEB / f, out / p, ref=eng if f == "playbook.json" else None)
-    # the packs are named by what is in them (?d=, not the build's ?v=): the site deploys many times a day and the
-    # data seldom changes, so a phone that has them (the service worker's copy) keeps them across deploys
-    data_stamp = hashlib.sha256(b"".join((out / p).read_bytes() for p in PACKED.values())).hexdigest()[:12]
-    extra += f"<meta name=\"data\" content=\"{data_stamp}\">"
+    # each spot also on its own (game.js loadTeams, <meta name="spot1">): a day's drive downloads its one spot, not the
+    # other 19 of its chunk; with its opening snap's facts (first: web/spot_info.js, the site's own worker on its packs)
+    first = spot_info(out)
+    for f in chunks:
+        for i, t in json.loads(f.read_text()).items():
+            (out / "spots" / f"p{i}.json").write_text(json.dumps({i: {**t, **({"first": first[i]} if i in first else {})}}, separators=(",", ":")))
+    # every file the page loads carries its own stamp, named by what is in it (game.js reads them from the meta; the
+    # worker's ride in its address; sw.js has them all), so a stamped address always holds the same bytes and phones keep
+    # it for good (_headers); the build's own stamp (the service worker's, the page's) is named by all of them
+    stamps = stamps_of(out)
+    stamp = _stamp(json.dumps(stamps, sort_keys=True).encode())
+    page_stamps = {k: v for k, v in stamps.items() if not k.startswith("fonts/")}       # (the fonts: in the pages' CSS)
+    extra += (f"<meta name=\"build\" content=\"{stamp}\"><meta name=\"stamps\" content='{html.escape(json.dumps(page_stamps, separators=(',', ':')), quote=False)}'>"
+              f"<meta name=\"spot1\" content=\"on\"><meta name=\"home\" content=\"{html.escape(home, quote=True)}\">" + canonical(site_url, "") + FOOT_CSS)
+    # game.json (the intro needs it) downloads alongside game.js instead of after it: the same request game.js makes
+    # (fetch: cors, same-origin credentials), so the browser hands that one over
+    extra = f"<link rel=\"preload\" href=\"game.json?v={stamps['game.json']}\" as=\"fetch\" crossorigin>" + extra
     extra += ('<script type="application/ld+json">' + json.dumps({"@context": "https://schema.org", "@type": "WebSite",
               "name": "Two-Minute Drill", "url": site_url.rstrip("/") + "/", "description": desc}) + "</script>")
-    page = own_fonts((WEB / "game.html").read_text())
+    page = own_fonts((WEB / "game.html").read_text(), stamps)
     for js in ("motion.js", "vs_core.js", "game.js"):     # vs_core.js: college overtime's rules (Versus, a college game)
-        page = page.replace(f'<script src="{js}"></script>', f'<script src="{js}?v={stamp}"></script>')
+        page = page.replace(f'<script src="{js}"></script>', f'<script src="{js}?v={stamps[js]}"></script>')
     (out / "index.html").write_text(HEAD.format(extra=moving + extra + AD_CSS) + page.replace("<!--SITE-FOOT-->", foot_ads() + FOOT) + "</body></html>\n")
     # the stats page (/stats): its own document; the same analytics tag and backend address
     stats_head = (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Two-Minute Drill stats",
         "How everyone did on the daily drive: players per day, the score spread and the top ten.", "stats") + (
         f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else "")
-    fill = lambda name, head, path, ads=True: (out / name).write_text(own_fonts((WEB / name).read_text()).replace("nfl2mindrill.com", home).replace("<!--SITE-HEAD-->",
+    fill = lambda name, head, path, ads=True: (out / name).write_text(own_fonts((WEB / name).read_text(), stamps).replace("nfl2mindrill.com", home).replace("<!--SITE-HEAD-->",
         moving + head + canonical(site_url, path) + FOOT_CSS + AD_CSS).replace("<!--AD-MID-->", ad_frame("banner") if ads else "")
         .replace("<!--SITE-FOOT-->", (foot_ads() if ads else "") + FOOT))
     fill("stats.html", stats_head, "stats")
@@ -460,8 +539,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
             {"src": "/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
             {"src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}]}, indent=1) + "\n")
     # the service worker (web/sw.js: network first, its cache only offline), stamped with this build: a new build is a new
-    # worker, which drops the last build's cache (all but the packs this build still uses: their stamp, __DATA__)
-    (out / "sw.js").write_text((WEB / "sw.js").read_text().replace("__BUILD__", stamp).replace("__DATA__", data_stamp))
+    # worker, which drops the last build's cache (all but the files this build names as they were: __STAMPS__)
+    (out / "sw.js").write_text((WEB / "sw.js").read_text().replace("__BUILD__", stamp).replace("'__STAMPS__'", json.dumps(stamps, separators=(",", ":"))))
     # for crawlers: every page allowed, and the sitemap of the site's pages
     base = site_url.rstrip("/")
     (out / "robots.txt").write_text(f"User-agent: *\nAllow: /\n\nSitemap: {base}/sitemap.xml\n")
@@ -496,10 +575,10 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     if domain:
         (out / "CNAME").write_text(domain.strip() + "\n")
     (out / ".nojekyll").write_text("")          # serve the files as they are
-    game = json.loads((WEB / "game.json").read_text())
     (out / "version.json").write_text(json.dumps({
-        "built": datetime.now(timezone.utc).isoformat(timespec="seconds"), "commit": commit or None,
+        "built": datetime.now(timezone.utc).isoformat(timespec="seconds"), "commit": commit or None, "data_built": built,
         "spots": len(game.get("spots", [])) if isinstance(game, dict) else None}, indent=1) + "\n")
+    check_stamps(out, stamps)
     return out
 
 

@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fnmatch
 import functools
+import json
 import math
 import http.server
 import random
@@ -22,6 +24,7 @@ import re
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 from playwright.async_api import async_playwright
@@ -77,7 +80,26 @@ QUIRK = {
 }
 
 
-async def episode(browser, base: str, name: str, mode: str, seed: int, target: int, out: Path, mobile: bool, quirk: str = "") -> dict:
+# The site's addresses cached for good (its _headers) and every file's stamp (its sw.js, site.py stamps_of): a request
+# for one of those addresses without its file's stamp would keep a phone on old bytes for a year
+def stamps_of(root: Path) -> tuple[list[str], dict]:
+    hdr = root / "_headers"
+    pats = [ln.strip() for ln in hdr.read_text().splitlines() if ln.startswith("/")] if hdr.exists() else []
+    m = re.search(r"const STAMPS = (\{.*?\});", (root / "sw.js").read_text()) if (root / "sw.js").exists() else None
+    return pats, json.loads(m.group(1)) if m else {}
+
+
+def unstamped(url: str, base: str, pats: list[str], stamps: dict) -> bool:
+    u = urllib.parse.urlsplit(url)
+    if not url.startswith(base) or not any(fnmatch.fnmatchcase(u.path, p) for p in pats):
+        return False
+    want = lambda f: stamps.get(f) or stamps.get(f.split("/")[0] + "/")
+    q = urllib.parse.parse_qsl(u.query)
+    return "v" not in dict(q) or any(want(u.path[1:] if k == "v" else k) != v for k, v in q)
+
+
+async def episode(browser, base: str, name: str, mode: str, seed: int, target: int, out: Path, mobile: bool, quirk: str = "",
+                  stamped: tuple = ([], {}), first: bool = False) -> dict:
     rnd = random.Random(seed)
     vp = {"width": 390, "height": 844} if mobile else {"width": 1280, "height": 900}
     ctx = await browser.new_context(viewport=vp, is_mobile=mobile, has_touch=mobile)
@@ -95,13 +117,16 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     page.on("pageerror", lambda e: problems.append(f"script error: {e}"))
     page.on("console", lambda m: m.type == "error" and "googletagmanager" not in m.text and "ERR_" not in m.text
             and problems.append(f"console error: {m.text[:300]}"))
-    page.on("requestfailed", lambda r: base in r.url and problems.append(f"request failed: {r.url} {r.failure}"))
+    # (a reload cuts short what is still downloading: the first call shows before the simulator's data is in)
+    page.on("requestfailed", lambda r: base in r.url and "ERR_ABORTED" not in (r.failure or "") and problems.append(f"request failed: {r.url} {r.failure}"))
+    page.on("request", lambda r: unstamped(r.url, base, *stamped) and problems.append(f"an address cached for good, without its stamp: {r.url}"))
     url = f"{base}/index.html" + ("#survivor" if mode == "survivor" else "")
     await page.goto(url)
     finished = reloads = steps = rundowns = drawn = 0
     last_key, since, chaos_done = None, time.time(), set()
     trail: list[str] = []            # the last screens and actions, printed with a failure
     first_q = None                   # the quarter a daily drive starts in: a first-half drive ends at halftime
+    first_call = first               # the first call shows on the spot's own facts (game.js firstInfo), not the simulator's
     act = lambda what: trail.append(f"  > {what}")
     t_start = time.time()
     status = "ok"
@@ -178,6 +203,11 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         break
                     await page.get_by_role("button", name="New run").click(timeout=3000)
                 elif st == "choose":
+                    if first_call:
+                        first_call = False
+                        if not await page.evaluate("() => performance.getEntriesByName('tmd:first-info').length"):
+                            problems.append("the first call waited on the simulator: the spot's file has its facts (site.py spot_info), unused")
+                            continue
                     r = rnd.random()
                     if r < 0.03 and "help" not in chaos_done:
                         chaos_done.add("help"); act("help"); await page.click("#helpBtn", timeout=3000)
@@ -283,6 +313,9 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
 
 async def main(a) -> int:
     srv, port = serve(Path(a.site).resolve())
+    stamped = stamps_of(Path(a.site))
+    p0 = Path(a.site) / "spots" / "p0.json"
+    first = p0.exists() and '"first":' in p0.read_text()
     base = f"http://127.0.0.1:{port}"
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -297,7 +330,7 @@ async def main(a) -> int:
             async with sem:
                 quirk = ("", "", "nopack", "", "nostore")[i % 5]
                 r = await episode(browser, base, f"{mode}-{seed}" + (f"-{quirk}" if quirk else ""), mode, seed, target, out,
-                                  mobile=i % 3 != 2, quirk=quirk)
+                                  mobile=i % 3 != 2, quirk=quirk, stamped=stamped, first=first)
             print(f"{r['status']:5s} {r['name']:24s} games {r['finished']}  reloads {r['reloads']}  {r['secs']} s"
                   + "".join(f"\n      {x}" for x in r["problems"]) + "".join(f"\n        {x}" for x in r["trail"]), flush=True)
             return r
