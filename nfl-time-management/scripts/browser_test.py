@@ -235,7 +235,8 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         await page.reload()
                         await page.wait_for_timeout(800)
                     else:
-                        btns = page.locator("#dock button:visible:not([disabled])")
+                        # (on a phone the timeout is the button on the field, not one in the dock)
+                        btns = page.locator("#dock button:visible:not([disabled]), #toBtn:visible")
                         n = await btns.count()
                         if n:
                             # mostly the big calls; sometimes anything (a route, a tempo, a timeout, Back)

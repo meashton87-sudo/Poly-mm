@@ -366,7 +366,8 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
     bottom: calc(env(safe-area-inset-bottom, 0px) + 7px); min-height: 40px; padding: 0 14px; border: 0; border-radius: 999px;
     background: var(--chain); color: var(--chain-ink); font: 800 13px var(--body); cursor: pointer; }
   body.bcast .sheet.down { transform: translateY(calc(100% - 66px - env(safe-area-inset-bottom, 0px))); }
-  body.bcast .grip { display: flex; align-items: center; justify-content: center; flex: none; height: 26px; border: 0; background: none; cursor: grab; touch-action: none; }
+  body.bcast .grip { display: flex; align-items: center; justify-content: center; flex: none; height: 26px; border: 0; background: none; cursor: grab; touch-action: none; position: relative; }
+  body.bcast .grip::before { content: ""; position: absolute; inset: -14px 0 0; }      /* (a finger-sized 40px to grab, 14px of it over the field) */
   body.bcast .grip i { width: 44px; height: 5px; border-radius: 3px; background: var(--line); }
   body.bcast #dock { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 14px 14px; }      /* (the sheet keeps clear of the home bar) */
   body.bcast .sheet.down #dock { overflow: hidden; }
@@ -376,6 +377,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
   /* the game over, the field has nothing left to show: the final card gets the screen under the scoreboard */
   body.bcast .sheet:has(.endcard) { max-height: calc(100% - env(safe-area-inset-top, 0px) - 112px); }
   body.bcast .tip, body.bcast .tipring { z-index: 8; }
+  body.bcast .toast { width: max-content; max-width: calc(100vw - 32px); text-align: center; }      /* (where: game.js toast) */
 }
 /* wide screens: the calls beside the field, both on screen at once (no scrolling down to call the play) */
 @media (min-width: 1000px) { @supports selector(:has(*)) {    /* browsers without :has() keep the one-column layout */
@@ -729,7 +731,14 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 @media (max-width: 999px) {
   body.bcast .result.banner .verdict .why { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
   body.bcast .result.banner .verdict:has(.why ~ .why) .why { -webkit-line-clamp: 1; }      /* two calls graded: a line each */
-  body.bcast .result.banner .verdict.open .why { display: block; }
+  body.bcast .result.banner.open .verdict .why { display: block; }
+  /* the keys past the sheet's edge (a short phone, a long result): what is above them folds, a step at a time
+     (game.js fitDock), to a line each; a tap on the result opens it again */
+  body.bcast #dock:has(> .fit1) .result.banner:not(.open) .verdict .why, body.bcast #dock:has(> .fit1) .read .v small { display: none; }
+  body.bcast #dock:has(> .fit1) .result.banner:not(.open) .verdict .why + br { display: inline; }      /* (two calls graded: a line each) */
+  body.bcast #dock:has(> .fit2) .result.banner:not(.open) :is(.res-play .pl, .verdict),
+  body.bcast #dock:has(> .fit3) .stopnote > :last-child { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden; }
+  body.bcast #dock:has(> .fit3) .result.banner:not(.open) .res-play .wc { display: none; }
   body.bcast .result.banner .verdict .why + br { display: none; }      /* (the reason is a block already: no blank line) */
 }
 .result.banner > .res-acts, .result.banner > .mline, .result.banner > .btn { display: none; }
@@ -813,7 +822,7 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 .newbadge .bt span { font-size: 13px; color: var(--muted); }
 .newbadge .more { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; font-weight: 600; }
 .newbadge .more span { white-space: nowrap; }
-.newbadge .linkbtn { grid-column: 1 / -1; justify-self: start; font-size: 13px; padding: 0; }
+.newbadge .linkbtn { grid-column: 1 / -1; justify-self: start; font-size: 13px; padding: 12px 0; margin-block: -12px; }      /* (a finger-sized target, the card no taller) */
 @media (prefers-reduced-motion: reduce) { .newbadge, .newbadge .bic { animation: none; } }
 /* the stats sheet: the last four weeks (a week a row, Monday first) and the badges, earned and still to get */
 .scal { display: grid; gap: 6px; margin: 0 0 14px; }
