@@ -7,7 +7,7 @@
 importScripts('engine.js' + self.location.search);     // the page's build stamp (?v=...), if any
 importScripts('vs_core.js' + self.location.search);    // a full defensive call, shown as called (VSCore.called); the packed data's unpack
 
-let eng = null;
+let eng = null, lastInfo = null;
 const sims = new Map();
 
 function simFor(scen) {
@@ -113,7 +113,11 @@ self.onmessage = async (ev) => {
       eng.loadPlaybook(pb);
       self.postMessage({ type: 'ready' });
     } else if (m.type === 'info') {
-      self.postMessage({ type: 'info', id: m.id, info: info(simFor(m.scen), m.root) });
+      // the last answer is kept: the page asks for the first call's facts while the intro is up (game.js renderIntro),
+      // so the same question from the huddle is answered at once
+      const key = m.scen.id + JSON.stringify(m.root);
+      if (!lastInfo || lastInfo.key !== key) lastInfo = { key, info: info(simFor(m.scen), m.root) };
+      self.postMessage({ type: 'info', id: m.id, info: lastInfo.info });
     } else if (m.type === 'eval') {
       const sim = simFor(m.scen);
       const out = m.options.map((o) => {
