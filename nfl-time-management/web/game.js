@@ -3551,7 +3551,11 @@
     b.setAttribute('aria-label', `${code(1)} ${r.score[1]}, ${code(0)} ${r.score[0]}, ${ck.text} left in ${r.ot ? 'overtime' : `the ${ordinal(ck.q)} quarter`}. Game details`);
     const dd = $('dd');
     dd.textContent = '';
-    if (r.phase === SNAP) dd.append(el('b', '', r.try2 ? 'Two-point try' : ddText(r)), document.createTextNode(` · ${spotText(r)}${VS ? '' : ` · clock ${r.clock_running ? 'running' : 'stopped'}`}`));
+    if (r.phase === SNAP) {
+      dd.append(el('b', '', r.try2 ? 'Two-point try' : ddText(r)), ' · ', el('span', 'sp', spotText(r)));
+      // (the clock its own piece: on a phone it takes a line of its own, never cut to "clock sto…", game.html)
+      if (!VS) { const ck = el('span', 'ck'); ck.append(el('span', 'sep', ' · '), `clock ${r.clock_running ? 'running' : 'stopped'}`); dd.append(ck); }
+    }
     else dd.textContent = r.phase === PAT ? 'Try after the touchdown' : r.phase === KICKOFF ? 'Kickoff' : r.t >= 1800 ? 'Halftime' : 'Final';
   }
   function drawAll() { drawTiles(); drawBar(); drawField(); }
@@ -4150,6 +4154,7 @@
     save(`${STORE}:hint:${key}`, true);
     track('hint', { key });
     const h = el('div', 'hintonce');
+    h.dataset.hint = key;
     h.append(el('span', 'k', 'Tip'), el('span', 't', text));
     const x = el('button', 'x', '×');
     x.type = 'button'; x.setAttribute('aria-label', 'Close the tip');
@@ -5166,6 +5171,10 @@
   function takeBanner(d) {
     if (!G.banner) return;
     G.banner.classList.add('banner');
+    // (a tip in it points at what the compact banner folds away, the Replay: it waits for a full result card)
+    G.banner.querySelectorAll('.hintonce').forEach((h) => { h.remove(); save(`${STORE}:hint:${h.dataset.hint}`, false); });
+    // (on a phone its reason is cut to two lines, game.html: a tap shows it all)
+    G.banner.querySelectorAll('.verdict').forEach((v) => { if (v.querySelector('.why')) v.addEventListener('click', () => v.classList.toggle('open')); });
     d.append(G.banner);
     G.banner = null;
   }
@@ -5529,7 +5538,7 @@
       res.mine > res.theirs ? `You win ${res.mine}–${res.theirs}${ot}` : res.mine < res.theirs ? `You lose ${res.mine}–${res.theirs}${ot}` :
       inOT ? `Tie ${res.mine}–${res.theirs} after overtime` :
       SURV && res.ot ? `Tied ${res.mine}–${res.theirs}: you ${res.ot > 0 ? 'win' : 'lose'} in overtime` : `Tied ${res.mine}–${res.theirs}: overtime`;
-    card.append(el('h2', '', head));
+    card.append(el('h2', '', head.replace(/(\d)–(\d)/g, '$1\u2060–\u2060$2')));      // (the score never splits at its dash)
     if (SURV && res.ot) card.append(el('p', 'note', `Your overtime win chance was ${wpTxt(res.wp)}.`));
     else if (inOT && tie) card.append(el('p', 'note', 'Nobody won it. A tie keeps your run alive, but it doesn’t count as a win.'));
     else if (res.half === 1 || (tie && !inOT)) card.append(el('p', 'note', `Your win chance from here: ${wpTxt(res.wp)}.`));
