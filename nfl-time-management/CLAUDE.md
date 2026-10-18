@@ -127,7 +127,8 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   checked for shape there).
 - The day's and week's lists (board/worker.js /daily, /week; game.js leaders): a name's first result of a day goes on the
   day's list (25 kept, 10 shown) and into its weeks (wk:<end date>: each name's best WEEK_BEST of 7 days added up, a
-  histogram for ranks, 100 kept); kept as results come (a result touches 7 week values), never rebuilt by scanning.
+  histogram for ranks, 100 kept); kept as results come (a result touches 7 week values), never rebuilt by scanning
+  (once only: fairWeeks, below).
   A restarted daily (game.js restartAsk: Start over, the ☰ menu on a phone, under the field elsewhere; the day's state
   keeps restarts, the post says restarted: true) is the device's first result all the same but stays out of the day's
   n, histogram, averages and both lists (the day counts them as nr): the day's draws are everyone's, so a restart could
@@ -138,7 +139,11 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   day, the streak, tendencies or post to /daily.
 - The fair set (worker.js day.f; game.js fairDay/dayFor, stats.html show): a /daily post with g: 2 (every call graded
   g: 2) also counts there; old-way results are never replaced or moved (first result per device stands). Where a day
-  has both (Oct 18, 2026), the stats page and a fair result's day card use the fair set only, with a note.
+  has both (Oct 18, 2026), the stats page and a fair result's day card use the fair set only, with a note. The weeks
+  count no old-way result of that day (worker.js OLD_WAY_DAYS, dates; game.js OLD_WAY_DAYS, day numbers: the same day):
+  it stays on the day's whole list, and wn.d keeps null for it (still the name's one result of the day; a fair one never
+  replaces it). The weeks kept before that were made fair once (fairWeeks: wn nulls, wk:<D>..<D+6> rebuilt from wn,
+  marked fairweek:<D>); the end card's This week says so to its player (the week's old).
 
 ## Moving the site to a new address
 The site moves with two GitHub variables; nothing else in the code names the address.
