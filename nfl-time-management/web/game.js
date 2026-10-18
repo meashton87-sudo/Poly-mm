@@ -1480,7 +1480,7 @@
   // (browser tests only, window.__sepLog: the drawing and the play, for bots that draw thousands of lines and plays)
   if (window.__sepLog) {
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
-      DRAWN_RANGE, CALL, ROUTE_DEPTH, SX0, XYD, Motion, get: () => ({ G, ui, scene }) };
+      DRAWN_RANGE, CALL, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, get: () => ({ G, ui, scene }) };
   }
   // who gets the ball, by his place in the list (the field may be redrawn under the buttons: a resize, the phone's
   // address bar)
@@ -2582,14 +2582,16 @@
             if (err < 0.6) break;
           }
           shadow = best;
-          // (a catch nobody could get near in time, a quick throw out wide: as close as the nearest could get; one
-          // behind the line with a rusher already there, a screen: that close)
+          // (a catch nobody could get near in time, a quick throw out wide: as close as the nearest could get)
           if (caught && !e.incomplete && bD > sepd.sep + 0.6) sepd.sep = bD;
-          if (caught && !e.incomplete) {
-            const at = probe(), rush = Math.min(99, ...K.def.filter((d) => !cov.cover.includes(d)).map((d) => dist(at.get(d), end)));
-            if (rush < sepd.sep - 0.4) sepd.sep = Math.max(0.8, rush);
+          // (one behind the line with a rusher already on him, a screen that goes nowhere much: the rusher is the man
+          // there, and the cover man stays off; a screen he breaks for 8 or more had the rush go past: moved off too)
+          if (caught && !e.incomplete && (e.yards || 0) - air < 8) {
+            const at = probe(), rs = K.def.filter((d) => !cov.cover.includes(d)), rd = rs.map((d) => dist(at.get(d), end));
+            const k = rd.indexOf(Math.min(...rd));
+            if (k >= 0 && rd[k] < sepd.sep - 0.4) { sepd.sep = Math.max(0.8, rd[k]); shadow = rs[k]; }
           }
-          shadowOn(shadow);
+          if (cov.cover.includes(shadow)) shadowOn(shadow);
           busy.add(shadow);
           const left = cov.carry.get(shadow);
           if (left && left !== tgt) {
@@ -2598,11 +2600,12 @@
             if (by) { cov.carry.set(by, left); leg(by, tS, 'chase', { who: left.b, gap: 2.2, eff: 0.95, lead: 0.5 }); }
           }
           // a completion: the man on him is the nearest; anyone else who would be on top of him as the ball comes
-          // (a zone defender in the lane, a man on a crossing route) runs his own way a few yards off instead
-          // (players saw catches "in triple coverage" with a long run after them)
+          // (a zone defender in the lane, a man on a crossing route, a rusher on a screen behind the line) runs his
+          // own way a few yards off instead (players saw catches "in triple coverage" with a long run after them, and
+          // screens caught between a rusher and the man on him)
           if (caught && !e.incomplete) {
             const R_ = sepd.sep + 1.2, at = probe(true);
-            cov.cover.forEach((d) => {
+            K.def.forEach((d) => {
               const { p: pe, hx, hy } = at.get(d), dd = dist(pe, end);
               // (a man on another receiver, deep or in man, stays on him unless he is right on top of this one: taken
               // off, his own man ran free. The man on him, when he would close tighter than drawn, eases out to it)
@@ -2641,7 +2644,8 @@
       // the throw
       Wd.run(tThrow);
       const qT = here(passer);
-      if (thrownAway) catchPt = [sidelineX(qT[0] + side * 10) + Math.sign(qT[0] - FW / 2 || side) * 2.5, inL(fwd(L0, Math.max(3, air)))];
+      // (a throwaway sails out past the sideline it is thrown to: 2.5 yards beyond it, never landing in bounds)
+      if (thrownAway) { const sx = sidelineX(qT[0] + side * 10); catchPt = [sx + Math.sign(sx - FW / 2) * 2.5, inL(fwd(L0, Math.max(3, air)))]; }
       // (a lofted ball, higher and slowing more; a line drive, flatter)
       fly(tThrow, tCatch, px(qT[0]) + 4, qT[1], px(catchPt[0]), catchPt[1], Math.min(2.4, 0.3 + Math.max(0, air) * 0.055), air >= 20 ? 0.22 : air > 0 ? 0.14 : 0.08);
       ring(tThrow, passer, false);
