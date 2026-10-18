@@ -796,10 +796,6 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 .coach .name { font: 900 34px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
 .coach .why { font-size: 14px; text-wrap: balance; }
 .coach .meta { font-size: 12px; color: var(--muted); }
-.coach.madden { border: 2px solid #c9a227; background: linear-gradient(160deg, rgba(201,162,39,.16), var(--card) 60%); box-shadow: 0 0 0 3px rgba(201,162,39,.18); }
-.coach.madden .rare { justify-self: center; font: 800 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: #1d1700; background: #e2b93b; border-radius: 999px; padding: 3px 10px; }
-.coach.madden .name { color: var(--ink); }
-.coach.madden .claim { font: 800 13px var(--body); letter-spacing: .08em; color: var(--ink); }
 /* the real game a spot comes from, on its intro */
 .intro .game { font: 800 15px var(--body); letter-spacing: .02em; text-align: center; text-wrap: balance; }
 /* the last result, riding on top of the next call */
@@ -899,7 +895,7 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 /* the score against the result, when they disagree: why, in a line (game.js scoreWhy) */
 .pct-why { margin: 2px auto 0; max-width: 34em; font: 600 14px/1.35 var(--body); color: var(--muted); text-wrap: balance; }
 .streak { font: 700 14px var(--body); margin-top: 2px; }
-/* a missed day a streak freeze covered, under the streak; a badge just earned (game.js badgeCard), gold like a Madden find */
+/* a missed day a streak freeze covered, under the streak; a badge just earned (game.js badgeCard), in gold */
 .rsnote { text-align: center; margin: 2px 0 0; }
 .frz { justify-self: center; font: 700 13px var(--body); color: var(--ice); background: var(--ice-soft); border-radius: 999px; padding: 5px 12px; text-wrap: balance; }
 .newbadge { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; align-items: center; text-align: left; border: 2px solid var(--gold); border-radius: 12px; padding: 12px 14px; background: linear-gradient(160deg, var(--gold-soft), var(--card) 70%); animation: rise .35s ease both; }
