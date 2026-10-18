@@ -23,6 +23,7 @@ python -m pytest -q
 python scripts/parity_expected.py 2026_05_BUF_LA 8000 && node web/parity_test.js 8000
 node web/game_smoke.js                # daily game: every spot's two real teams, playbook sampling, call ranking, play-by-play log
 node web/game_sweep.js                # daily game: every spot x call x tempo, whole games, football invariants, points to the right team, the called play is the play run (~3 min)
+node web/score_sweep.js               # daily score: real spots played out by random, league-mix, sharp and greedy players, scored by game.js's own code (~15 min on 4 cores)
 node web/motion_test.js               # daily game animation: player motion stays in the tracking envelope, routes, coverage
 node board/worker_test.mjs            # the website's survivor leaderboard (Cloudflare Worker + Durable Object), storage in memory
 node board/match_test.mjs             # Versus: rooms, lobby, ladder in memory (board/vs_world.mjs), a stand-in engine (a second)
