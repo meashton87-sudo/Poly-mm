@@ -5,16 +5,16 @@
 // A copy is a pair: the page names its scripts and data with the build stamp (?v=...), so an offline page only ever
 // finds the files of its own build. site.py writes the build stamp below: each build is a new worker (the browser
 // checks sw.js on every visit: game.js registers it with updateViaCache 'none') that takes over at once and drops the
-// last build's cache (keeping what this build can use: activate below). Only this site's own GETs are touched: the
-// board API, fonts, analytics and ads are other origins (the browser handles them as if there were no worker), and ad
-// frames, the admin page and version.json are skipped.
+// last build's cache (keeping what this build can use: activate below). Only this site's own GETs are touched (its
+// fonts too, web/fonts): the board API, analytics and ads are other origins (the browser handles them as if there were
+// no worker), and ad frames, the admin page and version.json are skipped.
 // The simulator's packs are the one exception: they are stamped with what is in them (?d=, site.py), not the build, so
 // a copy is the file itself: answered from here first, and kept across builds while a build's pages name the same.
 // To turn it off: ship a sw.js that unregisters itself (self.registration.unregister()) and deletes its caches.
 const VERSION = '__BUILD__';
 const DATA = '__DATA__';
 const CACHE = `tmd-${VERSION}`;
-const KEEP = /\.(?:js|json|pack|png|svg|ico|webmanifest)$/;          // what a page loads; anything else passes through
+const KEEP = /\.(?:js|json|pack|png|svg|ico|webmanifest|woff2)$/;          // what a page loads; anything else passes through
 const SKIP = /^\/(?:ad-|admin|sw\.js|version\.json|remind-)/;
 
 self.addEventListener('install', () => self.skipWaiting());

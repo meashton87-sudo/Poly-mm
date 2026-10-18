@@ -7,7 +7,7 @@
 importScripts('engine.js' + self.location.search);     // the page's build stamp (?v=...), if any
 importScripts('vs_core.js' + self.location.search);    // a full defensive call, shown as called (VSCore.called); the packed data's unpack
 
-let eng = null;
+let eng = null, lastInfo = null;
 const sims = new Map();
 
 function simFor(scen) {
@@ -105,7 +105,7 @@ self.onmessage = async (ev) => {
       // the page fetches the data once and hands each worker its own copy (bytes); on its own, a worker fetches it.
       // Packed (scripts/site.py pack, gunzipped by the page): VSCore.unpack, the engine's first (the playbook's refers to it)
       const get = (buf, url, what, ref) => (buf ? Promise.resolve(m.packed ? VSCore.unpack(buf, ref) : JSON.parse(new TextDecoder().decode(buf)))
-        : fetch(url).then((r) => { if (!r.ok) throw new Error(what + ' ' + r.status); return r.json(); }));
+        : fetch(url + self.location.search).then((r) => { if (!r.ok) throw new Error(what + ' ' + r.status); return r.json(); }));     // (stamped like the page's: these addresses are cached for good)
       const pbGet = m.playbook ? null : get(null, 'playbook.json', 'playbook');        // (fetched alongside the engine's)
       const d = await get(m.engine, 'engine_data.json', 'engine data');
       const pb = await (pbGet || get(m.playbook, 'playbook.json', 'playbook', d));
@@ -113,7 +113,11 @@ self.onmessage = async (ev) => {
       eng.loadPlaybook(pb);
       self.postMessage({ type: 'ready' });
     } else if (m.type === 'info') {
-      self.postMessage({ type: 'info', id: m.id, info: info(simFor(m.scen), m.root) });
+      // the last answer is kept: the page asks for the first call's facts while the intro is up (game.js renderIntro),
+      // so the same question from the huddle is answered at once
+      const key = m.scen.id + JSON.stringify(m.root);
+      if (!lastInfo || lastInfo.key !== key) lastInfo = { key, info: info(simFor(m.scen), m.root) };
+      self.postMessage({ type: 'info', id: m.id, info: lastInfo.info });
     } else if (m.type === 'eval') {
       const sim = simFor(m.scen);
       const out = m.options.map((o) => {
