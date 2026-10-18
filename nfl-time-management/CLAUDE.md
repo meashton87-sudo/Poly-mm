@@ -128,6 +128,11 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
 - The day's and week's lists (board/worker.js /daily, /week; game.js leaders): a name's first result of a day goes on the
   day's list (25 kept, 10 shown) and into its weeks (wk:<end date>: each name's best WEEK_BEST of 7 days added up, a
   histogram for ranks, 100 kept); kept as results come (a result touches 7 week values), never rebuilt by scanning.
+  A restarted daily (game.js restartAsk: Start over, the ☰ menu on a phone, under the field elsewhere; the day's state
+  keeps restarts, the post says restarted: true) is the device's first result all the same but stays out of the day's
+  n, histogram, averages and both lists (the day counts them as nr): the day's draws are everyone's, so a restart could
+  learn them. It counts for the player (score, stats day, streak). Pro drives and runs restart as a new try (new tryAt,
+  new draws), archive days freely; never survivor, practice or Versus.
   Never a blocked() name; `DELETE /week?name=` (admin token) takes a name off for good. Practice (#practice, game.js
   practiceState/renderPractice): only after the day's drive is done; its own saved state; it must never write a stats
   day, the streak, tendencies or post to /daily.

@@ -401,7 +401,8 @@ select), `help_open` (a tap on ?; auto: the three-line help a first visit to a P
 browser's prompt), `sim_ready` (packed data or JSON, ms since load, ms a player
 sat waiting on it), `info_mismatch` (a spot's first-call facts, shipped with it, differ from the simulator's: spot id), `drive_leave` (the page went to the background mid-drive: calls made, seconds in, still
 loading), `stats_open`, `stats_page_link`, `replay`, `name_set`, `leaderboard_tab` (day or week), `practice_start` (from the
-daily card or a practice card), `practice_finish` (practice drive number, kind, score, snaps). Share opens the phone's share sheet
+daily card or a practice card), `practice_finish` (practice drive number, kind, score, snaps), `restart_ask` (mode: Start over
+tapped) and `restart` (mode, calls made, restarts so far, the drive, run or day: confirmed). Share opens the phone's share sheet
 where there is one. In Google Analytics: Reports, Engagement, Events (custom fields need registering as custom
 dimensions under Admin, Custom definitions, to show in reports).
 

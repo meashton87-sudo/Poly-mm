@@ -7,9 +7,9 @@
 //   GET    /daily?date=2026-10-14                         -> that day's players: { n, hist, spots, top }
 //   GET    /days                                           -> every day played: { days: [{ date, n, avg, best }] }
 //   GET    /madden                                         -> every John Madden found: { odds, finds: [{ date, at, code }] }
-//   POST   /daily  { date, key, p, spots: [w, ...], name?, g? }  -> the same, after counting your result (1-3 spots: the
-//                                                             day's drive, or the three spots days had before), and
-//                                                             week: the week to that date with your own line
+//   POST   /daily  { date, key, p, spots: [w, ...], name?, g?, restarted? }  -> the same, after counting your result
+//                                                             (1-3 spots: the day's drive, or the three spots days had
+//                                                             before), and week: the week to that date with your own line
 //   GET    /week?date=2026-10-17                          -> the week to that date: { from, to, best, n, top: [{ name, pts, days }] }
 //   DELETE /week?name=Eli  (Authorization: Bearer <ADMIN_TOKEN>)          a name off the day and week lists, for good
 // The daily game: every device's first result of a day counts once (a replay of the day changes nothing). p is the
@@ -24,6 +24,12 @@
 // posted before it were worked out the old way (inflated on that day's drive) and stay as they were: a device's first
 // result still counts once, so a device that posted the old way never enters the fair set, and nothing replaces a
 // result. g only says which set a post also counts in: the same checks as any post, and no more trust than one.
+// A restarted drive (restarted: true; game.js restartAsk: the player started the day's drive over, so may have seen
+// the day's draws play out once) is still the device's first result of the day (a later post changes nothing), but
+// it stays out of the day's numbers: not in n, the histogram, the spots' averages, the day's list or the weeks, and
+// not in the fair set either (whatever its g). Out of
+// n too, so n is always the histogram's total (the page's rank and median read both). The day counts them on their
+// own (nr); the answer's you carries restarted: true.
 // Players are identified by name (a game among friends): trimmed, control characters dropped, 1-24 characters,
 // matched case-insensitively. The first post under a name claims it for that device's key (a random string the page
 // keeps; only its SHA-256 is stored), so nobody else can overwrite your score. Signed in ({ session } with the post:
@@ -157,7 +163,7 @@ const emptyDay = () => ({ n: 0, hist: new Array(101).fill(0), spots: [0, 1, 2].m
 const setView = (d) => ({ n: d.n, hist: d.hist, spots: d.spots.map((x) => ({ n: x.n, avg: x.n ? x.sum / x.n : 0, hist: x.hist })),
   top: shown(d.top).slice(0, DAY_TOP).map(({ name, p }) => ({ name, p })) });
 // (fair: the day's fair-scored set, when any post was: above)
-const dayView = (d) => ({ ...setView(d), ...(d.f ? { fair: setView(d.f) } : {}) });
+const dayView = (d) => ({ ...setView(d), nr: d.nr || 0, ...(d.f ? { fair: setView(d.f) } : {}) });
 const addTop = (set, name, p, kh) => {
   if (set.top.some(sameName(name.toLowerCase()))) return;
   set.top.push({ name, p, kh });
@@ -286,7 +292,7 @@ async function daily(req, env, storage, hits, h, url) {
   let body;
   try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
   const date = String((body && body.date) || ''), p = body && body.p, devKey = String((body && body.key) || '');
-  const spots = Array.isArray(body && body.spots) ? body.spots : null, raw = clean(body && body.name);
+  const spots = Array.isArray(body && body.spots) ? body.spots : null, raw = clean(body && body.name), restarted = !!(body && body.restarted === true);
   const refused = !!raw && blocked(raw), name = refused ? '' : raw;   // a refused name: the result counts, unnamed
   const fair = body.g === 2;                                          // every call graded the fair way (above)
   if (!dateOk(date)) return json({ error: 'date (YYYY-MM-DD, today) wanted' }, 400, h);
@@ -306,16 +312,16 @@ async function daily(req, env, storage, hits, h, url) {
     unclaimed = !owner;
   }
   const weekOut = async () => weekFor(storage, date, (prev && prev.name) || (name && !taken ? name : ''));
-  if (prev) {           // the day's first result stands; a name given afterwards puts that result on the list
-    if (name && !prev.name && !taken) {
+  if (prev) {           // the day's first result stands; a name given afterwards puts that result on the list (never a restarted one)
+    if (name && !prev.name && !taken && !prev.restarted) {
       prev.name = name;
       await listed(storage, day, date, name, nk, prev.p, prev.g === 2);
       await storage.put(mine, prev);
       await storage.put(`day:${date}`, day);
       if (unclaimed) await claim(storage, name.toLowerCase(), nk);
     }
-    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots, ...(prev.g === 2 ? { g: 2 } : {}) }, week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}),
-      ...(prev.madden ? { madden: prev.madden } : {}) }, 200, h);
+    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots, ...(prev.g === 2 ? { g: 2 } : {}), ...(prev.restarted ? { restarted: true } : {}) },
+      week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}), ...(prev.madden ? { madden: prev.madden } : {}) }, 200, h);
   }
   const pt = Math.round(p * 100);
   const count = (set) => {
@@ -323,17 +329,20 @@ async function daily(req, env, storage, hits, h, url) {
     set.hist[pt] += 1;
     spots.forEach((w, i) => { const x = set.spots[i]; x.n += 1; x.sum += w; x.hist[Math.max(0, Math.min(100, Math.round(w * 100) + 50))] += 1; });
   };
-  count(day);
-  if (fair) { day.f = day.f || emptyDay(); count(day.f); }
-  if (name && !taken) await listed(storage, day, date, name, nk, p, fair);
-  const you = { p, spots, ...(fair ? { g: 2 } : {}) };
+  if (restarted) day.nr = (day.nr || 0) + 1;        // off the day's numbers and lists, the fair set's too (above)
+  else {
+    count(day);
+    if (fair) { day.f = day.f || emptyDay(); count(day.f); }
+    if (name && !taken) await listed(storage, day, date, name, nk, p, fair);
+  }
+  const you = { p, spots, ...(fair ? { g: 2 } : {}), ...(restarted ? { restarted: true } : {}) };
   const madden = await maddenDraw(env, storage, kh, date);
   if (madden) {
     const list = (await storage.get('madden:list')) || [];
     list.push({ date, at: new Date().toISOString(), code: madden });
     await storage.put('madden:list', list.slice(-MADDEN_KEEP));
   }
-  await storage.put(mine, { ...you, ...(name && !taken ? { name } : {}), ...(madden ? { madden } : {}) });
+  await storage.put(mine, { ...you, ...(name && !taken && !restarted ? { name } : {}), ...(madden ? { madden } : {}) });
   await storage.put(`day:${date}`, day);
   if (unclaimed && name) await claim(storage, name.toLowerCase(), nk);
   return json({ ...dayView(day), counted: true, you, week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}), ...(madden ? { madden } : {}) }, 200, h);
