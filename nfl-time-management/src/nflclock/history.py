@@ -38,7 +38,7 @@ SEASONS = (2023, 2024, 2025, 2026)     # the daily game's own seasons; a feature
 
 OL_SLOTS = ["LT", "LG", "C", "RG", "RT"]
 OFF_POS = {"QB": "QB", "RB": "RB", "HB": "RB", "FB": "RB", "WR": "WR", "TE": "TE",
-           "T": "T", "OT": "T", "G": "G", "OG": "G", "C": "C", "OL": "G"}
+           "T": "T", "OT": "T", "G": "G", "OG": "G", "C": "C", "OL": "G", "LT": "T", "RT": "T", "LG": "G", "RG": "G"}
 DEF_POS = {"DE": "EDGE", "OLB": "EDGE", "DT": "DL", "NT": "DL", "DL": "DL", "ILB": "LB", "MLB": "LB", "LB": "LB",
            "CB": "CB", "DB": "CB", "FS": "S", "SS": "S", "S": "S", "SAF": "S"}
 UNRATED_OVR = int(O.CENTER - 12)       # a player without enough snaps yet, as in the current-roster lineups
@@ -46,17 +46,36 @@ UNRATED_OVR = int(O.CENTER - 12)       # a player without enough snaps yet, as i
 # of the time, so a team is looked up under both
 TEAM_THEN = {"LA": ["STL"], "LAC": ["SD"], "LV": ["OAK"]}
 codes = lambda team: [team] + TEAM_THEN.get(team, [])     # noqa: E731
+# the season rosters before 2013 (and their depth charts) keep a code of their own for a few teams
+ROSTER_CODES = {"ARI": ["ARZ"], "BAL": ["BLT"], "CLE": ["CLV"], "HOU": ["HST"], "LA": ["STL", "SL"]}
+rcodes = lambda team: list(dict.fromkeys(codes(team) + ROSTER_CODES.get(team, [])))     # noqa: E731
+# the old rosters give a lineman as "OL", a defensive back as "DB" ...; their depth-chart position is the real one
+ROSTER_GENERIC = {"OL", "DL", "DB", "LB", "RB", "SPEC"}
+# a historic drive (a Pro drive or playoff-run spot): who touched the ball on it, and whom a player who did may take the
+# place of in the lineup (his own position first, then the nearest: the snap's personnel changes as little as it can)
+DRIVE_OFF = ["passer_player_id", "rusher_player_id", "receiver_player_id", "lateral_receiver_player_id", "lateral_rusher_player_id"]
+DRIVE_PLAYS = ["pass", "run", "no_play", "qb_kneel", "qb_spike"]
+SWAP_OFF = {"QB": ["QB"], "RB": ["RB", "FB", "TE", "WR"], "FB": ["FB", "RB", "TE", "WR"], "WR": ["WR", "TE", "FB", "RB"],
+            "TE": ["TE", "FB", "WR", "RB"]}
+SWAP_DEF = {"EDGE": ["EDGE", "DL", "LB"], "DL": ["DL", "EDGE", "LB"], "LB": ["LB", "EDGE", "S", "DL", "CB"],
+            "CB": ["CB", "S", "LB"], "S": ["S", "CB", "LB"]}
 
 
 def _ol_slots(players: list) -> list:
     """Five linemen (id, roster position) to LT, LG, C, RG, RT: centers to the middle, guards inside, tackles
     outside, filling from the next closest position; a sixth (jumbo) lineman stays an extra tackle."""
     pool = {"C": [], "G": [], "T": []}
-    for pid, pos in players:
-        pool[pos if pos in pool else "G"].append(pid)
-    order = {"C": ["C", "G", "T"], "LG": ["G", "C", "T"], "RG": ["G", "C", "T"], "LT": ["T", "G", "C"], "RT": ["T", "G", "C"]}
     out = []
+    for pid, pos in players:
+        if pos in OL_SLOTS and all(pos != s for _, s in out):       # the slot his depth chart gives him
+            out.append((pid, pos))
+        else:
+            p = OFF_POS.get(pos, "G")
+            pool[p if p in pool else "G"].append(pid)
+    order = {"C": ["C", "G", "T"], "LG": ["G", "C", "T"], "RG": ["G", "C", "T"], "LT": ["T", "G", "C"], "RT": ["T", "G", "C"]}
     for slot in ["C", "LG", "RG", "LT", "RT"]:
+        if any(s == slot for _, s in out):
+            continue
         for src in order[slot]:
             if pool[src]:
                 out.append((pool[src].pop(0), slot))
@@ -98,6 +117,7 @@ class History:
                         f[c] = None
                 self.part[s] = f.rename(columns={"nflverse_game_id": "game_id"})
         self.R, self.meas, self.cards, self.pbp_raw, self.ovr, self.ovr_data = {}, {}, {}, {}, {}, None
+        self.starters = {}         # (game id, team) -> the line's five names, LT to RT, where no data names it (pro_drives.json "line")
         full = pd.read_parquet(PL._get("players", "players.parquet"), columns=["gsis_id", "display_name", "height", "weight", "position"])
         full = full.drop_duplicates("gsis_id").set_index("gsis_id")
         self.names, self.body = full["display_name"].to_dict(), full[["height", "weight"]]
@@ -239,8 +259,89 @@ class History:
         if ("roster", season) not in self.jerseys:
             p = PL._get("rosters", f"roster_{season}.parquet", optional=True)
             cols = ["season", "team", "position", "gsis_id", "full_name", "years_exp"]
-            self.jerseys[("roster", season)] = pd.read_parquet(p, columns=cols).dropna(subset=["gsis_id"]) if p is not None else pd.DataFrame(columns=cols)
+            if p is None:
+                f = pd.DataFrame(columns=cols)
+            else:
+                have = set(pq.read_schema(p).names)
+                f = pd.read_parquet(p, columns=cols + [c for c in ("depth_chart_position",) if c in have]).dropna(subset=["gsis_id"])
+                if "depth_chart_position" in f:      # an "OL" of the old rosters is a tackle, guard or center there
+                    dcp = f["depth_chart_position"].astype("object").replace({"OT": "T"})
+                    f["position"] = f["position"].where(~(f["position"].isin(ROSTER_GENERIC) & dcp.notna()), dcp)
+                    f = f.drop(columns="depth_chart_position")
+            self.jerseys[("roster", season)] = f
         return self.jerseys[("roster", season)]
+
+    def _depth(self, season: int) -> pd.DataFrame:
+        """The season's depth charts (nflverse, 2001 on), one frame: team, when (the week, or from 2025 the day the
+        chart stood), unit (off/def), slot (LT, LG, C, RG, RT, LCB, ...), position, rank (1: the starter), gsis_id."""
+        if ("depth", season) not in self.jerseys:
+            p = PL._get("depth_charts", f"depth_charts_{season}.parquet", optional=True)
+            f = pd.read_parquet(p) if p is not None else pd.DataFrame()
+            cols = ["team", "when", "unit", "slot", "position", "rank", "gsis_id"]
+            st = lambda c: f[c].astype(str).str.strip().str.upper()      # noqa: E731
+            if "club_code" in f:               # 2001-2024: a chart a week
+                f = pd.DataFrame({"team": f["club_code"], "when": pd.to_numeric(f["week"], errors="coerce"),
+                                  "unit": f["formation"].map({"Offense": "off", "Defense": "def"}), "slot": st("depth_position"),
+                                  "position": st("position"), "rank": pd.to_numeric(f["depth_team"], errors="coerce"), "gsis_id": f["gsis_id"]})
+            elif "pos_abb" in f:               # 2025 on: the chart as it stood each day
+                grp = f["pos_grp"].astype(str)
+                f = pd.DataFrame({"team": f["team"], "when": f["dt"].astype(str).str[:10],
+                                  "unit": np.where(grp.str.contains("Special"), None, np.where(grp.str.endswith(" D"), "def", "off")),
+                                  "slot": st("pos_abb"), "position": st("pos_abb"), "rank": pd.to_numeric(f["pos_rank"], errors="coerce"),
+                                  "gsis_id": f["gsis_id"]})
+            else:
+                f = pd.DataFrame(columns=cols)
+            self.jerseys[("depth", season)] = f.dropna(subset=["gsis_id", "unit"])
+        return self.jerseys[("depth", season)]
+
+    def _depth_rows(self, season: int, week: int, team: str, date: str | None) -> pd.DataFrame:
+        """The team's depth chart for that game: the game week's (else the latest before it); from 2025, the chart as it
+        stood on the game's day."""
+        f = self._depth(season)
+        f = f[f["team"].isin(rcodes(team))]
+        if not len(f):
+            return f
+        w = f["when"]
+        if isinstance(w.iloc[0], str):
+            if not date:
+                return f.iloc[:0]
+            before = w[w <= str(date)[:10]]
+            return f[w == (before.max() if len(before) else w.min())]
+        return f[w == (week if (w == week).any() else (w[w < week].max() if (w < week).any() else w.min()))]
+
+    def _depth_units(self, season: int, week: int, team: str) -> dict:
+        """Before snap counts (2001-2012): the starters the team's depth chart named for that game, the line in its
+        slots; a unit the chart does not fill is left out."""
+        d = self._depth_rows(season, week, team, None)
+        d = d[d["rank"] == 1].drop_duplicates(["unit", "gsis_id"])
+        out = {}
+        off = d[d["unit"] == "off"]
+        grp = off["position"].map(lambda p: "FB" if p == "FB" else OFF_POS.get(p))
+        qb = off[grp == "QB"].head(1)
+        line = []
+        for slot in OL_SLOTS:
+            r = off[(off["slot"] == slot) & grp.isin(["T", "G", "C"])]
+            if len(r) and r["gsis_id"].iloc[0] not in {i for i, _ in line}:
+                line.append((r["gsis_id"].iloc[0], slot))
+        for i, p in zip(off["gsis_id"], off["position"]):      # a chart naming the line T, G, C, without a side
+            if len(line) < 5 and OFF_POS.get(p) in ("T", "G", "C") and i not in {j for j, _ in line}:
+                line.append((i, p))
+        buckets = {g: [(i, p) for i, p, gg in zip(off["gsis_id"], off["position"], grp) if gg == g] for g in ("WR", "TE", "RB", "FB")}
+        skill = []
+        for g in ("WR", "WR", "TE", "RB", "FB", "WR", "TE", "RB"):
+            if len(skill) < 5 and buckets[g]:
+                skill.append(buckets[g].pop(0))
+        if len(qb) and len(line) == 5 and len(skill) == 5:
+            out["off"] = [(qb["gsis_id"].iloc[0], "QB")] + line + skill
+        dfn = d[d["unit"] == "def"]
+        dg = dfn["position"].map(lambda p: DEF_POS.get(p))
+        dfn = dfn[dg.notna()].assign(g=dg[dg.notna()])
+        backs = [(i, p) for i, p, g in zip(dfn["gsis_id"], dfn["position"], dfn["g"]) if g in ("CB", "S")]
+        front = [(i, p) for i, p, g in zip(dfn["gsis_id"], dfn["position"], dfn["g"]) if g not in ("CB", "S")]
+        picks = (front[:7] + backs)[:11] if len(front) >= 7 else (front + backs)[:11]
+        if len(picks) == 11:
+            out["def"] = picks
+        return out
 
     def _boxscore_units(self, game_id: str, season: int, team: str) -> dict:
         """Before snap counts (2012): the players the play-by-play credits in the game, most involved first, at the
@@ -249,7 +350,7 @@ class History:
         g = pd.read_parquet(PL.pbp_path(season), columns=cols, filters=[("game_id", "==", game_id)])
         g = g[g["play_type"].isin(["run", "pass"])]
         ros = self._roster(season)
-        ros = ros[ros["team"].isin(codes(team))].sort_values("years_exp", ascending=False)
+        ros = ros[ros["team"].isin(rcodes(team))].sort_values("years_exp", ascending=False)
         pos_of = {**self.pos_now, **dict(zip(ros["gsis_id"], ros["position"]))}
         out = {}
         # offense: the quarterback who threw most, then the backs, receivers and tight ends by touches
@@ -312,6 +413,125 @@ class History:
             out["def"] = picks
         return out
 
+    # ---- a historic drive: the players who played it
+    def _drive(self, game_id: str, season: int, play_id: float) -> dict | None:
+        """The real drive from the spot's snap on: its offense (team) and defense (opp), the game's day, who touched the
+        ball (offense: threw, ran, caught, took a lateral; defense: a tackle, sack, hit, pass defended, pick or forced
+        fumble), a player's snaps on it (participation, 2016 on) and in the game."""
+        dcols = self.BOX_DEF + ["tackle_with_assist_1_player_id", "tackle_with_assist_2_player_id"]
+        cols = ["game_id", "play_id", "posteam", "defteam", "fixed_drive", "play_type", "game_date"] + DRIVE_OFF + dcols
+        have = set(pq.read_schema(PL.pbp_path(season)).names)
+        g = pd.read_parquet(PL.pbp_path(season), columns=[c for c in cols if c in have], filters=[("game_id", "==", game_id)])
+        at = g[g["play_id"] == play_id]
+        if not len(at) or pd.isna(at["posteam"].iloc[0]):
+            return None
+        r = at.iloc[0]
+        d = g[(g["fixed_drive"] == r["fixed_drive"]) & (g["posteam"] == r["posteam"]) & (g["play_id"] >= play_id)
+              & g["play_type"].isin(DRIVE_PLAYS)]
+        out = {"team": r["posteam"], "opp": r["defteam"], "date": r.get("game_date"), "touch": {"off": Counter(), "def": Counter()},
+               "snaps": {"off": Counter(), "def": Counter()}, "game": Counter()}
+        for c in DRIVE_OFF:
+            for pid in d[c].dropna():
+                out["touch"]["off"][pid] += 1
+        dcols = [c for c in dcols if c in g]
+        for c in dcols:
+            for pid in d[c].dropna():
+                if pid not in out["touch"]["off"]:         # an offensive player's tackle after a turnover is not the defense's
+                    out["touch"]["def"][pid] += 1
+        for c in list(DRIVE_OFF) + dcols:                    # how involved each player was in the whole game
+            for pid in g[g["play_type"].isin(["pass", "run"])][c].dropna():
+                out["game"][pid] += 1
+        f = self.part.get(season)
+        if f is not None:
+            rows = f[(f["game_id"] == game_id) & f["play_id"].isin(d["play_id"])]
+            for unit, col in (("off", "offense_players"), ("def", "defense_players")):
+                for ids in rows[col].dropna():
+                    for i in str(ids).split(";"):
+                        out["snaps"][unit][i] += 1
+        return out
+
+    def _team_ids(self, R, season: int, week: int, team: str, game_id: str) -> set:
+        """Everyone known to be on the team that week: its roster, depth chart, snap counts and participation."""
+        ros = self._roster(season)
+        ids = set(ros.loc[ros["team"].isin(rcodes(team)), "gsis_id"])
+        ids |= set(self._depth_rows(season, week, team, None)["gsis_id"]) if season < 2025 else set()
+        t = self._jersey_table(season)
+        ids |= {k[0] for k in t if len(k) == 2 and k[1] in rcodes(team)}
+        sn = R.T["snaps"]
+        to_gsis = {v: k for k, v in R.gsis_to_pfr.items()}
+        ids |= {to_gsis.get(p, "pfr:" + p) for p in sn.loc[(sn["game_id"] == game_id) & sn["team"].isin(codes(team)), "pfr_player_id"]}
+        f = self.part.get(season)
+        if f is not None:
+            g = f[f["game_id"] == game_id]
+            for col, mine in (("offense_players", g["possession_team"].isin(codes(team))), ("defense_players", ~g["possession_team"].isin(codes(team)))):
+                for v in g.loc[mine, col].dropna():
+                    ids |= set(str(v).split(";"))
+        return ids
+
+    def _pos_of(self, R, season: int, week: int, team: str, game_id: str, date) -> dict:
+        """A player's position in that game: its snap counts (2013 on), else the depth chart, the season's roster, today's."""
+        ros = self._roster(season)
+        ros = ros[ros["team"].isin(rcodes(team))]
+        dep = self._depth_rows(season, week, team, date)
+        dep = dep[~dep["position"].isin(OL_SLOTS) | dep["position"].isin(["C"])]       # (from 2025 the chart gives slots only)
+        return {**self.pos_now, **dict(zip(ros["gsis_id"], ros["position"])),
+                **dict(zip(dep["gsis_id"], dep["position"])), **self._game_positions(R, game_id)}
+
+    def _def_group(self, R, rt, season: int, gid: str, p: str) -> str:
+        """EDGE, DL, LB, CB or S: his role (PFF) tells an edge from an interior lineman; in an old game a corner who
+        became a safety (or the reverse) was what that game's snap counts say."""
+        pfr = R.gsis_to_pfr.get(gid)
+        then = DEF_POS.get(p) if season < 2023 and p in ("CB", "DB", "S", "FS", "SS", "SAF") else None
+        grp = then or (R.role.get(pfr) if pfr else None) or rt["grp"].get(pfr) or DEF_POS.get(p) or p
+        return grp if grp in ("EDGE", "DL", "LB", "CB", "S") else DEF_POS.get(p, "LB")
+
+    def _drive_lineup(self, unit: list, kind: str, touch: Counter, weight, group, team_ids: set, pos_of: dict) -> tuple:
+        """The unit with everyone who touched the ball on the drive in it: each one not on the field takes the place of
+        a player who did not touch it, at his own position if there is one (else the nearest, or a sixth lineman's
+        place; the fewest snaps on the drive, then in the game, goes); with every such place taken by players who
+        touched it, the one who touched it least makes way for one who touched it more. Returns (unit, the players
+        moved out, the touchers there was no place for, most touches first)."""
+        unit = list(unit)
+        on = lambda: {i for i, _ in unit}       # noqa: E731
+        moved, left = [], []
+        order = sorted((p for p in touch if p in team_ids), key=lambda p: (group(p, pos_of.get(p, "")) != "QB", -touch[p]))
+        for pid in order:
+            if pid in on():
+                continue
+            pos = pos_of.get(pid, "")
+            g = group(pid, pos)
+            swap = (SWAP_OFF if kind == "off" else SWAP_DEF).get(g)
+            if not swap:
+                left.append((pid, pos))
+                continue
+            line = [k for k, (i, p) in enumerate(unit) if group(i, p) in ("T", "G", "C")]
+            wants = [(w, False) for w in swap + (["OL"] if kind == "off" and len(line) > 5 else [])]   # (a sixth lineman's place)
+            # no one left there who did not touch it: one who touched it less (he goes to the bench)
+            for want, less in wants + [(w, True) for w in swap]:
+                cand = [(k, (i, p)) for k, (i, p) in enumerate(unit)
+                        if (touch[i] < touch[pid] if less else i not in touch) and (group(i, p) == want or (want == "OL" and k in line))]
+                if cand:
+                    k, out = min(cand, key=lambda c: (touch[c[1][0]], weight(c[1][0]), -c[0]))
+                    unit[k] = (pid, pos)
+                    (left if less else moved).append(out)
+                    break
+            else:
+                left.append((pid, pos))
+        return unit, moved, left
+
+    def _ol_relabel(self, members: list, season: int, week: int, team: str, date) -> list:
+        """The line in the slots the team's depth chart gives each lineman that week (left tackle, right guard, ...),
+        where those are five different slots; else as they were."""
+        d = self._depth_rows(season, week, team, date)
+        d = d[(d["unit"] == "off") & d["slot"].isin(OL_SLOTS)].sort_values("rank")
+        slot = dict(zip(d["gsis_id"][::-1], d["slot"][::-1]))          # (his highest rank's slot)
+        ol = [(i, p) for i, p in members if OFF_POS.get(p) in ("T", "G", "C")]
+        got = [slot.get(i) for i, _ in ol]
+        if len(ol) != 5 or None in got or len(set(got)) != 5:
+            return members
+        new = dict(zip([i for i, _ in ol], got))
+        return [(i, new.get(i, p)) for i, p in members]
+
     def _jersey_table(self, season: int) -> dict:
         """Jersey numbers and names from nflverse weekly rosters: (id, team, week), then (id, team) for the season, as
         (number, name); ids are gsis and pfr. Empty when the season's file is not published. The name is the one he
@@ -352,18 +572,11 @@ class History:
         recs, cbs = [], 0
         if unit == "off":
             qb = [(i, "QB") for i, p in members if OFF_POS.get(p) == "QB"]
-            ol = [(i, OFF_POS.get(p, "G")) for i, p in members if OFF_POS.get(p) in ("T", "G", "C")]
+            ol = [(i, p if p in OL_SLOTS else OFF_POS.get(p, "G")) for i, p in members if OFF_POS.get(p) in ("T", "G", "C")]
             skill = [(i, OFF_POS.get(p, "WR")) for i, p in members if OFF_POS.get(p, "WR") in ("RB", "WR", "TE")]
             placed = qb[:1] + [(i, s) for i, s in _ol_slots(ol)] + skill + qb[1:]
         else:
-            placed = []
-            for i, p in members:
-                pfr = R.gsis_to_pfr.get(i)
-                # his role today (PFF) tells an edge from an interior lineman; in an old game a corner who became a safety
-                # (or the reverse) was what that game's snap counts say
-                then = DEF_POS.get(p) if season < 2023 and p in ("CB", "DB", "S", "FS", "SS", "SAF") else None
-                grp = then or (R.role.get(pfr) if pfr else None) or rt["grp"].get(pfr) or DEF_POS.get(p) or p
-                placed.append((i, grp if grp in ("EDGE", "DL", "LB", "CB", "S") else DEF_POS.get(p, "LB")))
+            placed = [(i, self._def_group(R, rt, season, i, p)) for i, p in members]
         line_pct, line_stat = next((rt["ol"][c] for c in codes(team) if c in rt["ol"]), (None, None))
         ov = self.overall(season, week) if week is not None else None
         if not hasattr(self, "pfr_to_gsis"):
@@ -462,20 +675,63 @@ class History:
             "league": {k: round(float(r[k]), 5) for k in ("mu_pass", "mu_rush", "home_pass", "home_rush")},
         }
 
-    def teams(self, game_id: str, season: int, week: int, play_id: float, home: str, away: str, coaches: dict) -> dict:
-        """{'home': team, 'away': team} in the daily game's team format, as of that game."""
+    def teams(self, game_id: str, season: int, week: int, play_id: float, home: str, away: str, coaches: dict,
+              drive: bool = False) -> dict:
+        """{'home': team, 'away': team} in the daily game's team format, as of that game. drive (a historic drive: Pro):
+        the lineups of the drive that starts at the snap, everyone who touched the ball on it on the field (the
+        offense's and the defense's), the line in its depth chart's slots."""
         R = self.ratings(season)
         rt = R.week(season, week)
         card = self.card(season, week)
+        dr = self._drive(game_id, season, play_id) if drive else None
         out = {}
         for side, team in (("home", home), ("away", away)):
             units = self._snap_units(game_id, season, play_id, team, self._game_positions(R, game_id) if season < 2023 else None)
             if len(units) < 2:
                 units = {**self._snapcount_units(R, game_id, team), **units}
-            if len(units) < 2:
-                units = {**self._boxscore_units(game_id, season, team), **units}
+            if len(units) < 2:              # before snap counts: the depth chart's starters, then who the box score credits
+                box = self._boxscore_units(game_id, season, team)
+                units = {**box, **self._depth_units(season, week, team), **units, "bench": box.get("bench", [])}
             bench = self._bench(R, game_id, team, units.get("off", [])) or units.get("bench", [])
             off, dfn = units.get("off", []), units.get("def", [])
+            fixed = self.starters.get((game_id, team))
+            if fixed:                       # a line no data names (1999-2000): the game's starters, LT to RT, by name
+                ros = self._roster(season)
+                ros = ros[ros["team"].isin(rcodes(team))]
+                ids = [ros.loc[ros["full_name"] == n, "gsis_id"] for n in fixed]
+                if any(not len(i) for i in ids):
+                    raise RuntimeError(f"{game_id} {team}: no {[n for n, i in zip(fixed, ids) if not len(i)]} on the roster")
+                off = [(i, p) for i, p in off if OFF_POS.get(p) not in ("T", "G", "C")]
+                off = off[:1] + [(i.iloc[0], slot) for i, slot in zip(ids, OL_SLOTS)] + off[1:]
+            if dr is not None and team in (dr["team"], dr["opp"]):
+                kind = "off" if team == dr["team"] else "def"
+                pos_of = self._pos_of(R, season, week, team, game_id, dr["date"])
+                sn = R.T["snaps"]
+                g = sn[(sn["game_id"] == game_id) & sn["team"].isin(codes(team))]
+                to_gsis = {v: k for k, v in R.gsis_to_pfr.items()}
+                gsn = Counter({to_gsis.get(p, "pfr:" + p): n for p, n in zip(g["pfr_player_id"], g[kind + "ense_snaps"])})
+                weight = lambda i: (dr["snaps"][kind][i], gsn[i], dr["game"][i])      # noqa: E731
+                if kind == "off":
+                    group = lambda i, p: "FB" if p == "FB" else OFF_POS.get(p)        # noqa: E731
+                else:
+                    group = lambda i, p: self._def_group(R, rt, season, i, p)        # noqa: E731
+                ids = self._team_ids(R, season, week, team, game_id)
+                new, moved, left = self._drive_lineup(off if kind == "off" else dfn, kind, dr["touch"][kind], weight, group, ids, pos_of)
+                if kind == "off":
+                    on = {i for i, _ in new}
+                    skill = lambda p: "FB" if p == "FB" else OFF_POS.get(p, "WR")      # noqa: E731
+                    extra = [(i, skill(p)) for i, p in left + moved + [(i, p) for i, p in bench] if skill(p) in ("RB", "FB", "WR", "TE")]
+                    bench = []
+                    for i, p in extra:         # the touchers there was no place for first, then whom they replaced
+                        if i not in on and all(i != j for j, _ in bench):
+                            bench.append((i, p))
+                    off = new
+                else:
+                    dfn = new
+            if drive and season < 2026:
+                date = dr["date"] if dr is not None else None
+                off = self._ol_relabel(off, season, week, team, date)
+            bench = [(i, p) for i, p in bench if all(i != j for j, _ in off)]
             qb_id = next((i for i, p in off if OFF_POS.get(p) == "QB"), None)
             if qb_id is None or qb_id.startswith("pfr:"):
                 d = self.pbp[(self.pbp["game_id"] == game_id) & (self.pbp["posteam"] == team) & (self.pbp["qb_dropback"] == 1)]

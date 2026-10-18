@@ -353,15 +353,17 @@
   }
   // a spot in overtime (a historic drive: Super Bowl LVIII's, Fitzgerald's): the period it is in, playoff rules or not, and
   // whether the other team has had the ball (behind, or past the period's first snap: they have), so the engine plays the
-  // overtime rules from it (each team a possession, then the next score wins) and not a fourth quarter
+  // overtime rules from it (each team a possession, then the next score wins; a historic drive's of its time, the
+  // spot's overtime: pro.py overtime_rules) and not a fourth quarter
   function otOf(sc) {
     const st = sc.start;
     if (!(st.qtr > 4)) return {};
     const pos = st.pos === sc.home ? 0 : 1, po = ['WC', 'DIV', 'CON', 'SB'].includes((sc.real || {}).type);
-    const fresh = st.qtr === 5 && st.score[0] === st.score[1] && st.clock >= (po ? 900 : 600);
+    const rules = (sc.overtime || {}).rules, len = (sc.overtime || {}).len || (po ? 900 : 600);
+    const fresh = st.qtr === 5 && st.score[0] === st.score[1] && st.clock >= len;
     const c = [0, 0];
     if (!fresh) c[1 - pos] = 1;
-    return { ot: { c, po, n: st.qtr - 4 } };
+    return { ot: { c, po, n: st.qtr - 4, ...(rules === 'sd' || rules === 'msd' ? { r: rules } : {}) } };
   }
   // a spot's matchup: its two teams as they were in that game (web/spots), the real point spread, that
   // season's league averages
@@ -1410,10 +1412,15 @@
       return a > 0 && a < 1 && b > 0 && b < 1;
     };
     for (let i = 0; i < fine.length - 1; i++) for (let j = i + 2; j < fine.length - 1; j++) if (crosses(fine[i], fine[i + 1], fine[j], fine[j + 1])) return 'loop';
-    let turn = 0;
-    for (let k = 1; k < main.length - 1; k++) turn += turnOf(main[k - 1], main[k], main[k + 1]);
-    if (turn > DRAW_TURN) return 'loop';
-    if (legs.length > 4 && simplify(raw, 2.6).length > 4) return 'cuts';
+    // turning one way all along winds into a loop; a zigzag turns back and forth (its turns cancel): too many cuts
+    let turn = 0, net = 0;
+    for (let k = 1; k < main.length - 1; k++) {
+      const a = main[k - 1], b = main[k], c = main[k + 1], t = turnOf(a, b, c);
+      turn += t;
+      net += Math.sign((b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])) * t;
+    }
+    if (Math.abs(net) > DRAW_TURN) return 'loop';
+    if ((legs.length > 4 && simplify(raw, 2.6).length > 4) || turn > DRAW_TURN) return 'cuts';
     for (let k = 1; k < legs.length - 1; k++) {
       const last = k === legs.length - 2, len = Math.hypot(legs[k + 1][0] - legs[k][0], legs[k + 1][1] - legs[k][1]);
       if (turnOf(legs[k - 1], legs[k], legs[k + 1]) > 150 && !(last && len <= DRAW_BACK + 1)) return 'back';
@@ -4006,9 +4013,15 @@
   // the real game a spot comes from: "2023 · Week 14" or "2024 · Divisional Round"
   const ROUND = { WC: 'Wild Card Round', DIV: 'Divisional Round', CON: 'Conference Championship', SB: 'Super Bowl' };
   const COLLEGE_ROUND = { B1G: 'Big Ten Championship' };
+  // "2024 · Week 8"; a playoff game by its month, as people know it ("Super Bowl LII · Feb 2018", not the season's 2017)
+  const roman = (n) => [[50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']].reduce((a, [v, r]) => { while (n >= v) { a += r; n -= v; } return a; }, '');
   function gameTag(sc) {
     const rl = sc.real || {};
-    return `${rl.season} · ${ROUND[rl.type] || COLLEGE_ROUND[rl.type] || `Week ${rl.week}`}`;
+    if (!ROUND[rl.type]) return `${rl.season} · ${COLLEGE_ROUND[rl.type] || `Week ${rl.week}`}`;
+    // (the game's date where the data has it; else January after the season, a Super Bowl February from the 2003 season's)
+    const d = rl.date ? new Date(`${rl.date}T12:00:00`) : new Date(rl.season + 1, rl.type === 'SB' && rl.season >= 2003 ? 1 : 0, 15);
+    const when = `${d.toLocaleDateString('en-US', { month: 'short' })} ${d.getFullYear()}`;
+    return `${rl.type === 'SB' ? `Super Bowl ${roman(rl.season - 1965)}` : ROUND[rl.type]} · ${when}`;
   }
   const matchLine = (sc) => (sc.neutral ? `${teamName(sc.away)} vs ${teamName(sc.home)}${sc.site ? ` · ${sc.site}` : ''}` : `${teamName(sc.away)} at ${teamName(sc.home)}`);
   // the kind of spot, as this one is: "Tied, or end of the half" says which ("End of the half" above "Down by 4")
@@ -4043,6 +4056,9 @@
     const tos = (n) => (n ? `${n} timeout${n === 1 ? '' : 's'}` : 'no timeouts');
     [`${r.pos === G.me ? 'Your' : `${teamName(op)}`} ball, ${ddText(r)} ${onSpot(r)}`, `You: ${tos(r.to[G.me])}`,
       `${teamName(op)}: ${tos(r.to[1 - G.me])}`].forEach((f) => facts.append(el('span', '', f)));
+    // an overtime spot: its rules (a historic drive's are of its time)
+    if (r.ot) facts.append(el('span', '', r.ot.r === 'sd' ? 'Sudden death: the first score wins' : r.ot.r === 'msd' ? `${sc.real.season} overtime rules: a touchdown wins it`
+      : 'Overtime: each team gets the ball, then the next score wins'));
     box.append(facts);
     // Play right under the spot, on the first screen without scrolling (players asked); the story and the rest below
     const go = el('button', 'btn play', G.started ? 'Back to the drive' : 'Play');
@@ -5927,26 +5943,31 @@
     track('overtime', { day: dayN });
     const r = G.root, po = isPlayoff(G.scen), d = $('dock'), them = teamName(code(1 - G.me));
     const won = rng(hash('toss', seedKey(), G.si))() < 0.5;
+    // a historic drive's overtime is its time's (pro.py overtime_rules); the daily game's, today's
+    const OT = G.scen.overtime || {}, rules = OT.rules === 'sd' || OT.rules === 'msd' ? OT.rules : null, len = OT.len || (po ? 900 : 600);
+    const how = rules === 'sd' ? `Sudden death (the rules of ${G.scen.real.season}): the first score wins.`
+      : rules === 'msd' ? `The rules of ${G.scen.real.season}: a touchdown on the first possession wins it; a field goal gives the other team the ball. Then the next score wins.`
+        : 'Both teams get the ball, then the next score wins.';
     drawAll();
     d.textContent = '';
     takeBanner(d);
     const head = el('div', 'ask');
     head.append(el('h2', '', `Tied ${r.score[G.me]}–${r.score[1 - G.me]}: overtime`),
-      el('span', 'sub', `${po ? 15 : 10} minutes, ${po ? 3 : 2} timeouts each. Both teams get the ball, then the next score wins.${
+      el('span', 'sub', `${len / 60} minutes, ${po ? 3 : 2} timeouts each. ${how}${
         po ? ' Playoffs: it goes on until someone wins.' : ' Still tied after that, it’s a tie: you stay alive, without a win.'}`));
     d.append(head);
     d.append(el('p', 'note toss', won ? 'You won the coin toss.' : `The ${them} won the coin toss and will receive.`));
     const start = (kicker) => {
       if (busy) return;
-      G.root = { t: po ? 900 : 600, pos: kicker, score: [r.score[0], r.score[1]], down: 1, ytg: 10, yl: 65, to: po ? [3, 3] : [2, 2],
-        clock_running: false, phase: KICKOFF, credit: 0, free_kick: false, ot: { c: [0, 0], po, n: 1 } };
+      G.root = { t: len, pos: kicker, score: [r.score[0], r.score[1]], down: 1, ytg: 10, yl: 65, to: po ? [3, 3] : [2, 2],
+        clock_running: false, phase: KICKOFF, credit: 0, free_kick: false, ot: { c: [0, 0], po, n: 1, ...(rules ? { r: rules } : {}) } };
       G.over = false; G.result = null;
       addLog(kicker === G.me ? `Overtime: you kick off to the ${them}` : `Overtime: the ${them} kick off to you`, G.root.t, true);
       persist();
       advance();
     };
     const keys = el('div', 'keys');
-    const opts = won ? [['Receive', 'Get the ball first', 1 - G.me], ['Kick off', 'Know what you need', G.me]] : [['Kick off', null, G.me]];
+    const opts = won ? [['Receive', 'Get the ball first', 1 - G.me], ['Kick off', rules === 'sd' ? 'Defend first' : 'Know what you need', G.me]] : [['Kick off', null, G.me]];
     keys.style.setProperty('--cols', opts.length);
     opts.forEach(([label, sub, kicker], i) => {
       const b = key(label, sub, 'big', i);
@@ -6005,6 +6026,12 @@
     else if (res.half === 1 || (tie && !inOT)) card.append(el('p', 'note', `Your win chance from here: ${wpTxt(res.wp)}.`));
     if (SURV) card.append(el('p', `alive ${state.out ? 'out' : 'in'}`, state.out ? `Eliminated after ${state.won} win${state.won === 1 ? '' : 's'}.` :
       inOT && tie ? `Still alive: ${state.won} win${state.won === 1 ? '' : 's'}.` : `${state.won} straight. You're still alive.`));
+    // a playoff run, like a real one, ends with a loss: the games after it are not played (the run can be played again)
+    const runOut = !!RUN_N && res.half !== 1 && res.mine < res.theirs && G.si < today.length - 1;
+    if (runOut) {
+      const rg = PRO_RUNS.runs[RUN_N - 1].games[G.si];
+      card.append(el('p', 'alive out', `Season over: the ${teamName(sc.player)} are out in ${roundIn(rg.round)}.`));
+    }
     card.append(squaresOf(G.decisions));
     const bc = SURV && badgeCard(res.badges || []);
     if (bc) card.append(bc);
@@ -6021,7 +6048,7 @@
     const cc = coachCard(G.decisions, 'You called this one like');
     if (cc) card.append(cc.el);
     card.append(el('p', 'verdict', callsLine(G.decisions)));
-    const btn = el('button', 'btn', SURV ? (state.out ? 'Your run' : 'Next game') : PRACTICE ? 'Your score' : G.si < today.length - 1 ? (RUN_N ? 'Next game' : 'Next spot')
+    const btn = el('button', 'btn', SURV ? (state.out ? 'Your run' : 'Next game') : PRACTICE ? 'Your score' : runOut ? 'Your run' : G.si < today.length - 1 ? (RUN_N ? 'Next game' : 'Next spot')
       : DRIVE ? 'Your grade' : RUN_N ? 'Your run' : ARCH_DAY ? 'Your score' : "Today's score");
     btn.type = 'button';
     if (SURV) card.append(...lifeOffer());
@@ -6036,6 +6063,7 @@
         saveState();
         return survOpen();
       }
+      if (runOut) { state.out = G.si; saveState(); return renderSummary(); }
       state.current = G.si + 1;
       saveState();
       if (G.si < today.length - 1) openSpot(G.si + 1);
@@ -6534,6 +6562,8 @@
     return strip;
   }
   // a drive played again from the snap: its saved state cleared (its best grade stays)
+  // "the Divisional round", "the Super Bowl": a playoff round in a sentence
+  const roundIn = (r) => (/Championship|Super Bowl/.test(r) ? `the ${r}` : `the ${r} round`);
   function retryDrive() {
     try { localStorage.removeItem(stateKey()); } catch (e) { /* storage off */ }
     track('drive_retry', { drive: DRIVE });
@@ -6562,7 +6592,7 @@
   }
   function renderSummary() {
     if (PRACTICE) return renderPractice();
-    if (!G) resumeSpot(today.length - 1);
+    if (!G) resumeSpot(RUN_N && state.out != null ? state.out : today.length - 1);
     show('done');
     const decs = allDecisions();
     const p = decs.length ? scoreVsNFL(decs) : 0;
@@ -6629,13 +6659,20 @@
         el('div', 'streak', RUN_N ? 'Playoff run' : ARCH_DAY ? 'From the archive' : streakLine(sk)));
       if (!RUN_N && state.froze && state.froze.length) box.append(el('div', 'frz', `❄️ Streak saved by a freeze${state.froze.length > 1 ? ` (${state.froze.length} days)` : ''}: ${state.froze.length > 1 ? 'the days you missed count' : 'the day you missed counts'}`));
     }
-    if (RUN_N) {                      // the run's record against the real one
-      const run = PRO_RUNS.runs[RUN_N - 1], w = runRec.filter((x) => x > 0).length, l = runRec.filter((x) => x < 0).length, t = today.length - w - l;
-      const rw = run.games.filter((g) => g.won).length, rl = run.games.length - rw;
+    if (RUN_N) {                      // the run's record against the real one; a loss ended it (state.out: that game)
+      const run = PRO_RUNS.runs[RUN_N - 1], w = runRec.filter((x) => x > 0).length, l = runRec.filter((x) => x < 0).length;
+      const played = today.filter((_, i) => state.spots[i] && state.spots[i].result).length, t = played - w - l;
+      const rw = run.games.filter((g) => g.won).length, rl = run.games.length - rw, out = state.out != null ? run.games[state.out] : null;
+      const realOut = run.games.find((g) => !g.won);
       const v = el('div', 'h2h-day');
-      v.append(el('span', 'k', 'Your run'), el('b', '', `${w}-${l}${t ? `-${t}` : ''}`),
-        el('span', 'sub', w === today.length ? 'Every game won. Champions.' : `The real ${run.title} went ${rw}-${rl}.`));
+      v.append(el('span', 'k', out ? 'Season over' : 'Your run'), el('b', '', `${w}-${l}${t ? `-${t}` : ''}`),
+        el('span', 'sub', w === today.length ? 'Every game won. Champions.'
+          : `${out ? `Out in ${roundIn(out.round)}, against the ${teamName(out.opp)}. ` : ''}The real ${run.title} went ${rw}-${rl}${realOut ? `, out in ${roundIn(realOut.round)}` : ''}.`));
       box.append(v);
+      const again = el('button', 'btn', out ? 'Play the run again' : 'Play it again');
+      again.type = 'button';
+      again.addEventListener('click', () => { try { localStorage.removeItem(stateKey()); } catch (e) { /* storage off */ } track('run_retry', { run: RUN_N }); location.reload(); });
+      box.append(again);
     }
     if (cc) box.append(cc.el);
     box.append(el('p', 'verdict', callsLine(decs)));
@@ -8572,12 +8609,21 @@
   }
   // the Pro screen: the historic drives and every past day, newest first, with your score where you played; the
   // pitch when Pro is not on
+  // a #drive-N / #run-N link naming none: the Pro screen (#archive) says so at its top, once
+  function badProLink() {
+    const m = /^#(drive|run)-(\d+)$/.exec(location.hash) || [];
+    try { sessionStorage.setItem(`${STORE}:badlink`, `${m[1] === 'run' ? 'playoff run' : 'historic drive'} ${m[2]}`); } catch (e) { /* storage off */ }
+    location.replace(location.pathname + location.search + '#archive');
+  }
   async function renderArchive(now) {
     track('archive_open', { pro: isPro() });
     show('arch');
     const box = $('arch'), todayN = dayOf(now);
     box.textContent = '';
     box.append(el('h2', '', 'Pro'));
+    let bad = null;
+    try { bad = sessionStorage.getItem(`${STORE}:badlink`); sessionStorage.removeItem(`${STORE}:badlink`); } catch (e) { /* storage off */ }
+    if (bad) box.append(el('p', 'note badlink', `There is no ${bad}${isPro() ? ': here are the ones there are.' : '.'}`));
     if (!isPro()) {
       box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''}, the historic drives and the playoff runs: play any of them, graded like the day it ran.`));
       if (PRO_LIVE === null && (proCode() || authSession())) {     // a code (or a session) is kept here but the board could not confirm it
@@ -8614,7 +8660,9 @@
         if (fresh) tb.append(el('span', 'freshtag', fresh), d.title);
         const right = rec(k) ? el('span', 'gr') : el('span', 'sc', 'Play');
         if (rec(k)) right.append(gradeBadge(scoreOf(k)), el('small', '', String(scoreOf(k))));
-        a.append(tb, el('span', 'd', String(sp.real.season)), el('span', 'm', `${teamName(sp.player)} vs ${teamName(opp)}`), right);
+        // (the year it was played, as on its intro: Super Bowl LII is 2018, not the 2017 season)
+        const yr = sp.real.date ? Number(sp.real.date.slice(0, 4)) : sp.real.season + (ROUND[sp.real.type] ? 1 : 0);
+        a.append(tb, el('span', 'd', String(yr)), el('span', 'm', `${teamName(sp.player)} vs ${teamName(opp)}`), right);
         dl.append(a);
       });
       box.append(dl);
@@ -8630,7 +8678,7 @@
           el('span', `sc${rec && rec.w === rec.n ? ' champ' : ''}`, rec ? `${rec.w === rec.n ? '🏆 ' : ''}${rec.w}-${rec.l}` : 'Play'));
         rl.append(a);
       });
-      box.append(rl, el('p', 'note', 'Every game of the run in order, each from the spot the team was least likely to win it from. Win them all.'));
+      box.append(rl, el('p', 'note', 'Every game of the run in order, each from its spot with the most at stake, the game still in doubt. Lose one and the season is over, as it was for real; win them all.'));
     } else box.append(el('p', 'note', 'The playoff runs land here with the next build.'));
     box.append(el('h3', '', 'Past dailies'));
     if (todayN <= 1) { box.append(el('p', '', 'The archive fills from tomorrow: today’s drive is on the Daily tab.')); return; }
@@ -9344,6 +9392,8 @@
         vsConnect();
         return;
       }
+      // a link to a drive or run there is none of (#run-0, #drive-99): to the Pro screen, which says so
+      if (PRO_ON && /^#(drive|run)-\d+$/.test(location.hash) && !DRIVE && !RUN_N) { badProLink(); return; }
       if (ARCH || (ARCH_DAY && (!isPro() || ARCH_DAY >= dayOf(now))) || ((DRIVE || RUN_N) && !isPro())) { await renderArchive(now); return; }
       if (SURV) {
         state = load(stateKey(), null) || newRun();
@@ -9367,7 +9417,7 @@
       } else if (RUN_N) {
         PRO_RUNS = await loadRuns();
         const run = PRO_RUNS && PRO_RUNS.runs[RUN_N - 1];
-        if (!run) { location.replace(location.pathname + '#archive'); return; }
+        if (!run) { badProLink(); return; }
         const teams = await loadChunks('r', PRO_RUNS.spot_chunk, run.games.map((g) => g.spot));
         today = run.games.map((g) => {
           const sc = buildScen(PRO_RUNS.spots[g.spot], teams[g.spot]);
@@ -9378,7 +9428,7 @@
       } else if (DRIVE) {
         PRO = await loadPro();
         const d = PRO && PRO.drives[DRIVE - 1];
-        if (!d) { location.replace(location.pathname + '#archive'); return; }
+        if (!d) { badProLink(); return; }
         const teams = await loadProTeams(d.spot);
         today = [buildScen(PRO.spots[d.spot], teams[d.spot])];
         today[0].story = d.note;
