@@ -20,10 +20,13 @@
   const TOUCH = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
   const POOL = Math.max(1, Math.min(TOUCH ? 2 : 3, (navigator.hardwareConcurrency || 2) - 1));
   const STORE = 'tmd:v3';
-  // the website stamps each build (<meta name="build">, scripts/site.py): every file the page loads carries it, so a
-  // phone that cached the last build's files fetches this build's instead of mixing old and new
+  // the website stamps each build (<meta name="build">, scripts/site.py) and each file the page loads with what is in it
+  // (<meta name="stamps">; the spots share one, spots/): a phone never mixes two builds' files, and a deploy that leaves
+  // a file as it was leaves its address too, so a phone keeps its copy (they are cached for good: site.py _headers)
   const BUILD = (document.querySelector('meta[name="build"]') || {}).content || '';
-  const asset = (u) => (BUILD ? `${u}?v=${encodeURIComponent(BUILD)}` : u);
+  const STAMPS = (() => { try { return JSON.parse((document.querySelector('meta[name="stamps"]') || {}).content || '{}'); } catch (e) { return {}; } })();
+  const stampOf = (u) => STAMPS[u] || STAMPS[u.replace(/\/.*/, '/')] || '';         // (a folder's one: spots/)
+  const asset = (u) => (stampOf(u) ? `${u}?v=${encodeURIComponent(stampOf(u))}` : u);
   // Analytics events (the website's Google tag, scripts/site.py --ga; nothing anywhere else): what players do, so the
   // next changes follow the data. Event names and fields are listed in the README.
   const track = (name, params) => { try { if (typeof window.gtag === 'function') window.gtag('event', name, params || {}); } catch (e) { /* never in the way */ } };
@@ -352,7 +355,7 @@
     const H = T.home, A = T.away;
     const game = { home: H, away: A, home_spread: sp.spread ?? 0, indoor: sp.indoor, wind: sp.wind, temp: sp.temp,
       league: sp.league || idx.league, home_coach: H.coach, away_coach: A.coach, season: sp.real ? sp.real.season : idx.asof.season };
-    return { ...sp, game };
+    return { ...sp, game, first: T.first || null };        // (first: the first call's facts, the website's spot files: firstInfo)
   }
   const sideFor = (seq) => (hash('side', seedKey(), G.si, seq) % 2 ? 1 : -1);   // +1: strong side on the offense's right
   // A jumbo snap: a sixth lineman reported as eligible sits in a tight end's slot (history.py _ol_slots). The drive
@@ -428,17 +431,15 @@
     }
     return new Blob(parts).arrayBuffer();
   }
-  // the packs are stamped with what is in them (site.py <meta name="data">), not the build: kept across deploys (sw.js)
-  const DATA = (document.querySelector('meta[name="data"]') || {}).content || '';
-  async function fetchPacked(name, size) {
+  async function fetchPacked(url, size) {
     // gunzipped as it comes in (the bytes counted on the way), not all at the end: the last chunk is the only wait
-    const url = DATA ? `${name}?d=${encodeURIComponent(DATA)}` : asset(name);
+    const name = url.split('?')[0];
     const r = await fetch(url);
     if (!r.ok) throw new Error(`${name} ${r.status}`);
     dl.total += +r.headers.get('content-length') || size;
     // the first visit (no service worker yet, so nothing kept it): a copy goes into this build's worker's cache, so the
     // next visit doesn't download it again
-    const keep = DATA && swOn() && !navigator.serviceWorker.controller && typeof caches !== 'undefined' && r.type === 'basic' ? r.clone() : null;
+    const keep = /[?&]v=/.test(url) && swOn() && !navigator.serviceWorker.controller && typeof caches !== 'undefined' && r.type === 'basic' ? r.clone() : null;
     let body = r.body;
     if (body && typeof TransformStream === 'function') body = body.pipeThrough(new TransformStream({ transform(c, ctl) { dl.got += c.length; ctl.enqueue(c); } }));
     else { const b = await r.arrayBuffer(); dl.got += b.byteLength; body = new Blob([b]).stream(); }
@@ -449,24 +450,36 @@
     return out;
   }
   // the download starts as soon as the page knows it will play (boot, before game.json): it is most of what the first
-  // call waits on, and the intro's few small files go alongside it
+  // snap waits on, and the intro's few small files go alongside it. (Both packs at once: the engine's first, then the
+  // playbook's, to set the engine up while the playbook's came in, was no faster: the second request's round trip ate
+  // what it saved)
   let fetched = false;
   function fetchData() {
     if (fetched) return;
     fetched = true;
     const json = () => Promise.all([fetchBytes(asset('engine_data.json'), 'engine data', 5.5e6), fetchBytes(asset('playbook.json'), 'playbook', 6.1e6)]);
     const pk = BUILD && typeof DecompressionStream === 'function'
-      ? Promise.all([fetchPacked('engine_data.pack', 1.8e6), fetchPacked('playbook.pack', 1.3e6)]).then((b) => { packed = true; return b; })
+      ? Promise.all([fetchPacked(asset('engine_data.pack'), 1.8e6), fetchPacked(asset('playbook.pack'), 1.3e6)]).then((b) => { packed = true; return b; })
       : Promise.reject(new Error('no pack'));
-    dataBytes = pk.catch(() => { dl.got = 0; dl.total = 0; packed = false; return json(); });
-    dataBytes.catch((e) => fatal('The simulator could not load (' + e.message + '). Check your connection and reload.'));
+    // (not when the page is going away: a reload or a mode switch cuts the download short, and the call shows before
+    // it is done, so that is often now)
+    let leaving = false;
+    addEventListener('pagehide', () => { leaving = true; });
+    dataBytes = pk.catch((e) => { if (leaving) throw e; dl.got = 0; dl.total = 0; packed = false; return json(); });
+    dataBytes.catch((e) => { if (!leaving) fatal('The simulator could not load (' + e.message + '). Check your connection and reload.'); });
   }
   function startWorkers() {
     fetchData();
     startWorker();
   }
+  // the worker's own files' stamps ride in its address, one parameter a file (game_worker.js reads them)
+  function workerUrl() {
+    const arg = (u) => { const v = /\?v=([^&]*)/.exec(u); return v ? `&${u.split('?')[0]}=${v[1]}` : ''; };
+    const w = asset('game_worker.js'), q = arg(asset('engine.js')) + arg(asset('vs_core.js')) + arg(asset('engine_data.json')) + arg(asset('playbook.json'));
+    return !q ? w : w.includes('?') ? w + q : `${w}?${q.slice(1)}`;
+  }
   function startWorker() {
-    const w = new Worker(asset('game_worker.js'));
+    const w = new Worker(workerUrl());
     const slot = { w, ready: false, busy: false };
     w.onmessage = (ev) => onMsg(slot, ev.data);
     w.onerror = (e) => fatal('The simulator could not start: ' + (e.message || 'worker error'));
@@ -489,6 +502,7 @@
     if (m.type === 'ready') {
       slot.ready = true; readyCount++;
       if (readyCount === 1) {              // how long the simulator took, and how long a player sat waiting on it
+        simUp();
         const now = performance.now();
         track('sim_ready', { mode: modeName(), packed, ms: Math.round(now), waited_ms: huddleT0 ? Math.round(now - huddleT0) : 0 });
       }
@@ -515,6 +529,39 @@
     return new Promise((resolve, reject) => { msg.id = ++reqId; pending.set(msg.id, { resolve, reject }); if (urgent) queue.unshift(msg); else queue.push(msg); pump(); });
   }
   const simScen = () => ({ id: G.scen.id, game: G.scen.game, start: { receive2h: G.scen.start.receive2h } });
+  // The facts for a call (the worker's 'info'): on the website a spot's file carries them for its opening snap, worked
+  // out when the site was built by the same worker on the same data (web/spot_info.js), so the first call shows without
+  // waiting on the simulator's data (only the snap does: simWait). Used only for the very question they answer (infoKey:
+  // a fingerprint of it, cyrb53, the same as spot_info.js), else null: asked. The simulator is asked anyway once it is
+  // in and must answer the same (a difference is reported: the console and analytics)
+  function infoKey(s) {
+    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677); }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+  }
+  function firstInfo(r) {
+    const q = { scen: simScen(), root: r }, f = G.scen.first;
+    if (!f || f.key !== infoKey(JSON.stringify(q))) return null;
+    const txt = JSON.stringify(f.info);
+    try { performance.mark('tmd:first-info'); } catch (e) { /* no marks */ }
+    send({ type: 'info', ...q }).then((m) => {
+      if (JSON.stringify(m.info) === txt) return;
+      console.error(`the first call's facts for ${q.scen.id} differ from the simulator's`);
+      track('info_mismatch', { spot: q.scen.id });
+    }, () => {});
+    return JSON.parse(txt);          // (a copy: the page's own, as the worker's answers are)
+  }
+  // a call made before the simulator's data is in (the first call showed on the spot's own facts): say so, with how
+  // far along the download is, until it is
+  let simUp = null;
+  const simReady = new Promise((res) => { simUp = res; });
+  async function simWait() {
+    if (readyCount || VS) return;
+    huddle('Getting the playbook ready…');
+    await simReady;
+  }
   async function evaluate(root, options, seed, n = N_EVAL) {
     const W = Math.max(1, readyCount), sc = simScen(), out = {};
     const opts = options.map((o) => ({ key: o.key, action: o.action }));
@@ -3973,7 +4020,8 @@
     box.append(el('div', 'from legal', 'Fan-made. Not affiliated with or endorsed by the NFL or its teams.'));
     go.focus({ preventScroll: true });
     // the first call's facts, asked for while the intro is read: the worker keeps the answer (game_worker.js), so Play
-    // finds the call ready instead of waiting on the simulator setting up this game
+    // finds the call ready instead of waiting on the simulator setting up this game (with the spot's own facts,
+    // firstInfo, it is set up for the first snap)
     if (!G.started) send({ type: 'info', scen: simScen(), root: G.root }).catch(() => { /* asked again on Play */ });
   }
   async function enterField() {
@@ -4139,7 +4187,7 @@
     const tick = () => {
       if (readyCount || !sp || !sp.isConnected) return;
       sp.textContent = dl.total && dl.got >= dl.total ? 'Setting up the simulator…'
-        : `Loading the playbook… ${dl.total ? Math.min(99, Math.round((100 * dl.got) / dl.total)) : 0}%`;
+        : `Getting the playbook ready… ${dl.total ? Math.min(99, Math.round((100 * dl.got) / dl.total)) : 0}%`;
       setTimeout(tick, 200);
     };
     tick();
@@ -4147,8 +4195,11 @@
   // your ball: Run / Pass / RPO, plus a timeout, spike, kneel or kick when it matters
   async function promptOffense() {
     const r = G.root;
-    huddle('Breaking the huddle…');
-    G.info = (await send({ type: 'info', scen: simScen(), root: r }, true)).info;
+    G.info = firstInfo(r);
+    if (!G.info) {
+      huddle('Breaking the huddle…');
+      G.info = (await send({ type: 'info', scen: simScen(), root: r }, true)).info;
+    }
     if (VS && (G.root !== r || vs.ui !== 'prompt')) return;          // the room moved on while the odds came in
     G.fast = false;
     G.odds = {};
@@ -4775,6 +4826,7 @@
       vsSubmit(r.phase === SNAP && r.pos !== G.me ? { def: action.def, to_def: !!action.to_def } : { action });
       return;
     }
+    await simWait();
     const pend = { snap: G.snapN, specs };
     G.snapN += 1;
     G.pending = pend;
@@ -4812,6 +4864,7 @@
     busy = true;
     const r = G.root;
     try {
+      await simWait();
       const x = (await gradeSpecs({ snap: G.snapN, specs: [clockSpec(r, rundown ? 'rundown' : 'timeout', G.seq)] }))[0];
       G.decisions.push(x);
       G.snapN += 1;
@@ -4899,7 +4952,7 @@
   async function promptDefense() {
     const r = G.root;
     huddle('Their huddle…');
-    G.dinfo = (await send({ type: 'info', scen: simScen(), root: r }, true)).info;
+    G.dinfo = firstInfo(r) || (await send({ type: 'info', scen: simScen(), root: r }, true)).info;
     if (VS && (G.root !== r || vs.ui !== 'prompt')) return;          // the room moved on while the odds came in
     // are they kicking? The snap as it will be played (the same seed stepWith will use), left alone: a field goal or a
     // punt gets your special-teams call instead of the defense

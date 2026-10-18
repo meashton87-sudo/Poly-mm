@@ -38,6 +38,10 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
 - **Parity**: any change to `src/nflclock/sim.py` (or to library sampling in `library.py`) must be made
   identically in `web/engine.js`, and the parity check above must pass. The browser tool is what
   coaches use during a game.
+- First call on the website: each spot's file carries its opening snap's facts (scripts/site.py spot_info runs
+  web/spot_info.js, the site's own worker on its packs). spot_info.js copies game.js startRoot, buildScen, simScen and
+  infoKey: change them together (a mismatch only makes the first call wait on the simulator, and the browser test fails).
+  Every file the site loads is stamped with its own content (`?v=`; site.py check_stamps fails the build otherwise).
 - NFL rules are encoded explicitly (clock stops, two-minute warning, out-of-bounds windows, play clock,
   timeouts). Keep a one-line rationale next to every policy constant at the top of `sim.py`.
 - The full grading pipeline (`scripts/run_analysis.py`, `validate_sim.py`, `make_report.py`,
