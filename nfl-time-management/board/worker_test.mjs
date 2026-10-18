@@ -183,30 +183,11 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   b = await (await call('GET')).json();
   assert.ok(!b.rows.some((x) => x.name === 'b!tch'), 'a stored row with such a name is left out');
 }
-// the #HuntForMadden: the draw is the server's (a secret the page never sees). With a known secret, find a device that
-// draws him: its first result of the day gets a claim code, the public list has it with the time, a replay of the day
-// returns the same code, and anyone else's result doesn't get one
+// the rare-coach find is retired: a result never carries a claim code, and its public list is gone
 {
-  const { createHash } = await import('node:crypto');
-  const hex = (x) => createHash('sha256').update(x).digest('hex');
-  board.env.MADDEN_SECRET = 'test-madden-secret';
-  let lucky = null;
-  for (let i = 0; i < 2e6 && !lucky; i++) {
-    const k = `madden-device-key-${i}`, d = hex(`test-madden-secret:draw:${hex(k)}:${today}`);
-    if (parseInt(d.slice(0, 12), 16) / 2 ** 48 < 1 / 50000) lucky = k;
-  }
-  assert.ok(lucky, 'a device that draws him');
-  const plain = await (await day({ date: today, key: 'unlucky-device-key-00001', p: 0.5, spots: [0, 0, 0] })).json();
-  assert.strictEqual(plain.madden, undefined, 'an ordinary result: no Madden');
-  const got = await (await day({ date: today, key: lucky, p: 0.3, spots: [0, 0, 0] })).json();
-  assert.ok(/^[0-9A-F]{8}$/.test(got.madden), 'a claim code: ' + JSON.stringify(got).slice(0, 200));
-  const again = await (await day({ date: today, key: lucky, p: 0.9, spots: [0, 0, 0] })).json();
-  assert.strictEqual(again.madden, got.madden, 'a replay shows the same code');
-  const list = await (await call('GET', null, { path: '/madden' })).json();
-  assert.strictEqual(list.odds, 50000);
-  assert.deepStrictEqual(list.finds.map((f) => [f.date, f.code]), [[today, got.madden]], 'on the public list, once');
-  assert.ok(!JSON.stringify(list).includes(hex(lucky)) && !JSON.stringify(list).includes('test-madden-secret'), 'no key or secret shown');
-  delete board.env.MADDEN_SECRET;
+  const r = await (await day({ date: today, key: 'plain-device-key-000001', p: 0.5, spots: [0, 0, 0] })).json();
+  assert.ok(!('madden' in r), 'no claim code on a result');
+  assert.strictEqual((await call('GET', null, { path: '/madden' })).status, 404, 'no public list');
 }
 // a survivor best that used the extra life carries the mark on the board
 {
@@ -393,7 +374,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
 {
   for (const e of [env, board.env]) e.STRIPE_SECRET = 'sk_live_x';
   assert.strictEqual((await call('POST', { note: 'x' }, { path: '/pro/gift' })).status, 403, 'a gift code is admin only');
-  const g = await (await call('POST', { note: 'found Madden' }, { path: '/pro/gift', auth: 'Bearer commish-secret-123' })).json();
+  const g = await (await call('POST', { note: 'a prize' }, { path: '/pro/gift', auth: 'Bearer commish-secret-123' })).json();
   assert.ok(/^TMD-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(g.code), 'a code');
   const r = await call('POST', { code: g.code, key: 'gift-device-key-000000001' }, { path: '/restore' });
   assert.strictEqual(r.status, 200, 'the gift code unlocks Pro');
@@ -1014,11 +995,11 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
     drives: { 3: { p: 0.7, wpa: 0.05, tries: 2, won: false, last: 0.6, at: 1790000000000 } }, runs: { 2: { p: 0.66, wpa: 0.3, w: 3, l: 1, n: 4 } }, badges: {}, frozen: {} }, 'cleaned: junk entries and fields dropped');
   d = await ok(await au('/auth/stats', { session: sa, stats: { days: { 5: { p: 0.4, wpa: 0.9, coach: 'Other' }, 6: { p: 0.9, wpa: 0.3, coach: 'Sean McVay', madden: 'zz' }, 10: { p: 0.3, wpa: 0, coach: 'John Madden', madden: 'ABCD1234' } },
     drives: { 3: { p: 0.6, wpa: 0, tries: 5, won: true }, 4: { p: 0.95, wpa: 0.2, tries: 1, won: true } }, runs: { 2: { p: 0.5, wpa: 0, w: 1, l: 3, n: 4 } } } }), 'second phone');
-  assert.deepStrictEqual(d.stats.days, { 5: { p: 0.5, wpa: 0.1, coach: 'Andy Reid' }, 6: { p: 0.9, wpa: 0.3, coach: 'Sean McVay' }, 10: { p: 0.3, wpa: 0, coach: 'John Madden', madden: 'ABCD1234' } }, 'days: the higher score of each, a bad Madden code dropped');
+  assert.deepStrictEqual(d.stats.days, { 5: { p: 0.5, wpa: 0.1, coach: 'Andy Reid' }, 6: { p: 0.9, wpa: 0.3, coach: 'Sean McVay' }, 10: { p: 0.3, wpa: 0, coach: null } }, 'days: the higher score of each, the retired find dropped');
   assert.deepStrictEqual(d.stats.drives, { 3: { p: 0.7, wpa: 0.05, tries: 5, won: true, last: 0.6, at: 1790000000000 }, 4: { p: 0.95, wpa: 0.2, tries: 1, won: true } }, 'drives: best score, most tries, won if either');
   assert.strictEqual(d.stats.runs[2].p, 0.66, 'runs: the best');
-  d = await ok(await au('/auth/stats', { session: sa, stats: { days: { 10: { p: 0.6, wpa: 0, coach: 'Bill Belichick' } } } }), 'a better score on a Madden day');
-  assert.deepStrictEqual(d.stats.days[10], { p: 0.6, wpa: 0, coach: 'John Madden', madden: 'ABCD1234' }, 'the Madden find kept');
+  d = await ok(await au('/auth/stats', { session: sa, stats: { days: { 10: { p: 0.6, wpa: 0, coach: 'Bill Belichick' } } } }), 'a better score on that day');
+  assert.deepStrictEqual(d.stats.days[10], { p: 0.6, wpa: 0, coach: 'Bill Belichick' }, 'the better score stands');
   assert.deepStrictEqual((await ok(await au('/auth/stats', { session: sb }), 'other')).stats, { days: {}, drives: {}, runs: {}, badges: {}, frozen: {} }, 'never another account\'s');
   // the newest 2000 days stand when a merge goes over
   store.set('stats:d:g:700003', Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [i + 1, { p: 0.5, wpa: 0, coach: null }])));
@@ -1033,11 +1014,16 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
     assert.strictEqual((await au('/auth/stats', { session: sc, stats })).status, 400, why);
   }
   d = await ok(await au('/auth/stats', { session: sc, stats: { days: { 3: { p: 0.5, vs: 1 }, 4: { p: 0.5, vs: 5 }, 5: { p: 0.5, vs: -0.4 } },
-    badges: { first: 1790000002000, coach: 1790000001500, 'Bad-Id': 1, '1st': 1, ['x'.repeat(17)]: 1, win: 'soon', day90: -5 },
+    badges: { first: 1790000002000, coach: 1790000001500, 'Bad-Id': 1, '1st': 1, ['x'.repeat(17)]: 1, win: 'soon', day90: -5, madden: 1790000001000 },
     frozen: { 7: 1790000000100, 0: 1, abc: 1, 100000: 1, 8: null } } }), 'badges and frozen days');
   assert.deepStrictEqual([d.stats.days[3].vs, 'vs' in d.stats.days[4], d.stats.days[5].vs], [1, false, -1], 'vs: better, the same or worse; anything else dropped');
   assert.deepStrictEqual([d.stats.badges, d.stats.frozen], [{ coach: 1790000001500, first: 1790000002000 }, { 7: 1790000000100 }], 'cleaned');
   assert.deepStrictEqual(store.get('stats:m:g:700003'), { badges: d.stats.badges, frozen: d.stats.frozen }, 'kept on their own key');
+  // kept from before the rare-coach find was retired: read back without its badge or its coach
+  store.set('stats:m:g:700003', { badges: { ...d.stats.badges, madden: 1790000000500 }, frozen: d.stats.frozen });
+  store.set('stats:d:g:700003', { ...store.get('stats:d:g:700003'), 9: { p: 0.4, wpa: 0, coach: 'John Madden', madden: 'ABCD1234' } });
+  const old = (await ok(await au('/auth/stats', { session: sc }), 'an old record')).stats;
+  assert.deepStrictEqual([old.badges, old.days[9]], [{ coach: 1790000001500, first: 1790000002000 }, { p: 0.4, wpa: 0, coach: null }], 'the retired find gone');
   d = await ok(await au('/auth/stats', { session: sc, stats: { badges: { first: 1790000001000, win: 1790000003000, coach: 1790000009000 }, frozen: { 7: 1790000000050, 9: 1790000000200 } } }), 'the other phone');
   assert.deepStrictEqual([d.stats.badges, d.stats.frozen], [{ first: 1790000001000, coach: 1790000001500, win: 1790000003000 }, { 7: 1790000000050, 9: 1790000000200 }], 'a union, the earliest of each');
   d = await ok(await au('/auth/stats', { session: sc, stats: { days: { 3: { p: 0.6 } } } }), 'an older page');

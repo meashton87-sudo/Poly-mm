@@ -6,7 +6,6 @@
 //   DELETE /board?name=Eli  (Authorization: Bearer <ADMIN_TOKEN>)          remove a row (no ADMIN_TOKEN secret: off)
 //   GET    /daily?date=2026-10-14                         -> that day's players: { n, hist, spots, top }
 //   GET    /days                                           -> every day played: { days: [{ date, n, avg, best }] }
-//   GET    /madden                                         -> every John Madden found: { odds, finds: [{ date, at, code }] }
 //   POST   /daily  { date, key, p, spots: [w, ...], name?, g?, restarted? }  -> the same, after counting your result
 //                                                             (1-3 spots: the day's drive, or the three spots days had
 //                                                             before), and week: the week to that date with your own line
@@ -108,22 +107,6 @@ function blocked(name) {
   return words.some((w) => WORD.includes(w) || WORD.includes(squash(w)));
 }
 const shown = (rows) => rows.filter((r) => !blocked(r.name));
-// The rare one (the #HuntForMadden): a device's first counted daily result is John Madden one time in MADDEN_ODDS, by a
-// draw from a secret the pages never see (env.MADDEN_SECRET, else one made at random on first use and kept in
-// storage), so it can't be faked on the page or worked out in advance. Each find gets a claim code (shown on the card)
-// and goes on the public list with the time, earliest first: the first code on the list is the first find.
-const MADDEN_ODDS = 50000, MADDEN_KEEP = 2000;
-async function maddenSecret(env, storage) {
-  if (env.MADDEN_SECRET) return String(env.MADDEN_SECRET);
-  let s = await storage.get('madden:secret');
-  if (!s) { s = Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, '0')).join(''); await storage.put('madden:secret', s); }
-  return s;
-}
-async function maddenDraw(env, storage, kh, date) {
-  const sec = await maddenSecret(env, storage), d = await sha256(`${sec}:draw:${kh}:${date}`);
-  if (parseInt(d.slice(0, 12), 16) / 2 ** 48 >= 1 / MADDEN_ODDS) return null;
-  return (await sha256(`${sec}:code:${kh}:${date}`)).slice(0, 8).toUpperCase();
-}
 
 function cors(req, env) {
   const allowed = String(env.ALLOWED_ORIGINS || '*').split(',').map((s) => s.trim()).filter(Boolean);
@@ -363,7 +346,7 @@ async function daily(req, env, storage, hits, h, url) {
       if (unclaimed) await claim(storage, name.toLowerCase(), nk);
     }
     return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots, ...(prev.g === 2 ? { g: 2 } : {}), ...(prev.restarted ? { restarted: true } : {}) },
-      week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}), ...(prev.madden ? { madden: prev.madden } : {}) }, 200, h);
+      week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}) }, 200, h);
   }
   const pt = Math.round(p * 100);
   const count = (set) => {
@@ -378,16 +361,10 @@ async function daily(req, env, storage, hits, h, url) {
     if (name && !taken) await listed(storage, day, date, name, nk, p, fair);
   }
   const you = { p, spots, ...(fair ? { g: 2 } : {}), ...(restarted ? { restarted: true } : {}) };
-  const madden = await maddenDraw(env, storage, kh, date);
-  if (madden) {
-    const list = (await storage.get('madden:list')) || [];
-    list.push({ date, at: new Date().toISOString(), code: madden });
-    await storage.put('madden:list', list.slice(-MADDEN_KEEP));
-  }
-  await storage.put(mine, { ...you, ...(name && !taken && !restarted ? { name } : {}), ...(madden ? { madden } : {}) });
+  await storage.put(mine, { ...you, ...(name && !taken && !restarted ? { name } : {}) });
   await storage.put(`day:${date}`, day);
   if (unclaimed && name) await claim(storage, name.toLowerCase(), nk);
-  return json({ ...dayView(day), counted: true, you, week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}), ...(madden ? { madden } : {}) }, 200, h);
+  return json({ ...dayView(day), counted: true, you, week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}) }, 200, h);
 }
 
 // ---- Pro
@@ -738,11 +715,12 @@ async function readBody(req) {
 // drives passed survive a new phone. Kept as stats:d:<acct> (the days: what a league board reads), stats:x:<acct>
 // (drives and runs) and stats:m:<acct> (badges and frozen days). Each entry is checked and rebuilt from its numbers
 // (nothing else of a post is kept); a kind with more entries than its cap, or not an object, refuses the post. Merged,
-// the higher score of each day, drive or run stands (a drive: the most tries, won if either was; a day: a Madden find
-// kept from either); over a cap, the newest. Badges ({ id: when earned }) and frozen days ({ day: when the freeze was
+// the higher score of each day, drive or run stands (a drive: the most tries, won if either was); over a
+// cap, the newest. Badges ({ id: when earned }) and frozen days ({ day: when the freeze was
 // spent }) are a union, the earliest time of each kept: earned on either phone is earned (the page knows which ids
 // are real; the worker only checks their shape, so a new badge needs no deploy here).
 const STATS_CAP = { days: [99999, 2000], drives: [999, 500], runs: [999, 500] };      // [highest key, most entries]
+const GONE_BADGE = 'madden';        // (a retired badge: never kept)
 const BADGES_MAX = 64, FROZEN_MAX = 500, BADGE_RE = /^[a-z][a-z0-9]{0,15}$/;      // (about 20 badges today; a freeze a week at most)
 const num = (x, lo, hi) => (typeof x === 'number' && Number.isFinite(x) && x >= lo && x <= hi ? x : null);
 function statEntry(kind, v) {
@@ -750,9 +728,9 @@ function statEntry(kind, v) {
   const p = num(v.p, 0, 1), wpa = num(v.wpa, -10, 10) ?? 0;
   if (p === null) return null;
   if (kind === 'days') {
-    const coach = typeof v.coach === 'string' ? clean(v.coach, 40) : '', madden = typeof v.madden === 'string' && /^[0-9A-F]{8}$/.test(v.madden) ? v.madden : null;
+    const c = typeof v.coach === 'string' ? clean(v.coach, 40) : '', coach = c === 'John Madden' ? '' : c;      // (a retired rare find: no coach)
     const vs = num(v.vs, -1, 1);           // against the real coach that day: better 1, the same 0, worse -1
-    return { p, wpa, coach: coach || null, ...(madden ? { madden } : {}), ...(vs !== null ? { vs: Math.sign(vs) } : {}) };
+    return { p, wpa, coach: coach || null, ...(vs !== null ? { vs: Math.sign(vs) } : {}) };
   }
   if (kind === 'drives') {
     const last = num(v.last, 0, 1), at = num(v.at, 0, 1e14);
@@ -778,7 +756,7 @@ function cleanStats(s) {
     }
   }
   // the badges and the frozen days: { key: a time (ms) }, the key a badge id or a day number
-  for (const [kind, max, ok] of [['badges', BADGES_MAX, (k) => BADGE_RE.test(k)], ['frozen', FROZEN_MAX, (k) => /^[1-9]\d{0,4}$/.test(k) && +k <= STATS_CAP.days[0]]]) {
+  for (const [kind, max, ok] of [['badges', BADGES_MAX, (k) => BADGE_RE.test(k) && k !== GONE_BADGE], ['frozen', FROZEN_MAX, (k) => /^[1-9]\d{0,4}$/.test(k) && +k <= STATS_CAP.days[0]]]) {
     const o = s[kind] ?? {};
     if (typeof o !== 'object' || Array.isArray(o)) return `stats.${kind}: an object wanted`;
     const ks = Object.keys(o);
@@ -792,7 +770,6 @@ function statBetter(kind, a, b) {
   if (!a || !b) return a || b;
   const w = b.p > a.p ? b : a;
   if (kind === 'drives') return { ...w, tries: Math.max(a.tries || 0, b.tries || 0), won: !!(a.won || b.won) };
-  if (kind === 'days' && !w.madden && (a.madden || b.madden)) return { ...w, coach: 'John Madden', madden: a.madden || b.madden };
   return w;
 }
 function statsMerge(a, b) {
@@ -813,7 +790,10 @@ function statsMerge(a, b) {
 }
 async function statsOf(storage, acct) {
   const x = (await storage.get(`stats:x:${acct}`)) || {}, m = (await storage.get(`stats:m:${acct}`)) || {};
-  return { days: (await storage.get(`stats:d:${acct}`)) || {}, drives: x.drives || {}, runs: x.runs || {}, badges: m.badges || {}, frozen: m.frozen || {} };
+  const d = (await storage.get(`stats:d:${acct}`)) || {}, b = { ...(m.badges || {}) };
+  delete b[GONE_BADGE];                    // (kept from before it was retired: read back without it, and without its find's coach)
+  const days = Object.fromEntries(Object.entries(d).map(([k, v]) => [k, v && v.madden ? statEntry('days', v) : v]).filter(([, v]) => v));
+  return { days, drives: x.drives || {}, runs: x.runs || {}, badges: b, frozen: m.frozen || {} };
 }
 
 // ---- Friend leagues: a private group of accounts (a name and a join link) with its own board of the daily: each
@@ -1209,8 +1189,6 @@ export async function handle(req, env, storage, hits) {
   if (url.pathname === '/daily') return daily(req, env, storage, hits, h, url);
   if (url.pathname === '/week') return week(req, env, storage, h, url);
   if (url.pathname === '/days') return req.method === 'GET' ? days(storage, h) : json({ error: 'method' }, 405, h);
-  if (url.pathname === '/madden') return req.method === 'GET' ? json({ odds: MADDEN_ODDS, finds: (await storage.get('madden:list')) || [] }, 200, h)
-    : json({ error: 'method' }, 405, h);
   if (url.pathname !== '/board') return json({ error: 'not found' }, 404, h);
   const readAll = async () => { const all = await storage.get('runs'); return Array.isArray(all) ? all : []; };
   if (req.method === 'GET') return json({ rows: ranked(await readAll()) }, 200, h);
@@ -1516,7 +1494,7 @@ export default {
   fetch(req, env) {
     const url = new URL(req.url);
     if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me'].includes(url.pathname)) return versus(req, env, url);
-    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, '/board', '/daily', '/week', '/days', '/madden'].includes(url.pathname)) return handle(req, env, null, null);
+    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, '/board', '/daily', '/week', '/days'].includes(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },
   // the cron trigger (wrangler.toml): the day's reminder emails, sent by the Board (its storage); the day is the run's

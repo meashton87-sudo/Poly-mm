@@ -5955,20 +5955,7 @@
     return box;
   }
 
-  // The rare one: John Madden (the #HuntForMadden; no play-by-play from his years, so never a match on tendencies).
-  // The draw is the leaderboard server's (board/worker.js: about one first daily finish in 50,000, from a secret the page
-  // never sees, so it can't be faked here); it answers the day's result with a claim code, shown on the card and kept
-  // on its public list (/madden) with the time
-  let onMadden = null, onRank = null;
-  function maddenCard(code) {
-    const box = el('div', 'coach madden');
-    box.append(el('div', 'rare', '★ Rare'), el('div', 'k', 'Today you coached like'), el('div', 'name', 'John Madden'),
-      el('div', 'why', 'The rarest coach in the game: about 1 in 50,000 drives. Boom!'),
-      el('div', 'meta', 'Raiders · 1969–1978 · 103–32–7 · Super Bowl XI champion · never a losing season'),
-      el('div', 'claim', `Claim code ${code} · #HuntForMadden`));
-    box.title = 'The rare one: about 1 in 50,000 finished daily drives.';
-    return { el: box, name: 'John Madden', rare: true };
-  }
+  let onRank = null;
 
   // Survivor overtime (NFL rules since 2025, engine.js _otAfter): tied at the end of regulation, a coin toss, then
   // 10:00 (15:00 in the playoffs, which play on until someone wins) with two timeouts each (three in the playoffs).
@@ -6994,22 +6981,6 @@
       if (!share.brag) { share.text = share.text.replace(/(Better than \d+% of NFL play-callers)/, `$1\n${line}`); pre.textContent = share.text; }
       share.brag = line;
     };
-    // the server drew John Madden for this result: his card in place of the match, his line in the share text
-    onMadden = (code) => {
-      const m = maddenCard(code), old = box.querySelector('.coach');
-      if (old) old.replaceWith(m.el); else box.insertBefore(m.el, pre);
-      const line = `Coached like John Madden 🏆 (${code})`;
-      share.text = cc ? share.text.replace(`Coached like ${cc.name}`, line) : share.text.replace(/\n/, `\n${line}\n`);
-      pre.textContent = share.text;
-      const stt = load(`${STORE}:stats`, { days: {} });
-      if (stt.days[dayN] && stt.days[dayN].madden !== code) {
-        stt.days[dayN].coach = 'John Madden'; stt.days[dayN].madden = code;
-        const got = badgeAward(stt, null);           // (the Madden badge: the find comes after the card)
-        save(`${STORE}:stats`, stt); statsSync(true);
-        if (got.length) { state.badges = [...(state.badges || []), ...got]; saveState(); badgeShow(box, state.badges, true); }
-      }
-      if (!state.madden) { state.madden = code; saveState(); track('madden', { day: dayN }); }
-    };
     box.insertBefore(btn, dbox);
     const img = el('button', 'btn ghostbtn', 'Share as a picture');
     img.type = 'button';
@@ -7170,7 +7141,6 @@
     ['ice', '❄️', 'Ice in the veins', 'Have a streak freeze save your streak.', (R) => R.sk.frozen.size > 0],
     ['surv5', '🛡️', 'Still standing', 'Win 5 straight in Survivor.', (R) => R.surv >= 5],
     ['surv10', '👑', 'Dynasty', 'Win 10 straight in Survivor.', (R) => R.surv >= 10],
-    ['madden', '🎙️', 'Boom!', 'Coach like John Madden (he is rare).', (R) => Object.values(R.days).some((x) => x.madden)],
     ['history', '📜', 'Rewrite history', 'Pass a historic drive (Pro): an A, and the game won.', (R) => R.drives.some((d) => d.p * 100 >= PASS_AT - 0.5), true],
     ['ring', '💍', 'Ring ceremony', 'Win every game of a playoff run (Pro).', (R) => R.runs.some((r) => r.n > 0 && r.w === r.n), true],
   ].map(([id, icon, name, how, test, pro]) => ({ id, icon, name, how, test, pro: !!pro }));
@@ -7689,7 +7659,7 @@
     };
     let retried = false;
     const refresh = async (force) => {
-      try { const d = await post(); fillDaily(box, d, p, spotW, () => refresh(true)); if (d.madden && onMadden) onMadden(d.madden); } catch (e) {
+      try { const d = await post(); fillDaily(box, d, p, spotW, () => refresh(true)); } catch (e) {
         if (force) toast('Could not reach today’s stats');
         else if (!retried) { retried = true; setTimeout(() => { if (box.isConnected) refresh(false); }, 5000); }   // once: a busy moment
       }
@@ -8606,7 +8576,6 @@
     if (!mine || !theirs) return mine || theirs;
     const w = theirs.p > mine.p ? theirs : mine;
     if (kind === 'drives') return { ...w, tries: Math.max(mine.tries || 0, theirs.tries || 0), won: !!(mine.won || theirs.won), ...(mine.at ? { at: mine.at } : {}), ...(mine.prev ? { prev: mine.prev } : {}) };
-    if (kind === 'days' && !w.madden && (mine.madden || theirs.madden)) return { ...w, coach: 'John Madden', madden: mine.madden || theirs.madden };
     return w;
   }
   const newest = (o, n) => Object.fromEntries(Object.keys(o || {}).map(Number).filter((k) => k > 0).sort((a, b) => a - b).slice(-n).map((k) => [k, o[k]]));
@@ -9851,8 +9820,20 @@
     } catch (e) { /* storage off: nothing to start over */ }
     save(`${STORE}:gauntlet_fresh`, true);
   }
+  // the rare-coach find is gone: a day kept from it keeps its score, without the coach, the code or the badge
+  function rareGone() {
+    try {
+      const st = load(`${STORE}:stats`, null);
+      if (st && st.days && Object.values(st.days).some((d) => d && d.madden)) {
+        for (const d of Object.values(st.days)) if (d && d.madden) { delete d.madden; d.coach = null; }
+        if (st.badges) delete st.badges.madden;
+        save(`${STORE}:stats`, st);
+      }
+    } catch (e) { /* storage off: nothing kept */ }
+  }
   async function boot() {
     gauntletFresh();
+    rareGone();
     const topH = () => document.documentElement.style.setProperty('--top-h', `${document.querySelector('.top').offsetHeight}px`);
     topH(); addEventListener('resize', topH);
     $('helpBtn').addEventListener('click', openHelp);
