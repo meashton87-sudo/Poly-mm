@@ -1,0 +1,7 @@
+{
+  "_about": "The check ride (design WS4): 12 drills, two from each category below, picked from the built library by export.checkride (recent seasons, middle difficulty, distinct games). Seeds come from hash(version, month) in the app; pass at 70.",
+  "version": "2026-10",
+  "per_category": {"two_min_o": 2, "four_min_o": 2, "end_half": 2, "fourth": 2, "two_pt": 2, "two_min_d": 2},
+  "seed": "monthly",
+  "pass": 70
+}

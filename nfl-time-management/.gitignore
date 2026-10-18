@@ -12,6 +12,7 @@ web/scenarios.json
 web/game.json
 web/teams.json
 web/spots/
+web/spots
 web/pro/
 web/_test_game.html
 web/_test_anim.html
@@ -24,3 +25,9 @@ _site_*/
 browser_test_out/
 board/assets/pro/*.json
 board/assets/vs/
+web/engine_data_cfb.json
+web/engine_data_hs.json
+web/cfb_overlay.json
+web/coach.json
+web/coach_hs.json
+web/drills/
