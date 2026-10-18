@@ -216,8 +216,6 @@
   const DRIVE = PRO_ON ? Number((location.hash.match(/^#drive-(\d+)$/) || [])[1] || 0) : 0;
   // a playoff run (Pro, pro/runs.json): #run-N plays the Nth one, its games in order, like a day of several spots
   const RUN_N = PRO_ON ? Number((location.hash.match(/^#run-(\d+)$/) || [])[1] || 0) : 0;
-  // the Gauntlet on its own (#gauntlet, or #gauntlet-results: the link the results share), for everyone, Pro or not
-  const GAUNTLET = PRO_ON && /^#gauntlet(-results)?$/.test(location.hash);
   let PRO = null, PRO_RUNS = null;        // pro/drives.json and pro/runs.json, once loaded
   // Pro grades: a drive's score (better than this many % of NFL play-callers) as a letter. 90 and up is an A, green:
   // the drive is passed. The best grade on each drive is kept; the ranks count the drives passed
@@ -5965,7 +5963,7 @@
       });
       if (m < my - 1e-9) better += 1; else if (Math.abs(m - my) <= 1e-9) better += 0.5;
     }
-    // a historic drive is a mission: an A (a pass, the Gauntlet's too) takes winning the game
+    // a historic drive is a mission: an A (a pass) takes winning the game
     if (DRIVE && groups.some((g) => g.res < 1)) return Math.min(better / N, (PASS_AT - 1) / 100);
     return better / N;
   }
@@ -6130,12 +6128,7 @@
     const sk = streakOf(st, DRIVE || RUN_N || ARCH_DAY ? dayOf(new Date()) : dayN), streak = sk.n;
     dayLabelSet();
     if (DRIVE) {
-      const card = driveCard(p, driveRec, drivePrev), note = el('p', 'racenote');
-      note.hidden = true;
-      card.append(note);
-      box.append(card, driveActions(driveRec));
-      // the pass goes to the Gauntlet once; one that never got an answer (the page closed while sending) goes again
-      if (firstFinish || (state.raceTok && state.raceSent === false)) racePass(p, decs, note);
+      box.append(driveCard(p, driveRec, drivePrev), driveActions(driveRec));
     }
     else {
       box.append(el('div', 'note', RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · your run` : `Day ${dayN} · your score`), el('div', 'big-pct', `${Math.round(p * 100)}`),
@@ -6339,7 +6332,7 @@
   // when a finish or a sync changes the streak (never over practice's own label: a sync landing mid-drive put the day's
   // number and streak up there, as if it were the daily)
   function dayLabelSet() {
-    if (SURV || PRACTICE || DRIVE || RUN_N || VS || ARCH || GAUNTLET || !idx || !today.length) return;
+    if (SURV || PRACTICE || DRIVE || RUN_N || VS || ARCH || !idx || !today.length) return;
     const sk = ARCH_DAY ? null : streakOf(load(`${STORE}:stats`, { days: {} }), dayOf(new Date())), stk = sk ? sk.n : 0;
     $('dayLabel').textContent = `No. ${dayN} · ${dayDate(dayN).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${ARCH_DAY ? ' · archive' : ''}${stk >= 2 ? ` · \ud83d\udd25${stk}${sk.pending.length ? '\u2744\ufe0f' : ''}` : ''}`;
   }
@@ -6713,8 +6706,7 @@
     const box = el('div', 'pro provalue'), days = Math.max(0, dayOf(new Date()) - 1);
     box.append(el('div', 'k', 'Want more? Two-Minute Drill Pro'), el('div', 'price', '$4.99 \u00b7 once, yours for good'));
     const ul = el('ul');
-    [...(gauntletOver() ? [] : ['The Gauntlet: race everyone through the historic drives. $50 and the Champion title to the first to pass them all']),
-      'The historic drives: Mahomes\u2019 13 seconds, the Minneapolis Miracle, the Philly Special, 28\u20133 and more, from their real spots',
+    ['The historic drives: Mahomes\u2019 13 seconds, the Minneapolis Miracle, the Philly Special, 28\u20133 and more, from their real spots',
       'Playoff runs: coach a team through its whole postseason, every late-game spot in order',
       `The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed`].forEach((t) => ul.append(el('li', '', t)));
     const row = el('div', 'row'), buy = el('button', 'btn', 'Unlock Pro \u00b7 $4.99'), more = el('a', 'btn ghostbtn', 'See what\u2019s inside');
@@ -7054,7 +7046,7 @@
   // plays never waits on it. Daily and Survivor only (a Pro drive or Versus is no first visit); kept in storage, so a
   // reload picks up where it was and a finished or skipped tour never comes back. The full help stays on the ?.
   const TOUR_KEY = `${STORE}:tour`;
-  const TOUR_OK = !(VS || VS_LOBBY || DRIVE || RUN_N || ARCH || ARCH_DAY || GAUNTLET);
+  const TOUR_OK = !(VS || VS_LOBBY || DRIVE || RUN_N || ARCH || ARCH_DAY);
   const qs = (s) => document.querySelector(s);
   const TOUR = [
     { id: 'spot', at: () => qs('#intro .chips'), side: 'below', title: 'Your spot',
@@ -7326,7 +7318,6 @@
   function proLaunch() {
     PRO_ON = true;
     $('modeArch').hidden = false;
-    raceBar();
     proVerify();
   }
   // ---- Accounts (board/worker.js /auth*): Pro on an account, Sign in with Google or an emailed link. The session the
@@ -7351,7 +7342,7 @@
         const r = await fetch(`${BOARD.api}/auth/me`, POST_JSON({ session: authSession() }));
         if (r.ok) {
           ACCT.me = acctOf(await r.json());
-          if (ACCT.me.pro) { PRO_LIVE = true; if (RACE.refresh) RACE.refresh(); return; }
+          if (ACCT.me.pro) { PRO_LIVE = true; return; }
         } else if (r.status === 401 || r.status === 503) authLost();
         else if (!proCode()) { PRO_LIVE = null; return; }
       } catch (e) { if (!proCode()) { PRO_LIVE = null; return; } }
@@ -7361,7 +7352,7 @@
     if (!BOARD.api) { PRO_LIVE = null; return; }
     try {
       const r = await fetch(`${BOARD.api}/restore`, POST_JSON({ code, key: deviceKey() }));
-      if (r.ok) { PRO_LIVE = true; if (RACE.refresh) RACE.refresh(); return; }
+      if (r.ok) { PRO_LIVE = true; return; }
       if (r.status === 409) { const d = await r.json().catch(() => ({})); proOff(d.error || 'This code is in use on too many devices'); return; }
       if (r.status === 404 || r.status === 400) { proOff('That Pro code is not valid any more'); return; }
       PRO_LIVE = null;                                                   // the board is down: neither on nor off
@@ -7948,263 +7939,6 @@
       leagueJoin(LEAGUE_HASH);
     } else leaguePending();
   }
-  // ---- The Gauntlet: the contest across the historic drives (board/worker.js /race). Pass all of them (an A each)
-  // first and win. A Pro code enters under a public name; only passes made after entering count, each drive once; the
-  // board is live (polled while it is on screen) and open to everyone, Pro or not
-  const RACE_NAME = 'The Gauntlet';
-  const RACE_PRIZE = '$50, the Gauntlet Champion title on the site and the pick of a future daily';                  // what the winner gets, in a few words ('' says "the prize")
-  const RACE_POLL = 15000;
-  const RACE = { view: null, full: false, timer: 0 };
-  const racePrize = () => RACE_PRIZE || 'the prize';
-  async function raceCall(path, body) {
-    if (!BOARD.api) throw new Error('the leaderboard is not on this site');
-    const r = await fetch(`${BOARD.api}${path}`, body ? POST_JSON(body) : { cache: 'no-store' });
-    const d = await r.json().catch(() => ({}));
-    return { ok: r.ok, status: r.status, ...d };
-  }
-  const raceFetch = () => (isPro() ? raceCall('/race/me', proCred()) : raceCall('/race'));
-  const hms = (ms) => { const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60;
-    return `${h ? `${h}:` : ''}${String(m).padStart(h ? 2 : 1, '0')}:${String(x).padStart(2, '0')}`; };
-  // the board's clock (a phone's own can be minutes off): the countdown and the Live chip go by it
-  const raceSkew = (d) => { const t = Date.parse(d && d.now); if (Number.isFinite(t)) RACE.skew = t - Date.now(); };
-  const raceNow = () => Date.now() + (RACE.skew || 0);
-  const raceOver = (v) => !!v && (v.over || (!!v.to && raceNow() >= Date.parse(v.to)));     // past the end (the board's clock)
-  // the contest's panel: what it is, live status, your entry (or how to enter), the board, the rules
-  function racePanel() {
-    const box = el('div', 'race');
-    box.setAttribute('aria-live', 'polite');
-    const draw = () => {
-      const v = RACE.view, n = (v && v.n) || (PRO ? PRO.drives.length : 24);
-      box.textContent = '';
-      const head = el('div', 'rhead');
-      const live = v && raceNow() >= Date.parse(v.from), over = raceOver(v);
-      const chip = el('span', `rchip${v && (v.winner || over) ? ' won' : live ? ' live' : ''}`, over ? 'Final' : v && v.winner ? 'Won' : live ? 'Live' : v ? `Starts in ${hms(Date.parse(v.from) - raceNow())}` : '…');
-      chipEl = chip;
-      head.append(el('span', 'rk', 'The contest'), chip);
-      box.append(head, el('h3', 'rtitle', RACE_NAME));
-      // a winner, or past the end: the results take the panel (the board stays open for 2nd and 3rd until the end)
-      if (v && (v.winner || over)) { raceFinal(v, n, over); return; }
-      box.append(el('p', 'rlead', `${n} historic drives. Pass every one, an A (${PASS_AT} or better) on each. The first to do it wins ${racePrize()}.`));
-      if (!v) { box.append(el('p', 'note', BOARD.api ? 'Loading the leaderboard…' : `The leaderboard is on ${HOME}.`)); return; }
-      const stats = el('div', 'rstats');
-      stats.append(el('span', '', `${v.entrants} in the race`), el('span', '', `${v.passes} drive${v.passes === 1 ? '' : 's'} passed`));
-      if (v.rows[0] && v.rows[0].n) stats.append(el('span', '', `Leader: ${v.rows[0].name}, ${v.rows[0].n}/${n}`));
-      box.append(stats);
-      box.append(youBox(v, n, live));
-      raceBoard(v, n, RACE.full ? v.rows.length : 10);
-      box.append(raceRules(n));
-    };
-    // you: your entry and where you stand, or how to enter
-    const youBox = (v, n, live) => {
-      const me = v.me, you = el('div', 'ryou');
-      if (me) {
-        const bar = el('div', 'rbar'), fill = el('i');
-        fill.style.width = `${(100 * me.n) / n}%`;
-        bar.append(fill);
-        you.append(el('div', 'rme', `${me.name}`), el('div', 'rme2', `${me.n}/${n} passed${me.rank ? ` · ${ordinal(me.rank)} place` : ''}`), bar,
-          el('p', 'note', me.done ? `All ${n} passed. Hall of Fame.` : me.n ? `Next: any drive you haven't passed since you entered. ${n - me.n} to go.` : 'Pass a historic drive with an A to get on the board. Drives passed before you entered don’t count, so play them again.'));
-        if (!live) {                       // before the start: a new name for the same entry
-          const ch = el('button', 'btn ghostbtn', 'Change name');
-          ch.type = 'button';
-          ch.addEventListener('click', () => {
-            const form = el('form', 'rjoin'), inp = el('input'), go = el('button', 'btn', 'Save');
-            inp.maxLength = 24; inp.value = me.name; inp.setAttribute('aria-label', 'Your new name for the Gauntlet'); inp.autocomplete = 'nickname';
-            go.type = 'submit';
-            form.append(inp, go);
-            form.addEventListener('submit', async (ev) => {
-              ev.preventDefault();
-              const name = inp.value.trim();
-              if (!name) { inp.focus(); return; }
-              go.disabled = true;
-              try {
-                const d = await raceCall('/race/join', { ...proCred(), name, rename: true });
-                if (!d.ok) { toast(d.error || 'Could not change it'); go.disabled = false; return; }
-                RACE.view = d;
-                toast(`You're on the board as ${d.me.name}.`);
-                draw();
-              } catch (e) { toast('No connection to the board. Try again.'); go.disabled = false; }
-            });
-            ch.replaceWith(form);
-            inp.focus();
-          });
-          you.append(ch);
-        }
-      } else if (isPro()) {
-        const form = el('form', 'rjoin'), inp = el('input'), go = el('button', 'btn', 'Enter');
-        inp.placeholder = 'Your name on the board'; inp.maxLength = 24; inp.setAttribute('aria-label', 'Your name for the Gauntlet');
-        inp.value = (signedIn() && ACCT.me.name) || myName() || ''; inp.autocomplete = 'nickname';
-        go.type = 'submit';
-        form.append(inp, go);
-        form.addEventListener('submit', async (ev) => {
-          ev.preventDefault();
-          const name = inp.value.trim();
-          if (!name) { inp.focus(); return; }
-          go.disabled = true;
-          try {
-            const d = await raceCall('/race/join', { ...proCred(), name });
-            if (!d.ok) { toast(d.error || 'Could not enter'); go.disabled = false; return; }
-            RACE.view = d;
-            track('race_join');
-            toast(`You're in. Good luck, ${d.me.name}.`);
-            draw();
-          } catch (e) { toast('No connection to the board. Try again.'); go.disabled = false; }
-        });
-        you.append(el('div', 'rme', 'Enter the race'), form, el('p', 'note', 'Your name shows on the board for everyone. Only drives you pass after entering count, so enter before you play.'));
-      } else if ((proCode() || authSession()) && PRO_LIVE === null) {      // Pro on this device or account, not confirmed yet: the entry comes once it is
-        you.append(el('div', 'rme', 'Checking your Pro…'), el('p', 'note', 'One moment: your entry shows here once your Pro code is confirmed.'));
-      } else {
-        const a = el('a', 'btn', 'Get Pro to enter');
-        a.href = '#proBuy';
-        a.addEventListener('click', (ev) => { ev.preventDefault(); const t = document.querySelector('.arch .pro'); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); else location.hash = '#archive'; });
-        you.append(el('div', 'rme', 'Want in?'), el('p', 'note', `Pro opens the ${n} historic drives and your entry. One code, one entry.`), a);
-      }
-      return you;
-    };
-    // the board: the top `top` rows (and the button for the rest)
-    const raceBoard = (v, n, top) => {
-      const me = v.me, rows = v.rows.slice(0, top);
-      if (rows.length) {
-        const ol = el('ol', 'rboard');
-        rows.forEach((x, i) => {
-          const li = el('li', `${me && x.name === me.name ? 'mine' : ''}${x.done ? ' done' : ''}`.trim());
-          const bar = el('span', 'rb'), fill = el('i');
-          fill.style.width = `${(100 * x.n) / n}%`;
-          bar.append(fill);
-          li.append(el('span', 'rr', String(i + 1)), el('span', 'rn', x.done ? `🏆 ${x.name}` : x.name), bar, el('span', 'rc', `${x.n}/${n}`));
-          ol.append(li);
-        });
-        box.append(ol);
-        if (v.rows.length > 10 && top < Infinity) {
-          const more = el('button', 'btn ghostbtn', RACE.full ? 'Top 10' : `Full board (${v.rows.length})`);
-          more.type = 'button';
-          more.addEventListener('click', () => { RACE.full = !RACE.full; draw(); });
-          box.append(more);
-        }
-      } else box.append(el('p', 'note', 'Nobody on the board yet. The first pass takes the lead.'));
-    };
-    const raceRules = (n) => {
-      const rules = el('details', 'rrules');
-      rules.append(el('summary', '', 'Rules'));
-      const ul = el('ul');
-      [`Open to Pro players: one entry per Pro code, under a name everyone can see (no slurs or obscenities: names like that are refused).`,
-        `Pass a historic drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play-callers. You have to win the game: a loss or a tie tops out at 89. The score is mostly the calls, partly the result, so an A takes the win and sharp calls. Each drive counts once, the first time you pass it after entering.`,
-        `The board ranks by drives passed, then by who got there first (the server's clock). The first to pass all ${n} wins ${racePrize()}.`,
-        'Every pass keeps the calls behind it. A winning run is checked call by call before the prize goes out; a run that doesn’t hold up is taken off the board.',
-        '2nd and 3rd to pass all 24: 2nd picks a future daily too, 3rd gets a shout-out on the site and our socials.',
-        'One drive at a time: passes come in at most one every 30 seconds.'].forEach((t) => ul.append(el('li', '', t)));
-      rules.append(ul);
-      return rules;
-    };
-    // the results: the champion, 2nd and 3rd (the first three to pass all of them, in order; once it is over, the top
-    // of the standings for a place nobody finished), what's next, the full standings, a link to share
-    const raceFinal = (v, n, over) => {
-      const me = v.me, fin = v.rows.filter((x) => x.done), when = (t) => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-      const champ = v.winner || fin[0];
-      box.append(el('p', 'rlead', champ ? `${champ.name} passed all ${n} historic drives first and is the Gauntlet Champion.` : `The Gauntlet is over. Nobody passed all ${n}: the standings are final.`));
-      const pod = el('ol', 'rpod'), prize = [racePrize(), 'Picks a future daily', 'A shout-out on the site and our socials'];
-      ['Champion', '2nd', '3rd'].forEach((label, i) => {
-        const x = fin[i] || (over ? v.rows.filter((r) => !r.done)[i - fin.length] : null), li = el('li', `rp${i + 1}${x ? '' : ' open'}`);
-        li.append(el('span', 'rpk', x && !x.done ? ordinal(i + 1) : label), el('b', 'rpn', x ? `${i ? '' : '🏆 '}${x.name}` : 'Open'),
-          el('span', 'rps', x ? (x.done ? `All ${n} · ${when(x.done)}` : `${x.n}/${n} passed`) : `The next to pass all ${n} takes it`));
-        if (x && x.done) li.append(el('span', 'rpz', prize[i]));
-        pod.append(li);
-      });
-      box.append(pod);
-      if (!over) box.append(el('p', 'note', `The board stays open for 2nd and 3rd: pass all ${n} to take a place.`));
-      if (me && over) box.append(el('p', 'rmefin', `You: ${me.name}, ${me.n}/${n} passed${me.rank ? `, ${ordinal(me.rank)} place` : ''}.`));
-      else if (!over && (me || isPro())) box.append(youBox(v, n, true));
-      if (v.next) {                                   // the next contest (the board's NEXT_CONTEST): only when it is set
-        const nx = el('div', 'rnext');
-        nx.append(el('span', 'rk', 'Next contest'), el('p', '', v.next));
-        box.append(nx);
-      }
-      box.append(el('div', 'rk', over ? 'Final standings' : 'Standings'));
-      raceBoard(v, n, Infinity);
-      const share = el('button', 'btn ghostbtn', 'Share the results'), txt = el('p', 'rsharetxt');
-      share.type = 'button';
-      txt.textContent = `${RACE_NAME} results: ${champ ? `${champ.name} is the Gauntlet Champion, all ${n} historic drives passed.` : 'the final standings.'} ${location.origin}${location.pathname}#gauntlet-results`;
-      txt.hidden = true;
-      share.addEventListener('click', () => { txt.hidden = false; shareText(txt.textContent, txt, 'gauntlet'); });
-      box.append(share, txt, raceRules(n));
-    };
-    let shown = false, chipEl = null;                     // the panel is built before it is on the page: the first fetch goes anyway
-    // someone typing a name: the panel is not redrawn under them (a redraw rebuilds the form and loses what was typed)
-    const typing = () => { const i = box.querySelector('.rjoin input'); return !!i && (document.activeElement === i || i.value.trim() !== ''); };
-    const tick = async () => {
-      if (box.isConnected) shown = true;
-      else if (shown) { clearInterval(RACE.timer); return; }
-      if (shown && (document.visibilityState !== 'visible' || $('arch').hidden)) return;
-      try { const d = await raceFetch(); if (d.rows) { RACE.view = d; raceSkew(d); if (!typing()) draw(); } } catch (e) { /* the next tick */ }
-    };
-    RACE.refresh = () => { if (!shown || box.isConnected) tick(); };      // Pro confirmed after the panel was drawn: ask again at once
-    draw();
-    clearInterval(RACE.timer);
-    // the countdown: only the chip's text each second; the whole panel once, when it goes live
-    RACE.timer = setInterval(() => {
-      const v = RACE.view;
-      if (!v || v.winner || raceOver(v)) return;
-      const left = Date.parse(v.from) - raceNow();
-      if (left > 0) { if (chipEl) chipEl.textContent = `Starts in ${hms(left)}`; } else if (left > -1500 && !typing()) draw();
-    }, 1000);
-    const poll = setInterval(() => { if (shown && !box.isConnected) clearInterval(poll); else tick(); }, RACE_POLL);
-    tick();
-    return box;
-  }
-  // a new try of a historic drive: the board's token for it (only an entrant gets one, and only once the Gauntlet has
-  // started), so only a try started in the Gauntlet can count; a reloaded try keeps its own
-  async function raceStart() {
-    if (!PRO_ON || !BOARD.api || !proHave()) return;
-    const d = await raceRetry('/race/start', () => ({ ...proCred(), drive: DRIVE }));
-    if (d && d.ok && d.tok && state && !state.done) { state.raceTok = d.tok; saveState(); }
-  }
-  // a call to the board that must get through (a try's token, a pass): a busy board (429 slow down, 5xx) or no
-  // connection is tried again, waiting longer each time (about 2 minutes in all); any other answer is final
-  async function raceRetry(path, body, waits = [2, 4, 8, 15, 30, 60]) {
-    for (let i = 0; ; i++) {
-      let d = null;
-      try { d = await raceCall(path, body()); } catch (e) { d = null; }
-      const busy = !d || d.status >= 500 || (d.status === 429 && !/one drive at a time|too fast/.test(d.error || ''));
-      if (!busy || i >= waits.length) return d;
-      await sleep(waits[i] * 1000 * (0.75 + 0.5 * Math.random()));
-    }
-  }
-  // a passed historic drive, for the Gauntlet (once you have entered): its calls go with it, for the check
-  async function racePass(p, decs, note) {
-    if (!BOARD.api || p * 100 < PASS_AT - 0.5) return;
-    // Pro not confirmed yet (offline at load): keep the pass for the next time this drive opens
-    if (!isPro()) { if (PRO_LIVE === null && state.raceTok) { state.raceSent = false; saveState(); } return; }
-    const calls = decs.map((x) => ({ k: x.kind, f: x.family, c: x.chosen, s: x.snap, w: x.wps.map((o) => [o.key, Math.round(o.wp * 1e4) / 1e4]) }));
-    state.raceSent = false; saveState();
-    try {
-      note.textContent = `${RACE_NAME}: sending your pass…`; note.hidden = false;
-      const d = await raceRetry('/race/pass', () => ({ ...proCred(), drive: DRIVE, p: clip(p, 0, 1), decs: calls, tryAt: state.tryAt || null, tok: state.raceTok || null,
-        res: state.spots.map((x) => (x && x.result ? [x.result.mine, x.result.theirs] : null)) }), [2, 4, 8, 15, 30, 35, 60]);
-      if (!d) throw new Error('no connection');
-      state.raceSent = true; saveState();
-      if (d.rows) RACE.view = d;
-      const n = d.n || 24;
-      if (d.ok && d.me) {
-        note.textContent = `${RACE_NAME}: ${d.me.n}/${n} passed${d.me.rank ? ` · ${ordinal(d.me.rank)} place` : ''}${d.me.done ? ' · all of them!' : ''}`;
-        note.hidden = false;
-        if (d.me.done) track('race_done');
-      } else if (d.status === 403 && /enter/.test(d.error || '')) {
-        note.textContent = '';
-        const a = el('a', '', `Enter ${RACE_NAME}`);
-        a.href = '#archive';
-        note.append(`This pass would count in the race. `, a, ' (then pass it again).');
-        note.hidden = false;
-      } else if (d.error) { note.textContent = `${RACE_NAME}: ${d.error}`; note.hidden = false; }
-    } catch (e) { note.textContent = `${RACE_NAME}: no connection, so this pass hasn't reached the board yet. Reopen this drive when you're back online and it is sent again.`; note.hidden = false; }
-  }
-  // on the Daily and Survivor tabs, once it is on: a bar to the race
-  function raceBar() {
-    if (!PRO_ON || !BOARD.api || ARCH || ARCH_DAY || DRIVE || RUN_N || VS || GAUNTLET || document.querySelector('.racebar')) return;
-    const over = gauntletOver(), a = el('a', `racebar${over ? ' slim' : ''}`);       // (over: one line, out of Play's way)
-    a.href = over ? '#gauntlet-results' : '#archive';
-    a.append(el('b', '', `🏁 ${RACE_NAME}`), el('span', '', over ? 'Final results →' : 'First to pass all 24 historic drives wins. Leaderboard →'));
-    a.addEventListener('click', () => track('race_bar'));
-    $('modeArch').closest('nav').after(a);
-  }
   // your Pro code, where you can't miss it: the code, Copy, and how to use it on your other devices
   function proCodeCard(fresh) {
     const box = el('div', 'procode'), code = proShownCode();
@@ -8297,17 +8031,6 @@
     if (ago === 1) return 'LAST NIGHT';
     return `${day.toLocaleDateString(undefined, { weekday: 'short' }).toUpperCase()} NIGHT`;
   }
-  // #gauntlet: the contest's panel alone (the link the results share), then the way to the drives
-  function renderGauntlet() {
-    track('gauntlet_open', { pro: isPro() });
-    show('arch');
-    const box = $('arch');
-    box.textContent = '';
-    if (!BOARD.api) { box.append(el('p', 'note', `The Gauntlet is on ${HOME}.`)); return; }
-    const a = el('a', 'btn ghostbtn gtodrives', isPro() ? 'Play the historic drives' : 'Pro: the historic drives');
-    a.href = '#archive';
-    box.append(racePanel(), a);
-  }
   // the Pro screen: the historic drives and every past day, newest first, with your score where you played; the
   // pitch when Pro is not on
   async function renderArchive(now) {
@@ -8316,7 +8039,6 @@
     const box = $('arch'), todayN = dayOf(now);
     box.textContent = '';
     box.append(el('h2', '', 'Pro'));
-    if (BOARD.api) box.append(racePanel());
     if (!isPro()) {
       box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''}, the historic drives and the playoff runs: play any of them, graded like the day it ran.`));
       if (PRO_LIVE === null && (proCode() || authSession())) {     // a code (or a session) is kept here but the board could not confirm it
@@ -9009,10 +8731,6 @@
   // The Gauntlet's start: every player's historic-drive record starts over then, like the board (the grades from before
   // move to drives_before_gauntlet, kept, not shown), and a try begun before it is dropped (it could never count)
   const GAUNTLET_FROM = Date.parse('2026-10-16T20:00:00Z');
-  // ... and its end (board/wrangler.toml RACE_TO): past it the bar on every daily and the Pro pitch after it stop
-  // promising the race and its prize (the panel itself goes by the board's own view: over)
-  const GAUNTLET_TO = Date.parse('2026-10-17T00:45:00Z');
-  const gauntletOver = () => Date.now() >= GAUNTLET_TO;
   function gauntletFresh() {
     if (Date.now() < GAUNTLET_FROM || load(`${STORE}:gauntlet_fresh`, false)) return;
     try {
@@ -9039,9 +8757,8 @@
     sheetSetup();
     boardInit();
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
-    $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE || GAUNTLET ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
+    $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
     $('modeArch').hidden = !PRO_ON;
-    raceBar();
     if (PRO_BUILT && !PRO_ON) {
       const at = () => { if (!PRO_ON && Date.now() >= PRO_AT) proLaunch(); };
       if (PRO_AT - Date.now() < 864e5) setTimeout(at, PRO_AT - Date.now() + 50);
@@ -9068,7 +8785,7 @@
     // (not while a play runs: the redraw would wipe the animation; the next draw picks up the new size)
     window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); }, 150); });
     show('boot');
-    if (!(VS || VS_LOBBY || GAUNTLET || ARCH || ARCH_DAY || DRIVE || RUN_N)) fetchData();      // the daily, survivor, practice
+    if (!(VS || VS_LOBBY || ARCH || ARCH_DAY || DRIVE || RUN_N)) fetchData();      // the daily, survivor, practice
     try {
       idx = await fetch(asset('game.json')).then((r) => { if (!r.ok) throw new Error('game data ' + r.status); return r.json(); });
       idx.calls.forEach((c) => { CALL[c.id] = c; });
@@ -9088,7 +8805,6 @@
         vsConnect();
         return;
       }
-      if (GAUNTLET) { renderGauntlet(); return; }
       if (ARCH || (ARCH_DAY && (!isPro() || ARCH_DAY >= dayOf(now))) || ((DRIVE || RUN_N) && !isPro())) { await renderArchive(now); return; }
       if (SURV) {
         state = load(stateKey(), null) || newRun();
@@ -9141,7 +8857,6 @@
     if (stale(load(stateKey(), null))) { try { localStorage.removeItem(stateKey()); } catch (e) { /* storage off */ } }
     const fresh = !load(stateKey(), null);
     state = load(stateKey(), null) || { spots: [], current: 0, done: false, tryAt: Date.now() };     // tryAt: this try (a drive's record)
-    if (fresh && DRIVE) raceStart();      // a new try of a historic drive: the Gauntlet's token for it
     if (!$('modal').hidden) { /* a question already up (the unsubscribe link's): the welcome waits for the next visit */ }
     else if (!load(`${STORE}:seen`, false)) { if (TOUR_OK) tourStart(true); else openHelp(true); save(`${STORE}:seen`, true); } else tourStart(false);
     drawTiles();
