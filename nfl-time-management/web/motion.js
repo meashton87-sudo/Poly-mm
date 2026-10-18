@@ -199,6 +199,10 @@
   function World(opts) {
     this.dt = (opts && opts.dt) || DT;
     this.field = (opts && opts.field) || null;           // [left, right] sidelines: a run to a spot or a chase pulls up there
+    // the edges of the ground: [back, front] past the end lines and [left, right] past the sidelines, where nobody
+    // runs on (into the stands, off the drawn field)
+    this.ends = (opts && opts.ends) || null;
+    this.sides = (opts && opts.sides) || null;
     this.bodies = [];
     this.t = 0;
   }
@@ -351,8 +355,12 @@
         a.nx -= ux * push; a.ny -= uy * push; c.nx += ux * push; c.ny += uy * push;
       }
     }
+    const E = this.ends, X = this.sides;
     for (const b of this.bodies) {
       if (b.nx != null) { b.x = b.nx; b.y = b.ny; }
+      // (at the edge he pulls up: his speed past it is gone, he runs on along it)
+      if (E && (b.y < E[0] || b.y > E[1])) { b.vy = 0; b.y = clip(b.y, E[0], E[1]); }
+      if (X && (b.x < X[0] || b.x > X[1])) { b.vx = 0; b.x = clip(b.x, X[0], X[1]); }
       b.hx.push(b.x); b.hy.push(b.y);
     }
     this.t = t + dt;
@@ -478,9 +486,18 @@
     '2man': { deep: [[13, 17], [W - 13, 17]], under: [] },
     cover0: { deep: [], under: [] },
   };
+  // A short field (the red zone, the goal line): every depth past the line of scrimmage fits in the room there is,
+  // `room` yards to the end line, the deepest a yard short of it. The deep zones come up to the back of the end zone
+  // and the underneath ones in proportion, as defenses play it there; nothing within 2 yards of the line moves (the
+  // front, a man pressed up). deepest: the deepest depth of the shell or alignment it is part of
+  function squeeze(d, deepest, room) {
+    const cap = room - 1, near = 2;
+    if (d <= near || deepest <= cap) return Math.min(d, Math.max(cap, near));
+    return near + ((Math.min(d, deepest) - near) * Math.max(0, cap - near)) / (deepest - near);
+  }
   const SHELL_SHARE = [['cover1', 0.30], ['cover3', 0.23], ['cover2', 0.18], ['cover4', 0.11], ['cover6', 0.06], ['2man', 0.05],
     ['cover0', 0.04], ['cover9', 0.03]];
   const MAN = { cover1: true, '2man': true, cover0: true };
 
-  return { ENV, DT, planPath, minTime, World, envOf, smooth, route, routeOnField, curveShift, CURVES, SHELLS, SHELL_SHARE, MAN };
+  return { ENV, DT, planPath, minTime, World, envOf, smooth, route, routeOnField, curveShift, CURVES, SHELLS, SHELL_SHARE, MAN, squeeze };
 });
