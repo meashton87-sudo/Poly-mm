@@ -326,7 +326,8 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .intro .who { font-size: 18px; font-weight: 600; text-wrap: balance; }
 .intro .btn.play { font-size: 20px; padding-block: 14px; }
 .intro .story.fold { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-.intro .more-story { justify-self: start; border: 0; background: none; padding: 0; margin-top: -8px; font: 700 14px var(--body); color: var(--muted); text-decoration: underline; cursor: pointer; }
+/* (padding for a finger-sized target, pulled back by the margins so it sits where it did) */
+.intro .more-story { justify-self: start; border: 0; background: none; padding: 11px 0; margin: -19px 0 -11px; font: 700 14px var(--body); color: var(--muted); text-decoration: underline; cursor: pointer; }
 .intro .story { margin: 0; max-width: 46ch; font-size: 15px; line-height: 1.45; color: var(--ink); border-left: 3px solid var(--sq-r); padding: 2px 0 2px 10px; text-align: left; text-wrap: pretty; }
 .intro .chips { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; }
 .intro .chips span { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 5px 12px; font-weight: 600; font-size: 14px; }
@@ -390,10 +391,15 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
   body.bcast .bmenu > [data-mode] { font-weight: 600; color: var(--muted); }
   body.bcast .fieldbox .fov { top: calc(env(safe-area-inset-top, 0px) + 66px); bottom: auto; align-items: flex-start; }
   body.bcast .fieldbox .fovl .ramp { display: none; }      /* (the color key: in the ratings) */
-  body.bcast .fieldbox .fov .dd { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: calc(100vw - 200px); line-height: 1.3; }
+  body.bcast .fieldbox .fov .dd { overflow: hidden; max-width: calc(100vw - 200px); line-height: 1.3; }
+  body.bcast .fieldbox .fov .dd > * { white-space: nowrap; }      /* (wraps only between the pieces, when it must) */
+  body.bcast .fieldbox .fovl { flex: none; }      /* the down keeps its width; the buttons beside it wrap instead */
+  body.bcast .fieldbox .fov .dd .ck { display: block; }      /* the clock on a line of its own, so the chip stays narrow */
+  body.bcast .fieldbox .fov .dd .sep { display: none; }
+  body.bcast #speedBtn { min-width: 40px; justify-content: center; }
   body.bcast .fieldbox .tobtn { top: calc(env(safe-area-inset-top, 0px) + 112px); bottom: auto; }
   body.bcast .sheet { display: flex; flex-direction: column; position: absolute; z-index: 4; left: 0; right: 0; bottom: 0; max-height: 52%;
-    background: var(--paper); border-radius: 20px 20px 0 0; box-shadow: 0 -8px 28px rgba(0, 0, 0, .3); transition: transform .24s ease; }
+    padding-bottom: env(safe-area-inset-bottom, 0px); background: var(--paper); border-radius: 20px 20px 0 0; box-shadow: 0 -8px 28px rgba(0, 0, 0, .3); transition: transform .24s ease; }
   body.bcast .sheet.dragging { transition: none; }
   /* the snap: the sheet slides away and the play has the whole screen (a note says a tap skips it); back up with
      what happened */
@@ -405,8 +411,13 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
   body.bcast .sheet.down { transform: translateY(calc(100% - 66px - env(safe-area-inset-bottom, 0px))); }
   body.bcast .grip { display: flex; align-items: center; justify-content: center; flex: none; height: 26px; border: 0; background: none; cursor: grab; touch-action: none; }
   body.bcast .grip i { width: 44px; height: 5px; border-radius: 3px; background: var(--line); }
-  body.bcast #dock { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 14px calc(env(safe-area-inset-bottom, 0px) + 14px); }
+  body.bcast #dock { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 14px 14px; }      /* (the sheet keeps clear of the home bar) */
   body.bcast .sheet.down #dock { overflow: hidden; }
+  /* a long result or final card: its button stays in reach at the sheet's foot (the rest scrolls under it; the
+     sticky edge is inside the dock's 14px padding, so -8px and the 6px plate leave nothing peeking below it) */
+  body.bcast #dock .result > .btn, body.bcast #dock .endcard > .btn { position: sticky; bottom: -8px; z-index: 1; box-shadow: 0 0 0 6px var(--paper); opacity: 1; }
+  /* the game over, the field has nothing left to show: the final card gets the screen under the scoreboard */
+  body.bcast .sheet:has(.endcard) { max-height: calc(100% - env(safe-area-inset-top, 0px) - 112px); }
   body.bcast .tip, body.bcast .tipring { z-index: 8; }
 }
 /* wide screens: the calls beside the field, both on screen at once (no scrolling down to call the play) */
@@ -616,6 +627,11 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .chip { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 5px 11px; font-size: 13px; font-weight: 600; cursor: pointer; }
 a.chip { color: var(--ink); text-decoration: none; display: inline-block; }
 .chip:hover { border-color: var(--muted); }
+/* touch: the slim pills and switches take a finger a few px past their edges (a 40px+ target, the same look) */
+@media (pointer: coarse) {
+  .chip, .fov .ghost { position: relative; }
+  .chip::before, .fov .ghost::before, .sw2::before { content: ""; position: absolute; inset: -7px -2px; }
+}
 .plays { display: grid; }
 .prow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--line); }
 .prow:last-child { border-bottom: 0; }
@@ -635,6 +651,7 @@ a.chip { color: var(--ink); text-decoration: none; display: inline-block; }
 .seg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 9px; padding: 3px; gap: 3px; background: var(--card); }
 .segb { border: 0; border-radius: 6px; background: transparent; color: var(--ink); padding: 5px 4px; cursor: pointer; display: grid; gap: 1px; text-align: center; min-height: 40px; align-content: center; }
 .segb b { font: 800 12.5px/1.1 var(--body); letter-spacing: .04em; text-transform: uppercase; }
+@media (max-width: 380px) { .segb b { font-size: 11.5px; letter-spacing: .02em; } }      /* "No-huddle" on one line on the narrowest phones */
 .segb small { font: 600 10.5px var(--body); color: var(--muted); }
 .segb:hover { background: var(--key); }
 .segb.on { background: var(--ink); color: var(--paper); }
@@ -744,6 +761,13 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 .result.banner .res-top .sq { width: 32px; height: 32px; font-size: 15px; }
 .result.banner .res-top .sq.swing { font-size: 13px; }
 .result.banner .verdict { font-size: 12.5px; }
+/* (a phone: the grade's reason two lines at most, so the next call's keys stay in sight; a tap on it shows all, game.js) */
+@media (max-width: 999px) {
+  body.bcast .result.banner .verdict .why { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  body.bcast .result.banner .verdict:has(.why ~ .why) .why { -webkit-line-clamp: 1; }      /* two calls graded: a line each */
+  body.bcast .result.banner .verdict.open .why { display: block; }
+  body.bcast .result.banner .verdict .why + br { display: none; }      /* (the reason is a block already: no blank line) */
+}
 .result.banner > .res-acts, .result.banner > .mline, .result.banner > .btn { display: none; }
 /* you against the real coach */
 .h2h-day { display: grid; justify-items: center; gap: 2px; }
@@ -786,7 +810,7 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 .tip .tiph .n { font-size: 11.5px; opacity: .7; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tip p { margin: 4px 0 8px; font-size: 14px; line-height: 1.4; }
 .tip .tipacts { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.tip button { border: 0; cursor: pointer; font: 700 13.5px var(--body); min-height: 36px; border-radius: 8px; }
+.tip button { border: 0; cursor: pointer; font: 700 13.5px var(--body); min-height: 40px; border-radius: 8px; }
 .tip .tipskip { background: transparent; color: inherit; opacity: .75; padding: 0 4px; text-decoration: underline; text-underline-offset: 3px; }
 .tip .tipok { background: var(--chain); color: var(--chain-ink); padding: 0 18px; letter-spacing: .04em; text-transform: uppercase; font-weight: 800; }
 .tip button:focus-visible { outline: 3px solid var(--los); outline-offset: 2px; }
