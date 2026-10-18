@@ -4215,7 +4215,7 @@
     // the switch); once turned off it stays off for the drive
     const oobOn = oobMatters(r) && (r.t > 1800 || r.score[G.me] < r.score[1 - G.me]) && !G.oobOff;      // (tied: shown, left to you)
     const t0 = tempoKeyOf(G.info.tempo), tFit = TEMPOS.find((k) => !runsOut(k, r));      // (the usual tempo, or one that snaps in time)
-    ui = { step: 'family', fam: null, oob: oobOn, tempo: runsOut(t0, r) && tFit ? tFit : t0 };
+    ui = { step: 'family', fam: null, oob: oobOn, tempo: runsOut(t0, r) && tFit && wantsTime(r) ? tFit : t0 };
     if (!VS) save(`${STORE}:ncalls`, load(`${STORE}:ncalls`, 0) + 1);
     drawField();
     drawDock();
@@ -4771,6 +4771,9 @@
   // No-huddle "about 16 s" picked for him, lost to the clock with two timeouts left)
   const runsOut = (k, r) => r.clock_running && (tempoSecs(k, r) || 0) >= halfLeft(r.t);
   const allRunOut = (r) => TEMPOS.every((k) => runsOut(k, r));
+  // ... which is a loss of time only to a team that needs it: ahead in the second half, the clock running out is the win
+  // (up 7 at 0:26, their timeouts gone, No-huddle was picked for him and Huddle / Milk it shown in red)
+  const wantsTime = (r) => r.t > 1800 || r.score[G.me] <= r.score[1 - G.me];
   function tempoPicker(r) {
     const w = el('div', 'tempo');
     w.append(el('span', 'lab', 'Tempo'));
@@ -4782,7 +4785,7 @@
       b.type = 'button';
       b.setAttribute('role', 'radio');
       const secs = tempoSecs(k, r);
-      b.append(el('b', '', CLOCK[k].short), el('small', runsOut(k, r) ? 'out' : '', runsOut(k, r) ? 'clock runs out' : secs ? `about ${Math.round(secs)} s` : ''));
+      b.append(el('b', '', CLOCK[k].short), el('small', runsOut(k, r) && wantsTime(r) ? 'out' : '', runsOut(k, r) ? 'clock runs out' : secs ? `about ${Math.round(secs)} s` : ''));
       const mark = () => seg.querySelectorAll('.segb').forEach((x, i) => {
         x.classList.toggle('on', TEMPOS[i] === ui.tempo); x.setAttribute('aria-checked', String(TEMPOS[i] === ui.tempo));
       });
@@ -4791,7 +4794,7 @@
       if (k === TEMPOS[TEMPOS.length - 1]) requestAnimationFrame(mark);
     });
     w.append(seg);
-    if (allRunOut(r)) {
+    if (allRunOut(r) && wantsTime(r)) {
       const o = clockOptions(r), to = o.includes('timeout'), sp = o.includes('spike');
       w.append(el('p', 'warn', `⏱ The clock runs out before the snap${to || sp ? `: use ${[to && 'a timeout', sp && 'a spike'].filter(Boolean).join(' or ')}` : ''}.`));
     }
