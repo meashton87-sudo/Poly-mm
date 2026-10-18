@@ -330,9 +330,15 @@ Against a punt: set up the return (about 4 more yards a punt) or rush it (a 3.5%
 
 After each snap the result box shows what the play did to your win chance (green when it helped); the call's grade
 is a separate chip, so a touchdown on a call that was not the very best still shows as a touchdown. Grading values
-every option 600 times, then the top three and your call again 3,000 times on fresh games: the best of many noisy
-options valued on the games that picked it is lucky, and at 600 games alone 15% of the calls shown red were really
-green or yellow (none are now, against a 12,000-game reference). The snap goes at once and the grading runs while the play
+every option 600 times, then the top four again 3,000 times on fresh games: the best of many noisy options valued on
+the games that picked it is lucky, and at 600 games alone 15% of the calls shown red were really green or yellow.
+Which options go again never depends on your call, so your call is valued exactly as a simulated NFL play-caller's
+would be (until October 2026 your call always went again too: valued finely while the field kept the rough values, it
+paid none of the noise they did, and random calls scored 99 on a Super Bowl spot where nothing anyone called mattered).
+A call's cost counts as nothing, for you and for everyone else, when it is inside the simulation's noise (one standard
+error of the difference: about a point of win chance at 3,000 games), under half a point (a green call), or on a
+decision where no option is three standard errors worse than the best: with twenty options one is two off by chance
+alone, and on such noise random calls down 25 in the Super Bowl scored anywhere from 3 to 94. The snap goes at once and the grading runs while the play
 does (the snap jumps the worker queue): about 0.3 s from tap to snap with the CPU slowed to a phone's, down from 2.3 s.
 
 **The defense adapts to you.** The looks it shows lean toward the ones that beat your recent calls (this game's, and
@@ -460,7 +466,7 @@ Built for NFL fans: after each snap its result stays on top of your next call (n
 play" button only before the other team's plays), and every spot ends **you vs the real coach**: the
 game result in the fourth quarter, or the points the possession was worth before the half, against what
 the real coach got. The day's summary and the share text carry your record against the real coaches
-(W-L-T), and the share grid keeps each spot to one line (at most eight squares, longer drives grouped).
+(W-L-T), and the share grid keeps each spot to one line (one square a snap, at most twelve: longer drives grouped, with the snap count).
 
 Real plays are pooled by situation, and a rare call's pool can span the field, so a play keeps only what
 still fits where it is drawn: a touchdown if it covered at least 60% of the way, a safety only if the
@@ -478,11 +484,19 @@ late-game calls look most like yours ("You called this one like Nick Sirianni"),
 coaches' 1999-2026 fingerprints (Cowher, Dungy, Gruden, Holmgren, Shanahan and Schottenheimer through this year's
 first-time coaches): passes, deep shots, fourth-down tries and two-point tries, each over what the league did in
 the same spots in that coach's era (`coaches.py`; the 1999-2015 play-by-play is fetched for this alone). The day's score is a percentile against NFL play-callers
-on the same drive, with a share grid of one square per snap. The simulated callers call like the league, each
-sharpened by his own skill (an option's weight falls by e for each `tau` of win chance it gives up; tau drawn from
-very sharp to loose, and 15% call by frequency alone), so scores spread from 0 to 100 and a typical player lands
-near the middle (days 1-3 compared with frequency-only callers, and nearly everyone scored 90+; the morning of day 4,
-with every caller equally sharp, half the players scored 0).
+on the same drive (the calls and the result), with a share grid of one square per snap. Every simulated caller is
+measured with the player's own numbers (each option's cost, noise counted as nothing). They call like the league, each
+reading the spot with his own skill: an option's weight is its NFL share times e^(-s c / tau) for its cost c, s from -1
+(a misread, leaning to the costly calls) to 1 (the best call nearly always), so as many read it worse than the league's
+habits as better and the league's own mix scores about 50. Replayed on real daily spots with simulated players
+(the harness behind `node web/score_sweep.js`, 50 games of each player on ten spots with something at stake), the medians are random calls 11,
+the league's own mix 46, a sharp reader 79 and a greedy one 90 (before: 3, 26, 72 and 80, against callers who all
+read at least as well as the league). On a
+spot where nothing anyone calls moves the win chance (the Super Bowl LI comeback from 3-28) the calls cost nothing for
+anyone and the result decides; such snaps never count toward a Perfect drive, and the calls line says so. Days scored
+before the change keep their score (decisions without `g: 2` are scored by the old rules, `scoreVsNFLv1`). History:
+days 1-3 compared with frequency-only callers (nearly everyone scored 90+); the morning of day 4, with every caller
+equally sharp, half the players scored 0; then sharpened callers only, 15% by frequency alone, until October 2026.
 
 **Survivor** (the Survivor tab, or `game.html#survivor`) plays random real fourth quarters back to back from
 the same pool: the 430 spots that start in the fourth quarter, so every one is played to the final gun. Win

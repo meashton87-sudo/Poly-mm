@@ -15,7 +15,10 @@
   const RUN = 0, PASS = 1, KNEEL = 2, SPIKE = 3;
   const SNAP = 0, PAT = 1, KICKOFF = 2, DONE = 3;
   const N_EVAL = 600;
-  const N_REFINE = 3000, REFINE_TOP = 3;   // the second round of grading (evaluateGraded)
+  const N_REFINE = 3000, REFINE_TOP = 4;   // the second round of grading (evaluateGraded)
+  const NOISE_Z = 1;            // a cost inside this many standard errors of the simulation counts as nothing (decisionFrom)
+  const COST_MIN = 0.005;       // and so does one under half a point of win chance, a green call's (markOf)
+  const QUIET_Z = 3;            // and every cost on a decision where no option is this many standard errors off the best
   // each worker holds its own parsed copy of the engine and play data (about 11.5 MB of JSON): two on phones
   const TOUCH = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
   const POOL = Math.max(1, Math.min(TOUCH ? 2 : 3, (navigator.hardwareConcurrency || 2) - 1));
@@ -515,35 +518,42 @@
     return new Promise((resolve, reject) => { msg.id = ++reqId; pending.set(msg.id, { resolve, reject }); if (urgent) queue.unshift(msg); else queue.push(msg); pump(); });
   }
   const simScen = () => ({ id: G.scen.id, game: G.scen.game, start: { receive2h: G.scen.start.receive2h } });
-  async function evaluate(root, options, seed, n = N_EVAL) {
+  // (se, when given, gets each option's standard error: the simulation's own noise in that win chance)
+  async function evaluate(root, options, seed, n = N_EVAL, se = null) {
     const W = Math.max(1, readyCount), sc = simScen(), out = {};
     const opts = options.map((o) => ({ key: o.key, action: o.action }));
     if (options.length < 2 * W && W > 1) {
       // few options: every worker plays all of them, each on its own share of the games (its own seed)
       const m = Math.ceil(n / W);
       const res = await Promise.all(Array.from({ length: W }, (_, j) => send({ type: 'eval', scen: sc, root, options: opts, n: m, persp: G.me, seed: (seed + j * 7919) >>> 0 })));
-      opts.forEach((o) => { out[o.key] = res.reduce((a, r) => a + r.out.find((x) => x.key === o.key).mean, 0) / W; });
+      opts.forEach((o) => {
+        const xs = res.map((r) => r.out.find((x) => x.key === o.key));
+        out[o.key] = xs.reduce((a, x) => a + x.mean, 0) / W;
+        if (se) se[o.key] = Math.sqrt(xs.reduce((a, x) => a + (x.se || 0) ** 2, 0)) / W;
+      });
       return out;
     }
     const k = Math.min(W * 3, options.length);          // small jobs: a worker is soon free for the snap
     const chunks = Array.from({ length: k }, () => []);
     opts.forEach((o, i) => chunks[i % k].push(o));
     const res = await Promise.all(chunks.map((c) => send({ type: 'eval', scen: sc, root, options: c, n, persp: G.me, seed })));
-    res.forEach((r) => r.out.forEach((o) => { out[o.key] = o.mean; }));
+    res.forEach((r) => r.out.forEach((o) => { out[o.key] = o.mean; if (se) se[o.key] = o.se || 0; }));
     return out;
   }
-  // grading a decision: every option N_EVAL times, then the top few and your choice again N_REFINE times on fresh
-  // games. Valued on the same games that picked it, the best of many noisy options is lucky, and every other call looks
-  // worse than it is (at 600 games, 15% of the calls shown red were really green or yellow); valued again, it is not.
-  // An option left out of the second round never counts as better than the best one valued in it.
-  async function evaluateGraded(root, options, seed, chosen) {
-    const v = await evaluate(root, options, seed);
+  // grading a decision: every option N_EVAL times, then the top REFINE_TOP again N_REFINE times on fresh games. Valued
+  // on the same games that picked it, the best of many noisy options is lucky, and every other call looks worse than it
+  // is (at 600 games, 15% of the calls shown red were really green or yellow); valued again, it is not. An option left
+  // out of the second round never counts as better than the best one valued in it. Which options go again never
+  // depends on your call: yours is valued exactly as it would be if a simulated NFL play-caller had made it (your call
+  // valued finely and the rest roughly scored random calls 99 on a day when nothing mattered: the rough values the
+  // simulated callers paid for were noise that never landed on you). Each value keeps its standard error and games.
+  async function evaluateGraded(root, options, seed) {
+    const se1 = {}, v = await evaluate(root, options, seed, N_EVAL, se1);
     const keys = new Set(options.slice().sort((a, b) => v[b.key] - v[a.key]).slice(0, REFINE_TOP).map((o) => o.key));
-    if (chosen !== undefined) keys.add(chosen);
-    const v2 = await evaluate(root, options.filter((o) => keys.has(o.key)), (seed ^ 0x5bd1e995) >>> 0, N_REFINE);
-    const top = Math.max(...Object.values(v2));
-    options.forEach((o) => { v[o.key] = keys.has(o.key) ? v2[o.key] : Math.min(v[o.key], top); });
-    return v;
+    const se2 = {}, v2 = await evaluate(root, options.filter((o) => keys.has(o.key)), (seed ^ 0x5bd1e995) >>> 0, N_REFINE, se2);
+    const top = Math.max(...Object.values(v2)), out = {};
+    options.forEach((o) => { out[o.key] = keys.has(o.key) ? { wp: v2[o.key], se: se2[o.key], n: N_REFINE } : { wp: Math.min(v[o.key], top), se: se1[o.key], n: N_EVAL }; });
+    return out;
   }
 
   // ------------------------------------------------- what coaches do (q) ---
@@ -589,18 +599,37 @@
     else keys.forEach((k) => { out[k] /= s; });
     return out;
   }
+  // A decision as graded (g: 2). The best call is one a real play-caller would make here (2% of the time or more):
+  // never a flea-flicker, a 66-yard kick or a spike nobody makes, however the numbers come out (players saw them
+  // suggested), and never yours just for being yours (it made the bar every simulated caller was measured against).
+  // Each option's cost (wps[].c) is what it gives up against the best, and the same numbers count for you and for
+  // every simulated play-caller (scoreVsNFL), so luck in the simulation favors nobody. A cost counts as nothing:
+  // - inside the simulation's noise: NOISE_Z standard errors of the difference, each side's games with the larger of
+  //   the two per-game spreads (an option that won 3 of 600 games at 1% shows a spread too small to trust);
+  // - under COST_MIN, a green call's (protecting a 99% lead, tenths of a point decided the score: a sharp reader 9,
+  //   random calls 56);
+  // - on a decision where no option is QUIET_Z standard errors worse than the best (with 20 options, one is 2 off by
+  //   chance alone): nothing was at stake there for anyone (down 25 in the third quarter, random calls scored 3 to 94
+  //   on such noise; now about 50, the result's alone).
+  // gap is the raw difference, for the words; typical: what a typical NFL play-caller gives up here (the league's call
+  // mix); wpa: how much less yours did.
   function decisionFrom(kind, family, options, vals, chosen, q, situation, snap = G.snapN) {
-    const wps = options.map((o) => ({ key: o.key, label: o.label, wp: vals[o.key], call: (o.action && o.action.call) || null, ...(o.action && o.action.dc ? { dc: o.action.dc } : {}) }));
+    const wps = options.map((o) => ({ key: o.key, label: o.label, wp: vals[o.key].wp, call: (o.action && o.action.call) || null, ...(o.action && o.action.dc ? { dc: o.action.dc } : {}) }));
+    const n = (w) => vals[w.key].n || N_EVAL, sd2 = (w) => (vals[w.key].se || 0) ** 2 * n(w);
     const mine = wps.find((w) => w.key === chosen);
     const qq = normalize(q, wps.map((w) => w.key));
-    // the best call is one a real play-caller would make here (2% of the time or more), or yours: never a flea-flicker,
-    // a 66-yard kick or a spike nobody makes, however the numbers come out (players saw them suggested)
-    const real = wps.filter((w) => w === mine || qq[w.key] >= PLAUSIBLE);
+    const real = wps.filter((w) => qq[w.key] >= PLAUSIBLE);
     const best = (real.length ? real : wps).reduce((a, b) => (b.wp > a.wp ? b : a));
-    const typical = wps.reduce((a, w) => a + qq[w.key] * w.wp, 0);
-    const cost = Math.max(0, best.wp - mine.wp);
+    let stake = false;
+    wps.forEach((w) => {
+      const gap = Math.max(0, best.wp - w.wp), noise = w === best ? 0 : Math.sqrt(Math.max(sd2(w), sd2(best)) * (1 / n(w) + 1 / n(best)));
+      w.c = gap > NOISE_Z * noise && gap >= COST_MIN ? gap : 0;
+      if (w.c && gap >= QUIET_Z * noise) stake = true;
+    });
+    if (!stake) wps.forEach((w) => { w.c = 0; });
+    const typical = wps.reduce((a, w) => a + qq[w.key] * w.c, 0);
     return { kind, family, situation, wps, chosen, chosenCall: mine.call, chosenLabel: mine.label, best: best.key, bestLabel: best.label,
-      bestWp: best.wp, wp: mine.wp, cost, q: qq, typical, wpa: mine.wp - typical, snap };
+      bestWp: best.wp, wp: mine.wp, cost: mine.c, gap: Math.max(0, best.wp - mine.wp), q: qq, typical, wpa: typical - mine.c, snap, g: 2 };
   }
 
   // ---------------------------------------------------------- formations ---
@@ -4761,7 +4790,7 @@
   async function gradeSpecs(pend) {
     const out = [];
     for (const sp of pend.specs) {
-      const vals = await evaluateGraded(sp.r, sp.opts, sp.seed, sp.chosen);
+      const vals = await evaluateGraded(sp.r, sp.opts, sp.seed);
       // (ctx: the score and the clock it was made at, for its tip: whyLine)
       const ctx = { lead: sp.r.score[G.me] - sp.r.score[1 - G.me], left: Math.round(halfLeft(sp.r.t)), h2: sp.r.t <= 1800 };
       out.push({ ...decisionFrom(sp.kind, sp.family, sp.opts, vals, sp.chosen, sp.q, sp.situation, pend.snap), ctx, ...(sp.extra || {}) });
@@ -5368,8 +5397,10 @@
       const chip = el('span', `chip-g sq ${xm}`, GLYPH[xm]);
       chip.setAttribute('aria-hidden', 'true');
       v.append(chip, document.createTextNode(decisions.length > 1 ? `${KIND_NAME[x.kind]}: ` : 'Your call: '));
-      if (x.cost < 0.0005 || x.best === x.chosen) v.append(el('b', '', 'the best one.'));
-      else if (xm === 'g') v.append(el('b', '', 'as good as any'), document.createTextNode(` (${x.bestLabel} ${pts(x.cost)}%).`));
+      // (a gap inside the simulation's noise costs nothing: as good as any, with the raw gap shown)
+      const gap = x.gap ?? x.cost;
+      if (gap < 0.0005 || x.best === x.chosen) v.append(el('b', '', 'the best one.'));
+      else if (xm === 'g') v.append(el('b', '', 'as good as any'), document.createTextNode(` (${x.bestLabel} ${pts(gap)}%${x.cost < gap && gap >= COST_MIN ? ', inside the simulation’s margin' : ''}).`));
       else v.append(document.createTextNode(`${GRADE_WORD[xm]}; `), el('b', '', x.bestLabel), document.createTextNode(` was better (${pts(x.cost)}% win chance).`));
       if (xm !== 'g' && whyLine(x)) v.append(el('span', 'why', ` ${whyLine(x)}`));
     });
@@ -5864,22 +5895,34 @@
     box.append(row);
     return box;
   }
-  function snapsOf(decs) {
+  // a drive's snaps (a snap's calls together: the tempo and the play, say), each with its mark, how it did against a
+  // typical NFL play-caller (wpa) and whether anything was at stake: a typical caller gives up at least MATTERS of
+  // win chance there (down 25 in the third quarter, nothing anyone calls moves it). A day graded before g: 2 counts
+  // every snap as one that mattered (its typical was a win chance, not a cost)
+  const MATTERS = 0.005;
+  function snapStats(decs) {
     const by = new Map();
-    decs.forEach((x) => { const k = x.snap ?? by.size; by.set(k, (by.get(k) || 0) + x.cost); });
-    return [...by.values()].map(markOf);
+    decs.forEach((x) => {
+      const k = x.snap ?? by.size, s = by.get(k) || { cost: 0, wpa: 0, stake: 0, old: false };
+      s.cost += x.cost; s.wpa += x.wpa || 0;
+      if (x.g === 2) s.stake += x.typical || 0; else s.old = true;
+      by.set(k, s);
+    });
+    return [...by.values()].map((s) => ({ m: markOf(s.cost), cost: s.cost, wpa: s.wpa, matters: s.old || s.stake >= MATTERS }));
   }
-  // a spot's snaps in at most 8 squares for sharing: longer drives are grouped, each group graded by its average
+  const snapsOf = (decs) => snapStats(decs).map((s) => s.m);
+  // a spot's snaps in at most SHARE_SQ squares for sharing (one a snap, as the end card shows them): longer drives are
+  // grouped, each group graded by its average, and the share says how many snaps they stand for
+  const SHARE_SQ = 12;
   function squeeze(decs) {
-    const by = new Map();
-    decs.forEach((x) => { const k = x.snap ?? by.size; by.set(k, (by.get(k) || 0) + x.cost); });
-    const c = [...by.values()];
-    if (c.length <= 8) return c.map(markOf);
-    return Array.from({ length: 8 }, (_, j) => {
-      const g = c.slice(Math.floor((j * c.length) / 8), Math.floor(((j + 1) * c.length) / 8));
+    const c = snapStats(decs).map((s) => s.cost);
+    if (c.length <= SHARE_SQ) return c.map(markOf);
+    return Array.from({ length: SHARE_SQ }, (_, j) => {
+      const g = c.slice(Math.floor((j * c.length) / SHARE_SQ), Math.floor(((j + 1) * c.length) / SHARE_SQ));
       return markOf(g.reduce((a, x) => a + x, 0) / g.length);
     });
   }
+  const squeezeNote = (decs) => { const n = snapStats(decs).length; return n > SHARE_SQ ? ` (${n} snaps)` : ''; };
   function squaresOf(decs) {
     const w = el('div', 'squares');
     snapsOf(decs).forEach((m) => w.append(el('span', `sq ${m}`, GLYPH[m])));
@@ -6182,7 +6225,49 @@
   const RESULT_W = 0.03, RESULT_FROM = 6;
   // a percentile shows 1 to 99: a 0 beside a win read as broken, a 100 beside a loss as perfect
   const pctShown = (p) => clip(p, 0.01, 0.99);
-  const resultScored = () => !!(DRIVE || RUN_N || PRACTICE || dayN >= RESULT_FROM);
+  const resultScored = () => !!(DRIVE || RUN_N || PRACTICE || dayN >= RESULT_FROM || allDecisions().every((x) => x.g === 2));
+  // The score (decisions graded as g: 2, decisionFrom): the share of simulated NFL play-callers who did worse than you
+  // on the same drive, the calls and the result, as above (RESULT_W a win). Every one of them is measured with your
+  // numbers: the costs decisionFrom gave each option (noise counted as nothing), so a call costs a simulated caller
+  // exactly what it would have cost you. They call like the league (NFL frequencies q), each reading the spot with
+  // his own skill, from a misread to a sharp read, and as many read it worse than the league's habits as better: a
+  // skill s from -1 to 1, an option's weight q x e^(-s.c/tau) for its cost c, tau from SKILL_LOOSE at s = 0 (the
+  // league's own mix) to SKILL_SHARP at 1 (the best call nearly always) and SKILL_MISREAD at -1 (leaning to the
+  // costly calls). So the league's own mix scores about 50, better calls more, worse less: replayed on real daily spots
+  // (web/score_sweep.js) the medians are random calls 11, the league's mix 46, a sharp read 79 and a greedy one 90
+  // (before, against callers who all read at least as well as the league: 3, 26, 72 and 80). On a spot where nothing
+  // anyone calls changes the win chance every call costs nothing for anyone, and the result decides.
+  const SKILL_SHARP = 0.003, SKILL_LOOSE = 0.3, SKILL_MISREAD = 0.03;
+  function scoreVsNFL(decs) {
+    if (decs.some((x) => x.g !== 2)) return scoreVsNFLv1(decs);
+    let groups = spotGroups();
+    if (!groups.length) groups = [{ decs, res: 0, start: decs[0].bestWp }];
+    const my = groups.reduce((a, g) => a + RESULT_W * g.res - g.decs.reduce((b, x) => b + x.cost, 0), 0);
+    const R = rng(hash('pct3', dayN, DRIVE, RUN_N)), N = 6000;
+    const lnL = Math.log(SKILL_LOOSE), lnS = Math.log(SKILL_SHARP) - lnL, lnM = Math.log(SKILL_MISREAD) - lnL;
+    const D = groups.map((g) => g.decs.map((x) => ({ q: x.wps.map((o) => x.q[o.key] || 0), c: x.wps.map((o) => o.c), top: Math.max(...x.wps.map((o) => o.c)) })));
+    let better = 0;
+    for (let s = 0; s < N; s++) {
+      const sk = 2 * R() - 1, inv = sk >= 0 ? -1 / Math.exp(lnL + sk * lnS) : 1 / Math.exp(lnL - sk * lnM);
+      let m = 0;
+      groups.forEach((g, gi) => {
+        let tot = 0;
+        for (const x of D[gi]) {
+          // (weights relative to the costliest option's: a misread's e^(c/tau) stays finite)
+          let t = 0;
+          const w = x.q.map((q, j) => { const v = q * Math.exp(inv * (x.c[j] - (inv > 0 ? x.top : 0))); t += v; return v; });
+          let u = R() * t, j = 0;
+          for (; j < w.length - 1; j++) { u -= w[j]; if (u <= 0) break; }
+          tot += x.c[j];
+        }
+        const win = R() < clip(g.start - tot, 0.002, 0.998) ? 1 : 0;
+        m += RESULT_W * win - tot;
+      });
+      if (m < my - 1e-9) better += 1; else if (Math.abs(m - my) <= 1e-9) better += 0.5;
+    }
+    if (DRIVE && groups.some((g) => g.res < 1)) return pctShown(Math.min(better / N, (PASS_AT - 1) / 100));
+    return pctShown(better / N);
+  }
   function spotGroups() {
     const out = [];
     for (let i = 0; i < today.length; i++) {
@@ -6193,7 +6278,8 @@
     }
     return out;
   }
-  function scoreVsNFL(decs) {
+  // (the score of a day graded before g: 2, kept as it was recorded: scoreVsNFL)
+  function scoreVsNFLv1(decs) {
     if (!resultScored()) return percentileVsNFL(decs);
     const groups = spotGroups();
     if (!groups.length) return percentileVsNFL(decs);
@@ -6231,15 +6317,23 @@
   function scoreWhy(p) {
     const rs = today.map((_, i) => state.spots[i] && state.spots[i].result).filter((r) => r && r.half !== 1);
     const w = rs.filter((r) => r.mine > r.theirs).length, l = rs.filter((r) => r.mine < r.theirs).length;
+    // nothing at stake on most snaps (a deep hole, a game already won): the calls weigh little, the result decides
+    const S = snapStats(allDecisions()), quiet = S.filter((x) => !x.matters).length;
+    if (S.length >= 4 && quiet >= 0.75 * S.length) return quiet === S.length ? 'On every snap nothing you could call changed your win chance much: the result decides the score.'
+      : `On ${quiet} of your ${S.length} snaps nothing you could call changed your win chance much: the score is the other ${S.length - quiet} and the result.`;
     if (w && !l && p < 0.4) return 'You won, but your calls gave up win chance: the bounces bailed you out.';
     if (l && !w && p >= 0.6) return 'You lost, but your calls were sound: the bounces went the other way.';
     return null;
   }
-  // the calls in a line: how many were the best (or close), and the average call against a typical NFL play-caller's
-  // (their sum over a long drive read like a score: "−46.5 points of win chance" beside a win)
+  // the calls in a line, snap by snap as the squares show them: how many were the best (or close), how many had
+  // nothing at stake, and the average snap against a typical NFL play-caller's (their sum over a long drive read like
+  // a score: "-46.5 points of win chance" beside a win)
   function callsLine(decs) {
-    const n = decs.length, g = decs.filter((x) => markOf(x.cost) === 'g').length, avg = n ? decs.reduce((a, x) => a + x.wpa, 0) / n : 0;
-    return n ? `Your calls: ${g} of ${n} the best or close to it · ${Math.abs(avg * 100).toFixed(1)} points of win chance per call ${avg >= 0 ? 'better' : 'worse'} than a typical NFL play-caller’s.` : '';
+    const S = snapStats(decs), n = S.length;
+    if (!n) return '';
+    const g = S.filter((s) => s.m === 'g').length, quiet = S.filter((s) => !s.matters).length, avg = S.reduce((a, s) => a + s.wpa, 0) / n;
+    if (quiet === n) return `Your calls: nothing you could call on your ${n} snap${n === 1 ? '' : 's'} changed your win chance much, so none of them counted for or against you.`;
+    return `Your calls: ${g} of ${n} snaps the best or close to it${quiet ? ` (on ${quiet} of them no call changed much)` : ''} · ${Math.abs(avg * 100).toFixed(1)} points of win chance a snap ${avg >= 0 ? 'better' : 'worse'} than a typical NFL play-caller’s.`;
   }
   function percentileVsNFL(decs) {
     const my = decs.reduce((a, x) => a + x.cost, 0);
@@ -6434,7 +6528,7 @@
       const r = s.result ? (s.result.half === 1 ? 'HT' : s.result.mine > s.result.theirs ? 'W' : s.result.mine < s.result.theirs ? 'L' : 'OT') : '';
       const hh = headToHead(i, s.result);
       if (hh) rec[hh.v > 0 ? 0 : hh.v < 0 ? 1 : 2]++;
-      return `${today[i].player} ${r} ${squeeze(s.decisions || []).map((m) => SQ[m]).join('')}`;
+      return `${today[i].player} ${r} ${squeeze(s.decisions || []).map((m) => SQ[m]).join('')}${squeezeNote(s.decisions || [])}`;
     });
     const k3 = box.querySelector('.pct-why') ? 4 : 3;          // (the cards below go in under the score, and its why line)
     const met = rec[0] + rec[1] + rec[2], recTxt = `${rec[0]}-${rec[1]}${rec[2] ? `-${rec[2]}` : ''}`;
@@ -6639,7 +6733,8 @@
     ['coach10', '🎓', 'Coaching tree', 'Beat the real coach 10 times.', (R) => R.beat >= 10],
     // (not on the finish of a game lost: a star day beside a loss read as a mistake)
     ['day90', '⭐', 'Pro Bowl day', 'Score 90 or more on a daily you don’t lose.', (R, ev) => !anyG(ev, gLost) && Object.values(R.days).some((x) => Math.round(x.p * 100) >= 90)],
-    ['perfect', '💎', 'Perfect drive', 'Make every call green on a drive of 3 snaps or more.', (R, ev) => anyG(ev, (g) => { const s = snapsOf(g.decs); return s.length >= 3 && s.every((m) => m === 'g'); })],
+    // (snaps where something was at stake: down 25 in the third quarter every call is green, random ones too)
+    ['perfect', '💎', 'Perfect drive', 'Make every call green on a drive with 3 or more snaps that mattered.', (R, ev) => anyG(ev, (g) => { const s = snapStats(g.decs); return s.filter((x) => x.matters).length >= 3 && s.every((x) => x.m === 'g'); })],
     ['comeback', '🔄', 'Comeback kid', 'Win a game you took over down 7 or more.', (R, ev) => anyG(ev, (g) => gWon(g) && lead0(g.sc) <= -7)],
     ['twomin', '⏱️', 'Two-minute warrior', 'Win a game you took over with under 1:00 to play.', (R, ev) => anyG(ev, (g) => gWon(g) && g.sc.start.qtr === 4 && g.sc.start.clock < 60)],
     ['streak3', '🔥', 'Three-peat', 'Play the daily 3 days in a row.', (R) => R.sk.best >= 3],
@@ -6891,9 +6986,10 @@
     }
     if (coach) { x.font = `600 36px ${BODY}`; x.fillStyle = 'rgba(255,255,255,.85)'; x.fillText(`Coached like ${coach}`, W / 2, y, W - 80); y += 70; }
     // the calls, one row of squares per spot
-    const SQ = 74, GAP = 14;
+    const GAP = 14;
     o.rows.slice(0, 4).forEach((r) => {
-      const n = Math.max(1, r.marks.length), w = n * SQ + (n - 1) * GAP, lab = `${r.team} ${r.res}`.trim();
+      // (up to SHARE_SQ squares: smaller past 8, so the row and its label stay inside the picture)
+      const n = Math.max(1, r.marks.length), SQ = Math.min(74, Math.floor((W - 340 - (n - 1) * GAP) / n)), w = n * SQ + (n - 1) * GAP, lab = `${r.team} ${r.res}`.trim();
       x.font = `800 40px ${DISP}`; x.textAlign = 'right'; x.fillStyle = '#fff';
       const x0 = (W - w) / 2 + 60;
       x.fillText(lab, x0 - 24, y + SQ * 0.68);
