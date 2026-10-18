@@ -31,7 +31,9 @@ const current = (url) => {
 };
 const ours = async (req, res) => {
   const url = new URL(req.url);
-  if (url.searchParams.has('v')) return current(url);
+  // (an address with a query is a stamped one: an older build's ?d= packs are not this build's, else they were carried
+  // from build to build for good)
+  if (url.search) return current(url);
   if (!/html/.test(res.headers.get('content-type') || '')) return true;
   const m = (await res.clone().text()).match(/<meta name="build" content="([^"]*)"/);
   return !m || m[1] === VERSION;

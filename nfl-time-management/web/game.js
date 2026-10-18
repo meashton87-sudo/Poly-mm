@@ -434,12 +434,14 @@
   async function fetchPacked(url, size) {
     // gunzipped as it comes in (the bytes counted on the way), not all at the end: the last chunk is the only wait
     const name = url.split('?')[0];
+    // the first visit (no service worker when it was asked for, so nothing kept it): a copy goes into this build's
+    // worker's cache, so the next visit doesn't download it again (whether the worker took over by the time the answer
+    // came is beside the point: it never saw the request)
+    const uncached = swOn() && !navigator.serviceWorker.controller;
     const r = await fetch(url);
     if (!r.ok) throw new Error(`${name} ${r.status}`);
     dl.total += +r.headers.get('content-length') || size;
-    // the first visit (no service worker yet, so nothing kept it): a copy goes into this build's worker's cache, so the
-    // next visit doesn't download it again
-    const keep = /[?&]v=/.test(url) && swOn() && !navigator.serviceWorker.controller && typeof caches !== 'undefined' && r.type === 'basic' ? r.clone() : null;
+    const keep = /[?&]v=/.test(url) && uncached && typeof caches !== 'undefined' && r.type === 'basic' ? r.clone() : null;
     let body = r.body;
     if (body && typeof TransformStream === 'function') body = body.pipeThrough(new TransformStream({ transform(c, ctl) { dl.got += c.length; ctl.enqueue(c); } }));
     else { const b = await r.arrayBuffer(); dl.got += b.byteLength; body = new Blob([b]).stream(); }
@@ -3719,7 +3721,8 @@
     if (G.cot) mid.append(el('span', 'q', over ? (G.cot.round > 1 ? `FINAL/${G.cot.round}OT` : 'FINAL/OT') : `${G.cot.round > 1 ? G.cot.round : ''}OT`),
       el('span', 'clk', over ? '' : G.cot.round >= 3 ? 'Two-point' : `${G.cot.idx ? '2nd' : '1st'} poss`));
     else mid.append(el('span', 'q', over ? (r.t >= 1800 ? 'HALF' : r.ot ? 'FINAL/OT' : needsOvertime(r) ? 'END Q4' : 'FINAL') : qLabel(r)),
-      el('span', `clk${r.clock_running && !over ? ' run' : ''}`, over || r.untimed ? '0:00' : ck.text));
+      // (an overtime decided with time left: FINAL/OT, no clock, not a 0:00 that never ran)
+      el('span', `clk${r.clock_running && !over ? ' run' : ''}`, over && r.ot ? '' : over || r.untimed ? '0:00' : ck.text));
     b.append(side(1, false), mid, side(0, true));
     b.setAttribute('aria-label', `${code(1)} ${r.score[1]}, ${code(0)} ${r.score[0]}, ${ck.text} left in ${r.ot ? 'overtime' : `the ${ordinal(ck.q)} quarter`}. Game details`);
     const dd = $('dd');
@@ -3858,7 +3861,7 @@
     if (e.tdDef && !/touchdown/.test(res)) res = e.kind === PASS && !/fumble|bad snap|strip/.test(res) ? 'intercepted and returned for a touchdown' : `${res.split(',')[0]}, returned for a touchdown`;
     const extra = [];
     if (e.oob && !e.incomplete && !e.td && !e.tdDef) extra.push('out of bounds');      // (a touchdown is the score, wherever he ended up)
-    else if (act && act.oob && mine && !e.incomplete && !e.penalty && !e.turnover && !e.td && !e.safety) extra.push('could not get out of bounds');
+    else if (act && act.oob && mine && !e.incomplete && !e.penalty && !e.turnover && !e.onDowns && !e.td && !e.safety) extra.push('could not get out of bounds');
     if (e.fd && !e.td) extra.push(e.penalty ? 'automatic first down' : 'first down');
     if (e.onDowns) extra.push('turnover on downs');
     if (e.safety) extra.push('safety');
@@ -4151,6 +4154,8 @@
     narrate(res.log, action).forEach(([text, t, mine]) => addLog(text, t, mine));
     G.root = res.root;
     if (res.done) G.root.phase = DONE;
+    // a half that ends on the play itself (a kneel, a last snap, a kick) says so, as one run out between snaps does
+    if (G.root.phase === DONE && !G.root.ot && !res.log.some((x) => x.ev === 'end')) addLog(G.root.t >= 1800 ? 'Halftime' : 'End of regulation', G.root.t, false);
     if (res.log.some((x) => x.untimed)) G.root.untimed = true;        // a defensive foul as time ran out: one more snap at 0:00
     persist();
     const pe = res.log.find((x) => x.ev === 'play');
@@ -4261,7 +4266,9 @@
     const p = G.info.pFg, kickable = !r.clock_running || th >= 7;
     // and on any down late in a half once in decent range (down 9 with 2:00 left: take the points now, then the onside)
     const late = r.t > 1800 ? th <= 120 : th <= 300;
-    if (kickable && ((r.down === 4 && p >= 0.05) || (th <= 20 && p >= 0.2) || (r.down === 3 && th <= 40 && p >= 0.4) || (late && p >= 0.3))) specials.push('fg');
+    // (never as the game's last snap when it cannot win or tie it: a gold FIELD GOAL on an untimed down at 0:00, down 4)
+    const lastKick = r.t <= 1800 && !r.ot && r.score[G.me] - r.score[1 - G.me] <= -4 && (r.untimed || th <= 5);
+    if (kickable && !lastKick && ((r.down === 4 && p >= 0.05) || (th <= 20 && p >= 0.2) || (r.down === 3 && th <= 40 && p >= 0.4) || (late && p >= 0.3))) specials.push('fg');
     // a punt hands the ball over for good when behind in the game's last 40 s (NFL 2016-25: no team trailing in the
     // last 0:40 punted; engine.js _fourthDown makes the computer go), and it never gets off when the clock runs out
     // before any snap (a gold PUNT at 0:02, down 4, beside the timeout)
@@ -4415,16 +4422,19 @@
   // going out of bounds keeps the clock stopped inside the last 2:00 of the first half and the last 5:00 of the game
   // (and in overtime): it matters to you then when you're behind or tied, or the half is ending. The switch shows only
   // then (it said "tries to stop the clock" when going out stops nothing, and was offered to a team ahead late)
-  const oobMatters = (r) => r.pos === G.me && halfLeft(r.t) <= (r.t > 1800 ? 120 : 300) && (r.t > 1800 || r.score[G.me] - r.score[1 - G.me] <= 0);
+  const oobMatters = (r) => r.pos === G.me && !r.untimed && halfLeft(r.t) <= (r.t > 1800 ? 120 : 300) && (r.t > 1800 || r.score[G.me] - r.score[1 - G.me] <= 0);
   const setOob = (v) => { ui.oob = v; G.oobOff = !v; };
   function oobToggle() {
     const tg = el('div', 'toggle urgent');
     const lab = el('div', 'lab', '⏱ Get out of bounds');
-    lab.append(el('small', '', 'Going out stops the clock now. Turn it off to stay in bounds and keep the clock running.'));
+    // (what the switch does from where it is: off by default when tied, it said "Turn it off")
+    const how = () => `Going out stops the clock now. ${ui.oob ? 'Turn it off to stay in bounds and keep the clock running.' : 'Turn it on to get out of bounds when you can.'}`;
+    const note = el('small', '', how());
+    lab.append(note);
     const sw = el('button', 'sw2');
     sw.type = 'button'; sw.id = 'oobSwitch';
     sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(ui.oob)); sw.setAttribute('aria-label', 'Get out of bounds');
-    sw.addEventListener('click', () => { setOob(!ui.oob); sw.setAttribute('aria-checked', String(ui.oob)); });
+    sw.addEventListener('click', () => { setOob(!ui.oob); sw.setAttribute('aria-checked', String(ui.oob)); note.textContent = how(); });
     tg.append(lab, sw);
     return tg;
   }
@@ -5818,6 +5828,7 @@
       persist();
     }
     drawAll();
+    persChip();                  // (the personnel chip off the field over the final card)
     const res = G.result, sc = G.scen, d = $('dock');
     // (res.ot: a result from before overtime was played, settled with the win chance)
     const inOT = !!G.root.ot || cotDaily(), tie = res.mine === res.theirs;
@@ -6913,6 +6924,18 @@
   if (swOn()) {
     const reg = () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => { /* no worker: the site works the same */ });
     if (document.readyState === 'complete') reg(); else addEventListener('load', reg);
+    // the first visit: the page, its scripts, fonts and the spot's data came before the worker took over, so it kept
+    // none of them and the app could not open with no signal until a second visit. Copies go into its cache once it is
+    // in charge (the browser's own cache answers: the stamped files are cached for good). The packs are kept by
+    // fetchPacked (a pack still coming in would download twice)
+    if (!navigator.serviceWorker.controller && typeof caches !== 'undefined') {
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        const mine = (u) => { try { const x = new URL(u, location.href); return x.origin === location.origin && /\.(?:js|json|png|svg|ico|webmanifest|woff2)$/.test(x.pathname) && !/^\/(?:ad-|admin|sw\.js|version\.json|remind-)/.test(x.pathname); } catch (e) { return false; } };
+        const urls = [location.pathname].concat(performance.getEntriesByType('resource').map((e) => e.name).filter(mine));
+        caches.open(`tmd-${BUILD}`).then((c) => Promise.all([...new Set(urls)].map((u) => c.match(u).then((hit) => hit || c.add(u)).catch(() => { /* not kept: online play is the same */ }))))
+          .catch(() => { /* storage full or off */ });
+      }, { once: true });
+    }
   }
   // ---- your result as a picture (for Instagram, X, the group chat): drawn on a canvas, the phone's share sheet when it
   // takes files, else saved as a file
