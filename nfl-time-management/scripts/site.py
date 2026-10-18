@@ -252,8 +252,12 @@ def pack(src: Path, dst: Path, ref: dict | None = None) -> int:
 
 # Google AdSense: the site verification meta and the ad script (in every page's head), and with an ad unit's slot id
 # the pages show that unit on the screens between games (game.js / stats.html read the two metas). Off unless given.
+# The game's page has the script's address in a meta instead (ADSENSE_LATER): game.js loads it once the game is up
+# (adsSoon: on idle after the first play, its data in), not during start-up, where it competed with the game's files
+ADSENSE_SRC = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={id}"
 ADSENSE_TAG = ("<meta name=\"google-adsense-account\" content=\"{id}\">"
-               "<script async src=\"https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={id}\" crossorigin=\"anonymous\"></script>")
+               "<script async src=\"" + ADSENSE_SRC + "\" crossorigin=\"anonymous\"></script>")
+ADSENSE_LATER = "<meta name=\"google-adsense-account\" content=\"{id}\"><meta name=\"ads-src\" content=\"" + ADSENSE_SRC + "\">"
 
 
 # Another ad network's units (Adsterra and the like, whose approval is quicker than AdSense's): each unit's code, as
@@ -330,11 +334,11 @@ def banner_meta() -> str:
     return f'<meta name="ad-frame" content="/ad-banner.html" data-size="{w}x{h}">'
 
 
-def ads_head(adsense: str | None, ad_slot: str | None) -> str:
+def ads_head(adsense: str | None, ad_slot: str | None, later: bool = False) -> str:
     out = banner_meta()
     if not adsense:
         return out
-    return ADSENSE_TAG.format(id=adsense) + (f"<meta name=\"ad-slot\" content=\"{ad_slot}\">" if ad_slot and not out else "") + out
+    return (ADSENSE_LATER if later else ADSENSE_TAG).format(id=adsense) + (f"<meta name=\"ad-slot\" content=\"{ad_slot}\">" if ad_slot and not out else "") + out
 
 
 GA_TAG = ("<script async src=\"https://www.googletagmanager.com/gtag/js?id={id}\"></script>"
@@ -451,7 +455,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         if not re.fullmatch(r"G-[A-Z0-9]{4,16}", ga):
             raise SystemExit(f"--ga wants a measurement id like G-XXXXXXX, not {ga!r}")
         extra = GA_TAG.format(id=ga) + extra
-    extra += ads_head(adsense, ad_slot)
+    extra += ads_head(adsense, ad_slot, later=True)       # (the game's page: game.js loads the script)
     if board_api:
         extra += f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">"
     if pro:                                  # the Pro tab (archive, historic drives, the purchase): off until it is turned on

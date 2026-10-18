@@ -78,10 +78,17 @@
   const NO_PUNT_BEHIND = [16, 90.0, 9, 150.0];
   const KO_TOUCHBACK = 65;             // daily game: a kickoff through the end zone starts the receivers at their 35 (2025 rule)
   const PB_TD_SHARE = 0.6;            // daily game: a playbook touchdown drawn farther out scores only if it covered 60% of the way
-  // daily game: matchups. Every call against the defense's call (a blitz, a loaded box, or playing soft / a light box):
-  // +1 when the call beats it, -1 when it loses to it, by football logic (and the sign of the real EPA gaps: deep
-  // shots fare worse against a blitz and better against a loaded box, runs worse into a loaded box, screens and
-  // RPOs better against a blitz). The play is still a real one; its odds tilt toward better or worse outcomes by
+  // daily game: matchups. Every call against the defense's call (a blitz, a loaded box, or playing soft: a light box,
+  // nobody blitzing, everyone else in coverage): +1 when the call beats it, -1 when it loses to it, measured on the
+  // real plays (this library, 2022-26): each play's EPA against its call's mean in its situation, by look, then
+  // double-centered (what a matchup adds is the interaction: which calls do better or worse against a look than calls
+  // do against it in general; the real plays a look draws already carry its own effect). The data's sign at +-1
+  // where it is clear (|z| >= 2), +-0.5 where it leans (1.5 <= |z| < 2); elsewhere football logic at +-0.5, or 0 where
+  // the data points the other way. The real interaction: runs gain into a light box (+0.015 EPA) and lose into a loaded
+  // one (-0.014); quick passes beat the blitz (+0.032) and screens beat it and a loaded box (+0.06, +0.07); with
+  // nobody blitzing and seven in coverage, quick passes (-0.013) and screens (-0.042) fare worse, deep shots no worse
+  // (+0.028); deep shots lose to the blitz (-0.085), play action wins against a loaded box (+0.046).
+  // The play is still a real one; its odds tilt toward better or worse outcomes by
   // exp(MATCH_TILT * s * EPA), so a call into the teeth of the defense gets blown up far more often than the
   // ~0.05-point real gaps would make it (a game choice: the real gaps are too small to feel play by play). The tilt is
   // scaled to each pool's own spread of EPA: a winning matchup is a fifth of a standard deviation better, so a run into
@@ -90,21 +97,21 @@
   const MATCH_SD = 0.2;              // a full matchup (s = +-1) moves a call's mean EPA by this share of its own spread
   const MATCH_EPA_CAP = 3;
   const MATCH_AUDIBLE = 0.9;          // when you call their defense, the offense checks into calls that beat it
-  const RUN_M = { blitz: 0, load: -1, soft: 1 }, DEEP_M = { blitz: -1, load: 1, soft: -1 };
+  const RUN_M = { blitz: 0, load: -1, soft: 1 }, DEEP_M = { blitz: -1, load: 0.5, soft: 0 };
   const MATCH = {
     rb_out_strong: RUN_M, rb_out_weak: RUN_M, rb_tackle_strong: RUN_M, rb_tackle_weak: RUN_M, rb_inside_strong: RUN_M,
-    rb_inside_weak: RUN_M, rb_middle: RUN_M, qb_sneak: { blitz: 0, load: -0.5, soft: 0.5 }, qb_run: { blitz: 0.5, load: -1, soft: 1 },
-    rpo_strong: { blitz: 0.5, load: 1, soft: -0.5 }, rpo_weak: { blitz: 0.5, load: 1, soft: -0.5 },
+    rb_inside_weak: RUN_M, rb_middle: RUN_M, qb_sneak: { blitz: 0, load: 0, soft: 0 }, qb_run: { blitz: 0.5, load: -0.5, soft: 0.5 },
+    rpo_strong: { blitz: 0.5, load: 0.5, soft: 0 }, rpo_weak: { blitz: 0.5, load: 0.5, soft: 0 },
     quick_strong: { blitz: 1, load: 0.5, soft: -0.5 }, quick_weak: { blitz: 1, load: 0.5, soft: -0.5 },
-    quick_middle: { blitz: 1, load: 0.5, soft: -0.5 }, screen: { blitz: 1, load: 0.5, soft: -0.5 },
-    deep_strong: DEEP_M, deep_weak: DEEP_M, deep_middle: DEEP_M, pa_deep: DEEP_M, pa_short: { blitz: -0.5, load: 1, soft: 0 },
-    roll_strong: { blitz: -0.5, load: 0.5, soft: 0 }, roll_weak: { blitz: -0.5, load: 0.5, soft: 0 },
+    quick_middle: { blitz: 1, load: 0.5, soft: -0.5 }, screen: { blitz: 1, load: 1, soft: -1 },
+    deep_strong: DEEP_M, deep_weak: DEEP_M, deep_middle: DEEP_M, pa_deep: { blitz: -0.5, load: 0.5, soft: 0 },
+    pa_short: { blitz: -0.5, load: 1, soft: 0 }, roll_strong: { blitz: -0.5, load: 0.5, soft: 0 }, roll_weak: { blitz: -0.5, load: 0.5, soft: 0 },
     hail_mary: { blitz: 0, load: 0, soft: 0 },
-    // trick plays: the flea-flicker and the receiver pass sell the run (a loaded box bites; a blitz gets home before
-    // the slow throw; soft safeties stay deep); the end-around beats a blitz flowing to the run and loses to a loaded,
-    // disciplined front; the direct snap is a run with an extra blocker
-    trick_flea: { blitz: -1, load: 1, soft: -1 }, trick_pass: { blitz: -1, load: 1, soft: -1 },
-    trick_reverse: { blitz: 1, load: -1, soft: 0 }, trick_direct: { blitz: 0, load: -1, soft: 1 },
+    // trick plays (too few real ones to tell, football logic): the flea-flicker and the receiver pass sell the run (a
+    // loaded box bites; a blitz gets home before the slow throw; seven in coverage stay deep); the end-around beats a
+    // blitz flowing to the run; the direct snap is a run with an extra blocker, into a loaded box
+    trick_flea: { blitz: -0.5, load: 0.5, soft: -0.5 }, trick_pass: { blitz: 0, load: 0.5, soft: -0.5 },
+    trick_reverse: { blitz: 0.5, load: 0, soft: 0 }, trick_direct: { blitz: 0, load: -0.5, soft: 0 },
   };
   // the defense's call a look stands for (lookBucket: 0 light box, 1 light + blitz, 2 loaded box, 3 loaded + blitz)
   const LOOK_DEF = ['soft', 'blitz', 'load', 'blitz'];
