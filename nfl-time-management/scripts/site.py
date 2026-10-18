@@ -39,6 +39,42 @@ HEAD = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<style>:root{{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}}"
         "body{{margin:0;font:14px system-ui,sans-serif}}img{{max-width:100%}}[hidden]{{display:none!important}}</style></head><body>")
 
+# The typefaces from the site itself (web/fonts: Google's own files and @font-face rules), in place of each page's
+# Google Fonts stylesheet: that stylesheet held up the first paint behind two more hosts (DNS, TLS, then the CSS)
+GFONTS = re.compile(r'(?:<link rel="preconnect" href="https://fonts\.(?:googleapis|gstatic)\.com"(?: crossorigin)?>\s*)*'
+                    r'<link rel="stylesheet" href="https://fonts\.googleapis\.com/css2\?[^"]*">')
+
+
+def own_fonts(page: str) -> str:
+    css = re.sub(r"/\*.*?\*/\s*", "", (WEB / "fonts" / "fonts.css").read_text(), flags=re.S).replace("\n", "")
+    return GFONTS.sub(lambda m: f"<style>{css}</style>", page, count=1)
+
+
+# Cloudflare Pages' headers (_headers). A stamped address (?v= the build's files, ?d= the data's: both named by what
+# is in them) never changes what it holds, so a phone keeps it and asks again only for a new address: a reload (every
+# mode switch is one) and the simulator's extra workers no longer wait on a round trip a file. Everything else keeps
+# Pages' default (asked again every time). The fonts' names carry their version.
+IMMUTABLE = ["/game.js", "/motion.js", "/engine.js", "/game_worker.js", "/vs_core.js", "/game.json", "/playbook.json",
+             "/engine_data.json", "/teams.json", "/engine_data.pack", "/playbook.pack", "/spots/*", "/fonts/*"]
+HEADERS = "".join(f"{p}\n  Cache-Control: public, max-age=31536000, immutable\n" for p in IMMUTABLE)
+
+# The scripts shipped without their comments and indentation (esbuild, whitespace and syntax only: every name kept, so
+# an error still names its function): a third less to download and parse before the intro and the first call. The
+# files in web/ stay as written (the claude.ai artifact, the Node checks); without npx (an offline build) so does the site.
+SCRIPTS = ["game.js", "motion.js", "engine.js", "game_worker.js", "vs_core.js"]
+ESBUILD = "esbuild@0.24.0"
+
+
+def minify_scripts(out: Path) -> None:
+    try:
+        r = subprocess.run(["npx", "--yes", ESBUILD, *SCRIPTS, "--minify-whitespace", "--minify-syntax", "--log-level=warning",
+                            "--outdir=.", "--allow-overwrite"], cwd=out, capture_output=True, text=True, timeout=600)
+        ok = r.returncode == 0
+    except (OSError, subprocess.SubprocessError) as e:
+        r, ok = e, False
+    if not ok:
+        print(f"site.py: scripts not minified ({getattr(r, 'stderr', r)!s:.300}); shipping them as written")
+
 
 # The simulator's data (engine_data.json, playbook.json: typed arrays as base64 in JSON) re-packed for phones: the
 # same arrays as raw bytes, the integer index arrays as differences and every multi-byte array byte-plane shuffled
@@ -314,7 +350,7 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
           site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, pro_at: str | None = None, no_ads: bool = False,
-          fulldef: bool = False, google_client_id: str | None = None, old_domain: str | None = None) -> Path:
+          fulldef: bool = False, google_client_id: str | None = None, old_domain: str | None = None, minify: bool = True) -> Path:
     global NO_ADS
     NO_ADS = no_ads
     adsense, ad_slot = (adsense or "").strip() or None, (ad_slot or "").strip() or None     # "" (an unset variable): off
@@ -359,9 +395,25 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=WEB, capture_output=True, text=True, timeout=10).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         commit = ""
-    stamp = (commit[:12] or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"))
-    # every file the page loads carries the build stamp (game.js reads the meta), so phones never mix two builds
-    extra += f"<meta name=\"build\" content=\"{stamp}\"><meta name=\"home\" content=\"{html.escape(home, quote=True)}\">" + canonical(site_url, "") + FOOT_CSS
+    for f in FILES:
+        shutil.copy2(WEB / f, out / f)
+    if (WEB / "teams.json").exists():           # Versus: the 32 teams as they line up now (nflclock.pro.versus_teams)
+        shutil.copy2(WEB / "teams.json", out / "teams.json")
+    for f in sorted((WEB / "spots").glob("s*.json")):
+        shutil.copy2(f, out / "spots" / f.name)
+        # and each spot on its own (game.js loadTeams, <meta name="spot1">): a day's drive downloads its one spot, not
+        # the other 19 of its chunk
+        for i, t in json.loads(f.read_text()).items():
+            (out / "spots" / f"p{i}.json").write_text(json.dumps({i: t}, separators=(",", ":")))
+    shutil.copytree(WEB / "fonts", out / "fonts", ignore=shutil.ignore_patterns("*.css"))
+    if minify:
+        minify_scripts(out)
+    # every file the page loads carries the build stamp (game.js reads the meta), so phones never mix two builds. It is
+    # named by what those files hold (not the commit: the weekly data rebuild runs on the same one), so a stamped
+    # address always holds the same bytes and phones may keep it for good (_headers)
+    stamp = hashlib.sha256(b"".join(p.relative_to(out).as_posix().encode() + p.read_bytes()
+                                    for p in sorted(out.rglob("*")) if p.is_file())).hexdigest()[:12]
+    extra += f"<meta name=\"build\" content=\"{stamp}\"><meta name=\"spot1\" content=\"on\"><meta name=\"home\" content=\"{html.escape(home, quote=True)}\">" + canonical(site_url, "") + FOOT_CSS
     # game.json (the intro needs it) downloads alongside game.js instead of after it: the same request game.js makes
     # (fetch: cors, same-origin credentials), so the browser hands that one over
     extra = f"<link rel=\"preload\" href=\"game.json?v={stamp}\" as=\"fetch\" crossorigin>" + extra
@@ -374,7 +426,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     extra += f"<meta name=\"data\" content=\"{data_stamp}\">"
     extra += ('<script type="application/ld+json">' + json.dumps({"@context": "https://schema.org", "@type": "WebSite",
               "name": "Two-Minute Drill", "url": site_url.rstrip("/") + "/", "description": desc}) + "</script>")
-    page = (WEB / "game.html").read_text()
+    page = own_fonts((WEB / "game.html").read_text())
     for js in ("motion.js", "vs_core.js", "game.js"):     # vs_core.js: college overtime's rules (Versus, a college game)
         page = page.replace(f'<script src="{js}"></script>', f'<script src="{js}?v={stamp}"></script>')
     (out / "index.html").write_text(HEAD.format(extra=moving + extra + AD_CSS) + page.replace("<!--SITE-FOOT-->", foot_ads() + FOOT) + "</body></html>\n")
@@ -382,7 +434,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     stats_head = (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Two-Minute Drill stats",
         "How everyone did on the daily drive: players per day, the score spread and the top ten.", "stats") + (
         f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else "")
-    fill = lambda name, head, path, ads=True: (out / name).write_text((WEB / name).read_text().replace("nfl2mindrill.com", home).replace("<!--SITE-HEAD-->",
+    fill = lambda name, head, path, ads=True: (out / name).write_text(own_fonts((WEB / name).read_text()).replace("nfl2mindrill.com", home).replace("<!--SITE-HEAD-->",
         moving + head + canonical(site_url, path) + FOOT_CSS + AD_CSS).replace("<!--AD-MID-->", ad_frame("banner") if ads else "")
         .replace("<!--SITE-FOOT-->", (foot_ads() if ads else "") + FOOT))
     fill("stats.html", stats_head, "stats")
@@ -428,12 +480,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
                 '<meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;padding:0;overflow:hidden;'
                 'background:transparent;display:flex;justify-content:center}</style>' + STORAGE_SHIM + '</head><body>' + slot_code(slot)
                 + "</body></html>\n")
-    for f in FILES:
-        shutil.copy2(WEB / f, out / f)
-    if (WEB / "teams.json").exists():           # Versus: the 32 teams as they line up now (nflclock.pro.versus_teams)
-        shutil.copy2(WEB / "teams.json", out / "teams.json")
-    for f in sorted((WEB / "spots").glob("s*.json")):
-        shutil.copy2(f, out / "spots" / f.name)
+    (out / "_headers").write_text(HEADERS)
     # The Pro data (web/pro, nflclock.pro.build) is never copied here: the board worker serves it (POST /pro/data)
     # only to a valid Pro code, so it cannot be fetched from the site without the purchase.
     # the daily reminder (game.js reminderNodes): a calendar event every day at the hour the player picks, for Apple and
@@ -467,13 +514,14 @@ if __name__ == "__main__":
     ap.add_argument("--adsense", help="Google AdSense publisher id (ca-pub-...); empty: no ads")
     ap.add_argument("--ad-slot", help="an AdSense display ad unit's slot id, shown between games; empty: AdSense's own placement only")
     ap.add_argument("--no-ads", action="store_true", help="no ads anywhere on the site (overrides --adsense and web/ads)")
+    ap.add_argument("--no-minify", action="store_true", help="ship the scripts as written (no esbuild)")
     ap.add_argument("--pro-at", help="with --pro: the Pro tab stays hidden until this time (ISO 8601, e.g. 2026-10-16T18:00:00Z)")
     ap.add_argument("--vs", action="store_true", help="turn on Versus (two players live); off until approved")
     ap.add_argument("--fulldef", action="store_true", help="the full defensive call (personnel, front, coverage, rush) in every mode; off until approved")
     ap.add_argument("--google-client-id", help="a Google OAuth web client id (....apps.googleusercontent.com): Sign in with Google on the Pro tab; empty: off")
     ap.add_argument("--pro", action="store_true", help="turn on the Pro tab (the archive, the historic drives, the purchase); off until approved")
     a = ap.parse_args()
-    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, vs=a.vs, fulldef=a.fulldef, no_ads=a.no_ads,
+    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, vs=a.vs, fulldef=a.fulldef, no_ads=a.no_ads, minify=not a.no_minify,
               google_client_id=a.google_client_id, old_domain=a.old_domain)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6

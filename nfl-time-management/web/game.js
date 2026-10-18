@@ -3972,6 +3972,9 @@
     box.append(el('div', 'from', `The real score, clock, ball and timeouts from that game, with the players who were on the field and how good they were that week.`));
     box.append(el('div', 'from legal', 'Fan-made. Not affiliated with or endorsed by the NFL or its teams.'));
     go.focus({ preventScroll: true });
+    // the first call's facts, asked for while the intro is read: the worker keeps the answer (game_worker.js), so Play
+    // finds the call ready instead of waiting on the simulator setting up this game
+    if (!G.started) send({ type: 'info', scen: simScen(), root: G.root }).catch(() => { /* asked again on Play */ });
   }
   async function enterField() {
     show('play');
@@ -6043,9 +6046,13 @@
     const b = Math.max(survStats().best, state.won);
     return `Survivor · ${state.won} win${state.won === 1 ? '' : 's'}${b ? ` · best ${b}` : ''}`;
   }
+  // the website also has each spot in a file of its own (site.py, <meta name="spot1">): the day's drive downloads its
+  // one spot, not the 20 of its chunk; elsewhere (the claude.ai artifact, a local copy) the chunks
+  const SPOT1 = !!document.querySelector('meta[name="spot1"]');
   async function loadTeams(ids) {
     const per = idx.spot_chunk || 20, teams = {};
-    await Promise.all([...new Set(ids.map((i) => Math.floor(i / per)))].map((k) => fetch(asset(`spots/s${k}.json`))
+    const files = SPOT1 ? [...new Set(ids)].map((i) => `p${i}`) : [...new Set(ids.map((i) => Math.floor(i / per)))].map((k) => `s${k}`);
+    await Promise.all(files.map((f) => fetch(asset(`spots/${f}.json`))
       .then((r) => { if (!r.ok) throw new Error('spot data ' + r.status); return r.json(); }).then((c) => Object.assign(teams, c))));
     return teams;
   }
