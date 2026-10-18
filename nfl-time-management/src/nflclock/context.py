@@ -10,7 +10,8 @@ from scipy.stats import norm
 from . import library as L
 from .sim import GameContext
 
-TWO_PT_BASE = 0.47
+TWO_PT_BASE = 0.47    # NFL two-point rate for an average matchup (a level's data may carry its own: two_pt_base)
+OT_MARGIN_SD = 13.5   # NFL final-margin SD: how much the spread matters in a short overtime (ot_margin_sd)
 
 
 @dataclass
@@ -27,15 +28,16 @@ class TeamInfo:
     punter: str | None = None
 
 
-def ot_wp(home_spread: float) -> float:
+def ot_wp(home_spread: float, sd: float = OT_MARGIN_SD) -> float:
     """Overtime win probability for the home team (strength matters less in a short OT)."""
-    return float(0.5 + 0.5 * (norm.cdf(home_spread / 13.5) - 0.5))
+    return float(0.5 + 0.5 * (norm.cdf(home_spread / sd) - 0.5))
 
 
 def make_context(bundle, home: TeamInfo, away: TeamInfo, *, home_spread=0.0, receive_2h=1,
                  indoor=False, wind=0.0, temp=65.0, season=2025, mu_pass=None, mu_rush=None,
-                 home_pass=0.0, home_rush=0.0) -> GameContext:
+                 home_pass=0.0, home_rush=0.0, rules="nfl") -> GameContext:
     lib = bundle.lib
+    consts = bundle.consts
     mu_pass = lib.mean_epa[L.KIND_PASS] if mu_pass is None else mu_pass
     mu_rush = lib.mean_epa[L.KIND_RUN] if mu_rush is None else mu_rush
     era = {L.KIND_PASS: mu_pass - lib.mean_epa[L.KIND_PASS], L.KIND_RUN: mu_rush - lib.mean_epa[L.KIND_RUN]}
@@ -45,14 +47,16 @@ def make_context(bundle, home: TeamInfo, away: TeamInfo, *, home_spread=0.0, rec
         sign = 0.5 if i == 0 else -0.5
         delta[i, L.KIND_PASS] = era[L.KIND_PASS] + off.off_pass + de.def_pass + sign * home_pass
         delta[i, L.KIND_RUN] = era[L.KIND_RUN] + off.off_rush + de.def_rush + sign * home_rush
-    two = np.array([TWO_PT_BASE + 0.3 * (0.6 * delta[i, 1] + 0.4 * delta[i, 0]) for i in (0, 1)])
+    base = consts.get("two_pt_base", TWO_PT_BASE)
+    two = np.array([base + 0.3 * (0.6 * delta[i, 1] + 0.4 * delta[i, 0]) for i in (0, 1)])
     return GameContext(
         home=home.team, away=away.team, home_spread=float(home_spread), receive_2h=int(receive_2h),
         indoor=bool(indoor), wind=float(wind or 0.0), temp=float(65.0 if temp is None or np.isnan(temp) else temp),
         season=int(season), delta=delta, proe=np.array([t.proe for t in teams]),
         kicker_shift=np.array([t.kicker_rating for t in teams]),
         punter_shift=np.array([t.punter_rating for t in teams]),
-        two_pt=np.clip(two, 0.35, 0.6), ot_wp_home=ot_wp(home_spread),
+        two_pt=np.clip(two, 0.35, 0.6), ot_wp_home=ot_wp(home_spread, consts.get("ot_margin_sd", OT_MARGIN_SD)),
+        rules=rules,
     )
 
 

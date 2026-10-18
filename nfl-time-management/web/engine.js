@@ -213,6 +213,76 @@
   const FG_SNAP_YARDS = 17.0;
   const TWO_PT_SET = new Set([-2, -5, -9, -10, -13, 1, 5]);
 
+  // RULES:start (a JSON copy of src/nflclock/rules.py rules_table(), the source and its rationale: tests/test_rules.py keeps them equal)
+  const RULE_BOOK = {
+    "RULES": {
+      "nfl": {"level": "nfl", "quarter": 900, "tmw": 120, "oob": [120, 300], "fdStop": null, "untimed": "def", "runoff10": null, "penStop": null, "koTouchback": 65, "koFairCatch": null, "onsideBehindOnly": true, "patKick": 33, "twoYl": 2, "fgMissBack": 8, "fgMissTb": null, "tryForego": false, "kneelRunoff": [38, 40], "maxGap": null, "playClock": [40, 25], "hash": 23.58, "posts": 18.5, "ot": "nfl2025", "toPerHalf": 3, "runClock": null, "waterBreak": null, "fieldYards": 100, "firstDownYards": 10, "fgPoints": 3, "tryPoints": [1, 2]},
+      "ncaa2026": {"level": "fbs", "quarter": 900, "tmw": 120, "oob": [120, 120], "fdStop": {"window": 120, "credit": null}, "untimed": "any", "runoff10": {"window": 120}, "penStop": {"window": 120}, "koTouchback": 75, "koFairCatch": 75, "onsideBehindOnly": false, "patKick": 20, "twoYl": 3, "fgMissBack": 0, "fgMissTb": null, "tryForego": true, "kneelRunoff": [38, 40], "maxGap": null, "playClock": [40, 25], "hash": 20.0, "posts": 18.5, "ot": "ncaa", "toPerHalf": 3, "runClock": null, "waterBreak": null, "fieldYards": 100, "firstDownYards": 10, "fgPoints": 3, "tryPoints": [1, 2]},
+      "ncaa2022": {"level": "fbs", "quarter": 900, "tmw": null, "oob": [120, 120], "fdStop": {"window": 1800, "credit": null}, "untimed": "any", "runoff10": {"window": 60}, "penStop": {"window": 120}, "koTouchback": 75, "koFairCatch": 75, "onsideBehindOnly": false, "patKick": 20, "twoYl": 3, "fgMissBack": 0, "fgMissTb": null, "tryForego": true, "kneelRunoff": [38, 40], "maxGap": null, "playClock": [40, 25], "hash": 20.0, "posts": 18.5, "ot": "ncaa2022", "toPerHalf": 3, "runClock": null, "waterBreak": null, "fieldYards": 100, "firstDownYards": 10, "fgPoints": 3, "tryPoints": [1, 2]},
+      "nfhs": {"level": "hs", "quarter": 720, "tmw": null, "oob": [1440, 1440], "fdStop": {"window": 1440, "credit": 4.0}, "untimed": "any", "runoff10": null, "penStop": {"window": 120}, "koTouchback": 80, "koFairCatch": null, "onsideBehindOnly": false, "patKick": 20, "twoYl": 3, "fgMissBack": null, "fgMissTb": 80, "tryForego": true, "kneelRunoff": [38, 40], "maxGap": null, "playClock": [40, 25], "hash": 17.78, "posts": 23.33, "ot": "kansas10", "toPerHalf": 3, "runClock": null, "waterBreak": null, "fieldYards": 100, "firstDownYards": 10, "fgPoints": 3, "tryPoints": [1, 2]},
+      "nfhs25": {"level": "hs", "quarter": 720, "tmw": null, "oob": [1440, 1440], "fdStop": {"window": 1440, "credit": 4.0}, "untimed": "any", "runoff10": null, "penStop": {"window": 120}, "koTouchback": 80, "koFairCatch": null, "onsideBehindOnly": false, "patKick": 20, "twoYl": 3, "fgMissBack": null, "fgMissTb": 80, "tryForego": true, "kneelRunoff": [27, 30], "maxGap": 30.0, "playClock": [25, 25], "hash": 17.78, "posts": 23.33, "ot": "kansas10", "toPerHalf": 3, "runClock": null, "waterBreak": null, "fieldYards": 100, "firstDownYards": 10, "fgPoints": 3, "tryPoints": [1, 2]},
+      "uil2026": {"level": "hs", "quarter": 720, "tmw": 120, "oob": [120, 120], "fdStop": {"window": 120, "credit": null}, "untimed": "any", "runoff10": {"window": 120}, "penStop": {"window": 120}, "koTouchback": 75, "koFairCatch": 75, "onsideBehindOnly": false, "patKick": 20, "twoYl": 3, "fgMissBack": 0, "fgMissTb": null, "tryForego": true, "kneelRunoff": [38, 40], "maxGap": null, "playClock": [40, 25], "hash": 20.0, "posts": 18.5, "ot": "ncaa", "toPerHalf": 3, "runClock": null, "waterBreak": null, "fieldYards": 100, "firstDownYards": 10, "fgPoints": 3, "tryPoints": [1, 2]}
+    },
+    "OT": {
+      "nfl2025": null,
+      "ncaa": {"yl": 25, "yl3": null, "must2From": 2, "alt2From": 3, "altYl": 3, "to": 1, "toFrom3": "carry"},
+      "ncaa2022": {"yl": 25, "yl3": null, "must2From": 2, "alt2From": 3, "altYl": 3, "to": 1, "toFrom3": "reset"},
+      "kansas10": {"yl": 10, "yl3": null, "must2From": null, "alt2From": null, "altYl": 3, "to": 1, "toFrom3": "reset"},
+      "ga15": {"yl": 15, "yl3": null, "must2From": 2, "alt2From": 3, "altYl": 3, "to": 1, "toFrom3": "reset"},
+      "ut25": {"yl": 25, "yl3": null, "must2From": null, "alt2From": 3, "altYl": 3, "to": 1, "toFrom3": "reset"},
+      "or25": {"yl": 25, "yl3": 10, "must2From": null, "alt2From": null, "altYl": 3, "to": 1, "toFrom3": "reset"},
+      "at25": {"yl": 25, "yl3": null, "must2From": null, "alt2From": null, "altYl": 3, "to": 1, "toFrom3": "reset"},
+      "kansas10carry": {"yl": 10, "yl3": null, "must2From": null, "alt2From": null, "altYl": 3, "to": 1, "toFrom3": "reset", "toCarry": true}
+    },
+    "STATES": {
+      "GA": {"ot": "ga15", "runClock": {"margin": 30, "from": 1, "sticky": true, "stops": "wide"}},
+      "OH": {"runClock": {"margin": 30, "from": 2, "sticky": false, "stops": "min"}},
+      "PA": {"runClock": {"margin": 35, "from": 2, "sticky": true, "stops": "min"}},
+      "NE": {"runClock": {"margin": 35, "from": 2, "sticky": false, "stops": "wide"}},
+      "IN": {"runClock": {"margin": 35, "from": 2, "sticky": true, "stops": "wide"}},
+      "CA": {"runClock": {"margin": 35, "from": 1, "sticky": true, "stops": "min"}},
+      "FL": {"runClock": {"margin": 35, "from": 0, "sticky": true, "stops": "min"}, "waterBreak": 390},
+      "UT": {"ot": "ut25"},
+      "OR": {"ot": "or25"},
+      "MO": {"ot": "at25"},
+      "WI": {"ot": "at25"},
+      "IA": {},
+      "MA": {},
+      "LA": {"ot": "kansas10carry"}
+    }
+  };
+  // RULES:end
+  const deepFreeze = (o) => { if (o && typeof o === 'object' && !Object.isFrozen(o)) { Object.freeze(o); Object.values(o).forEach(deepFreeze); } return o; };
+  deepFreeze(RULE_BOOK);
+  // a ruleset by name ('nfl', 'ncaa2026', 'nfhs:GA': a state's overtime and running clock) or {base, ...overrides} (a
+  // whole ruleset passes through as its own overrides); rules.py rules_of, the same
+  function rulesOf(spec) {
+    if (spec && typeof spec === 'object') {
+      const R = rulesOf(spec.base || 'nfl');
+      for (const [k, v] of Object.entries(spec)) if (k !== 'base') R[k] = JSON.parse(JSON.stringify(v));
+      return R;
+    }
+    const [name, state] = String(spec == null ? 'nfl' : spec).split(':');
+    if (!RULE_BOOK.RULES[name]) throw new Error(`unknown rules ${spec}`);
+    const R = JSON.parse(JSON.stringify(RULE_BOOK.RULES[name]));
+    if (state !== undefined) {
+      if (!RULE_BOOK.STATES[state]) throw new Error(`unknown state ${state}`);
+      Object.assign(R, JSON.parse(JSON.stringify(RULE_BOOK.STATES[state])));
+    }
+    return R;
+  }
+  // the outcome data a ruleset may be played on: NFL data plays any (the test bed: rules_sweep.js, parity_exact
+  // --rules), college data plays college and high school rules (no high-school data yet)
+  const LEVEL_OK = { nfl: null, fbs: ['fbs', 'hs'], hs: ['hs'] };
+  // the half's clock geometry for a root: 0:00 of Q2 is t = H (two quarters), otherwise the start of the second half;
+  // a try at that moment (a touchdown on the last play of the first half) still belongs to the first half, which ends
+  // after it (sim.py the same). No two-minute stoppage: tmw = +inf, which no clock ever crosses
+  function geomOf(R, root) {
+    const H = 2 * R.quarter, halfEnd = root.t > H || (root.t === H && root.phase === PAT) ? H : 0;
+    return { halfEnd, half: halfEnd > 0 ? 1 : 2, qEnd: halfEnd + R.quarter, tmw: R.tmw == null ? Infinity : halfEnd + R.tmw,
+      oobWindow: halfEnd > 0 ? R.oob[0] : R.oob[1], R };
+  }
+
   const clip = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
   const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 
@@ -261,6 +331,13 @@
       this.data = data;
       const c = data.constants;
       this.consts = c;
+      // the level (engine_data constants.level: 'nfl', 'fbs') and its own constants; the NFL export carries none of
+      // them: today's values (the first-down credit, never used under NFL rules, falls back to the ready-for-play
+      // restart measured on out-of-bounds plays: the same official's signal)
+      this.level = data.level || c.level || 'nfl';
+      this.kickoffStart = c.kickoff_start_yl ?? KICKOFF_START_YL; this.koTb = c.ko_touchback_yl ?? KO_TOUCHBACK;
+      this.xpLogit = c.xp_logit ?? XP_LOGIT; this.twoPtBase = c.two_pt_base ?? 0.47; this.fdCredit = c.fd_restart_credit ?? c.oob_restart_credit;
+      this.onsideYl = c.onside_yl ?? [54, 46]; this.otSd = c.ot_margin_sd ?? 13.5; this.fgLong = c.fg_long ?? FG_LONG; this.fgMax = c.fg_max ?? 68;
       const L = data.lib;
       this.lib = {
         yards: decode(L.yards), flags: decode(L.flags), toRel: decode(L.to_rel), dur10: decode(L.dur10),
@@ -332,8 +409,8 @@
       }
       const K = data.kickoffs;
       this.ko = { start: decode(K.start_yl), dur10: decode(K.dur10), retTd: decode(K.ret_td) };
-      // daily game: kicks into the landing zone, everything but a touchback at the 35 (returned, short, or bounced in)
-      this.ko.ret = Int32Array.from(Array.from(this.ko.start.keys()).filter((i) => !(this.ko.start[i] === KO_TOUCHBACK && this.ko.dur10[i] === 0)));
+      // daily game: kicks into the landing zone, everything but a touchback (returned, short, or bounced in)
+      this.ko.ret = Int32Array.from(Array.from(this.ko.start.keys()).filter((i) => !(this.ko.start[i] === this.koTb && this.ko.dur10[i] === 0)));
       this.fg = data.fg;
       const W = data.wp;
       this.trees = { feature: decode(W.feature), threshold: decode(W.threshold), left: decode(W.left), right: decode(W.right),
@@ -547,6 +624,9 @@
     makeContext(game, opts) {
       opts = opts || {};
       const manual = opts.manual || {};
+      // the rulebook (rulesOf): the option, the game's own (a college spot), else the NFL's
+      const rules = rulesOf(opts.rules || game.rules || 'nfl'), ok = LEVEL_OK[this.level];
+      if (ok && !ok.includes(rules.level)) throw new Error(`${rules.level} rules on ${this.level} data`);
       const home = NFLClockEngine.effective(game.home, manual[game.home.team]);
       const away = NFLClockEngine.effective(game.away, manual[game.away.team]);
       const lg = game.league;
@@ -556,7 +636,7 @@
         delta[i][PASS] = eraPass + o.off_pass + d.def_pass + sgn * lg.home_pass;
         delta[i][RUN] = eraRun + o.off_rush + d.def_rush + sgn * lg.home_rush;
       });
-      const two = [0, 1].map((i) => clip(0.47 + 0.3 * (0.6 * delta[i][PASS] + 0.4 * delta[i][RUN]), 0.35, 0.6));
+      const two = [0, 1].map((i) => clip(this.twoPtBase + 0.3 * (0.6 * delta[i][PASS] + 0.4 * delta[i][RUN]), 0.35, 0.6));
       const spread = opts.homeSpread != null ? opts.homeSpread : game.home_spread;
       const r2h = opts.receive2h === game.home.team ? 0 : 1;
       // 4th-down decision style per team: null = sound (WP look-ahead); else play like a typical NFL coach
@@ -580,9 +660,18 @@
         wind: opts.wind != null ? opts.wind : (game.wind || 0), temp: opts.temp != null ? opts.temp : game.temp,
         season: game.season, delta, proe: [home.proe, away.proe],
         kickerShift: [home.kicker_rating, away.kicker_rating], punterShift: [home.punter_rating, away.punter_rating],
-        twoPt: two, otWpHome: 0.5 + 0.5 * (normCdf(spread / 13.5) - 0.5),
-        teams: [home, away],
+        twoPt: two, otWpHome: 0.5 + 0.5 * (normCdf(spread / this.otSd) - 0.5),
+        teams: [home, away], rules,
       };
+    }
+
+    // college data: the NFL playbook's call pools re-leveled to college outcomes (cfb_overlay.json: each pool's intent
+    // shift, replacing playbook.py's). Before simulator(): a simulator's call tables (pbTilt) read the shifts when built
+    loadOverlay(ov) {
+      if (!this.pb) throw new Error('loadOverlay: load the playbook first');
+      if (ov.n_pools !== this.pb.nPools) throw new Error(`overlay for ${ov.n_pools} pools, the playbook has ${this.pb.nPools}`);
+      this.pb.shift = decode(ov.pool_shift);
+      return this;
     }
 
     simulator(ctx) { return new Simulator(this, ctx); }
@@ -605,17 +694,30 @@
       this.oobCredit = c.oob_restart_credit; this.penCredit = c.penalty_restart_credit;
       this.onsideP = Math.max(c.onside, 0.05);
       this.x = new Float64Array(13);
+      this._rules(ctx);
     }
 
+    // the rulebook (makeContext's ctx.rules; board/lazy_sim.js builds its simulator without the constructor and calls this)
+    _rules(ctx) {
+      this.R = ctx.rules || rulesOf('nfl');
+      const R = this.R;   // the 11-player game only (8- and 6-player rules are not in this version)
+      if (R.fieldYards !== 100 || R.firstDownYards !== 10 || R.fgPoints !== 3 || R.tryPoints[0] !== 1 || R.tryPoints[1] !== 2) throw new Error('only 11-player football is supported');
+      this.fdCredit = this.R.fdStop && this.R.fdStop.credit != null ? this.R.fdStop.credit : this.e.fdCredit;
+    }
+
+    _geom(root) { return geomOf(this.R, root); }
+
     fgProb(dist, team) {
-      if (dist > 68) return 0;
-      const long = -FG_LONG[1] * Math.max(0, dist - FG_LONG[0]) - FG_LONG[3] * Math.max(0, dist - FG_LONG[2]);
+      const L = this.e.fgLong;
+      if (dist > this.e.fgMax) return 0;
+      const long = -L[1] * Math.max(0, dist - L[0]) - L[3] * Math.max(0, dist - L[2]);
       return sigmoid(this.e.fgLogit(dist, this.ctx) + this.ctx.kickerShift[team] + long);
     }
 
     wpFull(team, margin, t, down, ytg, yl, offTo, defTo) {
       const ctx = this.ctx;
       const spread = team === 0 ? ctx.homeSpread : -ctx.homeSpread;
+      if (this.R.quarter !== 900) t = t * 900 / this.R.quarter;      // shorter quarters: the model's game, scaled
       this.e.wpFeatures(margin, Math.max(t, 1), down, clip(ytg, 1, 99), clip(yl, 1, 99), offTo, defTo, spread,
         team === 0 ? 1 : 0, team === ctx.receive2h ? 1 : 0, this.x);
       return sigmoid(this.e.wpRaw(this.x));
@@ -625,7 +727,7 @@
       const k = clip(4 - down, 0, 3);
       const gaps = k + (running ? 1 : 0);
       const stops = defTo + (tmwPending ? 1 : 0);
-      const gap = 0.5 * (KNEEL_RUNOFF[0] + KNEEL_RUNOFF[1]);   // the average kneel runoff
+      const gap = 0.5 * (this.R.kneelRunoff[0] + this.R.kneelRunoff[1]);   // the average kneel runoff
       const burn = k * this.kneelDur + Math.max(gaps - stops, 0) * gap + Math.min(gaps, stops) * 1;
       return tHalf <= burn + 1;
     }
@@ -642,7 +744,7 @@
     // Daily game: the tempo the offense would use on its next snap with the clock running ('urgent',
     // 'hurry', 'normal' or 'milk'); mirrors steps (1)-(2) of _snap without the live tool's first-half strategy
     defaultTempo(root) {
-      const o = root.pos, half = root.t > 1800 ? 1 : 2, tHalf = root.t - (half === 1 ? 1800 : 0);
+      const g = this._geom(root), o = root.pos, half = g.half, tHalf = root.t - g.halfEnd;
       const margin = root.score[o] - root.score[1 - o], yl = root.yl, offTo = root.to[o];
       let hurry, urgent, milk;
       if (half === 2) {
@@ -667,7 +769,7 @@
 
     // The two numbers a coach asks for on 4th down: conversion chance and field-goal make chance.
     fourthInfo(root) {
-      const o = root.pos, half = root.t > 1800 ? 1 : 2, tHalf = root.t - (half === 1 ? 1800 : 0);
+      const g = this._geom(root), o = root.pos, half = g.half, tHalf = root.t - g.halfEnd;
       const margin = root.score[o] - root.score[1 - o], yl = root.yl;
       const mode = gameMode(half, tHalf, margin), zone = zoneOf(yl);
       const dist = yl + FG_SNAP_YARDS;
@@ -1213,11 +1315,7 @@
       opts = opts || {};
       const n = opts.n || 4000, action = opts.action || {}, persp = opts.perspective || 0, seed = (opts.seed || 0) >>> 0;
       const maxSteps = opts.maxSteps || 300;
-      // 0:00 of Q2 is t = 1800, otherwise the start of the second half; a try at that moment (a touchdown on the last
-      // play of the first half) still belongs to the first half, which ends after it (sim.py the same)
-      const halfEnd = root.t > 1800 || (root.t === 1800 && root.phase === PAT) ? 1800 : 0;
-      const g = { halfEnd, half: halfEnd > 0 ? 1 : 2, qEnd: halfEnd + 900, tmw: halfEnd + 120,
-        oobWindow: halfEnd > 0 ? 120 : 300 };
+      const g = this._geom(root);
       const values = new Float64Array(n);
       const S = { t: 0, pos: 0, s: [0, 0], down: 1, ytg: 10, yl: 75, to: [3, 3], running: false, credit: 0,
         phase: SNAP, freeKick: false, stratActive: false, plays: 0 };
@@ -1229,7 +1327,7 @@
       for (let r = 0; r < n; r++) {
         S.t = root.t; S.pos = root.pos; S.s[0] = root.score[0]; S.s[1] = root.score[1]; S.down = root.down;
         S.ytg = root.ytg; S.yl = root.yl; S.to[0] = root.to[0]; S.to[1] = root.to[1]; S.running = !!root.clock_running;
-        S.credit = 0; S.phase = root.phase || SNAP; S.freeKick = false; S.stratActive = !!action.h1; S.plays = 0;
+        S.credit = 0; S.phase = root.phase || SNAP; S.freeKick = false; S.stratActive = !!action.h1; S.plays = 0; S.rc = !!root.running_clock;
         S.ot = root.ot ? { c: [root.ot.c[0], root.ot.c[1]], po: !!root.ot.po, n: root.ot.n || 1, r: root.ot.r || null } : null;
         let driveOpen = startPhase === SNAP;
         const pos0 = root.pos, pts0 = root.score[pos0];
@@ -1269,14 +1367,10 @@
     step(root, opts) {
       opts = opts || {};
       const action = opts.action || {}, seed = (opts.seed || 0) >>> 0;
-      // 0:00 of Q2 is t = 1800, otherwise the start of the second half; a try at that moment (a touchdown on the last
-      // play of the first half) still belongs to the first half, which ends after it (sim.py the same)
-      const halfEnd = root.t > 1800 || (root.t === 1800 && root.phase === PAT) ? 1800 : 0;
-      const g = { halfEnd, half: halfEnd > 0 ? 1 : 2, qEnd: halfEnd + 900, tmw: halfEnd + 120,
-        oobWindow: halfEnd > 0 ? 120 : 300 };
+      const g = this._geom(root);
       const S = { t: root.t, pos: root.pos, s: [root.score[0], root.score[1]], down: root.down, ytg: root.ytg, yl: root.yl,
         to: [root.to[0], root.to[1]], running: !!root.clock_running, credit: root.credit || 0, phase: root.phase || SNAP,
-        freeKick: !!root.free_kick, stratActive: false, plays: 0, log: [],
+        freeKick: !!root.free_kick, stratActive: false, plays: 0, log: [], rc: !!root.running_clock,
         ot: root.ot ? { c: [root.ot.c[0], root.ot.c[1]], po: !!root.ot.po, n: root.ot.n || 1, r: root.ot.r || null } : null };
       const u = new Float64Array(8);
       for (let c = 0; c < 8; c++) u[c] = uni(seed, 0, 0, c);
@@ -1291,6 +1385,7 @@
       const out = { t: S.t, pos: S.pos, score: [S.s[0], S.s[1]], down: S.down, ytg: S.ytg, yl: S.yl, to: [S.to[0], S.to[1]],
         clock_running: S.running, phase: S.phase, credit: S.credit, free_kick: S.freeKick };
       if (S.ot) out.ot = { c: [S.ot.c[0], S.ot.c[1]], po: S.ot.po, n: S.ot.n, ...(S.ot.r ? { r: S.ot.r } : {}) };
+      if (this.R.runClock) out.running_clock = !!S.rc;
       return {
         root: out,
         log: S.log, done: S.phase === DONE,
@@ -1303,11 +1398,12 @@
       const o = S.pos, margin = S.s[o] - S.s[1 - o], tHalf = S.t - g.halfEnd;
       let go2 = g.half === 2 && tHalf <= 900 && TWO_PT_SET.has(margin);
       if (act && act.pat) go2 = act.pat === 'two';
-      const pk = clip(this.fgProb(33.0, o), 1e-9, 1 - 1e-9);
-      const p = go2 ? this.ctx.twoPt[o] : sigmoid(Math.log(pk / (1 - pk)) + XP_LOGIT);
+      const R = this.R, pk = clip(this.fgProb(R.patKick, o), 1e-9, 1 - 1e-9);
+      const p = go2 ? this.ctx.twoPt[o] : sigmoid(Math.log(pk / (1 - pk)) + this.e.xpLogit);
       let good = u[3] < p, callIdx = -1, row = -1, why = null;
-      // daily game: a two-point try you called is a real play of that call from the 2 (a must-score snap), against
-      // the look the defense showed: good if it gets 2 yards without a turnover (a flag: the league rate decides)
+      // daily game: a two-point try you called is a real play of that call from the 2 (the 3 in college and high
+      // school: R.twoYl; a must-score snap), against the look the defense showed: good if it gets there without a
+      // turnover (a flag: the league rate decides)
       if (go2 && act && act.call !== undefined && this.pbCdf && this.e.pb.callIndex[act.call] !== undefined) {
         const P = this.e.pb;
         callIdx = P.callIndex[act.call];
@@ -1315,14 +1411,14 @@
         if (dcValid(act.dc)) {
           const m = dcEffect(this.e.pb.dcEff, act.call, act.dc, act.pers, act.seen);
           why = m.why.slice(0, 3);
-          row = this.sampleVsDefense(o, callIdx, fineKey(MODE_NORMAL, 3, 2, 2), u[2], false, act.dc, m.s, route, who, act.pers);
+          row = this.sampleVsDefense(o, callIdx, fineKey(MODE_NORMAL, 3, R.twoYl, R.twoYl), u[2], false, act.dc, m.s, route, who, act.pers);
         } else {
           const match = this.matchOf(callIdx, this.defOfLooks(act.looks));
-          row = this.samplePlaybook(o, callIdx, fineKey(MODE_NORMAL, 3, 2, 2), u[2], false, act.looks, match, route, who, act.pers);
+          row = this.samplePlaybook(o, callIdx, fineKey(MODE_NORMAL, 3, R.twoYl, R.twoYl), u[2], false, act.looks, match, route, who, act.pers);
         }
         if (row >= 0) {
           const f = P.flags[row];
-          if (!(f & 1)) good = !(f & 64) && !(f & 4) && ((f & 16) !== 0 || P.yards[row] >= 2);
+          if (!(f & 1)) good = !(f & 64) && !(f & 4) && ((f & 16) !== 0 || P.yards[row] >= R.twoYl);
         }
       }
       if (good) S.s[o] += go2 ? 2 : 1;
@@ -1337,7 +1433,8 @@
       let onside = g.half === 2 && marginK < 0 &&
         ((tHalf <= 125 && S.to[kt] <= 1) || tHalf <= 65 || (tHalf <= 160 && marginK <= -9));
       onside = onside && !S.freeKick;
-      if (act && act.kick) onside = act.kick === 'onside' && (marginK < 0 || S.freeKick);   // only a team behind may declare one (2024+)
+      // the NFL (2024+): only a team behind may declare one; college and high school: anyone
+      if (act && act.kick) onside = act.kick === 'onside' && (!this.R.onsideBehindOnly || marginK < 0 || S.freeKick);
       const K = this.e.ko;
       let j = Math.floor(u[4] * K.start.length);
       // daily game: kicked to the returner (a real landing-zone kick) or through the end zone (a touchback)
@@ -1345,15 +1442,17 @@
       let start = K.start[j];
       let dur = K.dur10[j] / 10;
       let retTd = K.retTd[j] && !onside;
-      if (act && act.kick === 'touchback' && !S.freeKick) { start = KO_TOUCHBACK; dur = 0; retTd = false; }
+      // the data's touchbacks start where these rules put them (NFL data under college rules: the 25, not the 35)
+      if (dur === 0 && start === this.e.koTb && this.R.koTouchback !== this.e.koTb) start = this.R.koTouchback;
+      if (act && act.kick === 'touchback' && !S.freeKick) { start = this.R.koTouchback; dur = 0; retTd = false; }
       if (S.freeKick) start = clip(start - 8, 40, 75);
       const rec = onside && u[3] < this.onsideP;
       S.pos = rec ? kt : rt;
-      S.yl = onside ? (rec ? 54 : 46) : start;
+      S.yl = onside ? (rec ? this.e.onsideYl[0] : this.e.onsideYl[1]) : start;
       S.t = Math.max(S.t - (onside ? 3 : dur), g.halfEnd);
       if (S.t <= g.halfEnd + CLOCK_EPS) S.t = g.halfEnd;
-      S.down = 1; S.ytg = Math.min(10, S.yl); S.running = false; S.credit = 0; S.freeKick = false; S.phase = SNAP;
-      if (retTd) { S.s[S.pos] += 6; S.phase = PAT; }
+      S.down = 1; S.ytg = Math.min(10, S.yl); S.running = this._rc(S, g) && S.t > g.halfEnd; S.credit = 0; S.freeKick = false; S.phase = SNAP;
+      if (retTd) { S.s[S.pos] += 6; S.phase = PAT; S.running = false; }
       if (S.log) S.log.push({ ev: 'kickoff', team: kt, onside, recovered: rec, retTd, yl: S.yl, tb: !onside && dur === 0, kick: act && act.kick || null });
       if (S.t <= g.halfEnd && S.phase === SNAP) S.phase = DONE;
       this._noTry(S, g);
@@ -1452,13 +1551,15 @@
       if (forced !== undefined) fire = runC && forced === 'fg' && tHalf <= FIRE_WINDOW && act.runoff === undefined;
       tempo = kneelNow ? T_KNEEL : spikeNow ? T_SPIKE : fire ? T_FIRE : tempo;
       let runoff;
-      if (tempo === T_KNEEL) runoff = KNEEL_RUNOFF[0] + (KNEEL_RUNOFF[1] - KNEEL_RUNOFF[0]) * u[0];
+      const KR = this.R.kneelRunoff;
+      if (tempo === T_KNEEL) runoff = KR[0] + (KR[1] - KR[0]) * u[0];
       else if (tempo === T_FIRE) runoff = FIRE_DRILL[0] + (FIRE_DRILL[1] - FIRE_DRILL[0]) * u[0];
       else { const arr = this.e.tempo[tempo]; runoff = arr[Math.floor(u[0] * arr.length)]; }
       if (tempo === URGENT && tHalf <= URGENT_LATE[0]) {      // the last minute's hurry-up is faster
         const f = clip(tHalf / URGENT_LATE[0], 0, 1);
         runoff = Math.min(runoff * (URGENT_LATE[1] + (1 - URGENT_LATE[1]) * f), URGENT_LATE[2] + (URGENT_LATE[3] - URGENT_LATE[2]) * f);
       }
+      if (this.R.maxGap != null) runoff = Math.min(runoff, this.R.maxGap);      // a short play clock: no longer gaps
       runoff = runC ? Math.max(runoff - S.credit, 0) : 0;
       // a kick you called always gets off (players saw the clock run out on a field goal they had called): with too
       // little time for the unit to run on, your timeout first when you have one; without, the rush beats the clock
@@ -1559,7 +1660,7 @@
           match = this.matchOf(callIdx, act.def);
           if (callIdx >= 0) pbRow = this.samplePlaybook(o, callIdx, fk, u[2], half === 2 && tHalf <= 300 && margin > 0 ? -1 : 0, DEF_LOOKS[act.def], match);
         }
-        this._scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match, why);
+        this._scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match, why, runningAtSnap);
       }
     }
 
@@ -1599,14 +1700,14 @@
       const lo = g.halfEnd + 1.0;
       const t6 = Math.max(t - 6, lo), t5 = Math.max(t - 5, lo), t9 = Math.max(t - 9, lo);
       let wpConv;
-      if (tdConv) wpConv = 1 - this.wpFull(d, -(margin + 7), t6, 1, 10, KICKOFF_START_YL, defTo, offTo);
+      if (tdConv) wpConv = 1 - this.wpFull(d, -(margin + 7), t6, 1, 10, this.e.kickoffStart, defTo, offTo);
       else wpConv = this.wpFull(o, margin, t6, 1, Math.min(10, newYl), newYl, offTo, defTo);
       const fail = 1 - this.wpFull(d, -margin, t6, 1, Math.min(10, 100 - yl), 100 - yl, defTo, offTo);
       const wpGo = pConv * wpConv + (1 - pConv) * fail;
       let wpFg = -1;
       if (pFg > 0.02) {
-        const made = 1 - this.wpFull(d, -(margin + 3), t5, 1, 10, KICKOFF_START_YL, defTo, offTo);
-        const missYl = 100 - Math.max(yl + 8, 20);
+        const made = 1 - this.wpFull(d, -(margin + 3), t5, 1, 10, this.e.kickoffStart, defTo, offTo);
+        const missYl = this._missYl(yl);
         const miss = 1 - this.wpFull(d, -margin, t5, 1, Math.min(10, missYl), missYl, defTo, offTo);
         wpFg = pFg * made + (1 - pFg) * miss;
       }
@@ -1659,8 +1760,8 @@
       S.credit = S.running ? credit : 0;
     }
 
-    _scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match, why) {
-      const d = 1 - o, L = this.e.lib;
+    _scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match, why, runningAtSnap) {
+      const d = 1 - o, L = this.e.lib, R = this.R;
       const yl0 = S.yl, ytg0 = S.ytg, down0 = S.down;
       let yards = 0, penalty = false, autoFd = false, incomplete = false, oob = false, tdOff = false, tdDef = false,
         turnover = false, toRel = 0, safety = false, dur = 0;
@@ -1714,26 +1815,65 @@
       const scorePlay = tdOff || tdDef || safety;
       // the out-of-bounds window is judged where the play ends, not at the snap
       const inWin = (S.t - dur - g.halfEnd) <= g.oobWindow;
-      const stop = incomplete || (oob && inWin) || (penalty && inWin) || change || scorePlay;
-      const credit = oob ? this.oobCredit : (penalty ? this.penCredit : 0);
+      // a foul: NFL, the clock stopped till the snap inside the oob window; college and high school (R.penStop), on the
+      // ready-for-play, unless late in the half the offended team (behind or tied: it wants the clock stopped) takes
+      // the snap start
+      const fouler = yards < 0 ? o : d, offM = S.s[1 - fouler] - S.s[fouler];
+      const penStop = penalty && (R.penStop ? (S.t - dur - g.halfEnd) <= R.penStop.window && offM <= 0 : inWin);
+      // a first down (college late in the half, high school always): stopped for the chains, restarted on the
+      // ready-for-play: the clock runs for the next snap, its seconds stopped given back (the credit)
+      const fdStop = !!R.fdStop && fd && !change && !scorePlay && (S.t - dur - g.halfEnd) <= R.fdStop.window;
+      let stop = incomplete || (oob && inWin) || penStop || change || scorePlay;
+      let credit = oob ? this.oobCredit : (penalty ? this.penCredit : (fdStop ? this.fdCredit : 0));
       const t0 = S.t;
+      // college (3-4-4): late in the half, a foul that stops a running clock (a pre-snap foul: none of it runs) takes
+      // 10 seconds off at the offended team's option (ahead; tied, the defense), the clock then starting on the ready;
+      // the fouling team (behind or tied) spends a timeout to keep them, and a runoff declined or kept by a timeout
+      // starts the clock on the snap
+      let ro10 = false, roTo = false;
+      if (R.runoff10 && penalty && dur === 0 && runningAtSnap && !change && !scorePlay && t0 - g.halfEnd <= R.runoff10.window) {
+        stop = true;
+        if (offM > 0 || (offM === 0 && fouler === o)) {
+          if (S.to[fouler] > 0) { S.to[fouler] -= 1; roTo = true; } else { ro10 = true; stop = false; credit = this.penCredit; }
+        }
+      }
+      // a state's running clock (R.runClock): only a score stops it; 'wide' gives penalty enforcement its ready restart
+      const rc = this._rc(S, g);
+      if (rc) { stop = scorePlay; credit = penalty && R.runClock.stops === 'wide' ? this.penCredit : 0; }
       this._clockAfterPlay(S, g, dur, stop, credit);
-      // a half cannot end on an accepted defensive foul: an untimed down (as on a roughed kick, _stRush)
-      const untimed = penalty && yards > 0 && !change && !scorePlay && S.t <= g.halfEnd;
+      const run1 = S.running;
+      // a half cannot end on an accepted foul (NFL: a defensive one): an untimed down (as on a roughed kick, _stRush)
+      const untimed = penalty && (R.untimed === 'any' || yards > 0) && !change && !scorePlay && !ro10 && S.t <= g.halfEnd;
       if (untimed) S.t = Math.min(t0, g.halfEnd + 0.5);
+      if (ro10) { S.t = S.t - 10 <= g.halfEnd + CLOCK_EPS ? g.halfEnd : S.t - 10; S.running = S.running && S.t > g.halfEnd; }
+      if (S.log && roTo) S.log.push({ ev: 'timeout', team: fouler, t: S.t, why: 'runoff', left: S.to[fouler] });
       if (!change && !scorePlay) { S.yl = clip(newYl, 1, 99); S.down = newDown; S.ytg = Math.max(newYtg, 1); }
       if (turnover && !tdDef) this._flip(S, toYl);
       if (onDowns) this._flip(S, 100 - clip(newYl, 1, 99));
       if (tdOff) { S.s[o] += 6; S.phase = PAT; }
       if (tdDef && !tdOff) { S.s[d] += 6; S.pos = d; S.phase = PAT; }
       if (safety && !tdOff && !tdDef) { S.s[d] += 2; S.phase = KICKOFF; S.freeKick = true; }
+      if (rc && change) S.running = run1;
       if (S.log) {
         S.log.push({ ev: 'play', team: o, kind, call: callIdx === undefined ? -1 : callIdx, yards, down: down0, ytg: ytg0,
           yl: yl0, oob: oob && !penalty, incomplete, penalty, td: tdOff, tdDef, turnover, safety, fd: fd && !change,
           onDowns, dur, t: untimed ? g.halfEnd : S.t, running: S.running, row: pbRow === undefined ? -1 : pbRow, match: match || 0, ...(why ? { why } : {}),
-          ...(untimed ? { untimed } : {}) });
+          ...(untimed ? { untimed } : {}), ...(fdStop && !oob && !penalty && !rc ? { fdStop: true } : {}), ...(ro10 ? { runoff10: true } : {}) });
       }
       this._endHalfCheck(S, g);
+    }
+
+    // where a missed field goal from yl (yards to go) leaves the other team: the spot of the kick (NFL), the previous
+    // spot (college), never inside its 20; or a touchback at the 20 (high school: a miss is a scrimmage kick)
+    _missYl(yl) { return this.R.fgMissTb != null ? this.R.fgMissTb : 100 - Math.max(yl + this.R.fgMissBack, 20); }
+
+    // a state's running clock at this score and time (R.runClock), kept on once it starts when sticky (S.rc)
+    _rc(S, g) {
+      const rc = this.R.runClock;
+      if (!rc) return false;
+      const on = Math.abs(S.s[0] - S.s[1]) >= rc.margin && S.t <= rc.from * this.R.quarter && S.t > g.halfEnd;
+      if (on && rc.sticky) S.rc = true;
+      return on || (rc.sticky && !!S.rc);
     }
 
     _fieldGoal(S, g, u, o, fire, st) {
@@ -1744,10 +1884,11 @@
         p = sigmoid(z);
       }
       if (st === 'block' && this._stRush(S, g, u, o, 'fg', yl0 + FG_SNAP_YARDS, p)) return;
-      const made = u[3] < p;
+      const made = u[3] < p, rc = this._rc(S, g) && !made;
       if (S.log) S.log.push({ ev: 'fg', team: o, dist: yl0 + FG_SNAP_YARDS, made, p, fire: !!fire });
-      this._clockAfterPlay(S, g, 5.0, true, 0);
-      if (made) { S.s[o] += 3; S.phase = KICKOFF; } else this._flip(S, 100 - Math.max(yl0 + 8, 20));
+      this._clockAfterPlay(S, g, 5.0, !rc, 0);
+      const run1 = S.running;
+      if (made) { S.s[o] += 3; S.phase = KICKOFF; } else { this._flip(S, this._missYl(yl0)); if (rc) S.running = run1; }
       this._endHalfCheck(S, g);
     }
 
@@ -1793,10 +1934,12 @@
       if (normal && st === 'rush') net += ST_FAIR_GAIN;                 // a fair catch: no return yards
       const spot = yl0 - net;
       const recvYl = (P.touchback[j] || spot <= 0) ? 80 : clip(100 - spot, 1, 99);
-      this._clockAfterPlay(S, g, P.dur[j], true, 0);
+      const rc = this._rc(S, g) && !P.retTd[j];
+      this._clockAfterPlay(S, g, P.dur[j], !rc, 0);
+      const run1 = S.running;
       if (S.log) S.log.push({ ev: 'punt', team: o, net: P.retTd[j] ? null : yl0 + recvYl - 100, retTd: !!P.retTd[j],
         blocked: !!P.blocked[j], touchback: !!P.touchback[j] || spot <= 0, recvYl });
-      if (!P.retTd[j]) this._flip(S, recvYl);
+      if (!P.retTd[j]) { this._flip(S, recvYl); if (rc) S.running = run1; }
       else { S.s[d] += 6; S.pos = d; S.phase = PAT; }
       this._endHalfCheck(S, g);
     }
@@ -1835,9 +1978,11 @@
       this._noTry(S, g);
     }
     // a touchdown as the fourth quarter runs out: no try when it cannot change the result (NFL since 2018), a lead or a
-    // deficit of 3 or more (a try is worth 2 at most, to either team: the defense can return one for 2)
+    // deficit of 3 or more (a try is worth 2 at most, to either team: the defense can return one for 2); college and
+    // high school (R.tryForego) nor a lead of 1-2 (college: the option to forego it; high school: the defense cannot score)
     _noTry(S, g) {
-      if (S.phase !== PAT || S.ot || g.half !== 2 || S.t > g.halfEnd || Math.abs(S.s[S.pos] - S.s[1 - S.pos]) < 3) return false;
+      const m = S.s[S.pos] - S.s[1 - S.pos];
+      if (S.phase !== PAT || S.ot || g.half !== 2 || S.t > g.halfEnd || (Math.abs(m) < 3 && !(this.R.tryForego && m > 0))) return false;
       S.phase = DONE;
       if (S.log) S.log.push({ ev: 'notry', team: S.pos, t: S.t });
       return true;
@@ -1855,7 +2000,7 @@
         vHome = hm > 0 ? 1 : hm < 0 ? 0 : S.ot && !S.ot.po ? 0.5 : this.ctx.otWpHome;
       } else {
         const r = this.ctx.receive2h;
-        const w = this.wpFull(r, r === 0 ? hm : -hm, 1800, 1, 10, KICKOFF_START_YL, 3, 3);
+        const w = this.wpFull(r, r === 0 ? hm : -hm, 2 * this.R.quarter, 1, 10, this.e.kickoffStart, this.R.toPerHalf, this.R.toPerHalf);
         vHome = r === 0 ? w : 1 - w;
       }
       return persp === 0 ? vHome : 1 - vHome;
@@ -1864,6 +2009,10 @@
 
   NFLClockEngine.Simulator = Simulator;
   NFLClockEngine.PHASE = { SNAP, PAT, KICKOFF, DONE };
+  // the rulebooks (RULE_BOOK: RULES, OT, STATES), a ruleset by name, and a root's clock geometry under one
+  NFLClockEngine.RULE_BOOK = RULE_BOOK;
+  NFLClockEngine.rulesOf = rulesOf;
+  NFLClockEngine.geom = (rules, root) => geomOf(rules && typeof rules === 'object' && rules.quarter ? rules : rulesOf(rules || 'nfl'), root);
   NFLClockEngine.helpers = { fineKey, gameMode, zoneOf, ytgBucket, uni, dcEffect, dcGroup, dcValid, DC, DC_MIN };
   if (typeof module !== 'undefined' && module.exports) module.exports = NFLClockEngine;
   else global.NFLClockEngine = NFLClockEngine;

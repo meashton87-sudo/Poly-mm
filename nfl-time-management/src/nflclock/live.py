@@ -259,8 +259,9 @@ def coach4th_for(rec: dict, coach_mode: dict | None) -> list:
 
 
 def context_from_game(bundle, rec: dict, receive_2h: str | None = None, manual: dict | None = None,
-                      coach_mode: dict | None = None):
-    """GameContext for the simulator from a live game record. receive_2h: team code or None (unknown)."""
+                      coach_mode: dict | None = None, rules=None):
+    """GameContext for the simulator from a live game record. receive_2h: team code or None (unknown). rules: the
+    rulebook (rules.py; default: the record's own, else the NFL's)."""
     from .context import make_context
     manual = manual or {}
     home = effective(rec["home"], manual.get(rec["home"]["team"]))
@@ -270,6 +271,6 @@ def context_from_game(bundle, rec: dict, receive_2h: str | None = None, manual: 
     ctx = make_context(bundle, home, away, home_spread=rec["home_spread"], receive_2h=r2h,
                        indoor=rec["indoor"], wind=rec.get("wind") or 0.0, temp=rec.get("temp") or 65.0,
                        season=rec["season"], mu_pass=lg["mu_pass"], mu_rush=lg["mu_rush"],
-                       home_pass=lg["home_pass"], home_rush=lg["home_rush"])
+                       home_pass=lg["home_pass"], home_rush=lg["home_rush"], rules=rules or rec.get("rules", "nfl"))
     ctx.coach4th = coach4th_for(rec, coach_mode)
     return ctx, home, away
