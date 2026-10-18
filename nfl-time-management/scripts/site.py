@@ -101,7 +101,8 @@ def check_stamps(out: Path, stamps: dict) -> None:
     for f in SCRIPTS:
         js = (out / f).read_text()
         for m in named.finditer(js):
-            if not re.search(r"\b(?:asset|at)\(\s*$", js[max(0, m.start() - 12):m.start()]):
+            # (a name may also be one side of a choice inside the call: at(cfb ? 'a.json' : 'b.json'))
+            if not re.search(r"\b(?:asset|at)\(\s*(?:[\w$.]+\s*\?\s*(?:(['\"`])[^'\"`]*\1\s*:\s*)?)?$", js[max(0, m.start() - 80):m.start()]):
                 bad.append(f"{f}: ...{js[max(0, m.start() - 40):m.end() + 20]}...")
     if bad:
         raise SystemExit("site.py: addresses cached for good (_headers) named without their stamp:\n  " + "\n  ".join(bad[:20]))
