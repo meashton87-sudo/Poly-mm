@@ -136,6 +136,9 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   Never a blocked() name; `DELETE /week?name=` (admin token) takes a name off for good. Practice (#practice, game.js
   practiceState/renderPractice): only after the day's drive is done; its own saved state; it must never write a stats
   day, the streak, tendencies or post to /daily.
+- The fair set (worker.js day.f; game.js fairDay/dayFor, stats.html show): a /daily post with g: 2 (every call graded
+  g: 2) also counts there; old-way results are never replaced or moved (first result per device stands). Where a day
+  has both (Oct 18, 2026), the stats page and a fair result's day card use the fair set only, with a note.
 
 ## Moving the site to a new address
 The site moves with two GitHub variables; nothing else in the code names the address.

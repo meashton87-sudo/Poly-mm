@@ -133,7 +133,8 @@ ol.top b { font: 900 18px var(--display); }
     const t = $('tiles'), today = days.find((d) => d.date === localToday());
     const total = days.reduce((a, d) => a + d.n, 0), best = days.reduce((a, d) => Math.max(a, d.n), 0);
     t.textContent = '';
-    [[today ? fmt(today.n) : '0', 'played today'], [today ? Math.round(today.avg * 100) : '–', 'average score today'],
+    // (a day with fair-scored results, n2: their average, the old way's ran high on the day it changed)
+    [[today ? fmt(today.n) : '0', 'played today'], [today ? Math.round((today.n2 ? today.avg2 : today.avg) * 100) : '–', 'average score today'],
       [fmt(total), 'drives played, all time'], [fmt(best), 'most in one day']].forEach(([v, l]) => {
       const c = el('div', 'tile'); c.append(el('b', '', String(v)), el('span', '', l)); t.append(c);
     });
@@ -145,7 +146,7 @@ ol.top b { font: 900 18px var(--display); }
       const i = days.indexOf(d), b = el('button', i === pick ? 'on' : '');
       b.type = 'button';
       b.style.height = `${Math.max(2, (d.n / mx) * 100)}%`;
-      b.title = `${long(d.date)}: ${fmt(d.n)} player${d.n === 1 ? '' : 's'}, average ${Math.round(d.avg * 100)}`;
+      b.title = `${long(d.date)}: ${fmt(d.n)} player${d.n === 1 ? '' : 's'}, average ${Math.round(d.avg * 100)}${d.n2 && d.n2 < d.n ? `; ${fmt(d.n2)} scored the fair way, average ${Math.round(d.avg2 * 100)}` : ''}`;
       b.setAttribute('aria-label', b.title);
       b.setAttribute('aria-pressed', String(i === pick));
       b.addEventListener('click', () => show(i));
@@ -175,13 +176,20 @@ ol.top b { font: 900 18px var(--display); }
     try { x = await get(`/daily?date=${d.date}`); } catch (e) { box.lastChild.textContent = 'That day did not load. Try again in a moment.'; return; }
     if (pick !== i) return;
     box.lastChild.remove();
+    // A day with fair-scored results (worker.js: fair) is shown by them. On the day the fair score came in (Oct 18, 2026)
+    // the results posted before it were worked out the old way, which let the simulation's noise count: on that day's
+    // drive (Super Bowl LI, down 25) they ran high, a 92 on average with the top ten all 100. Shown beside the fair
+    // ones they would read as the same thing, so they are counted and said, not drawn
+    const all = x, mixed = !!(x.fair && x.fair.n < x.n);
+    if (x.fair && x.fair.n) x = x.fair;
     let sum = 0, best = 0;
     x.hist.forEach((c, pt) => { sum += c * pt; if (c) best = pt; });
     const facts = el('div', 'facts');
-    [[fmt(x.n), 'players'], [x.n ? Math.round(sum / x.n) : '–', 'average score'], [x.n ? best : '–', 'best score']].forEach(([v, l]) => {
+    [[fmt(x.n), mixed ? 'scored the fair way' : 'players'], [x.n ? Math.round(sum / x.n) : '–', 'average score'], [x.n ? best : '–', 'best score']].forEach(([v, l]) => {
       const c = el('div'); c.append(el('b', '', String(v)), el('span', '', l)); facts.append(c);
     });
     box.append(facts);
+    if (mixed) box.append(el('p', 'note', `The ${fmt(all.n - x.n)} scores posted on ${long(d.date)} before the fair-score fix were worked out the old way, which let the simulation’s noise count and ran them high. They aren’t shown; everything here is the ${fmt(x.n)} player${x.n === 1 ? '' : 's'} scored the fair way since.`));
     // the scores in ten buckets (0-9 ... 90-100), counts above the bars
     const buckets = Array.from({ length: 10 }, (_, k) => x.hist.slice(k * 10, k === 9 ? 101 : k * 10 + 10).reduce((a, c) => a + c, 0));
     const mx = Math.max(1, ...buckets);
@@ -201,12 +209,12 @@ ol.top b { font: 900 18px var(--display); }
     box.append(h, lab);
     const s0 = x.spots && x.spots[0];
     if (s0 && s0.n) box.append(el('p', 'note', `On the drive, the average player moved their win chance ${s0.avg >= 0 ? '+' : '−'}${Math.abs(s0.avg * 100).toFixed(1)} points against a typical NFL play-caller.`));
-    box.append(el('p', 'k', 'Top ten'));
+    box.append(el('p', 'k', mixed ? 'Top ten, scored the fair way' : 'Top ten'));
     if (x.top && x.top.length) {
       const ol = el('ol', 'top');
       x.top.forEach((r, k) => { const li = el('li'); li.append(el('span', 'n', String(k + 1)), el('span', 'nm', r.name), el('b', '', String(Math.round(r.p * 100)))); ol.append(li); });
       box.append(ol);
-    } else box.append(el('p', 'note', 'Nobody with a name on the board finished this day.'));
+    } else box.append(el('p', 'note', mixed ? 'Nobody with a name on the board has finished this day since the fix.' : 'Nobody with a name on the board finished this day.'));
   }
   // every John Madden found (about one first daily finish in 50,000), earliest first: the first claim code wins
   async function hunt() {

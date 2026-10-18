@@ -116,6 +116,47 @@ assert.strictEqual(b.days[0].date, '2026-01-02'); assert.strictEqual(b.days[0].n
 assert.ok(Math.abs(b.days[0].avg - 0.6) < 1e-9); assert.strictEqual(b.days[0].best, 0.8);
 assert.strictEqual(b.days[b.days.length - 1].date, today); assert.strictEqual(b.days[b.days.length - 1].n, 5);
 assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
+// the fair score (g: 2): a post graded the fair way also counts in the day's fair set; posts made the old way stay as
+// they were; nothing replaces a result (a device's first counts, whatever g it says later); g alone earns no trust
+{
+  const D = new Date(Date.now() - 864e5).toISOString().slice(0, 10), ip = { ip: '7.7.7.7' }, post = (x) => day({ date: D, spots: [0.01], ...x }, ip);
+  b = await (await post({ key: 'fair-old-device-key-0001', p: 0.95, name: 'Oldie' })).json();
+  assert.strictEqual(b.fair, undefined, 'no fair set before a fair post'); assert.strictEqual(b.you.g, undefined);
+  await post({ key: 'fair-old-device-key-0002', p: 0.9 });
+  b = await (await post({ key: 'fair-new-device-key-0001', p: 0.5, name: 'Fairy', g: 2 })).json();
+  assert.strictEqual(b.counted, true); assert.strictEqual(b.you.g, 2);
+  assert.deepStrictEqual([b.n, b.fair.n, b.fair.hist[50], b.fair.hist[95]], [3, 1, 1, 0], 'counted in both sets');
+  assert.deepStrictEqual(b.fair.top, [{ name: 'Fairy', p: 0.5 }]);
+  assert.deepStrictEqual(b.top.map((x) => x.name), ['Oldie', 'Fairy'], 'the whole list as it was');
+  await post({ key: 'fair-new-device-key-0002', p: 0.3, g: 2 });
+  b = await (await post({ key: 'fair-str-device-key-0001', p: 0.99, g: '2' })).json();
+  assert.strictEqual(b.fair.n, 2, 'only g: 2 exactly'); assert.strictEqual(b.you.g, undefined);
+  assert.strictEqual((await post({ key: 'fair-bad-device-key-0001', p: 1.5, g: 2 })).status, 400, 'the same checks as any post');
+  // a device that posted the old way can't move into the fair set or replace its result
+  b = await (await post({ key: 'fair-old-device-key-0001', p: 0.4, g: 2 })).json();
+  assert.deepStrictEqual([b.counted, b.you.p, b.you.g, b.n, b.fair.n, b.fair.hist[40]], [false, 0.95, undefined, 5, 2, 0], 'old result stands, not in the fair set');
+  b = await (await post({ key: 'fair-new-device-key-0001', p: 0.99, g: 2 })).json();
+  assert.deepStrictEqual([b.counted, b.you.p, b.you.g, b.fair.n], [false, 0.5, 2, 2], 'a fair replay changes nothing');
+  // a name given afterwards: on the fair list only for a fair result
+  b = await (await post({ key: 'fair-new-device-key-0002', p: 0.3, g: 2, name: 'Late' })).json();
+  assert.deepStrictEqual(b.fair.top.map((x) => [x.name, x.p]), [['Fairy', 0.5], ['Late', 0.3]]);
+  b = await (await post({ key: 'fair-old-device-key-0002', p: 0.9, name: 'Bee' })).json();
+  assert.ok(b.top.some((x) => x.name === 'Bee') && !b.fair.top.some((x) => x.name === 'Bee'), 'an old result on the whole list only');
+  b = await (await call('GET', null, { path: `/daily?date=${D}` })).json();
+  assert.deepStrictEqual([b.n, b.fair.n], [5, 2]); assert.ok(!JSON.stringify(b).includes('kh'), 'no key hashes out of the fair set');
+  // the stats page's day list: the fair set's players, average and best beside the day's
+  const dd = (await (await call('GET', null, { path: '/days' })).json()).days, x = dd.find((e) => e.date === D);
+  assert.deepStrictEqual([x.n, x.n2, x.best2, x.best], [5, 2, 0.5, 0.99]); assert.ok(Math.abs(x.avg2 - 0.4) < 1e-9);
+  assert.strictEqual(dd.find((e) => e.date === today).n2, undefined, 'a day without fair posts says nothing of them');
+  // a name taken off the lists comes off the fair list too
+  const was = board;
+  board = new Board({ storage }, env);              // (the board with the commissioner's token)
+  r = await call('DELETE', null, { path: '/week?name=fairy', auth: `Bearer ${env.ADMIN_TOKEN}` });
+  board = was;
+  assert.strictEqual(r.status, 200);
+  b = await (await call('GET', null, { path: `/daily?date=${D}` })).json();
+  assert.ok(!b.fair.top.some((x) => x.name === 'Fairy') && !b.top.some((x) => x.name === 'Fairy'), 'off both lists');
+}
 // the page posts as text/plain (a simple cross-origin request, no preflight): read as JSON all the same, with CORS
 {
   const plain = (path, body) => worker.fetch(new Request(`https://w.example${path}`, { method: 'POST', body: JSON.stringify(body),
@@ -828,6 +869,21 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.deepStrictEqual([g.n, g.nr, g.hist[97]], [2, 2, 0]);
   const dd = (await (await call('GET', null, { path: '/days' })).json()).days.find((x) => x.date === date);
   assert.deepStrictEqual([dd.n, dd.best], [2, 0.6], 'the stats page: counted results only');
+  // fair-scored (g: 2) and restarted: off the fair set too (its n, histogram, spots, top list; /days' n2, avg2, best2),
+  // still the device's one result, marked both ways; a fair, plain post goes into both sets
+  w = await (await day({ date, key: rk('fay'), p: 0.7, spots: [0.2], name: 'Fay', g: 2 })).json();
+  assert.deepStrictEqual([w.n, w.fair.n, w.fair.hist[70], w.fair.top.map((x) => x.name).join(), w.top.map((x) => x.name).join()], [3, 1, 1, 'Fay', 'Fay,Ann'], 'fair and plain: both sets');
+  w = await (await day({ date, key: rk('gus'), p: 0.99, spots: [0.5], name: 'Gus', g: 2, restarted: true })).json();
+  assert.deepStrictEqual([w.counted, w.n, w.nr, w.fair.n, w.fair.hist[99], w.hist[99], w.fair.spots[0].n], [true, 3, 3, 1, 0, 0, 1], 'fair and restarted: in neither set');
+  assert.ok(Math.abs(w.fair.spots[0].avg - 0.2) < 1e-9, 'nor the fair spot\'s average');
+  assert.deepStrictEqual([w.you.g, w.you.restarted], [2, true]);
+  assert.deepStrictEqual([w.fair.top.map((x) => x.name).join(), w.top.map((x) => x.name).join()], ['Fay', 'Fay,Ann'], 'on neither list');
+  assert.strictEqual(w.fair.hist.reduce((a, c) => a + c, 0), w.fair.n, 'the fair n is its histogram\'s total');
+  w = await (await day({ date, key: rk('gus'), p: 0.99, spots: [0.5], name: 'Gus', g: 2 })).json();
+  assert.deepStrictEqual([w.counted, w.n, w.fair.n, w.you.restarted, w.you.g], [false, 3, 1, true, 2], 'a later fair post: still the restarted one');
+  assert.ok(!w.fair.top.some((x) => x.name === 'Gus') && !w.top.some((x) => x.name === 'Gus'), 'named afterwards: still off both lists');
+  const d2 = (await (await call('GET', null, { path: '/days' })).json()).days.find((x) => x.date === date);
+  assert.deepStrictEqual([d2.n, d2.n2, d2.best, d2.best2], [3, 1, 0.7, 0.7], 'the stats page\'s fair figures: counted results only');
   Date.now = realNow;
 }
 // Accounts, continued: stats that follow the account, usernames on the boards, friend leagues, the daily email

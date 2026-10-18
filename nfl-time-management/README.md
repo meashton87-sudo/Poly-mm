@@ -370,6 +370,12 @@ your score and each spot's win chance post once (your first finish of the day co
 the summary shows how you compare with everyone who played that day: the share of players you beat, the day's
 scores in the same buckets as your own stats, each spot against the day's average, and the day's top ten named
 players (a name is claimed the same way as on the survivor board). The day is the player's local date.
+A result whose every call was graded the fair way (`g: 2`) also counts in the day's fair set (`fair` in `/daily`,
+`n2`/`avg2`/`best2` in `/days`). On Oct 18, 2026, the day the fair score came in, scores posted before it were
+worked out the old way and ran high (Super Bowl LI, down 25: nothing anyone called mattered, and the old way paid
+the simulation's noise). Nothing replaces them (a device's first result counts once), but where a day has both, the
+day card ranks a fair-scored result among the fair set, and the stats page shows only the fair set and its top ten,
+with a line saying how many were scored the old way. A device's own day-7 record keeps its number, with a note.
 Under it, two tabs: **Today's top 10** (name and score) and **This week** (`/week`: each name's best 5 daily scores of
 the last 7 days, added up, out of 500; the page says so), each with your own line under the list when you're not on it
 ("You: #142 of 1,380": the day's rank among everyone who played, named or not; the week's among the names in it). A
