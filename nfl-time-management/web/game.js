@@ -207,8 +207,8 @@
   let PRACTICE = location.hash === '#practice';
   const PRACTICE_KEY = `${STORE}:practice`;
   // the home screen (#home: the title, the Home tab, the menu on the field, the end cards): today's drive, survivor,
-  // Pro and your stats. A bare address opens it too once today's drive is done (boot); before that it opens the day's
-  // drive, so a player from a shared link is one tap from playing. A friend's challenge (?ch=) opens the day's card
+  // Pro and your stats. A bare address opens it too (the owner's call: the site's front door is Home, the day's drive
+  // one tap away on it). A friend's challenge (?ch=) opens the day's card
   let HOME_PG = location.hash === '#home';
   const CH_LINK = new URLSearchParams(location.search).has('ch');
   // Pro is off until it is turned on in the site build (scripts/site.py --pro: <meta name="pro">): no tab, no
@@ -9738,9 +9738,9 @@
       await proClaimFromUrl();
       await proVerify();
       const acct = acctInit();
-      // home: asked for (#home), or a bare address once today's drive is done (the page between days); drawn again when
-      // the account is in (its button, your leagues)
-      if (HOME_PG || (!location.hash && !CH_LINK && dayDone(dayN))) {
+      // home: asked for (#home), or a bare address (the front door); drawn again when the account is in (its button,
+      // your leagues)
+      if (HOME_PG || (!location.hash && !CH_LINK)) {
         renderHome(!HOME_PG);
         acct.then(() => { if (homeUp) renderHome(false, true); }).catch(() => {});
         return;
