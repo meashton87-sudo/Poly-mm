@@ -74,7 +74,7 @@ TRACE_HALF = False          # what else the pages asked the stub (printed at the
 async def pro_context(ctx, base: str, pro: bool = True) -> None:
     async def page_(route):
         r = await route.fetch()
-        body = (await r.text()).replace("<head>", f'<head><meta name="pro" content="on"><meta name="board-api" content="{base}/__board">', 1)
+        body = re.sub(r'<meta name="scn-at"[^>]*>', '', await r.text()).replace("<head>", f'<head><meta name="pro" content="on"><meta name="board-api" content="{base}/__board">', 1)
         await route.fulfill(response=r, body=body)
 
     async def board(route):

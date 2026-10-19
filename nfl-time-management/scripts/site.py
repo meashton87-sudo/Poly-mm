@@ -427,7 +427,7 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
 
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
-          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, pro_at: str | None = None, no_ads: bool = False,
+          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, pro_at: str | None = None, scn_at: str | None = None, no_ads: bool = False,
           fulldef: bool = False, google_client_id: str | None = None, old_domain: str | None = None, minify: bool = True) -> Path:
     global NO_ADS
     NO_ADS = no_ads
@@ -463,6 +463,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         extra += "<meta name=\"pro\" content=\"on\">"
         if pro_at:                           # ... and not before this time (ISO, UTC): the page turns it on then
             extra += f"<meta name=\"pro-at\" content=\"{html.escape(pro_at, quote=True)}\">"
+        if pro and scn_at:                   # Build a scenario (#custom) stays hidden until this time (ISO, UTC)
+            extra += f"<meta name=\"scn-at\" content=\"{html.escape(scn_at, quote=True)}\">"
     if google_client_id:                     # Sign in with Google on the Pro tab (the board checks the same client id)
         extra += f"<meta name=\"google-client-id\" content=\"{html.escape(google_client_id, quote=True)}\">"
     if fulldef:                              # the full defensive call in the daily and survivor: off until it is approved
@@ -603,13 +605,14 @@ if __name__ == "__main__":
     ap.add_argument("--ad-slot", help="an AdSense display ad unit's slot id, shown between games; empty: AdSense's own placement only")
     ap.add_argument("--no-ads", action="store_true", help="no ads anywhere on the site (overrides --adsense and web/ads)")
     ap.add_argument("--no-minify", action="store_true", help="ship the scripts as written (no esbuild)")
+    ap.add_argument("--scn-at", help="with --pro: Build a scenario stays hidden until this time (ISO 8601, UTC)")
     ap.add_argument("--pro-at", help="with --pro: the Pro tab stays hidden until this time (ISO 8601, e.g. 2026-10-16T18:00:00Z)")
     ap.add_argument("--vs", action="store_true", help="turn on Versus (two players live); off until approved")
     ap.add_argument("--fulldef", action="store_true", help="the full defensive call (personnel, front, coverage, rush) in every mode; off until approved")
     ap.add_argument("--google-client-id", help="a Google OAuth web client id (....apps.googleusercontent.com): Sign in with Google on the Pro tab; empty: off")
     ap.add_argument("--pro", action="store_true", help="turn on the Pro tab (the archive, the historic drives, the purchase); off until approved")
     a = ap.parse_args()
-    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, vs=a.vs, fulldef=a.fulldef, no_ads=a.no_ads, minify=not a.no_minify,
+    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, scn_at=a.scn_at, vs=a.vs, fulldef=a.fulldef, no_ads=a.no_ads, minify=not a.no_minify,
               google_client_id=a.google_client_id, old_domain=a.old_domain)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6

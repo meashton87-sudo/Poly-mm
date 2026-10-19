@@ -229,7 +229,9 @@
   const RUN_N = PRO_ON ? Number((location.hash.match(/^#run-(\d+)$/) || [])[1] || 0) : 0;
   // a scenario of your own (Pro, web/scenario.js): #custom builds one, #custom-<code> plays it (its own saved state and,
   // like a historic drive, each try its own draws); the rosters it plays with are the site's (rosters/: scenario.py)
-  const SCN = typeof TMDScenario !== 'undefined' ? TMDScenario : null;
+  // (hidden, link and all, until its launch: scripts/site.py --scn-at puts the time in a meta; a reload after shows it)
+  const SCN_AT = Date.parse((document.querySelector('meta[name="scn-at"]') || {}).content || '') || 0;
+  const SCN = typeof TMDScenario !== 'undefined' && Date.now() >= SCN_AT ? TMDScenario : null;
   const CUSTOM_BUILD = PRO_ON && !!SCN && location.hash === '#custom';
   const CUSTOM = PRO_ON && SCN ? ((location.hash.match(/^#custom-(1(?:-[0-9A-Za-z]{1,4}){21})$/) || [])[1] || '') : '';
   let PRO = null, PRO_RUNS = null;        // pro/drives.json and pro/runs.json, once loaded
