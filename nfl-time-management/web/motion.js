@@ -19,8 +19,9 @@
  */
 (function (root, factory) {
   const M = factory();
-  if (typeof module === 'object' && module.exports) module.exports = M;
-  else root.Motion = M;
+  // (both, always: a page with a global `module` from some other script, iPhones on Oct 19, never got window.Motion)
+  if (typeof module === 'object' && module && module.exports) module.exports = M;
+  if (root) root.Motion = M;
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
