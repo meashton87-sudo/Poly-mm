@@ -338,6 +338,13 @@ def banner_meta() -> str:
     return f'<meta name="ad-frame" content="/ad-banner.html" data-size="{w}x{h}">'
 
 
+# EzoicAds step 2 (docs.ezoic.com, site integration), as Ezoic gives it: the consent (CMP) scripts first, with
+# data-cfasync="false" ahead of src so Cloudflare leaves their order alone, then sa.min.js, its command queue and analytics
+EZOIC_HEAD = ('<script data-cfasync="false" src="https://cmp.gatekeeperconsent.com/min.js"></script>'
+              '<script data-cfasync="false" src="https://the.gatekeeperconsent.com/cmp.min.js"></script>'
+              '<script async src="//www.ezojs.com/ezoic/sa.min.js"></script>'
+              '<script>window.ezstandalone = window.ezstandalone || {}; ezstandalone.cmd = ezstandalone.cmd || [];</script>'
+              '<script src="//ezoicanalytics.com/analytics.js"></script>')
 EZOIC_ADSTXT = "https://srv.adstxtmanager.com/19390/{domain}"     # Ezoic's ads.txt manager (docs.ezoic.com, ads.txt setup)
 
 
@@ -449,7 +456,7 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
 
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
-          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, pro_at: str | None = None, scn_at: str | None = None, no_ads: bool = False, ezoic: str | None = None,
+          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, pro_at: str | None = None, scn_at: str | None = None, no_ads: bool = False, ezoic: str | None = None, ezoic_head: bool = False,
           fulldef: bool = False, google_client_id: str | None = None, old_domain: str | None = None, minify: bool = True) -> Path:
     global NO_ADS
     NO_ADS = no_ads
@@ -472,6 +479,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     site_url = site_url or f"https://{(domain or 'nfl2mindrill.com').strip()}"
     home = (domain or "").strip() or "nfl2mindrill.com"          # the site's own address, wherever the pages name it
     moving = move_js(domain, (old_domain or "").split(","))      # first in every page: the old address hands over
+    if ezoic_head and not no_ads:            # Ezoic (EzoicAds step 2): its privacy scripts, then its header script, at the top
+        moving += EZOIC_HEAD                 # of every page's head, right after the old address's hand-over
     desc = "Call the plays in real NFL endings. One drive a day: beat the real coach and see how you rank."
     extra = f"<meta name=\"description\" content=\"{desc}\">" + share_tags(site_url, "Two-Minute Drill: call the plays in real NFL endings", desc)
     if ga:                                   # Google Analytics (gtag.js), as Google gives it, at the top of <head>
@@ -634,6 +643,7 @@ if __name__ == "__main__":
     ap.add_argument("--adsense", help="Google AdSense publisher id (ca-pub-...); empty: no ads")
     ap.add_argument("--ad-slot", help="an AdSense display ad unit's slot id, shown between games; empty: AdSense's own placement only")
     ap.add_argument("--ezoic", metavar="DOMAIN", help="add Ezoic's sellers (their ads.txt manager, for this domain) to ads.txt")
+    ap.add_argument("--ezoic-head", action="store_true", help="Ezoic's privacy and header scripts at the top of every page")
     ap.add_argument("--no-ads", action="store_true", help="no ads anywhere on the site (overrides --adsense and web/ads)")
     ap.add_argument("--no-minify", action="store_true", help="ship the scripts as written (no esbuild)")
     ap.add_argument("--scn-at", help="with --pro: Build a scenario stays hidden until this time (ISO 8601, UTC)")
@@ -643,7 +653,7 @@ if __name__ == "__main__":
     ap.add_argument("--google-client-id", help="a Google OAuth web client id (....apps.googleusercontent.com): Sign in with Google on the Pro tab; empty: off")
     ap.add_argument("--pro", action="store_true", help="turn on the Pro tab (the archive, the historic drives, the purchase); off until approved")
     a = ap.parse_args()
-    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, scn_at=a.scn_at, vs=a.vs, fulldef=a.fulldef, no_ads=a.no_ads, ezoic=a.ezoic, minify=not a.no_minify,
+    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, scn_at=a.scn_at, vs=a.vs, fulldef=a.fulldef, no_ads=a.no_ads, ezoic=a.ezoic, ezoic_head=a.ezoic_head, minify=not a.no_minify,
               google_client_id=a.google_client_id, old_domain=a.old_domain)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6
