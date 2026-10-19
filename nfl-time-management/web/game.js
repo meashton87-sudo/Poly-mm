@@ -4437,6 +4437,7 @@
     $('done').hidden = which !== 'done';
     $('boot').hidden = which !== 'boot';
     restartSync();
+    ezDrive(which === 'play');
   }
 
   function addLog(text, t, mine) {
@@ -6883,7 +6884,7 @@
     });
     card.append(btn);
     // survivor: an ad after each finished game, below the button (never between the player and it)
-    if (SURV) { const ad = adBox(); if (ad) card.append(ad); }
+    if (SURV) { const ad = adBox('surv'); if (ad) card.append(ad); }
     d.append(card);
     drawTiles();
     if (newBadge) badgeToast(res.badges, bc);
@@ -7221,7 +7222,7 @@
     again.type = 'button';
     again.addEventListener('click', () => { state = newRun(); saveState(); survOpen(); });
     box.append(...lifeOffer(), nameInput(), pre, share, again, homeBtn(), boardEl());
-    const ad = adBox();
+    const ad = adBox('survend');
     if (ad) box.append(ad);
     box.append(disclaimer());
     if (!redraw) again.focus({ preventScroll: true });
@@ -7695,7 +7696,7 @@
     badgeShow(box, state.badges || [], firstFinish);
     box.append(countdown(streak >= 1 ? 'Keep the streak: next drive in ' : null));
     if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) box.append(a2hsSlotEl(), reminderNodes());     // the habit: an icon on the phone, a reminder
-    const ad = adBox();
+    const ad = adBox('done');
     if (ad) box.append(ad);
     box.append(disclaimer());
   }
@@ -8277,7 +8278,49 @@
     }), ms);
   }
   addEventListener('load', () => adsSoon(ADS_LATE));
-  function adBox() {
+  // Ezoic (site.py --ezoic-head: <meta name="ezoic">, and the game's own spots' placeholder ids from Ezoic's dashboard in
+  // <meta name="ezoic-ids">: the day's end card, survivor's card after a game, survivor's run over). The cards are made
+  // here, after the page loads, so each spot is called with showAds(id) once it is on the page, destroyed before its id
+  // is used again (Ezoic: dynamic content), and while a drive is on screen no interstitial or floating video comes over it
+  const EZ = !!document.querySelector('meta[name="ezoic"]');
+  const EZ_IDS = ((document.querySelector('meta[name="ezoic-ids"]') || {}).content || '').split(',').map(Number).filter((n) => n > 0);
+  const EZ_KINDS = ['done', 'surv', 'survend'];
+  const ezShown = new Set();
+  let ezPlay = null;
+  function ezq(fn) {
+    if (!EZ) return;
+    try {
+      const z = window.ezstandalone = window.ezstandalone || {};
+      (z.cmd = z.cmd || []).push(() => { try { fn(window.ezstandalone); } catch (e) { /* never in the way */ } });
+    } catch (e) { /* no Ezoic */ }
+  }
+  function ezDrive(on) {
+    if (!EZ || ezPlay === on) return;
+    ezPlay = on;
+    const ids = on ? [...ezShown] : [];
+    ids.forEach((i) => ezShown.delete(i));
+    ezq((z) => {
+      if (ids.length) z.destroyPlaceholders(...ids);       // (the cards' spots went with the cards)
+      z.setOutstreamAllowed(!on, { reason: on ? 'drive-on' : 'between-drives' });
+      z.setInterstitialAllowed(!on, { reason: on ? 'drive-on' : 'between-drives' });
+    });
+  }
+  function ezBox(kind) {
+    const id = EZ_IDS[EZ_KINDS.indexOf(kind)];
+    if (!id) return null;
+    const old = document.getElementById(`ezoic-pub-ad-placeholder-${id}`);
+    if (old) old.remove();                                  // (one of each id on the page)
+    const box = el('div', 'adbox'), ph = el('div');
+    ph.id = `ezoic-pub-ad-placeholder-${id}`;
+    box.append(ph);
+    const again = ezShown.has(id);
+    ezShown.add(id);
+    // (after the caller puts the card on the page)
+    setTimeout(() => ezq((z) => { if (!ph.isConnected) return; if (again) z.destroyPlaceholders(id); z.showAds(id); }), 0);
+    return box;
+  }
+  function adBox(kind) {
+    if (EZ) return ezBox(kind);
     // another network's banner (site.py: web/ads/banner.html, e.g. Adsterra): in a sandboxed frame of its own, so its
     // script can't touch the game or send the page elsewhere (a tap on the ad still opens it in a new tab)
     const frame = document.querySelector('meta[name="ad-frame"]');
