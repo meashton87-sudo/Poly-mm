@@ -59,7 +59,7 @@ def own_fonts(page: str, stamps: dict) -> str:
 # spots one for all of them), so a deploy that changes one file leaves the others' addresses, and the phone's copies,
 # as they were. Everything else keeps Pages' default (asked again every time). An address here without its stamp would
 # keep a phone on old bytes for a year: check_stamps fails the build on one.
-IMMUTABLE = ["/game.js", "/game.*.js", "/motion.js", "/engine.js", "/game_worker.js", "/vs_core.js", "/scenario.js", "/game.json", "/playbook.json",
+IMMUTABLE = ["/game.js", "/motion.js", "/engine.js", "/game_worker.js", "/vs_core.js", "/scenario.js", "/game.json", "/playbook.json",
              "/engine_data.json", "/teams.json", "/engine_data.pack", "/playbook.pack", "/spots/*", "/fonts/*", "/rosters/*"]
 HEADERS = "".join(f"{p}\n  Cache-Control: public, max-age=31536000, immutable\n" for p in IMMUTABLE)
 _stamp = lambda b: hashlib.sha256(b).hexdigest()[:12]
@@ -557,6 +557,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     # the page's script under a name that carries its stamp (game.<stamp>.js), not only ?v=: a cache in front of the site
     # that keys on the path alone (Oct 19: iPhones kept getting an older build's game.js, and motion.js before it, under
     # this build's ?v=) can't hand an old copy for a new address
+    # (Pages' default cache for it, asked again on every load: an older page's name is gone after the next deploy, and
+    # Pages answers a missing address with the front page, which must not be kept for a year as the script)
     shutil.copy2(out / "game.js", out / f"game.{stamps['game.js']}.js")
     page = page.replace('<script src="game.js"></script>', f'<script src="game.{stamps["game.js"]}.js"></script>')
     (out / "index.html").write_text(HEAD.format(extra=moving + extra + AD_CSS) + page.replace("<!--SITE-FOOT-->", foot_ads() + FOOT) + "</body></html>\n")
