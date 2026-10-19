@@ -33,6 +33,34 @@
   // Analytics events (the website's Google tag, scripts/site.py --ga; nothing anywhere else): what players do, so the
   // next changes follow the data. Event names and fields are listed in the README.
   const track = (name, params) => { try { if (typeof window.gtag === 'function') window.gtag('event', name, params || {}); } catch (e) { /* never in the way */ } };
+  // an error the page didn't catch: counted (js_error: the message, where, the build) and, when it is one of the page's
+  // own, said on screen with a Reload, not left as a field that never draws (a Pro buyer's iPhone, Oct 19: no way to
+  // tell what broke). Once a message; a browser's "Script error." from elsewhere and ResizeObserver's noise are left be.
+  const errSeen = new Set();
+  function pageError(msg, file, line, col, stack) {
+    msg = String(msg || '').slice(0, 200);
+    if (!msg || /^Script error\.?$|ResizeObserver/.test(msg) || errSeen.has(msg)) return;
+    errSeen.add(msg);
+    const where = `${String(file || '').split('/').pop().split('?')[0]}:${line || 0}:${col || 0}`;
+    track('js_error', { msg, where, stack: String(stack || '').slice(0, 300), build: (document.querySelector('meta[name="build"]') || {}).content || '' });
+    if ((file && !String(file).startsWith(location.origin)) || /^(Load failed|Failed to fetch|NetworkError)/.test(msg)) return;     // (offline: the page says so itself)
+    if (document.getElementById('errBar')) return;
+    const bar = document.createElement('div'), p = document.createElement('p'), b = document.createElement('button');
+    bar.id = 'errBar'; bar.setAttribute('role', 'alert');
+    bar.style.cssText = 'position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));z-index:9999;background:#7a1f1f;color:#fff;border-radius:12px;padding:12px 14px;font:14px/1.35 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35);display:flex;gap:12px;align-items:center';
+    p.style.cssText = 'margin:0;flex:1;min-width:0;overflow-wrap:anywhere';
+    p.textContent = `Something broke on this page (${msg} · ${where}). Reload to try again; a screenshot of this helps us fix it.`;
+    b.type = 'button'; b.textContent = 'Reload';
+    b.style.cssText = 'flex:none;background:#fff;color:#7a1f1f;border:0;border-radius:8px;padding:8px 12px;font:600 14px system-ui,sans-serif';
+    b.addEventListener('click', () => location.reload());
+    bar.append(p, b);
+    (document.body || document.documentElement).append(bar);
+  }
+  window.addEventListener('error', (e) => { if (e && e.message) pageError(e.message, e.filename, e.lineno, e.colno, e.error && e.error.stack); });
+  window.addEventListener('unhandledrejection', (e) => {
+    const r = e && e.reason;
+    if (r instanceof Error) pageError(r.message, ((r.stack || '').match(/(https?:[^\s)]+?):(\d+):(\d+)/) || [])[1] || location.href, 0, 0, r.stack);
+  });
   const modeName = () => (VS ? 'versus' : SURV ? 'survivor' : PRACTICE ? 'practice' : DRIVE ? 'drive' : RUN_N ? 'run' : CUSTOM ? 'custom' : ARCH_DAY ? 'archive' : 'daily');
   // a drive left half-played: when the page goes to the background mid-drive (closed, or switched away from), once
   // a page load, with how far in it was and whether it was still waiting on the simulator's data
