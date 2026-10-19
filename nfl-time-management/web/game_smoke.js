@@ -28,6 +28,16 @@ idx.spots.forEach((sp, i) => {
   }
 });
 idx.schedule.forEach((day) => day.forEach((i) => assert.ok(idx.spots[i], `spot ${i}`)));
+// a featured day of two sides (game.js sidesOf): two spots of one real game, a side for each team, the first its spot
+Object.entries(idx.featured || {}).forEach(([d, f]) => {
+  if (!f.sides) return;
+  const ss = f.sides.map((x) => idx.spots[x.spot]);
+  assert.ok(ss.length === 2 && ss.every(Boolean), `day ${d}: two sides`);
+  assert.strictEqual(f.spot, f.sides[0].spot, `day ${d}: its spot is its first side`);
+  assert.strictEqual(new Set(ss.map((sp) => sp.id.split('#')[0])).size, 1, `day ${d}: one game`);
+  assert.strictEqual(new Set(ss.map((sp) => sp.player)).size, 2, `day ${d}: one side each team`);
+  console.log(`day ${d}: pick a side, ${ss.map((sp) => `${sp.player} ${sp.id} (${sp.category})`).join(' or ')}`);
+});
 const scen = (sp) => {
   const T = TEAMS[idx.spots.indexOf(sp)], H = T.home, A = T.away;
   return { ...sp, game: { home: H, away: A, home_spread: sp.spread ?? 0, indoor: sp.indoor, wind: sp.wind, temp: sp.temp,

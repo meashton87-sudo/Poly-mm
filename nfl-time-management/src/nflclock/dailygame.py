@@ -55,14 +55,23 @@ def custom_spots() -> dict:
     return {k: v for k, v in json.loads(CUSTOM.read_text()).items() if not k.startswith("_")} if CUSTOM.exists() else {}
 
 
+def _sides(f: dict) -> list:
+    """A featured day's spots: its one spot, or the two sides it offers (sides: two takeovers of one real game, the
+    player picks one; each {id, category, note?, summary?})."""
+    return f["sides"] if f.get("sides") else [{"id": f["id"], "category": f["category"]}]
+
+
 def freeze(game_json=WEB / "game.json", out=FROZEN) -> dict:
     """Write the schedule of a built game.json (the live one) to the frozen file."""
     g = json.loads(game_json.read_text())
-    feat = {k for f in g.get("featured", {}).values() for k in [f["spot"]]}
+    feat = {s["spot"] for f in g.get("featured", {}).values() for s in (f.get("sides") or [f])}
+    side = lambda s: {"id": g["spots"][s["spot"]]["id"], "category": g["spots"][s["spot"]]["category"],
+                      **{k: s[k] for k in ("note", "summary") if s.get(k)}}
     frozen = {"launch": g["launch"], "spots": [[sp["id"], sp["category"]] for k, sp in enumerate(g["spots"]) if k not in feat],
               "schedule": g["schedule"],
               "featured": {d: {"id": g["spots"][f["spot"]]["id"], "category": g["spots"][f["spot"]]["category"], "note": f["note"],
-                               **({"title": f["title"]} if f.get("title") else {})}
+                               **({"title": f["title"]} if f.get("title") else {}),
+                               **({"sides": [side(s) for s in f["sides"]]} if f.get("sides") else {})}
                            for d, f in g.get("featured", {}).items()}}
     out.write_text(json.dumps(frozen, separators=(",", ":")) + "\n")
     return {"spots": len(frozen["spots"]), "days": len(frozen["schedule"])}
@@ -179,7 +188,8 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
     frozen = json.loads(FROZEN.read_text()) if FROZEN.exists() else None
     featured = (frozen or {}).get("featured", {})
     custom = custom_spots()
-    keep = {**dict(map(tuple, frozen["spots"])), **{f["id"]: f["category"] for f in featured.values() if f["id"] not in custom}} if frozen else None
+    fspots = {s["id"]: s["category"] for f in featured.values() for s in _sides(f)}       # every featured day's spots, sides too
+    keep = {**dict(map(tuple, frozen["spots"])), **{i: c for i, c in fspots.items() if i not in custom}} if frozen else None
     seasons = sorted(set(SCENARIO_SEASONS) | {int(k[:4]) for k in (keep or {})})
     pbp = data.load(tuple(range(min(2016, min(seasons) - 2), max(seasons) + 1)))    # two seasons before the earliest: its team ratings
     cand = candidates(pbp, lib, keep=keep)
@@ -189,7 +199,7 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
         missing = [i for i, _ in frozen["spots"] if i not in by_id.index]
         if missing:       # a play renumbered upstream: the build fails rather than move a day's drive
             raise RuntimeError(f"frozen spots missing from the data: {missing[:5]} ({len(missing)})")
-        missing = [f["id"] for f in featured.values() if f["id"] not in by_id.index and f["id"] not in custom]
+        missing = [i for i in fspots if i not in by_id.index and i not in custom]
         if missing:
             raise RuntimeError(f"featured spots missing from the data: {missing}")
         picks = {cat: by_id.loc[[i for i, c in frozen["spots"] if c == cat]] for cat in CATEGORIES}
@@ -197,7 +207,7 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
         if [i for cat in CATEGORIES for i in picks[cat]["spot_id"]] != order:
             raise RuntimeError("frozen spots are not grouped by kind in CATEGORIES order")
         # featured days' spots go after all the others, so no index of a frozen spot moves
-        picks["_featured"] = by_id.loc[[f["id"] for f in featured.values() if f["id"] not in custom]]
+        picks["_featured"] = by_id.loc[[i for i in fspots if i not in custom]]
     else:
         picks = {cat: cand[cand["category"] == cat].iloc[lambda d: rng.permutation(len(d))].head(days) for cat in CATEGORIES}
 
@@ -222,6 +232,11 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
         sp["league"] = {k: round(float(ls[k]), 5) for k in ("mu_pass", "mu_rush", "home_pass", "home_rush")}
         chunks.setdefault(len(spots) // SPOT_CHUNK, {})[str(len(spots))] = c["teams"]
         spots.append(sp)
+    at = {sp["id"]: k for k, sp in enumerate(spots)}
+    for f in featured.values():          # a side's story of the real drive (what that team did), for its reveal
+        for sd in f.get("sides") or []:
+            if sd.get("summary"):
+                spots[at[sd["id"]]]["real"]["summary"] = sd["summary"]
     n = {cat: len(df) for cat, df in picks.items()}
     offs = {cat: sum(n[c] for c in list(CATEGORIES)[:i]) for i, cat in enumerate(CATEGORIES)}
     if frozen:
@@ -242,9 +257,12 @@ def build(days: int = DAYS, seed: int = 2026, season: int = SEASON) -> dict:
     out = {"launch": LAUNCH.isoformat(), "categories": CATEGORIES, "calls": calls, "models": models,
            "schedule": schedule,
            # a day can feature one spot (a famous one) in place of its scheduled drive: day -> spot index, with its story
-           # and an optional title ("28–3 · Super Bowl LI")
-           "featured": {d: {"spot": next(k for k, sp in enumerate(spots) if sp["id"] == f["id"]), "note": f.get("note", ""),
-                            **({"title": f["title"]} if f.get("title") else {})}
+           # and an optional title ("28–3 · Super Bowl LI"); or two sides of one game (sides: the player picks one,
+           # the day's drive; spot is the first), each with its own story where it has one
+           "featured": {d: {"spot": at[_sides(f)[0]["id"]], "note": f.get("note", ""),
+                            **({"title": f["title"]} if f.get("title") else {}),
+                            **({"sides": [{"spot": at[sd["id"]], **{k: sd[k] for k in ("note", "summary") if sd.get(k)}}
+                                          for sd in f["sides"]]} if f.get("sides") else {})}
                         for d, f in featured.items()} if frozen else {},
            "spots": spots, "spot_chunk": SPOT_CHUNK, "league": league,
            "coaches": CO.fingerprints(),
