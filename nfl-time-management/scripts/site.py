@@ -111,6 +111,9 @@ def check_stamps(out: Path, stamps: dict) -> None:
 # an error still names its function): a third less to download and parse before the intro and the first call. The
 # files in web/ stay as written (the claude.ai artifact, the Node checks); without npx (an offline build) so does the site.
 SCRIPTS = ["game.js", "motion.js", "engine.js", "game_worker.js", "vs_core.js", "scenario.js"]
+# what the page loads ahead of game.js, shipped inside it (build: one file, one stamp): motion.js the players' movement,
+# vs_core.js college overtime's rules (Versus, a college game), scenario.js Pro's scenarios
+PAGE_BUNDLE = ["motion.js", "vs_core.js", "scenario.js"]
 ESBUILD = "esbuild@0.24.0"
 
 
@@ -494,6 +497,11 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     shutil.copytree(WEB / "fonts", out / "fonts", ignore=shutil.ignore_patterns("*.css"))
     if minify:
         minify_scripts(out)
+    # the page's scripts go out as one file: game.js with motion.js, vs_core.js and scenario.js ahead of it (each its own
+    # IIFE). A phone that got this build's game.js beside an older build's motion.js (an iPhone, Oct 19: Motion.squeeze
+    # is not a function, the field never drawn) can't any more: one file, one stamp. (vs_core.js stays a file too: the
+    # simulator's worker loads it.)
+    (out / "game.js").write_text("".join((out / f).read_text().rstrip().rstrip(";") + ";\n" for f in PAGE_BUNDLE) + (out / "game.js").read_text())
     eng = json.loads((WEB / "engine_data.json").read_text())
     for f, p in PACKED.items():
         pack(WEB / f, out / p, ref=eng if f == "playbook.json" else None)
@@ -517,8 +525,9 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     extra += ('<script type="application/ld+json">' + json.dumps({"@context": "https://schema.org", "@type": "WebSite",
               "name": "Two-Minute Drill", "url": site_url.rstrip("/") + "/", "description": desc}) + "</script>")
     page = own_fonts((WEB / "game.html").read_text(), stamps)
-    for js in ("motion.js", "vs_core.js", "scenario.js", "game.js"):     # vs_core.js: college overtime's rules (Versus, a college game); scenario.js: Pro's scenarios
-        page = page.replace(f'<script src="{js}"></script>', f'<script src="{js}?v={stamps[js]}"></script>')
+    for js in PAGE_BUNDLE:                   # (in game.js: above)
+        page = page.replace(f'<script src="{js}"></script>', '')
+    page = page.replace('<script src="game.js"></script>', f'<script src="game.js?v={stamps["game.js"]}"></script>')
     (out / "index.html").write_text(HEAD.format(extra=moving + extra + AD_CSS) + page.replace("<!--SITE-FOOT-->", foot_ads() + FOOT) + "</body></html>\n")
     # the stats page (/stats): its own document; the same analytics tag and backend address
     stats_head = (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Two-Minute Drill stats",
