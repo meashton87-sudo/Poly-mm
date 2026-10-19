@@ -9844,6 +9844,7 @@
     let bad = null;
     try { bad = sessionStorage.getItem(`${STORE}:badlink`); sessionStorage.removeItem(`${STORE}:badlink`); } catch (e) { /* storage off */ }
     if (bad) box.append(el('p', 'note badlink', `There is no ${bad}${isPro() ? ': here are the ones there are.' : '.'}`));
+    if (SCN) box.append(scenEntry());        // Build a scenario first on the Pro screen, with Pro or without (building is free to try)
     if (!isPro()) {
       box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''}, the historic drives and the playoff runs: play any of them, graded like the day it ran.`));
       if (PRO_LIVE === null && (proCode() || authSession())) {     // a code (or a session) is kept here but the board could not confirm it
@@ -9855,7 +9856,6 @@
     }
     box.append(proCodeCard(false));
     box.append(authNodes());        // Pro by code: keep it on an account; signed in: who, and Sign out
-    if (SCN) box.append(scenEntry());
     gauntletFresh();
     const pro = await loadPro(), ds = load(`${STORE}:drives`, {});
     if (pro && pro.drives.length) {
@@ -9995,7 +9995,7 @@
   function scenEntry() {
     const a = el('a', 'scnentry'), n = Object.values(scenList()).filter((e) => e && !e.gone).length;
     a.href = '#custom';
-    a.append(el('span', 'k', 'New · Build a scenario'), el('b', '', 'Your teams, your situation'),
+    a.append(el('span', 'k', isPro() ? 'New · Build a scenario' : 'New in Pro · Build a scenario'), el('b', '', 'Your teams, your situation'),
       el('span', 'm', `Any two teams from 2001 on, as they lined up that season. Set the game, the clock, the score and the ball, then call it.${n ? ` ${n} played.` : ''}`),
       el('span', 'cta', 'Build one'));
     return a;
