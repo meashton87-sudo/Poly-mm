@@ -49,10 +49,10 @@ function child(dir, packed) {
 
 // game.js startRoot, buildScen and simScen: the spot's opening snap and its matchup, as the page builds them
 function startRoot(sc) {
-  const st = sc.start;
+  const st = sc.start, kick = st.phase === 'kick';        // (a scenario can open on a kickoff: pos is the kicking team)
   return { t: st.qtr <= 4 ? (4 - st.qtr) * 900 + st.clock : st.clock, pos: st.pos === sc.home ? 0 : 1,
-    score: [st.score[1], st.score[0]], down: st.down, ytg: Math.min(st.ytg, st.yl), yl: st.yl,
-    to: [st.to[1], st.to[0]], clock_running: !!st.running, phase: 0, credit: 0, free_kick: false, ...otOf(sc) };
+    score: [st.score[1], st.score[0]], down: kick ? 1 : st.down, ytg: kick ? 10 : Math.min(st.ytg, st.yl), yl: kick ? 65 : st.yl,
+    to: [st.to[1], st.to[0]], clock_running: !!st.running, phase: kick ? 2 : 0, credit: 0, free_kick: false, ...otOf(sc) };
 }
 // a spot in overtime (a historic drive: Super Bowl LVIII's, Fitzgerald's): the period it is in, playoff rules or not, and
 // whether the other team has had the ball (behind, or past the period's first snap: they have), so the engine plays the
@@ -66,6 +66,7 @@ function otOf(sc) {
   const fresh = st.qtr === 5 && st.score[0] === st.score[1] && st.clock >= len;
   const c = [0, 0];
   if (!fresh) c[1 - pos] = 1;
+  if (st.otc) { c[0] = st.otc[0]; c[1] = st.otc[1]; }       // (a scenario says who has had the ball: web/scenario.js)
   return { ot: { c, po, n: st.qtr - 4, ...(rules === 'sd' || rules === 'msd' ? { r: rules } : {}) } };
 }
 function buildScen(idx, sp, T) {

@@ -28,6 +28,7 @@ from scipy.stats import norm
 from . import config, live
 from . import players as PL
 
+TGT_PER_CATCH = 1.63          # targets per catch, 2002 and 2009-2012 (the seasons around the ones with no targets)
 SEASON_W = {2022: 0.05, 2023: 0.15, 2024: 0.4, 2025: 1.0, 2026: 1.0}   # per game, by season: last season and this one count most
 GROUPS = ["QB", "RB", "WR", "TE", "OL", "EDGE", "DL", "LB", "CB", "S"]
 OFFENSE = {"QB", "RB", "WR", "TE", "OL"}
@@ -39,6 +40,7 @@ STANDING_QB = {"contract": 0.35, "honors": 0.4, "draft": 0.05, "usage": 0.2}   #
 CENTER, SPREAD = 77.0, 9.5            # OVR of the average starter, and per standard deviation among starters
 TOP, ROOM = 88.0, 12.0                # above TOP the scale bends toward 100 so the best players stay apart
 STARTER_ROLE = 0.5                    # a starter plays at least this share of his side's snaps
+STARTS = {"QB": 1, "RB": 1, "WR": 3, "TE": 1, "OL": 5, "EDGE": 2, "DL": 2, "LB": 3, "CB": 2, "S": 2}   # starters a team fields
 POS_GROUP = {"QB": "QB", "RB": "RB", "HB": "RB", "FB": "RB", "WR": "WR", "TE": "TE", "T": "OL", "G": "OL", "C": "OL", "OL": "OL",
              "OT": "OL", "OG": "OL", "DE": "EDGE", "OLB": "EDGE", "DT": "DL", "NT": "DL", "DL": "DL", "LB": "LB", "ILB": "LB",
              "MLB": "LB", "CB": "CB", "DB": "CB", "S": "S", "FS": "S", "SS": "S", "SAF": "S"}
@@ -68,6 +70,10 @@ def _load(seasons=None):
     T = PL.load_tables(seasons)
     st = PL.read_seasons("stats_player", "stats_player_week_{s}.parquet", seasons)
     st = st[st["season_type"] == "REG"]
+    # 2003-2008: the play-by-play names no receiver on an incompletion, so the player stats count (almost) no targets;
+    # a catch then stands for TGT_PER_CATCH targets, the league's rate in the seasons either side
+    gone = st.groupby("season")["targets"].transform("sum") < 0.5 * st.groupby("season")["receptions"].transform("sum")
+    st = st.assign(targets=st["targets"].where(~gone, st["receptions"].fillna(0) * TGT_PER_CATCH))
     ngs = {k: pd.read_parquet(PL._get("nextgen_stats", f"ngs_{k}.parquet")) for k in ("rushing", "receiving")}
     ngs = {k: v[(v["week"] > 0) & v["season"].isin(seasons)] for k, v in ngs.items()}
     cols = ["season", "season_type", "game_id", "posteam", "id", "qb_dropback", "qb_epa", "play_type", "rusher_player_id",
@@ -381,11 +387,17 @@ def ratings_asof(season: int, week: int, data=None) -> pd.DataFrame:
     df["score"] = df["w_perf"] * df["perf"].fillna(0.0) + (1 - df["w_perf"]) * df["standing"]
     df["starter"] = _share(df["grp"], role) >= STARTER_ROLE
     df["ovr"], df["pct"] = np.nan, np.nan
+    # before snap counts (2012) nobody is known to start: the players in the league that season stand in, the busiest
+    # of them, as many as its teams start (a lineman, never in a box score: every one in the league)
+    yrs = pd.read_parquet(PL._get("players", "players.parquet"), columns=["gsis_id", "rookie_season", "last_season"]).drop_duplicates("gsis_id").set_index("gsis_id")
+    active = ((yrs["rookie_season"] <= season) & (yrs["last_season"] >= season)).reindex(df.index).fillna(False).to_numpy(bool)
+    teams = max(int(pbp.loc[pbp["season"] == season, "posteam"].nunique()), 28)
     for g_ in GROUPS:
         m = df["grp"] == g_
         ref = df.loc[m & df["starter"], "score"]
         if len(ref) < 5:
-            ref = df.loc[m, "score"]
+            busy = df.loc[m & active & (df["n"] > 0), "n"].nlargest(STARTS[g_] * teams).index
+            ref = df.loc[busy, "score"] if len(busy) >= 5 else df.loc[m & active, "score"] if (m & active).sum() >= 5 else df.loc[m, "score"]
         z = (df.loc[m, "score"] - ref.mean()) / (ref.std() or 1.0)
         df.loc[m, "ovr"] = scale(CENTER + SPREAD * z)
         srt = np.sort(ref.to_numpy())

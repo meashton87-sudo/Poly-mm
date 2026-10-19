@@ -40,7 +40,7 @@ STATE = """() => {
   const vis = (id) => { const e = document.getElementById(id); return e && !e.hidden; };
   if (vis('modal')) return 'modal';
   if (vis('deep')) return 'deep';
-  if (vis('done') && document.querySelector('#done .big-pct')) return 'summary';
+  if (vis('done') && document.querySelector('#done .big-pct, #done .gradecard')) return 'summary';
   if (vis('intro') && document.querySelector('#intro .sidepick')) return 'pick';
   if (vis('intro') && document.querySelector('#intro .btn')) return 'intro';
   if (!vis('play')) return 'loading';
@@ -63,6 +63,70 @@ DOTS = """() => {
   const up = qb && ball ? Math.sign(pt(tr(ball))[1] - pt(tr(qb))[1]) || -1 : -1;
   return { rec, up };
 }"""
+# Pro, for the scenario episodes (game.js #custom): the page as the site ships it, told Pro is on (the pro meta) and
+# where its backend is (a stub on the test server's own address: /restore says the stored code is good; accounts off;
+# anything else answered empty), with a Pro code stored, so any site build can play a scenario
+PRO_CODE = "TMD-TEST-TEST-TEST"
+STUB_ASKED: set = set()
+TRACE_HALF = False          # what else the pages asked the stub (printed at the end)
+
+
+async def pro_context(ctx, base: str, pro: bool = True) -> None:
+    async def page_(route):
+        r = await route.fetch()
+        body = (await r.text()).replace("<head>", f'<head><meta name="pro" content="on"><meta name="board-api" content="{base}/__board">', 1)
+        await route.fulfill(response=r, body=body)
+
+    async def board(route):
+        path = urllib.parse.urlsplit(route.request.url).path.removeprefix("/__board")
+        if path == "/restore":
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "code": PRO_CODE}))
+        else:                     # (accounts off: no way to sign in; nothing else is asked of it on these pages)
+            STUB_ASKED.add(path)
+            await route.fulfill(status=200, content_type="application/json", body="{}")
+    await ctx.route(f"{base}/index.html*", page_)
+    await ctx.route(f"{base}/__board/**", board)
+    if pro:
+        await ctx.add_init_script(f"try {{ localStorage.setItem('tmd:v3:pro', JSON.stringify({{ code: '{PRO_CODE}', at: Date.now() }})); }} catch (e) {{}}")
+
+
+# a random scenario that passes its checks (web/scenario.js random, on the rosters' index the page itself loads), the
+# kind pinned by the episode: overtime in the playoffs, a fourth quarter, the end of the first half, any (a first half
+# played on through the second is scenario_half's: a whole half is more than an episode's steps)
+SCEN_PICK = """async ([seed, kind]) => {
+  const st = JSON.parse(document.querySelector('meta[name="stamps"]').content), u = `rosters/index.json?v=${st['rosters/index.json']}`;
+  const ix = await fetch(u).then((r) => r.json());
+  let s = seed >>> 0;
+  const R = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const opt = [{ qtr: 5, type: ['WC', 'DIV', 'CON', 'SB'][seed % 4] }, { qtr: 4 }, { qtr: 2, end: 'half' }, { end: 'half' }, { qtr: 2, end: 'game', type: 'REG' }][kind];
+  const sc = TMDScenario.random(R, ix, opt);
+  if (sc && kind === 4) Object.assign(sc, { clock: 2, ball: 'opp', start: 'snap', yl: 75, down: 1, ytg: 10, r2h: 'you' });
+  return sc && TMDScenario.ok(sc, ix) ? { code: TMDScenario.code(sc), sc, first: ix.seasons[0].season, last: ix.seasons[ix.seasons.length - 1].season } : null;
+}"""
+# the builder (#custom): a preset gives a scenario it can kick off; a distance past the goal line is refused, said
+# where it is and Kick off off; a fixed one is good again
+BUILDER = """async () => {
+  const q = (s) => document.querySelector(s), out = [];
+  const pre = [...document.querySelectorAll('#arch .spre .key')];
+  if (pre.length < 4) return ['the builder has no presets'];
+  pre[0].click();
+  await new Promise((r) => setTimeout(r, 50));
+  if (q('#arch .sacts .btn').disabled || !q('#arch .ssum .scnsum')) out.push('a preset does not give a scenario to kick off');
+  const yl = q('#scn-yl'), ytg = q('#scn-ytg');
+  const set = (i, v) => { i.value = String(v); i.dispatchEvent(new Event('input', { bubbles: true })); };
+  [...document.querySelectorAll('#arch .seg[data-f="side"] button')].find((b) => b.dataset.v === 'opp').click();
+  set(yl, 5); set(ytg, 8);
+  await new Promise((r) => setTimeout(r, 50));
+  if (!q('#arch .serr li') || !q('#arch .sacts .btn').disabled || !ytg.classList.contains('bad')) out.push('a distance past the goal line is not refused');
+  set(ytg, 5);
+  await new Promise((r) => setTimeout(r, 50));
+  if (q('#arch .serr li') || q('#arch .sacts .btn').disabled) out.push('a goal-to-go fixed is still refused');
+  const sel = q('#scn-youyr'), years = [...sel.options].map((o) => +o.value);
+  return { out, years: [Math.min(...years), Math.max(...years)], seasons: years.length };
+}"""
+# the scenario's saved try (game.js stateKey: :custom:<code>): its restarts and the calls made so far
+SCENSTATE = """() => { const k = Object.keys(localStorage).find((x) => /:custom:1-/.test(x)), st = k && JSON.parse(localStorage.getItem(k));
+  return st ? { restarts: st.restarts || 0, calls: st.spots.reduce((a, x) => a + ((x && x.decisions) || []).length, 0), done: !!st.done } : null; }"""
 # the day's saved drive (the daily's own state): its restarts and the calls made so far
 DAYSTATE = """() => { const k = Object.keys(localStorage).find((x) => /:day:\\d+$/.test(x)), st = k && JSON.parse(localStorage.getItem(k));
   return st ? { restarts: st.restarts || 0, calls: st.spots.reduce((a, x) => a + ((x && x.decisions) || []).length, 0), done: !!st.done } : null; }"""
@@ -364,6 +428,8 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
         t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }}; }})();""")
     if quirk:
         await ctx.add_init_script(QUIRK[quirk])
+    if mode == "scenario":
+        await pro_context(ctx, base)
     page = await ctx.new_page()
     problems: list[str] = []
     page.on("pageerror", lambda e: problems.append(f"script error: {e}"))
@@ -373,7 +439,26 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     page.on("requestfailed", lambda r: base in r.url and "ERR_ABORTED" not in (r.failure or "") and problems.append(f"request failed: {r.url} {r.failure}"))
     page.on("request", lambda r: unstamped(r.url, base, *stamped) and problems.append(f"an address cached for good, without its stamp: {r.url}"))
     url = f"{base}/index.html" + ("#survivor" if mode == "survivor" else "#daily")
-    if mode != "survivor":
+    scen, b = None, {"years": [0, 0]}
+    if mode == "scenario":
+        # the builder first (its checks), then a random scenario of the episode's kind, kicked off by its link
+        await page.goto(f"{base}/index.html#custom")
+        try:
+            await page.wait_for_selector("#arch .sacts .btn", timeout=30000)
+            b = await page.evaluate(BUILDER)
+            problems.extend(b["out"] if isinstance(b, dict) else b)
+            scen = await page.evaluate(SCEN_PICK, [seed, seed % 4])
+        except Exception as e:
+            problems.append(f"the builder did not come up: {e}")
+        if not scen:
+            problems.append("no random scenario passed its checks")
+        else:
+            print(f"{name}: {scen['code']} (seasons {scen['first']}-{scen['last']}; builder offers {b['years'][0]}-{b['years'][1]})", flush=True)
+            if b["years"] != [scen["first"], scen["last"]]:
+                problems.append(f"the builder offers {b['years']}, the rosters {scen['first']}-{scen['last']}")
+        url = f"{base}/index.html#custom-{scen['code'] if scen else 'x'}"
+        first = False                     # (a scenario's file carries no first-call facts: the simulator answers)
+    if mode not in ("survivor", "scenario"):
         # the bare address is the front door: Home, with today's drive on it
         await page.goto(f"{base}/index.html")
         h = None
@@ -393,7 +478,8 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     last_key, since, chaos_done = None, time.time(), set()
     trail: list[str] = []            # the last screens and actions, printed with a failure
     first_q = None                   # the quarter a daily drive starts in: a first-half drive ends at halftime
-    restart_ep = mode == "daily" and seed % 2 == 1 and quirk != "nostore"     # (no storage: a reload is a new try already)
+    restart_ep = mode in ("daily", "scenario") and seed % 2 == 1 and quirk != "nostore"     # (no storage: a reload is a new try already)
+    rstate = SCENSTATE if mode == "scenario" else DAYSTATE
     restarted = False
     picked = None                    # a day of two sides: the one taken (asked once: a reload or a restart keeps it)
     first_call = first               # the first call shows on the spot's own facts (game.js firstInfo), not the simulator's
@@ -461,7 +547,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 elif st == "end":
                     finished += 1
                     if mode == "daily" or finished >= target:
-                        if mode == "daily":
+                        if mode in ("daily", "scenario"):
                             await page.click("#dock .endcard .btn", timeout=3000)
                             continue
                         break
@@ -483,6 +569,19 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                             print(f"tendencies: {calls} calls graded, {await page.evaluate("() => document.querySelectorAll('#modal .tend .tr').length")} traits")
                         await page.click("#mClose", timeout=3000)
                         await page.wait_for_timeout(200)
+                    if mode == "scenario":
+                        # the grade card, the scenario on My scenarios with its grade, and the ways on: again, change it, send it
+                        finished = max(finished, 1)
+                        got = await page.evaluate("""(c) => { const L = JSON.parse(localStorage.getItem('tmd:v3:scen') || '{}');
+                          return { card: !!document.querySelector('#done .gradecard .gbig'), rec: L[c] || null, acts: [...document.querySelectorAll('#done .pacts .btn')].map((b) => b.textContent),
+                            board: !!document.querySelector('#done .dailybox, #done .leaders') }; }""", scen["code"])
+                        if not got["card"] or not got["rec"] or not isinstance(got["rec"].get("p"), (int, float)) or got["rec"].get("tries") != 1:
+                            problems.append(f"the scenario's end card or its My scenarios record is missing: {got}")
+                        elif len(got["acts"]) < 4 or got["board"]:
+                            problems.append(f"the scenario's end card: {got}")
+                        else:
+                            print(f"{name}: graded {round(got['rec']['p'] * 100)}, {got['acts']}")
+                        break
                     if mode == "daily":
                         finished = max(finished, 1)
                         if picked is not None:        # a day of two sides: the end card and the share text name the side taken
@@ -508,7 +607,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     chaos_done.add("norestart")
                     if not await page.evaluate("() => document.getElementById('restartBtn').hidden"):
                         problems.append("survivor offers Start over (one life: it never should)")
-                elif st == "choose" and restart_ep and "restart" not in chaos_done and (await page.evaluate(DAYSTATE) or {}).get("calls", 0) >= 1:
+                elif st == "choose" and restart_ep and "restart" not in chaos_done and (await page.evaluate(rstate) or {}).get("calls", 0) >= 1:
                     # Start over, a call in: asked first (the leaderboard note), then a new try the page reloads into
                     chaos_done.add("restart"); act("START OVER")
                     if mobile:
@@ -523,14 +622,14 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         await page.click("#restartBtn", timeout=3000)
                     await page.wait_for_timeout(200)
                     txt = await page.evaluate("() => document.getElementById('modal').hidden ? '' : document.getElementById('modal').innerText")
-                    if "leaderboard" not in txt.lower():
-                        problems.append(f"Start over did not ask first with the leaderboard note: {txt[:160]!r}"); continue
+                    if ("fresh luck" if mode == "scenario" else "leaderboard") not in txt.lower():
+                        problems.append(f"Start over did not ask first with the {'new try' if mode == 'scenario' else 'leaderboard'} note: {txt[:160]!r}"); continue
                     async with page.expect_event("load"):
                         await page.click("#modal [data-restart-go]", timeout=3000)
                     await page.wait_for_timeout(800)
-                    ds = await page.evaluate(DAYSTATE)
+                    ds = await page.evaluate(rstate)
                     if not ds or ds["restarts"] != 1 or ds["calls"] or ds["done"]:
-                        problems.append(f"after Start over the day's state is not a new, marked try: {ds}")
+                        problems.append(f"after Start over the {'scenario' if mode == 'scenario' else 'day'}'s state is not a new, marked try: {ds}")
                     restarted = True
                     print(f"{name}: started over (asked first, a new try marked restarted)")
                 elif st == "choose" and sweep and "short_field" not in chaos_done:
@@ -698,6 +797,89 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "trail": trail if problems else []}
 
 
+async def scenario_half(browser, base: str) -> list[str]:
+    """A first-half scenario played to the final gun: at halftime the card says who gets the ball, and the second half
+    kicks off from 15:00 of the third quarter."""
+    out: list[str] = []
+    ctx = await browser.new_context(viewport={"width": 1280, "height": 900})
+    await pro_context(ctx, base)
+    await ctx.add_init_script("try { localStorage.setItem('tmd:v3:seen', 'true'); } catch (e) {}")      # (no first-visit help over Play)
+    page = await ctx.new_page()
+    errs: list[str] = []
+    page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+    try:
+        await page.goto(f"{base}/index.html#custom")
+        await page.wait_for_selector("#arch .sacts .btn", timeout=30000)
+        sc = await page.evaluate(SCEN_PICK, [11, 4])
+        async with page.expect_event("load"):
+            await page.goto(f"{base}/index.html#custom-{sc['code']}")
+        await page.click("#intro .btn", timeout=30000)
+        for _ in range(600):           # their snap with 0:02 left in the half (your defense: any call; anything after), then halftime
+            await page.wait_for_timeout(150)
+            txt = await page.evaluate("() => document.getElementById('dock').innerText")
+            if TRACE_HALF:
+                print(repr(txt[:120]), await page.evaluate("() => document.getElementById('bar').innerText.replace(/\\n/g, ' ')"))
+            if "halftime" in txt.lower():
+                break
+            if await page.locator("#field.playing").count():
+                await page.click("#field", timeout=2000)
+            elif await page.locator("#dock .key:visible:not([disabled])").count():
+                await page.locator("#dock .key:visible:not([disabled])").first.click(timeout=2000)
+            elif await page.locator("#dock .result .btn:visible").count():
+                await page.locator("#dock .result .btn").first.click(timeout=2000)
+        else:
+            return out + [f"no halftime card: {txt[:160]!r}"]
+        if "You get the ball" not in txt:
+            out.append(f"the halftime card does not say who gets the ball: {txt[:160]!r}")
+        await page.locator("#dock .key.big", has_text="Receive").click(timeout=3000)
+        for _ in range(200):
+            await page.wait_for_timeout(150)
+            bar = await page.evaluate("() => document.getElementById('bar').innerText")
+            if "Q3" in bar:
+                break
+        else:
+            out.append(f"the second half did not start: {bar!r}")
+    except Exception as e:
+        out.append(f"scenario halftime: {e}")
+    finally:
+        out.extend(errs)
+        await ctx.close()
+    return out
+
+
+async def scenario_pitch(browser, base: str) -> list[str]:
+    """A scenario's link opened without Pro: what it is (its summary) and the Pro pitch, never the game; a link with a
+    broken code says so."""
+    out: list[str] = []
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    await pro_context(ctx, base, pro=False)
+    page = await ctx.new_page()
+    errs: list[str] = []
+    page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+    try:
+        await page.goto(f"{base}/index.html#custom")
+        await page.wait_for_selector("#arch .sacts .btn", timeout=30000)
+        sc = await page.evaluate(SCEN_PICK, [7, 1])
+        async with page.expect_event("load"):
+            await page.goto(f"{base}/index.html#custom-{sc['code']}")
+        await page.wait_for_selector("#arch .scnsum", timeout=30000)
+        got = await page.evaluate("() => ({ pro: !!document.querySelector('#arch .pro .btn'), play: !document.getElementById('play').hidden || !document.getElementById('intro').hidden, text: document.getElementById('arch').innerText })")
+        if not got["pro"] or got["play"] or "Pro" not in got["text"]:
+            out.append(f"without Pro a scenario's link is not the pitch: {got['text'][:200]!r}")
+        async with page.expect_event("load"):
+            await page.goto(f"{base}/index.html#custom-1-KC-2026")
+        await page.wait_for_timeout(1500)
+        t = await page.evaluate("() => document.getElementById('arch').innerText")
+        if "doesn’t work" not in t:
+            out.append(f"a broken scenario link does not say so: {t[:160]!r}")
+    except Exception as e:
+        out.append(f"scenario pitch: {e}")
+    finally:
+        out.extend(errs)
+        await ctx.close()
+    return out
+
+
 async def snap_reach(browser, base: str) -> list[str]:
     """The snap needs no scrolling: on a phone (390x844, 375x667) and a desktop, a pass's Snap key, the run keys and a
     drawn run's Run it, the defense's Call it (the full call and the three keys) and the kicks' keys are all on the screen
@@ -783,7 +965,8 @@ async def main(a) -> int:
     base = f"http://127.0.0.1:{port}"
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    jobs = [("daily", a.seed + (i * a.day_step), 1) for i in range(a.daily)] + [("survivor", a.seed + 1000 + i, a.games) for i in range(a.survivor)]
+    jobs = [("daily", a.seed + (i * a.day_step), 1) for i in range(a.daily)] + [("survivor", a.seed + 1000 + i, a.games) for i in range(a.survivor)] \
+        + [("scenario", a.seed + 2000 + i, 1) for i in range(a.scenario)]
     sem = asyncio.Semaphore(a.jobs)
     async with async_playwright() as p:
         kw = {"executable_path": a.chromium} if a.chromium else {}
@@ -791,11 +974,22 @@ async def main(a) -> int:
         reach = await snap_reach(browser, base)
         print("snap in reach (pass, run, defense, kicks at 390x844, 375x667, 1280x900): " + ("ok" if not reach else "FAIL")
               + "".join(f"\n      {x}" for x in reach), flush=True)
+        if a.scenario:
+            pitch = await scenario_pitch(browser, base)
+            print("a scenario's link without Pro (the pitch, the scenario's summary), a bad link: " + ("ok" if not pitch else "FAIL")
+                  + "".join(f"\n      {x}" for x in pitch), flush=True)
+            reach += pitch
+            half = await scenario_half(browser, base)
+            print("a first half played to the final gun (the halftime card, the third quarter's kickoff): " + ("ok" if not half else "FAIL")
+                  + "".join(f"\n      {x}" for x in half), flush=True)
+            reach += half
 
         async def run(i, job):
             mode, seed, target = job
             async with sem:
                 quirk = ("", "", "nopack", "", "nostore")[i % 5]
+                if mode == "scenario" and quirk == "nostore":       # (Pro is a code in storage)
+                    quirk = ""
                 r = await episode(browser, base, f"{mode}-{seed}" + (f"-{quirk}" if quirk else ""), mode, seed, target, out,
                                   mobile=i % 3 != 2, quirk=quirk, stamped=stamped, first=first, sweep=i == 0)
             print(f"{r['status']:5s} {r['name']:24s} games {r['finished']}  reloads {r['reloads']}  {r['secs']} s"
@@ -870,6 +1064,8 @@ async def main(a) -> int:
         if tail < 0.001:
             print("FAIL: too many incompletions look wide open")
             bad.append({"name": "separation"})
+    if STUB_ASKED:
+        print(f"the Pro stub was also asked: {sorted(STUB_ASKED)}")
     print(f"{len(results) - len(bad)} of {len(results)} episodes clean" + (f"; screenshots in {out}" if bad else ""))
     return 1 if bad else 0
 
@@ -880,6 +1076,7 @@ if __name__ == "__main__":
     ap.add_argument("--daily", type=int, default=6, help="daily episodes (each a different day)")
     ap.add_argument("--survivor", type=int, default=4, help="survivor episodes")
     ap.add_argument("--games", type=int, default=3, help="games per survivor episode")
+    ap.add_argument("--scenario", type=int, default=0, help="Pro scenario episodes (game.js #custom: the builder, then a random scenario played out)")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--day-step", type=int, default=1, help="seed step between daily episodes (9: the same day each time)")
     ap.add_argument("--jobs", type=int, default=3, help="episodes at once")

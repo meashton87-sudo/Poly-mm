@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 
 WEB = Path(__file__).resolve().parents[1] / "web"
-FILES = ["game.js", "motion.js", "engine.js", "game_worker.js", "vs_core.js", "game.json", "playbook.json", "engine_data.json",
+FILES = ["game.js", "motion.js", "engine.js", "game_worker.js", "vs_core.js", "scenario.js", "game.json", "playbook.json", "engine_data.json",
          "og.png", "icon.svg", "icon-180.png", "icon-48.png", "icon-192.png", "icon-512.png", "midlogo.png", "favicon.ico",
          "icon-maskable-192.png", "icon-maskable-512.png"]      # the link preview card (og_card.html, drawn at 1200x630) and the icons
 # (the maskable icons: the logo inside the middle 72%, so a phone's round or squircle mask never cuts it)
@@ -59,8 +59,8 @@ def own_fonts(page: str, stamps: dict) -> str:
 # spots one for all of them), so a deploy that changes one file leaves the others' addresses, and the phone's copies,
 # as they were. Everything else keeps Pages' default (asked again every time). An address here without its stamp would
 # keep a phone on old bytes for a year: check_stamps fails the build on one.
-IMMUTABLE = ["/game.js", "/motion.js", "/engine.js", "/game_worker.js", "/vs_core.js", "/game.json", "/playbook.json",
-             "/engine_data.json", "/teams.json", "/engine_data.pack", "/playbook.pack", "/spots/*", "/fonts/*"]
+IMMUTABLE = ["/game.js", "/motion.js", "/engine.js", "/game_worker.js", "/vs_core.js", "/scenario.js", "/game.json", "/playbook.json",
+             "/engine_data.json", "/teams.json", "/engine_data.pack", "/playbook.pack", "/spots/*", "/fonts/*", "/rosters/*"]
 HEADERS = "".join(f"{p}\n  Cache-Control: public, max-age=31536000, immutable\n" for p in IMMUTABLE)
 _stamp = lambda b: hashlib.sha256(b).hexdigest()[:12]
 
@@ -110,7 +110,7 @@ def check_stamps(out: Path, stamps: dict) -> None:
 # The scripts shipped without their comments and indentation (esbuild, whitespace and syntax only: every name kept, so
 # an error still names its function): a third less to download and parse before the intro and the first call. The
 # files in web/ stay as written (the claude.ai artifact, the Node checks); without npx (an offline build) so does the site.
-SCRIPTS = ["game.js", "motion.js", "engine.js", "game_worker.js", "vs_core.js"]
+SCRIPTS = ["game.js", "motion.js", "engine.js", "game_worker.js", "vs_core.js", "scenario.js"]
 ESBUILD = "esbuild@0.24.0"
 
 
@@ -482,6 +482,10 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     (out / "game.json").write_text(json.dumps(game, separators=(",", ":")))
     if (WEB / "teams.json").exists():           # Versus: the 32 teams as they line up now (nflclock.pro.versus_teams)
         shutil.copy2(WEB / "teams.json", out / "teams.json")
+    # Pro's scenarios (#custom): every team-season's rosters (nflclock.scenario.build), a file a season, each with its
+    # own stamp, loaded only when the builder opens (the index) and a team of that season is picked
+    if (WEB / "rosters" / "index.json").exists():
+        shutil.copytree(WEB / "rosters", out / "rosters")
     chunks = sorted((WEB / "spots").glob("s*.json"))
     for f in chunks:
         shutil.copy2(f, out / "spots" / f.name)
@@ -511,7 +515,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     extra += ('<script type="application/ld+json">' + json.dumps({"@context": "https://schema.org", "@type": "WebSite",
               "name": "Two-Minute Drill", "url": site_url.rstrip("/") + "/", "description": desc}) + "</script>")
     page = own_fonts((WEB / "game.html").read_text(), stamps)
-    for js in ("motion.js", "vs_core.js", "game.js"):     # vs_core.js: college overtime's rules (Versus, a college game)
+    for js in ("motion.js", "vs_core.js", "scenario.js", "game.js"):     # vs_core.js: college overtime's rules (Versus, a college game); scenario.js: Pro's scenarios
         page = page.replace(f'<script src="{js}"></script>', f'<script src="{js}?v={stamps[js]}"></script>')
     (out / "index.html").write_text(HEAD.format(extra=moving + extra + AD_CSS) + page.replace("<!--SITE-FOOT-->", foot_ads() + FOOT) + "</body></html>\n")
     # the stats page (/stats): its own document; the same analytics tag and backend address

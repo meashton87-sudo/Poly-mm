@@ -101,6 +101,9 @@ def load_tables(seasons) -> dict:
     cols = ["season", "week", "season_type", "posteam", "play_type", "qb_dropback", "id", "qb_epa", "epa",
             "receiver_player_id", "two_point_attempt", "game_id", "passer_player_id", "rusher_player_id"]
     pbp = pd.concat([pd.read_parquet(pbp_path(s), columns=cols) for s in pbp_seasons(seasons)], ignore_index=True)
+    # (2020's snap counts give a player who lined up at two spots both, "G/T", "C/G", "FB/D": the first is his own)
+    pos = out["snaps"]["position"]
+    out["snaps"] = out["snaps"].assign(position=pos.where(pos.isna(), pos.astype(str).str.split("/").str[0]))
     out["snaps"] = fix_snap_teams(out["snaps"], out["players"], pbp)
     out["pbp"] = pbp[pbp["two_point_attempt"].fillna(0) == 0]
     return out

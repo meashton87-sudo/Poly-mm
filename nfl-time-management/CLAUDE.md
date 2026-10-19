@@ -13,6 +13,7 @@ python -m nflclock.cli build          # downloads nflverse play-by-play to data/
 python -m nflclock.cli sync --no-refresh --games 2026_05_BUF_LA        # live game file (Bills at Rams)
 python -c "from nflclock import webexport as w; w.export_engine(); w.export_game('2026_05_BUF_LA')"
 python -c "from nflclock import dailygame as G; print(G.build())"   # daily game data (web/playbook.json, web/game.json)
+python -c "from nflclock import scenario; print(scenario.build())"  # Pro's scenario rosters (web/rosters, ~12 min)
 python scripts/site.py _site --domain nfl2mindrill.com --board-api https://... --ga G-4QQ8N62SMB   # the game as a static website
 ```
 
@@ -48,7 +49,7 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
 - The full grading pipeline (`scripts/run_analysis.py`, `validate_sim.py`, `make_report.py`,
   `finalize.py`) takes about 1.5 hours on 4 cores. Do not run it casually.
 - `data/`, `artifacts/`, `web/engine_data.json`, `web/parity_expected.json`, `web/playbook.json`,
-  `web/game.json`, `web/spots/` and `_site/` are generated; never commit them (the website workflow,
+  `web/game.json`, `web/spots/`, `web/rosters/` and `_site/` are generated; never commit them (the website workflow,
   `.github/workflows/site.yml`, builds them in CI and ships them only to GitHub Pages).
 - The daily schedule is frozen in `src/nflclock/daily_schedule.json` (committed: every spot id in order and each
   day's three spots, as it went live). Never regenerate it with `dailygame.freeze()` from a fresh build: that moves
@@ -91,6 +92,15 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   (pro.py overtime_rules: sudden death, the 2010-2024 touchdown-wins rule, or both teams get the ball; engine.js
   _otAfter S.ot.r). A run's game spot always has something at stake (RUN_WP); a run ends at the first loss (game.js
   runOut), as a real one does, and can be played again.
+- Build a scenario (Pro, game.js #custom renderBuilder, #custom-<code>; web/scenario.js: the format, its code, the
+  presets, check() and spotOf(), shared by the page, web/game_smoke.js and tests/test_scenario.py). Its overtime table
+  is pro.py overtime_rules (change both; the test compares them). The rosters (web/rosters/index.json and
+  <season>.json, nflclock/scenario.py build, 2001 on: generated, never committed) are on the site, each stamped
+  (site.py IMMUTABLE /rosters/*), loaded when the builder opens and a season is picked. A scenario plays like a
+  historic drive (stateKey :custom:<code>, each try its own draws: seedKey; Start over; mustWin) and posts nowhere: no
+  daily list, stats day, streak or badge. A first-half one played to the final gun kicks off the second half
+  (secondHalf); startRoot/otOf read a kickoff start and who has had the ball in overtime (start.otc): spot_info.js
+  copies them. My scenarios (tmd:v3:scen) syncs with the account (worker.js stats:s:<acct>, scenMerge).
 - The Gauntlet (board/worker.js /race*): the contest on the historic drives, over (RACE_TO, Oct 16 2026). Its game code
   (game.js racePanel, the race bar, #gauntlet) was removed in #125; the worker endpoints and web/admin.html remain, so
   what follows describes them. game.js keeps only GAUNTLET_FROM / gauntletFresh (the drive records from its start). A Pro code enters once under
