@@ -885,7 +885,7 @@
   function covers() {
     if (!bcast()) return { top: 0, bot: 0 };
     const play = $('play'), sh = $('sheet'), vh = play.clientHeight || window.innerHeight;
-    const bot = sh.classList.contains('down') ? 66 : clip(sh.offsetHeight || vh * 0.45, 66, vh * 0.52);
+    const bot = sh.classList.contains('down') ? 66 : clip(sh.offsetHeight || vh * 0.45, 66, vh * 0.6);      // (a pass's sheet: up to 58%, game.html)
     return { top: 104, bot };
   }
   function fieldHeight() {
@@ -1326,11 +1326,20 @@
       $('dock').querySelectorAll('button.rcv').forEach((b) => {
         const od = G.odds[b.dataset.k];
         if (!od || b.querySelector('.od')) return;
-        b.append(el('span', 'od', oddsText(od)));
+        b.append(oddsEl(od));
       });
+      snapLine();
     }
   }
   const oddsText = (o) => (o ? `${Math.round(o.caught * 100)}% caught · ${o.yds.toFixed(1)} yds a throw${o.picks >= 0.03 ? ` · ${Math.round(o.picks * 100)}% picked` : ''}` : '');
+  // on a receiver's row: in full, or on a phone the numbers only ("58% · 9.1 yds", game.html), the words in its title
+  function oddsEl(o) {
+    const s = el('span', 'od');
+    s.title = oddsText(o);
+    s.append(el('b', '', `${Math.round(o.caught * 100)}%`), el('i', '', ' caught'), ` · ${o.yds.toFixed(1)} yds`, el('i', '', ' a throw'));
+    if (o.picks >= 0.03) s.append(el('span', 'pk', ` · ${Math.round(o.picks * 100)}% picked`));
+    return s;
+  }
   // the field takes the tap itself (phones do not always send taps on small SVG shapes): a quick touch, not a scroll,
   // anywhere near a receiver's dot or along his route changes that route
   let routeTapAt = 0;                 // when the field last used a tap for a route (the dot under it then stays shut)
@@ -1675,6 +1684,7 @@
     P.drawn[i] = d;
     P.routes[i] = d.name;
     P.sel = null;
+    P.target = i;                          // (the route you drew is the one you throw: the Snap key says so)
     redrawPass();
     toast(`${shortName(a.p ? a.p.name : '') || a.label}: ${routeSay(a.label, d.name)}, ${depthSay(d.depth)}${d.deeper ? ' (as deep as real ones go)' : ''}`);
     track('route_drawn', { route: d.name, depth: d.depth, legs: d.pts.length - 1 });
@@ -2082,7 +2092,8 @@
     }
     d.append(p);
     if (!s || s.fault || !go) return null;
-    const keys = el('div', 'keys');
+    // (its key the snap at the foot of the sheet, game.html .snapbar: the call's other keys scroll above it)
+    const keys = el('div', 'keys snapbar');
     keys.style.setProperty('--cols', 1);
     const b = key(ctx === 'run' ? 'Run it' : ctx === 'rpo' ? 'Run the RPO' : ctx === 'st' ? stLabel(s.key) : 'Call it', `Drawn: ${s.label || stLabel(s.key)}`, 'big drawn', 0);
     b.id = 'drawGo';
@@ -2097,7 +2108,8 @@
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
       DRAWN_RANGE, CALL, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, get: () => ({ G, ui, scene }),
       readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
-      promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k) };
+      promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k),
+      drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock() };
   }
   // who gets the ball, by his place in the list (the field may be redrawn under the buttons: a resize, the phone's
   // address bar)
@@ -2107,11 +2119,12 @@
     redrawPass();
   }
   function redrawPass() {
-    const y = window.scrollY, fi = scene ? eligibles(scene).findIndex((a) => a.g === document.activeElement) : -1;
+    const y = window.scrollY, fi = scene ? eligibles(scene).findIndex((a) => a.g === document.activeElement) : -1, dy = $('dock').scrollTop;
     lastBall = null;                  // the same snap: no fade-in, no ball move
     drawField();
     drawDock();
     window.scrollTo(0, y);
+    $('dock').scrollTop = dy;         // (a phone's sheet: the receiver just picked stays under the finger)
     // (his route changed from the keyboard: the focus stays on him, on the field drawn again)
     const a = fi >= 0 && scene && eligibles(scene)[fi];
     if (a) a.g.focus({ preventScroll: true });
@@ -2155,7 +2168,8 @@
     // the chips over the field go to the open grass: the half of the screen away from the line of scrimmage
     sc.svg.parentElement.classList.toggle('chipsdown', camY(sc)(spotGeom(G.root).L) < sc.H / 2);
     if (passing()) {
-      if (!ui.pass.routes || ui.pass.routes.length !== eligibles(sc).length) { ui.pass.routes = defaultRoutes(sc); ui.pass.drawn = []; ui.pass.sel = null; }
+      if (!ui.pass.routes || ui.pass.routes.length !== eligibles(sc).length) { ui.pass.routes = defaultRoutes(sc); ui.pass.drawn = []; ui.pass.sel = null; ui.pass.target = null; }
+      if (ui.pass.target == null) ui.pass.target = 0;        // (the Snap key throws to the first receiver until you pick another)
       drawRoutes(sc);
     }
     drawSketch(sc);
@@ -4437,7 +4451,8 @@
   }
   // Played from a keyboard: the dock redraws under the key just pressed (a call, Next play), and focus fell back to the
   // top of the page, the 22 players on the field between it and the next call. It goes on to the dock's next step
-  // instead: the final card's button or Next play, else the receivers or the first call; the day's score, its top.
+  // instead: the final card's button or Next play, else a pass's Snap key, the receivers or the first call; the day's
+  // score, its top.
   // And the first row of big keys gets its numbers (1 to 4 make those calls: boot's keydown)
   let kbd = false;
   function dockKeys() {
@@ -4471,7 +4486,7 @@
       return;
     }
     if ($('play').hidden) return;
-    const d = $('dock'), to = d.querySelector('.endcard > .btn, .result > .btn') || d.querySelector('.rcv') || d.querySelector('.key')
+    const d = $('dock'), to = d.querySelector('.endcard > .btn, .result > .btn') || d.querySelector('#snapGo') || d.querySelector('.rcv') || d.querySelector('.key')
       || [...d.querySelectorAll('button')].find((x) => !x.closest('.result'));
     if (to && to !== a) { to.focus({ preventScroll: true }); refocus.at = to; }
   }
@@ -5187,8 +5202,13 @@
     head.append(pen);
     if (G.look != null) d.append(readLine(G.look));
     const E = eligibles(sc), selA = P.draw && P.sel != null ? E[P.sel] : null;
-    if (!P.draw) d.append(el('p', 'hint', 'Tap a receiver on the field to change his route, or drag him to draw your own (drag the quarterback for his drop or a rollout). Tap a name below to throw it to him.'));
-    else {
+    // (the whole of it the first few times; after that one line, so the receivers and the Snap key fit under the field)
+    if (!P.draw) {
+      const h = load(`${STORE}:passhint`, 0) < 3 ? el('p', 'hint', 'Tap a name to pick who gets the ball, then Snap. Tap a man on the field for his next route, or drag him to draw one.')
+        : el('p', 'hint one', 'Pick a target, then Snap. Tap a dot for his next route.');
+      h.title = 'Tap a name to pick who gets the ball, then Snap. Tap a receiver on the field to change his route, or drag him to draw your own (drag the quarterback for his drop or a rollout).';
+      d.append(h);
+    } else {
       const h = el('p', 'hint draw', selA ? `Now drag from ${shortName(selA.p ? selA.p.name : '') || selA.label} to where he should go.`
         : 'Tap a receiver, then drag on the field where you want him to go. Each line plays as the real route it is closest to; drag the quarterback to the side to roll out.');
       if (P.drawn && P.drawn.some(Boolean)) {
@@ -5204,8 +5224,11 @@
       }
       d.append(h);
     }
+    // the receivers, a row each: a tap picks who gets the ball (the Snap key at the foot throws it)
     const list = el('div', 'rcvs');
-    eligibles(sc).forEach((a, i) => {
+    list.setAttribute('role', 'group');
+    list.setAttribute('aria-label', 'Who gets the ball');
+    E.forEach((a, i) => {
       const b = el('button', `rcv${P.target === i ? ' on' : ''}`);
       b.type = 'button';
       b.setAttribute('aria-pressed', String(P.target === i));
@@ -5213,10 +5236,10 @@
       b.dataset.k = pk;
       const dr = P.drawn && P.drawn[i];
       b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label),
-        el('span', 'rt', `${dr ? '✏️ ' : ''}${routeName(a.label, P.routes[i])}${dr ? ` · ${dr.depth} yds` : ''}${P.target === i ? ' · the target' : ''}`));
-      if (od) b.append(el('span', 'od', oddsText(od)));
-      b.setAttribute('aria-label', `Throw it to ${a.p ? a.p.name : a.label}, ${routeName(a.label, P.routes[i])}`);
-      b.addEventListener('click', () => { if (busy) return; P.target = i; decideCall({ pass: i }); });
+        el('span', 'rt', `${dr ? '✏️ ' : ''}${routeName(a.label, P.routes[i])}${dr ? ` · ${dr.depth} yds` : ''}`));
+      if (od) b.append(oddsEl(od));
+      b.setAttribute('aria-label', `${P.target === i ? 'The target' : 'Pick'}: ${a.p ? a.p.name : a.label}, ${routeName(a.label, P.routes[i])}`);
+      b.addEventListener('click', () => { if (!busy && P.target !== i) passPick(i); });
       list.append(b);
     });
     // the options first (they change the odds on the cards), as three small toggles on one line
@@ -5240,7 +5263,7 @@
     // picker, which players didn't find, while the grade could still name the screen as the best call)
     const extra = (avail.includes('quick_strong') ? ['quick_strong'] : []).concat(avail.includes('screen') ? ['screen'] : [], more);
     if (extra.length) {
-      const row = el('div', 'keys');
+      const row = el('div', 'keys pmore');
       row.style.setProperty('--cols', extra.length);
       extra.forEach((id, i) => {
         const b = key(id === 'screen' ? 'Screen' : id === 'quick_strong' ? 'Quick pass' : CALL[id].label.replace(/ \(.*\)$/, ''),
@@ -5250,9 +5273,33 @@
       });
       d.append(row);
     }
+    // the snap: one key, always in sight at the foot of the sheet (the dock beside the field), the throw to the target
+    // as his row would have made it (decideCall: snap first, graded while the play runs)
+    const t = E[P.target] ? P.target : 0, ta = E[t], foot = el('div', 'keys snapbar');
+    foot.style.setProperty('--cols', 1);
+    const go = key(`Snap · ${shortName(ta.p ? ta.p.name : '') || ta.label}`, ' ', 'big snap', 0);
+    go.id = 'snapGo';
+    go.setAttribute('aria-label', `Snap: throw it to ${ta.p ? ta.p.name : ta.label}, ${routeName(ta.label, P.routes[t])}`);
+    go.addEventListener('click', () => { if (!busy && passing()) decideCall({ pass: t }); });
+    foot.append(go);
+    d.append(foot);
+    snapLine();
     fetchOdds();
     // only on the way in: after that the page stays put while you change routes
-    if (P.fresh) { P.fresh = false; if (!bcast()) requestAnimationFrame(() => list.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' })); }
+    if (P.fresh) {
+      P.fresh = false;
+      save(`${STORE}:passhint`, load(`${STORE}:passhint`, 0) + 1);
+      if (!bcast()) requestAnimationFrame(() => foot.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' }));
+    }
+  }
+  // the Snap key's second line: the target's route and his odds on it (when they are in)
+  function snapLine() {
+    const g = $('snapGo'), P = ui.pass;
+    if (!g || !passing() || !scene) return;
+    const a = eligibles(scene)[P.target];
+    if (!a) return;
+    const od = G.odds && G.odds[pickKey(passOption(scene, P.target, false).action)];
+    g.querySelector('small').textContent = `${P.drawn && P.drawn[P.target] ? '✏️ ' : ''}${routeName(a.label, P.routes[P.target])}${od ? ` · ${oddsText(od)}` : ''}`;
   }
 
   // how fast to get to the next snap while the clock runs: no-huddle, huddle or milk it
@@ -5872,7 +5919,7 @@
       d.append(tg);
     }
     persButton();         // (the offense's personnel chip off the field: it stayed up on defense)
-    const keys = el('div', 'keys');
+    const keys = el('div', `keys${$('drawGo') ? '' : ' snapbar'}`);      // (the snap at the sheet's foot, or the drawing's)
     keys.style.setProperty('--cols', 1);
     const go = key('Call it', null, 'big', 0);
     go.addEventListener('click', () => {
@@ -5918,7 +5965,7 @@
     sketchChips(head, 'def');
     d.append(head);
     sketchPanel(d, 'def', (sk) => { if (!busy) decideDefenseLooks(sk.call, sk.draw); });
-    const keys = el('div', 'keys fam def');
+    const keys = el('div', `keys fam def${$('drawGo') ? '' : ' snapbar'}`);
     keys.style.setProperty('--cols', 3);
     DEFS.forEach((k, i) => {
       const b = key(DEF[k].label, DEF[k].sub, 'big def', i);
@@ -6088,6 +6135,7 @@
       busy = false;
     };
     if (drawn) sketchPanel(d, 'st', (sk) => { const o = spec.opts.find((x) => x.key === sk.key); if (o) choose(o, {}); else toast(SKETCH_FAULT.onside); });
+    if (!$('drawGo')) keys.classList.add('snapbar');          // (the choices are the snap: at the sheet's foot)
     spec.opts.forEach((o, i) => {
       const b = key(o.label, o.sub || null, spec.opts.length > 2 || spec.opts.some((x) => x.label.length > 10) ? 'big def' : 'big', i);
       b.addEventListener('click', () => choose(o, null));
@@ -8623,7 +8671,7 @@
     const ul = el('ul');
     [
       'You call the plays at the end of a real NFL game. A new drive every day.',
-      'Pick Run, Pass, RPO or Trick. On a pass, tap a receiver on the field to change his route, then tap his name to throw it.',
+      'Pick Run, Pass, RPO or Trick. On a pass, tap a receiver on the field to change his route, then pick who gets the ball and tap Snap.',
       'Every snap is a real NFL play. Read the defense: a blitz loses to quick throws, a loaded box to play action.',
       SURV ? 'Survivor: win each real game to keep going. One loss ends your run; put your name on the board.'
         : 'Beat the real coach, and see how you rank against everyone who played today.',
