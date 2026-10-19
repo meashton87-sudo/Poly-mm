@@ -867,6 +867,35 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.deepStrictEqual([d2.n, d2.n2, d2.best, d2.best2], [3, 1, 0.7, 0.7], 'the stats page\'s fair figures: counted results only');
   Date.now = realNow;
 }
+// a day offering two sides of one real game (game.js sidesOf): each post says the side it took (a team's code); the
+// day's numbers stay both sides together, and each side keeps its own n, histogram and average (the fair set's too);
+// a restarted one counts in neither; a bad side is refused like any bad field; a later post never moves a side
+{
+  const realNow = Date.now, date = '2027-06-03';
+  Date.now = () => Date.parse(date + 'T15:00:00Z');
+  const sk = (who) => `side-test-key-${who}`.padEnd(24, '0');
+  let w = await (await day({ date, key: sk('a'), p: 0.8, spots: [0.1], side: 'LA', g: 2 })).json();
+  assert.deepStrictEqual([w.counted, w.n, w.sides.LA.n, w.sides.LA.hist[80], w.you.side, w.fair.sides.LA.n], [true, 1, 1, 1, 'LA', 1]);
+  w = await (await day({ date, key: sk('b'), p: 0.4, spots: [-0.1], side: 'LA' })).json();
+  w = await (await day({ date, key: sk('c'), p: 0.3, spots: [0.2], side: 'ARI', g: 2 })).json();
+  assert.deepStrictEqual([w.n, w.hist[80] + w.hist[40] + w.hist[30], w.sides.LA.n, w.sides.ARI.n, w.fair.n, w.fair.sides.LA.n, w.fair.sides.ARI.n], [3, 3, 2, 1, 2, 1, 1], 'the day both sides together; each side its own');
+  assert.ok(Math.abs(w.sides.LA.avg - 0.6) < 1e-9 && Math.abs(w.sides.ARI.avg - 0.3) < 1e-9, 'each side\'s average score (0-1)');
+  assert.ok(Math.abs(w.spots[0].avg - 0.2 / 3) < 1e-9, 'the drive\'s average: both sides');
+  w = await (await day({ date, key: sk('d'), p: 0.99, spots: [0.5], side: 'ARI', restarted: true })).json();
+  assert.deepStrictEqual([w.n, w.nr, w.sides.ARI.n, w.you.side], [3, 1, 1, 'ARI'], 'restarted: in no side either');
+  w = await (await day({ date, key: sk('a'), p: 0.1, spots: [0], side: 'ARI' })).json();
+  assert.deepStrictEqual([w.counted, w.you.side, w.sides.LA.n, w.sides.ARI.n], [false, 'LA', 2, 1], 'the first result and its side stand');
+  for (const bad of ['la', 'LOSANGELES', 3, true, '', 'L A', ['LA']]) assert.strictEqual((await day({ date, key: sk('x'), p: 0.5, spots: [0], side: bad })).status, 400, `side ${JSON.stringify(bad)}`);
+  w = await (await day({ date, key: sk('e'), p: 0.5, spots: [0], side: null })).json();
+  assert.deepStrictEqual([w.counted, w.n, w.you.side, Object.keys(w.sides).join()], [true, 4, undefined, 'LA,ARI'], 'no side: counted, by no side');
+  for (const [k, t] of [['f', 'NE'], ['g', 'KC'], ['h', 'SF']]) w = await (await day({ date, key: sk(k), p: 0.5, spots: [0], side: t })).json();
+  assert.deepStrictEqual([w.n, Object.keys(w.sides).join()], [7, 'LA,ARI,NE,KC'], 'four sides a day at most; the fifth counts, by no side');
+  const g = await (await call('GET', null, { path: `/daily?date=${date}` })).json();
+  assert.deepStrictEqual([g.sides.LA.n, g.sides.ARI.n, g.fair.sides.ARI.n], [2, 1, 1], 'GET /daily: the sides');
+  const plain = await (await call('GET', null, { path: '/daily?date=2027-06-01' })).json();
+  assert.strictEqual(plain.sides, undefined, 'an ordinary day: no sides');
+  Date.now = realNow;
+}
 // the weeks made fair (OLD_WAY_DAYS: Oct 18, 2026, the day the fair score came in): an old-way result of that day goes
 // on the day's whole list but into no week (the name's day used all the same), a fair one counts as on any day; the
 // weeks kept before the fix (old-way points in wn:<name> and wk:<D>..<D+6>) are made again once, at the board's start
@@ -1013,10 +1042,11 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
     ['too many frozen days', { frozen: Object.fromEntries(Array.from({ length: 501 }, (_, i) => [i + 1, 1.79e12])) }]]) {
     assert.strictEqual((await au('/auth/stats', { session: sc, stats })).status, 400, why);
   }
-  d = await ok(await au('/auth/stats', { session: sc, stats: { days: { 3: { p: 0.5, vs: 1 }, 4: { p: 0.5, vs: 5 }, 5: { p: 0.5, vs: -0.4 } },
+  d = await ok(await au('/auth/stats', { session: sc, stats: { days: { 3: { p: 0.5, vs: 1 }, 4: { p: 0.5, vs: 5 }, 5: { p: 0.5, vs: -0.4 }, 11: { p: 0.5, side: 'LA' }, 12: { p: 0.5, side: 'la' } },
     badges: { first: 1790000002000, coach: 1790000001500, 'Bad-Id': 1, '1st': 1, ['x'.repeat(17)]: 1, win: 'soon', day90: -5, madden: 1790000001000 },
     frozen: { 7: 1790000000100, 0: 1, abc: 1, 100000: 1, 8: null } } }), 'badges and frozen days');
   assert.deepStrictEqual([d.stats.days[3].vs, 'vs' in d.stats.days[4], d.stats.days[5].vs], [1, false, -1], 'vs: better, the same or worse; anything else dropped');
+  assert.deepStrictEqual([d.stats.days[11].side, 'side' in d.stats.days[12]], ['LA', false], 'side: a team code (a day of two sides), anything else dropped');
   assert.deepStrictEqual([d.stats.badges, d.stats.frozen], [{ coach: 1790000001500, first: 1790000002000 }, { 7: 1790000000100 }], 'cleaned');
   assert.deepStrictEqual(store.get('stats:m:g:700003'), { badges: d.stats.badges, frozen: d.stats.frozen }, 'kept on their own key');
   // kept from before the rare-coach find was retired: read back without its badge or its coach

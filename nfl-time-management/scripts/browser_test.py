@@ -41,6 +41,7 @@ STATE = """() => {
   if (vis('modal')) return 'modal';
   if (vis('deep')) return 'deep';
   if (vis('done') && document.querySelector('#done .big-pct')) return 'summary';
+  if (vis('intro') && document.querySelector('#intro .sidepick')) return 'pick';
   if (vis('intro') && document.querySelector('#intro .btn')) return 'intro';
   if (!vis('play')) return 'loading';
   if (document.querySelector('#field.playing')) return 'animating';
@@ -371,6 +372,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     first_q = None                   # the quarter a daily drive starts in: a first-half drive ends at halftime
     restart_ep = mode == "daily" and seed % 2 == 1 and quirk != "nostore"     # (no storage: a reload is a new try already)
     restarted = False
+    picked = None                    # a day of two sides: the one taken (asked once: a reload or a restart keeps it)
     first_call = first               # the first call shows on the spot's own facts (game.js firstInfo), not the simulator's
     act = lambda what: trail.append(f"  > {what}")
     t_start = time.time()
@@ -406,7 +408,18 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 elif st in ("modal", "deep"):
                     await page.wait_for_timeout(rnd.choice([100, 400]))
                     act("close " + st); await page.click("#mClose" if st == "modal" else "#deepClose", timeout=3000)
+                elif st == "pick":
+                    if picked is not None:
+                        problems.append(f"asked to pick a side again, after taking side {picked} (a reload or a restart must keep it)")
+                        continue
+                    picked = (seed // 2) % 2           # (both sides over a few episodes, each with and without a restart)
+                    act(f"pick side {picked}"); await page.click(f"#intro .sidepick[data-side='{picked}']", timeout=3000)
                 elif st == "intro":
+                    if picked is not None:
+                        want = await page.evaluate(f"() => {{ const sp = document.querySelector('#intro .sidepick'); return !sp && /side ·/.test(document.querySelector('#intro .cat').textContent); }}")
+                        if not want:
+                            problems.append("a day of two sides: the drive's intro does not say the side taken")
+                            continue
                     act("intro Next"); await page.click("#intro .btn", timeout=3000)
                 elif st == "animating":
                     if restart_ep and "restart_mid" not in chaos_done:
@@ -449,6 +462,11 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         await page.wait_for_timeout(200)
                     if mode == "daily":
                         finished = max(finished, 1)
+                        if picked is not None:        # a day of two sides: the end card and the share text name the side taken
+                            side = await page.evaluate("() => { const b = document.querySelector('#done .sidetook b'), g = document.querySelector('#done .grid-share'); return [b ? b.textContent : '', g ? g.textContent : '']; }")
+                            if not side[0].startswith("You took the ") or "\nAs the " not in side[1]:
+                                problems.append(f"a day of two sides: the end card or the share text does not name the side taken: {side!r}")
+                                continue
                         if restarted and not await page.locator("#done .rsnote").count():
                             problems.append("a restarted daily's end card does not say it is off the leaderboard")
                         if restart_ep and not restarted:
