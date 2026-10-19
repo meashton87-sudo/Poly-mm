@@ -288,6 +288,9 @@ STORAGE_SHIM = ("<script>(function(){function M(){var d={};return{getItem:functi
 
 
 NO_ADS = False          # --no-ads: no ad anywhere (no unit, no AdSense, no ads.txt), whatever web/ads holds
+EZOIC = False           # --ezoic-head: Ezoic serves the page's ads (its slots in place of every other network's units)
+# an Ezoic spot (EzoicAds step 3, as Ezoic gives it): the ad shows where the snippet is, Ezoic picks its size
+EZOIC_SLOT = ('<div class="adslot ezslot"><script>ezstandalone.cmd.push(function () { ezstandalone.showAds({}); });</script></div>')
 
 
 def slot_code(slot: str) -> str:
@@ -305,6 +308,8 @@ def slot_size(slot: str) -> tuple[str, str]:
 
 def ad_frame(slot: str) -> str:
     """A unit's sandboxed frame, labeled (empty when the unit has no code)."""
+    if EZOIC and not NO_ADS:
+        return EZOIC_SLOT if slot in ("banner", "native") else ""     # (one spot each: mid-page, above the footer)
     if not slot_code(slot):
         return ""
     w, h = slot_size(slot)
@@ -458,8 +463,11 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
           site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, pro_at: str | None = None, scn_at: str | None = None, no_ads: bool = False, ezoic: str | None = None, ezoic_head: bool = False,
           fulldef: bool = False, google_client_id: str | None = None, old_domain: str | None = None, minify: bool = True) -> Path:
-    global NO_ADS
+    global NO_ADS, EZOIC
     NO_ADS = no_ads
+    EZOIC = ezoic_head and not no_ads
+    # with Ezoic on, no other network's code on the pages (Ezoic: remove leftover ad code); ads.txt keeps the AdSense line
+    tags_adsense = None if EZOIC else adsense
     adsense, ad_slot = (adsense or "").strip() or None, (ad_slot or "").strip() or None     # "" (an unset variable): off
     if no_ads:
         adsense = ad_slot = None
@@ -487,7 +495,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         if not re.fullmatch(r"G-[A-Z0-9]{4,16}", ga):
             raise SystemExit(f"--ga wants a measurement id like G-XXXXXXX, not {ga!r}")
         extra = GA_TAG.format(id=ga) + extra
-    extra += ads_head(adsense, ad_slot, later=True)       # (the game's page: game.js loads the script)
+    extra += ads_head(tags_adsense, ad_slot, later=True)       # (the game's page: game.js loads the script)
     if board_api:
         extra += f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">"
     if pro:                                  # the Pro tab (archive, historic drives, the purchase): off until it is turned on
@@ -558,7 +566,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     page = page.replace('<script src="game.js"></script>', f'<script src="game.js?v={stamps["game.js"]}"></script>')
     (out / "index.html").write_text(HEAD.format(extra=moving + extra + AD_CSS) + page.replace("<!--SITE-FOOT-->", foot_ads() + FOOT) + "</body></html>\n")
     # the stats page (/stats): its own document; the same analytics tag and backend address
-    stats_head = (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Two-Minute Drill stats",
+    stats_head = (GA_TAG.format(id=ga) if ga else "") + ads_head(tags_adsense, ad_slot) + share_tags(site_url, "Two-Minute Drill stats",
         "How everyone did on the daily drive: players per day, the score spread and the top ten.", "stats") + (
         f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else "")
     fill = lambda name, head, path, ads=True: (out / name).write_text(own_fonts((WEB / name).read_text(), stamps).replace("nfl2mindrill.com", home).replace("<!--SITE-HEAD-->",
@@ -570,7 +578,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
                                   "Real NFL late-game situations, 27 play calls, real plays on every snap, and calls graded on win chance."),
                                  ("about.html", "about", "About Two-Minute Drill",
                                   "An independent, fan-made NFL play-calling game built on public nflverse data.")):
-        fill(name, (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, title, d, path), path)
+        fill(name, (GA_TAG.format(id=ga) if ga else "") + ads_head(tags_adsense, ad_slot) + share_tags(site_url, title, d, path), path)
     # the privacy page (AdSense wants one): the analytics tag only, no ads on it
     fill("privacy.html", (GA_TAG.format(id=ga) if ga else "") + ICONS, "privacy", ads=False)
     # the Gauntlet's audit (admin.html, the check before a prize): not linked anywhere, not in the sitemap, noindex; no
