@@ -404,6 +404,11 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
   body.bcast .grip i { width: 44px; height: 5px; border-radius: 3px; background: var(--line); }
   body.bcast #dock { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 14px 14px; }      /* (the sheet keeps clear of the home bar) */
   body.bcast .sheet.down #dock { overflow: hidden; }
+  /* the Snap key flush with the sheet's foot (the sheet keeps clear of the home bar); a pass's sheet a little taller
+     on a tall phone, so every receiver fits over it with no scrolling (game.js covers frames the field above it) */
+  body.bcast #dock:has(> .snapbar) { padding-bottom: 0; }
+  body.bcast .dock > .snapbar { bottom: 0; padding-bottom: 8px; }
+  @media (min-height: 740px) { body.bcast .sheet:has(#snapGo) { max-height: 58%; } }
   /* a long result or final card: its button stays in reach at the sheet's foot (the rest scrolls under it; the
      sticky edge is inside the dock's 14px padding, so -8px and the 6px plate leave nothing peeking below it) */
   body.bcast #dock .result > .btn, body.bcast #dock .endcard > .btn { position: sticky; bottom: -8px; z-index: 1; box-shadow: 0 0 0 6px var(--paper); opacity: 1; }
@@ -495,15 +500,30 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .rcv .rt { font-size: 12.5px; color: var(--muted); }
 .rcv.on { border: 2px solid var(--chain); padding: 7px 9px; }
 .rcv .od { grid-column: 2; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
-/* phones: one compact row per receiver (name and route left, the odds right), so the whole list fits under the field */
+.rcv .od b, .rcv .od i { font: inherit; }
+.rcv .od .pk { color: var(--sq-r-ink); }
+.rcv.on .od { color: var(--ink); }
+/* phones: one line per receiver (position, name, route; the odds' numbers right), so the whole list fits under the
+   field with the Snap key under it */
 @media (max-width: 600px) {
   .rcvs { grid-template-columns: minmax(0, 1fr); gap: 4px; }
-  .rcv { grid-template-columns: auto minmax(0, 1fr) auto; padding: 3px 10px; line-height: 1.25; }
-  .rcv.on { padding: 2px 9px; }
-  .rcv .pos { grid-row: span 2; }
-  .rcv .nm, .rcv .rt { grid-column: 2; }      /* placed, so the odds arriving never reflow the row */
-  .rcv .od { grid-column: 3; grid-row: 1 / span 2; text-align: right; max-width: 15.5em; line-height: 1.3; }
+  .rcv { grid-template-columns: 24px auto minmax(0, 1fr) auto; gap: 0 8px; padding: 0 10px; min-height: 36px; line-height: 1.2; }
+  .rcv.on { padding: 0 9px; }
+  .rcv .pos { grid-row: auto; font-size: 13px; }
+  .rcv .nm { grid-column: 2; max-width: 9.5em; }
+  .rcv .rt { grid-column: 3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }      /* (placed: the odds arriving never reflow the row) */
+  .rcv .od { grid-column: 4; text-align: right; white-space: nowrap; font-size: 12px; }
+  .rcv .od i { display: none; }      /* (the words: in its title, and on the Snap key for the target) */
+  .hint.one { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 18px; min-height: 18px; }      /* (the min: a grid row never squeezes it away) */
+  .pmore .key { min-height: 40px; }
+  .pmore .key small { display: none; }
 }
+/* the snap in reach: the call's go key (a pass's Snap, Run it, Call it, the kick) held at the foot of the dock, the
+   rest scrolling above it, never under the fold (game.js drawPassDock, sketchPanel) */
+.dock > .snapbar { order: 1; position: sticky; bottom: env(safe-area-inset-bottom, 0px); z-index: 2; background: var(--paper); padding-block: 6px; }
+.dock > .snapbar .key.big { min-height: 56px; }
+.key.big.snap { font-size: clamp(19px, 5.4vw, 24px); }
+.key.big.snap small { color: var(--paper); opacity: .78; font-size: 11.5px; letter-spacing: .02em; line-height: 1.2; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-inline: 6px; }
 /* the survivor leaderboard */
 .board { display: grid; gap: 8px; text-align: left; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--card); }
 .board .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }

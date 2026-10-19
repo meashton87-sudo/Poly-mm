@@ -248,6 +248,29 @@ DRAW_FUZZ = """async ([kind, n, seed]) => {
   D.drawField();
   return out;
 }"""
+# the snap in reach: a call's go key (a pass's Snap, a drawn call's, Call it, the kicks) wholly on the screen, nothing over
+# it, with nobody having scrolled; on a tall phone every receiver's row too, clear of the Snap key
+REACH = """(sel) => {
+  const es = [...document.querySelectorAll(sel)];
+  if (!es.length) return [`${sel}: not on the screen`];
+  return es.map((e) => {
+    const r = e.getBoundingClientRect();
+    if (!r.height || r.top < -0.5 || r.left < -0.5 || r.bottom > innerHeight + 0.5 || r.right > innerWidth + 0.5)
+      return `${sel} (${e.innerText.replace(/\\s+/g, ' ').slice(0, 40)}): out of view at ${Math.round(r.top)}-${Math.round(r.bottom)} of ${innerHeight}`;
+    const snap = document.getElementById('snapGo'), s = snap && snap !== e && !snap.contains(e) && snap.getBoundingClientRect();
+    if (s && r.bottom > s.top - 6 + 0.5) return `${sel} (${e.innerText.replace(/\\s+/g, ' ').slice(0, 40)}): under the Snap key`;
+    const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return h && e.contains(h) ? '' : `${sel}: covered by ${h ? h.outerHTML.slice(0, 80) : 'nothing'}`;
+  }).filter(Boolean);
+}"""
+# the defense's screens and the kicks, put up in place on a phone's first call (the test page is thrown away after)
+SHOW = """async (what) => {
+  const D = window.__draw, { G, ui } = D.get();
+  Object.keys(ui).forEach((k) => delete ui[k]);
+  if (what === 'vdef') { Object.assign(ui, { step: 'vdef', dc: { ...Object.values(D.PRESET)[0].dc }, to: false }); D.drawField(); D.drawFullDefDock(); }
+  else if (what === 'defense') { Object.assign(ui, { step: 'defense', to: false }); D.drawField(); D.drawDefDock(); }
+  else D.promptChoice(what);
+}"""
 BAD_TEXT = re.compile(r"undefined|NaN|\[object|Infinity")
 # how long a screen may sit unchanged before it counts as frozen (s); a play's animation runs ~5-15 s
 LIMIT = {"animating": 60, "wait": 45, "loading": 60}
@@ -675,6 +698,83 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "trail": trail if problems else []}
 
 
+async def snap_reach(browser, base: str) -> list[str]:
+    """The snap needs no scrolling: on a phone (390x844, 375x667) and a desktop, a pass's Snap key, the run keys and a
+    drawn run's Run it, the defense's Call it (the full call and the three keys) and the kicks' keys are all on the screen
+    as each comes up."""
+    out: list[str] = []
+    for w, h, mob in ((390, 844, True), (375, 667, True), (1280, 900, False)):
+        ctx = await browser.new_context(viewport={"width": w, "height": h}, is_mobile=mob, has_touch=mob)
+        await ctx.add_init_script("window.__sepLog = [];")
+        page = await ctx.new_page()
+        errs: list[str] = []
+        page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+        at = f"{w}x{h}"
+
+        async def check(screen, sel):
+            await page.wait_for_timeout(900)          # (the keys' pop and the sheet's slide)
+            if await page.locator(".tipskip:visible").count():      # (the first drive's tour: its tips are not calls)
+                await page.click(".tipskip", timeout=3000)
+                await page.wait_for_timeout(300)
+            out.extend(f"{at} {screen}: {x}" for x in await page.evaluate(REACH, sel))
+
+        async def tap(label):
+            big = page.locator("#dock .key.big:visible")
+            for i in range(await big.count()):
+                if (await big.nth(i).inner_text()).upper().startswith(label):
+                    await big.nth(i).click(timeout=3000)
+                    return True
+            return False
+        try:
+            await page.goto(f"{base}/index.html#survivor")
+            for _ in range(300):
+                await page.wait_for_timeout(100)
+                if await page.locator("#intro .btn:visible").count():
+                    await page.click("#intro .btn", timeout=3000)
+                elif await page.locator("#modal:not([hidden]) #mClose").count():
+                    await page.click("#mClose", timeout=3000)
+                elif await page.locator("#dock .key.big:visible", has_text="Pass").count():
+                    break
+            else:
+                out.append(f"{at}: the first call never came up")
+                continue
+            if await tap("PASS"):
+                await check("pass", "#snapGo")
+                if mob and h >= 800:
+                    await check("pass", "#dock .rcv")
+                await page.click("#dock .ask .chip", timeout=3000)          # Back
+                await page.wait_for_timeout(400)
+            if await tap("RUN"):
+                await check("run", "#dock .prow .key")
+                sk = await page.evaluate(SKETCH)
+                rb = [m for m in (sk or {}).get("men", []) if m[2] in ("RB", "FB")]
+                for k in range(4 if rb else 0):
+                    x, y = rb[0][:2]
+                    ly, up, ppy = sk["los"][1], sk["up"], sk["ppy"]
+                    pts = [(x + (k - 1.5) * 3 * ppy, ly), (x + (k - 1.5) * 4 * ppy, ly + up * 8 * ppy)]
+                    await page.mouse.move(x, y); await page.mouse.down()
+                    for nx, ny in pts:
+                        for t in range(1, 7):
+                            await page.mouse.move(x + (nx - x) * t / 6, y + (ny - y) * t / 6)
+                        x, y = nx, ny
+                    await page.mouse.up()
+                    await page.wait_for_timeout(200)
+                    if await page.locator("#drawGo").count():
+                        await check("drawn run", "#drawGo")
+                        break
+                else:
+                    out.append(f"{at}: no run drawn to check its key")
+            for what in ("vdef", "defense", "kick", "fgdef", "puntdef", "pat"):
+                await page.evaluate(SHOW, what)
+                await check(what, "#dock .snapbar .key")
+        except Exception as e:
+            out.append(f"{at}: {e}")
+        finally:
+            out.extend(f"{at}: {x}" for x in errs)
+            await ctx.close()
+    return out
+
+
 async def main(a) -> int:
     srv, port = serve(Path(a.site).resolve())
     stamped = stamps_of(Path(a.site))
@@ -688,6 +788,9 @@ async def main(a) -> int:
     async with async_playwright() as p:
         kw = {"executable_path": a.chromium} if a.chromium else {}
         browser = await p.chromium.launch(**kw)
+        reach = await snap_reach(browser, base)
+        print("snap in reach (pass, run, defense, kicks at 390x844, 375x667, 1280x900): " + ("ok" if not reach else "FAIL")
+              + "".join(f"\n      {x}" for x in reach), flush=True)
 
         async def run(i, job):
             mode, seed, target = job
@@ -701,7 +804,7 @@ async def main(a) -> int:
         results = await asyncio.gather(*(run(i, j) for i, j in enumerate(jobs)))
         await browser.close()
     srv.shutdown()
-    bad = [r for r in results if r["status"] != "ok"]
+    bad = [r for r in results if r["status"] != "ok"] + ([{"name": "snap-reach"}] if reach else [])
     # the field has to match the outcome: an incomplete pass is a covered man or a visibly bad ball, seldom a receiver
     # with nobody near him. Incompletions are drawn contested (game.js separationFor), so about 5% have him 4+ yards
     # clear (a deep ball whose cover man is left behind); before the outcome-driven coverage, 43%. A fixed
