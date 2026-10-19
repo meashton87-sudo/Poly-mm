@@ -194,6 +194,7 @@
   const ST_BLOCK = { fg: 0.045, punt: 0.035 }, ST_FOUL = 0.02, ST_BLOCK_TD = 0.1, ST_FAIR_GAIN = 4;
   const WHO_CODE = { RB: 2, WR: 3, TE: 4 };            // the target's position in the playbook's carry codes
   // the route an action asks for: the receiver's route, at the depth it was drawn to when it was drawn (act.depth)
+  const oobMode = (oob) => (oob === -1 ? -1 : oob ? 1 : 0);    // _cdfOf's: 1 get out of bounds, -1 stay in, 0 neither
   const routeOfAct = (act) => (act.route && Number.isFinite(act.depth) ? `${act.route}@${Math.round(act.depth)}` : act.route);
   const DRAWN_WIN = 3;                // a drawn route: real throws on it within 3 yards (15% of it, deeper) of the drawn depth
   const PB_LOOK_MIN = 15;             // daily game: a call's plays against one defensive look are used when at least this many
@@ -461,6 +462,8 @@
         calls: pb.calls, yards: decode(R.yards), flags: decode(R.flags), toRel: decode(R.to_rel),
         dur10: decode(R.dur10), epa: decode(R.epa), items: decode(pb.items), offsets: decode(pb.offsets),
         poolOf: decode(pb.pool_of), freq: decode(pb.freq), oobOdds: pb.oob_odds, stayOdds: pb.stay_odds, nFine: pb.n_fine,
+        // the same by call and the target's route (calls x routes; route 0, not charted, the call's own)
+        oobRoute: pb.oob_route || null, stayRoute: pb.stay_route || null,
         // what happened on each real play (narration only): event, penalty called, pre-snap look
         event: R.event ? decode(R.event) : null, pen: R.pen ? decode(R.pen) : null, look: R.look ? decode(R.look) : null,
         air: R.air ? decode(R.air) : null, carry: R.carry ? decode(R.carry) : null,    // the animation: air yards, carrier, broken tackle
@@ -487,10 +490,29 @@
           if (P.lookPool) for (let b = 0; b < 4; b++) P.poolCall[P.lookPool[(c * P.nFine + f) * 4 + b]] = c;
         }
       }
+      // the carrier's try (pbOobCls), each row
+      P.oobCls = new Uint8Array(P.flags.length);
+      for (let r = 0; r < P.flags.length; r++) {
+        const f = P.flags[r];
+        P.oobCls[r] = f & 69 ? 0 : f & 8 ? 2 : !P.carry || (P.carry[r] & 7) > 0 ? 1 : 0;   // (a pick returned out of bounds: 0)
+      }
       P.itemEpa = new Float64Array(P.items.length);
       for (let i = 0; i < P.items.length; i++) P.itemEpa[i] = P.epa[P.items[i]];
       this.pb = P;
       return P;
+    }
+
+    // what the carrier's try can change on a play (P.oobCls, built by loadPlaybook): 2 he went out of bounds, 1 he had
+    // the ball and stayed in (a run, a catch, a scramble: no flag, incompletion or turnover), 0 neither (a sack, a
+    // throw on the ground, a pick, a penalty). And the weight of a play he went out on, of call c, when he tries to get
+    // out (om 1: the multiplier for its NGS route, playbook.py oob_route_odds; uncharted, the call's) or to stay in (-1)
+    pbOobMul(c, om, r) {
+      const P = this.pb;
+      if (!om) return 1;
+      const rt = P.ngs ? P.ngs.route[r] : 0;
+      const t = om < 0 ? (P.stayRoute ? P.stayRoute[c] : null) : (P.oobRoute ? P.oobRoute[c] : null);
+      const fam = om < 0 ? (P.stayOdds ? P.stayOdds[c] : 1) : P.oobOdds[c];
+      return (t ? t[rt] : undefined) ?? fam;
     }
 
     // Tilt every call pool toward one offense-vs-defense matchup (delta[c] = EPA shift for call c);
@@ -512,16 +534,23 @@
           th = clip(th + (target - m1) / Math.max(m2 - m1 * m1, 1e-6), -1.5, 1.5);
         }
         let mx = -Infinity; for (let i = lo; i < hi; i++) mx = Math.max(mx, th * e[i]);
-        let sw = 0, swo = 0, swi = 0;
-        const odds = P.oobOdds[c], stay = P.stayOdds ? P.stayOdds[c] : 1;
+        // the carrier trying to get out (or to stay in): a play he went out on weighs its call's multiplier for its route
+        // (pbOobMul), and the plays he had the ball on are scaled back to their own share, so trying never makes the
+        // catch, the sack or the incompletion likelier: only where he ends up
+        const K = P.oobCls;
+        let sw = 0, sE = 0, sEo = 0, sEi = 0;
         for (let i = lo; i < hi; i++) {
-          const w = Math.exp(th * e[i] - mx), out = P.flags[P.items[i]] & 8;
-          sw += w; swo += out ? w * odds : w; swi += out ? w * stay : w;
+          const w = Math.exp(th * e[i] - mx), r = P.items[i], k = K[r];
+          sw += w;
+          if (k) { sE += w; sEo += k === 2 ? w * this.pbOobMul(c, 1, r) : w; sEi += k === 2 ? w * this.pbOobMul(c, -1, r) : w; }
         }
+        const zo = sEo > 0 ? sE / sEo : 1, zi = sEi > 0 ? sE / sEi : 1, swo = sw - sE + zo * sEo, swi = sw - sE + zi * sEi;
         let cum = 0, cumo = 0, cumi = 0;
         for (let i = lo; i < hi; i++) {
-          const w = Math.exp(th * e[i] - mx), out = P.flags[P.items[i]] & 8;
-          cum += w / sw; cumo += (out ? w * odds : w) / swo; cumi += (out ? w * stay : w) / swi;
+          const w = Math.exp(th * e[i] - mx), r = P.items[i], k = K[r];
+          cum += w / sw;
+          cumo += (k ? (k === 2 ? w * this.pbOobMul(c, 1, r) : w) * zo : w) / swo;
+          cumi += (k ? (k === 2 ? w * this.pbOobMul(c, -1, r) : w) * zi : w) / swi;
           cdf[i] = p + Math.min(cum, 1 - 1e-12); cdfOob[i] = p + Math.min(cumo, 1 - 1e-12); cdfIn[i] = p + Math.min(cumi, 1 - 1e-12);
         }
       }
@@ -854,7 +883,7 @@
       const sets = [this._callRows(callIdx), this._groupRows(callIdx)];
       for (const ri of ri0 >= 16 ? [ri0, ri0 & 15] : [ri0]) for (const w of who ? [who, 0] : [0]) for (const lk of looks ? [looks, 0] : [0]) {
         for (const pl of [pool, ...coarse]) { const T = this._lookT(cdf, pl, lk, s, ri, w, true); if (T) return T; }
-        for (const set of sets) { const T = this._setT(set, lk, s, ri, w); if (T) return T; }
+        for (const set of sets) { const T = this._setT(set, lk, s, ri, w, callIdx, oob); if (T) return T; }
       }
       return null;
     }
@@ -1010,7 +1039,7 @@
             }
             if (where === 'pool') continue;
             for (const set of where === 'near' ? near : wide) {
-              const r = this._pickT(this._dcT(null, -1, set(), dc, L, s, ri, who || 0, pers || 0, pass, ref), u);
+              const r = this._pickT(this._dcT(null, -1, set(), dc, L, s, ri, who || 0, pers || 0, pass, ref, callIdx, oob), u);
               if (r >= 0) return r;
             }
           }
@@ -1093,8 +1122,10 @@
     // the real plays against the called defense keep their shape (the sacks, the pressure, the quick throws, the big
     // plays), and a handful of them against a rare defense never decide what it is worth (their mean is noise; s is
     // the estimate). The plays it is not about (ref) are added as they are, with their share of the situation's
-    _dcT(cdf, pool, set, dc, L, s, ri, who, pers, pass, ref) {
-      const key = `dc|${set ? set.id : pool}|${dc.pers}|${dc.front}|${dc.cover}|${dc.rush}|${L.join('.')}|${s || 0}|${ri}|${who}|${pers}|${pass ? 1 : 0}|${ref.id}`;
+    // A set of rows (no pool's weights) takes the carrier's try (c, oob: _oobW) as a pool's plays do from pbTilt
+    _dcT(cdf, pool, set, dc, L, s, ri, who, pers, pass, ref, c, oob) {
+      const om = set ? oobMode(oob) : 0;
+      const key = `dc|${set ? set.id : pool}|${dc.pers}|${dc.front}|${dc.cover}|${dc.rush}|${L.join('.')}|${s || 0}|${ri}|${who}|${pers}|${pass ? 1 : 0}|${ref.id}|${om ? `${c}:${om}` : ''}`;
       let cache;
       if (set) cache = this._dcSet = this._dcSet || new Map();
       else {
@@ -1135,7 +1166,11 @@
         hits++;
         items.push(r); ws.push(w); xs.push(e);
       };
-      if (set) for (const r of set.rows) take(r, 1);
+      if (set && !om) for (const r of set.rows) take(r, 1);
+      else if (set) {
+        const rows = Array.from(set.rows).filter((r) => test(r)), w = this._oobW(c, om, rows, rows.map(() => 1));
+        rows.forEach((r, i) => take(r, w[i]));
+      }
       else {
         const lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
         for (let i = lo; i <= hi; i++) take(P.items[i], cdf[i] - (i > lo ? cdf[i - 1] : pool));
@@ -1248,8 +1283,19 @@
     }
     // a play from a set of rows (equal weights), with the same filters and matchup tilt as _sampleLook
     _sampleSet(set, u, looks, s, ri, who) { return this._pickT(this._setT(set, looks, s, ri, who), u); }
-    _setT(set, looks, s, ri, who) {
-      const key = `${set.id}|${looks}|${s || 0}|${ri || 0}|${who || 0}`;
+    // a set of rows' weights (w, one a row) with the carrier's try (om, call c) as pbTilt gives a pool's: a play he went
+    // out on times its multiplier, the plays he had the ball on scaled back to their share
+    _oobW(c, om, rows, w) {
+      if (!om) return w;
+      const E = this.e, K = E.pb.oobCls;
+      let sE = 0, sM = 0;
+      rows.forEach((r, i) => { const k = K[r]; if (k) { sE += w[i]; sM += k === 2 ? w[i] * E.pbOobMul(c, om, r) : w[i]; } });
+      const z = sM > 0 ? sE / sM : 1;
+      return rows.map((r, i) => { const k = K[r]; return k ? (k === 2 ? w[i] * E.pbOobMul(c, om, r) : w[i]) * z : w[i]; });
+    }
+    _setT(set, looks, s, ri, who, c, oob) {
+      const om = c >= 0 ? oobMode(oob) : 0;
+      const key = `${set.id}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${om ? `${c}:${om}` : ''}`;
       this._setPick = this._setPick || new Map();
       let T = this._setPick.get(key);
       if (T === undefined) {
@@ -1268,7 +1314,8 @@
         }
         const cum = [];
         let tot = 0;
-        rows.forEach((r) => { const e = P.epa[r]; tot += k && Number.isFinite(e) ? Math.exp(k * clip(e, -MATCH_EPA_CAP, MATCH_EPA_CAP)) : 1; cum.push(tot); });
+        const ws = this._oobW(c, om, rows, rows.map((r) => { const e = P.epa[r]; return k && Number.isFinite(e) ? Math.exp(k * clip(e, -MATCH_EPA_CAP, MATCH_EPA_CAP)) : 1; }));
+        ws.forEach((w) => { tot += w; cum.push(tot); });
         T = rows.length < PB_LOOK_MIN ? null : { items: rows, cum, tot };
         this._setPick.set(key, T);
       }
