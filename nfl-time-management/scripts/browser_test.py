@@ -645,6 +645,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 elif st == "choose" and sweep and "draw_fuzz" not in chaos_done:
                     # thousands of drawings of every kind (runs, RPOs, the defense, kicks, the rush on theirs)
                     chaos_done.add("draw_fuzz"); act("drawing fuzz")
+                    t_fz = time.time()
                     tot = {"n": 0, "taps": 0, "plays": 0, "real": 0}
                     for k, kind in enumerate(("run", "rpo", "def", "kick", "stdef")):
                         fz = await page.evaluate(DRAW_FUZZ, [kind, 700, seed * 31 + k])
@@ -661,6 +662,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                             problems.append(f"a drawn {kind} ran another call in the simulator: {fz['realBad'][:3]}")
                         since = time.time()
                     since = time.time()
+                    t_start += since - t_fz          # (the fuzz's minutes don't count against the episode's 900 s)
                     print(f"{name}: drawing fuzz, {tot['n']} drawings, {tot['plays']} plays on the field, {tot['real']} simulated")
                 elif st == "choose":
                     if first_call:
