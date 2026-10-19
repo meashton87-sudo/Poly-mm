@@ -319,6 +319,6 @@
 
   const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, VS_OT, hash, rng, buildGame, possRoot, start, chooser, need, role,
     cleanAction, cleanDef, cleanHalf, apply, after, describe, called, stepper, unpack };
-  if (typeof module !== 'undefined' && module.exports) module.exports = VSCore;
-  else global.VSCore = VSCore;
+  if (typeof module !== 'undefined' && module && module.exports) module.exports = VSCore;
+  if (global) global.VSCore = VSCore;       // (always: a page with some other script's global `module` still gets it)
 })(typeof self !== 'undefined' ? self : this);

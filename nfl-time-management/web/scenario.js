@@ -284,6 +284,6 @@
 
   const TMDScenario = { VERSION, TITLE_MAX, blocked, cleanTitle, titleBad, link, parseLink, TYPES, PRESETS, OT_SAY, overtime, defaults, applyPreset, check, ok, code, parse, tidy, category, strength, spreadOf,
     spotOf, summary, random, rulesSeason, otLen, otTo, maxScore, clockText };
-  if (typeof module !== 'undefined' && module.exports) module.exports = TMDScenario;
-  else global.TMDScenario = TMDScenario;
+  if (typeof module !== 'undefined' && module && module.exports) module.exports = TMDScenario;
+  if (global) global.TMDScenario = TMDScenario;       // (always: a page with some other script's global `module` still gets it)
 })(typeof self !== 'undefined' ? self : this);
