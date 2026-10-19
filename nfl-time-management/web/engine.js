@@ -490,6 +490,14 @@
           if (P.lookPool) for (let b = 0; b < 4; b++) P.poolCall[P.lookPool[(c * P.nFine + f) * 4 + b]] = c;
         }
       }
+      // calls with the same multipliers (an OOB family: playbook.py OOB_FAMILIES) share a draw's tables from a set of
+      // rows (Simulator._dcT, _setT: a set of every call of a kind is not built again for each of them)
+      const ok = new Map();
+      P.oobKey = pb.calls.map((c, i) => {
+        const k = JSON.stringify([P.oobOdds[i], P.stayOdds ? P.stayOdds[i] : 1, P.oobRoute ? P.oobRoute[i] : 0, P.stayRoute ? P.stayRoute[i] : 0]);
+        if (!ok.has(k)) ok.set(k, i);
+        return ok.get(k);
+      });
       // the carrier's try (pbOobCls), each row
       P.oobCls = new Uint8Array(P.flags.length);
       for (let r = 0; r < P.flags.length; r++) {
@@ -1124,8 +1132,8 @@
     // the estimate). The plays it is not about (ref) are added as they are, with their share of the situation's
     // A set of rows (no pool's weights) takes the carrier's try (c, oob: _oobW) as a pool's plays do from pbTilt
     _dcT(cdf, pool, set, dc, L, s, ri, who, pers, pass, ref, c, oob) {
-      const om = set ? oobMode(oob) : 0;
-      const key = `dc|${set ? set.id : pool}|${dc.pers}|${dc.front}|${dc.cover}|${dc.rush}|${L.join('.')}|${s || 0}|${ri}|${who}|${pers}|${pass ? 1 : 0}|${ref.id}|${om ? `${c}:${om}` : ''}`;
+      const om = set ? oobMode(oob) : 0, P0 = this.e.pb;
+      const key = `dc|${set ? set.id : pool}|${dc.pers}|${dc.front}|${dc.cover}|${dc.rush}|${L.join('.')}|${s || 0}|${ri}|${who}|${pers}|${pass ? 1 : 0}|${ref.id}|${om ? `${P0.oobKey[c]}:${om}` : ''}`;
       let cache;
       if (set) cache = this._dcSet = this._dcSet || new Map();
       else {
@@ -1168,8 +1176,22 @@
       };
       if (set && !om) for (const r of set.rows) take(r, 1);
       else if (set) {
-        const rows = Array.from(set.rows).filter((r) => test(r)), w = this._oobW(c, om, rows, rows.map(() => 1));
-        rows.forEach((r, i) => take(r, w[i]));
+        // in one pass: a play he went out on at its multiplier, then the plays he had the ball on (of the reference)
+        // scaled back to their share (_oobW's z), the reference's sums with them
+        const K = this.e.pb.oobCls, mul = this._oobMulOf(c, om), cls = [];
+        let sE = 0, sM = 0, rw0 = 0, rw1 = 0, rwC0 = 0, rwC1 = 0;
+        for (const r of set.rows) {
+          const x = test(r);
+          if (!x) continue;
+          const kc = K[r], w = kc === 2 ? mul(r) : 1, e = X[r];
+          if (kc) { sE += 1; sM += w; rwC0 += w; rwC1 += w * e; } else { rw0 += w; rw1 += w * e; }
+          if (x === 1) continue;
+          hits++;
+          items.push(r); ws.push(w); xs.push(e); cls.push(kc);
+        }
+        const z = sM > 0 ? sE / sM : 1;
+        for (let i = 0; i < ws.length; i++) if (cls[i]) ws[i] *= z;
+        r0w = rw0 + z * rwC0; r1w = rw1 + z * rwC1;
       }
       else {
         const lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
@@ -1287,15 +1309,22 @@
     // out on times its multiplier, the plays he had the ball on scaled back to their share
     _oobW(c, om, rows, w) {
       if (!om) return w;
-      const E = this.e, K = E.pb.oobCls;
+      const K = this.e.pb.oobCls, mul = this._oobMulOf(c, om), m = rows.map((r) => (K[r] === 2 ? mul(r) : 1));
       let sE = 0, sM = 0;
-      rows.forEach((r, i) => { const k = K[r]; if (k) { sE += w[i]; sM += k === 2 ? w[i] * E.pbOobMul(c, om, r) : w[i]; } });
+      rows.forEach((r, i) => { if (K[r]) { sE += w[i]; sM += w[i] * m[i]; } });
       const z = sM > 0 ? sE / sM : 1;
-      return rows.map((r, i) => { const k = K[r]; return k ? (k === 2 ? w[i] * E.pbOobMul(c, om, r) : w[i]) * z : w[i]; });
+      return rows.map((r, i) => (K[r] ? w[i] * m[i] * z : w[i]));
+    }
+    // engine pbOobMul for call c and om, as a function of the row (its tables looked up once)
+    _oobMulOf(c, om) {
+      const P = this.e.pb, rt = P.ngs ? P.ngs.route : null;
+      const t = om < 0 ? (P.stayRoute ? P.stayRoute[c] : null) : (P.oobRoute ? P.oobRoute[c] : null);
+      const fam = om < 0 ? (P.stayOdds ? P.stayOdds[c] : 1) : P.oobOdds[c];
+      return t && rt ? (r) => t[rt[r]] ?? fam : () => fam;
     }
     _setT(set, looks, s, ri, who, c, oob) {
-      const om = c >= 0 ? oobMode(oob) : 0;
-      const key = `${set.id}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${om ? `${c}:${om}` : ''}`;
+      const om = c >= 0 ? oobMode(oob) : 0, P0 = this.e.pb;
+      const key = `${set.id}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${om ? `${P0.oobKey[c]}:${om}` : ''}`;
       this._setPick = this._setPick || new Map();
       let T = this._setPick.get(key);
       if (T === undefined) {
