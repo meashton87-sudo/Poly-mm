@@ -191,4 +191,82 @@ for (let k = 0; k < 100; k++) {
   const pe = r.log.find((e) => e.ev === 'play');
   assert.ok(pe && pe.row >= 0 && P.ngs.pers[pe.row] === 21, 'a 21-personnel run is a real 21-personnel run');
 }
+// Build a scenario (Pro, web/scenario.js, web/rosters: nflclock.scenario): every team-season the builder offers is a
+// full team; random valid scenarios of every era, regular season and playoffs, overtime and kickoffs included, play to
+// the end in the engine as game.js plays them (its startRoot, a second half from a first-half one, overtime started as
+// game.js overtime() does), the football in range at every step: the clock never runs up, scores move by football
+// numbers, a playoff game never ends tied, an overtime by the rules of its time
+if (fs.existsSync(path.join(dir, 'rosters', 'index.json'))) {
+  const SC = require('./scenario.js');
+  const rix = JSON.parse(fs.readFileSync(path.join(dir, 'rosters', 'index.json'), 'utf8')), ros = {};
+  const roster = (y) => (ros[y] = ros[y] || JSON.parse(fs.readFileSync(path.join(dir, 'rosters', `${y}.json`), 'utf8')));
+  rix.seasons.forEach((s) => {
+    const d = roster(s.season);
+    s.teams.forEach((m) => {
+      const t = d.teams[m.team], tag = `${s.season} ${m.team}`;
+      assert.ok(t && t.lineup.off.length === 11 && t.lineup.def.length === 11 && t.lineup.off.some((p) => p.pos === 'QB'), `${tag} lineup`);
+      assert.ok(t.kicker.name && t.punter.name && Math.abs(SC.strength(t) - m.net) < 1e-4, `${tag} specialists, strength`);
+    });
+  });
+  // (game.js startRoot, otOf: the copies spot_info.js keeps)
+  const startRoot = (sc) => {
+    const st = sc.start, kick = st.phase === 'kick', po = ['WC', 'DIV', 'CON', 'SB'].includes(sc.real.type);
+    const r = { t: st.qtr <= 4 ? (4 - st.qtr) * 900 + st.clock : st.clock, pos: st.pos === sc.home ? 0 : 1, score: [st.score[1], st.score[0]],
+      down: kick ? 1 : st.down, ytg: kick ? 10 : Math.min(st.ytg, st.yl), yl: kick ? 65 : st.yl, to: [st.to[1], st.to[0]], clock_running: false,
+      phase: kick ? 2 : 0, credit: 0, free_kick: false };
+    if (st.qtr > 4) r.ot = { c: st.otc.slice(), po, n: 1, ...(sc.overtime.rules !== 'both' ? { r: sc.overtime.rules } : {}) };
+    return r;
+  };
+  const R = ((a) => () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; })(2026);
+  const tally = { games: 0, snaps: 0, ot: 0, half2: 0, kick: 0, po: 0, eras: new Set(), ties: 0 };
+  const STEPS = new Set([0, 1, 2, 3, 6, 7, 8]);
+  for (let g = 0; g < 60; g++) {
+    const sc = SC.random(R, rix, g % 10 === 0 ? { qtr: 2, end: 'game' } : g % 7 === 0 ? { qtr: 5 } : undefined);
+    assert.ok(sc && SC.ok(sc, rix), `a random scenario ${g}`);
+    assert.deepStrictEqual(SC.parse(SC.code(sc)), sc, 'its code reads back');
+    const { spot, teams } = SC.spotOf(sc, roster(sc.ys), roster(sc.os), rix.spread);
+    const game = { home: teams.home, away: teams.away, home_spread: spot.spread, indoor: false, wind: 0, temp: null, league: spot.league,
+      home_coach: teams.home.coach, away_coach: teams.away.coach, season: spot.real.season };
+    const S = eng.simulator(eng.makeContext(game, { receive2h: spot.start.receive2h }));
+    let r = startRoot(spot), k = 0, half2 = false;
+    const tag = `${SC.code(sc)}`;
+    tally.games++; tally.eras.add(Math.floor(sc.ys / 5) * 5); if (sc.start === 'kick') tally.kick++; if (sc.type !== 'REG') tally.po++;
+    for (; k < 600; k++) {
+      if (r.phase === 3) {
+        if (spot.end === 'game' && r.t >= 1800 && !r.ot) {        // game.js secondHalf
+          const recv = spot.start.receive2h === spot.home ? 0 : 1;
+          r = { t: 1800 - 1e-6, pos: 1 - recv, score: r.score.slice(), down: 1, ytg: 10, yl: 65, to: [3, 3], clock_running: false, phase: 2, credit: 0, free_kick: false };
+          half2 = true; continue;
+        }
+        if (r.t <= 0 && !r.ot && r.score[0] === r.score[1]) {       // game.js overtime: the coin toss's kickoff
+          const po = sc.type !== 'REG', ot = spot.overtime;
+          r = { t: ot.len, pos: R() < 0.5 ? 0 : 1, score: r.score.slice(), down: 1, ytg: 10, yl: 65, to: po ? [3, 3] : [2, 2], clock_running: false, phase: 2,
+            credit: 0, free_kick: false, ot: { c: [0, 0], po, n: 1, ...(ot.rules !== 'both' ? { r: ot.rules } : {}) } };
+          continue;
+        }
+        break;
+      }
+      const call = eng.pb.calls[Math.floor(R() * eng.pb.calls.length)];
+      const action = r.phase === 0 ? (R() < 0.85 ? { to_off: false, play: call.kind, call: call.id } : {}) : r.phase === 2 ? { kick: R() < 0.9 ? 'deep' : 'onside' } : {};
+      const nx = S.step(r, { action, seed: 31 * g + k });
+      const b = r;
+      r = nx.root;
+      tally.snaps++;
+      assert.ok(r.t <= b.t + 1e-9 || (r.ot && b.ot && r.ot.n === b.ot.n + 1 && r.t === 900 && sc.type !== 'REG'), `${tag}: the clock ran up (${b.t} -> ${r.t})`);
+      for (const i of [0, 1]) assert.ok(STEPS.has(r.score[i] - b.score[i]), `${tag}: a score of ${r.score[i] - b.score[i]}`);
+      assert.ok(r.phase !== 0 || (r.down >= 1 && r.down <= 4 && r.yl > 0 && r.yl < 100 && r.ytg >= 1 && r.ytg <= r.yl + 1e-9), `${tag}: ${JSON.stringify(r)}`);
+      assert.ok(r.to.every((t) => t >= 0 && t <= 3), `${tag}: timeouts`);
+    }
+    assert.ok(r.phase === 3, `${tag}: did not end in ${k} steps (${JSON.stringify(r)})`);
+    if (r.ot) tally.ot++;
+    if (half2) { tally.half2++; assert.ok(r.t <= 0 || r.ot, `${tag}: the second half was played to the end`); }
+    if (r.score[0] === r.score[1] && (spot.end === 'game' || sc.qtr > 2)) {
+      tally.ties++;
+      assert.ok(sc.type === 'REG' && r.ot, `${tag}: a tie only after a regular-season overtime`);
+    }
+    if (r.ot && r.ot.r === 'sd' && r.score[0] !== r.score[1]) assert.ok(Math.abs(r.score[0] - r.score[1]) <= 8, `${tag}: sudden death`);
+  }
+  console.log(`scenarios: ${rix.seasons.length} seasons (${rix.seasons[0].season}-${rix.seasons[rix.seasons.length - 1].season}), ${rix.seasons.reduce((a, s) => a + s.teams.length, 0)} team-seasons; ` +
+    `${tally.games} random scenarios (eras ${[...tally.eras].sort().join(', ')}; ${tally.po} playoff, ${tally.kick} kickoffs, ${tally.half2} second halves, ${tally.ot} in overtime, ${tally.ties} ties), ${tally.snaps} steps`);
+} else console.log('scenarios: web/rosters not built (nflclock.scenario.build), skipped');
 console.log('smoke ok');

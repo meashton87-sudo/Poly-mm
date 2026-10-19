@@ -33,7 +33,7 @@
   // Analytics events (the website's Google tag, scripts/site.py --ga; nothing anywhere else): what players do, so the
   // next changes follow the data. Event names and fields are listed in the README.
   const track = (name, params) => { try { if (typeof window.gtag === 'function') window.gtag('event', name, params || {}); } catch (e) { /* never in the way */ } };
-  const modeName = () => (VS ? 'versus' : SURV ? 'survivor' : PRACTICE ? 'practice' : DRIVE ? 'drive' : RUN_N ? 'run' : ARCH_DAY ? 'archive' : 'daily');
+  const modeName = () => (VS ? 'versus' : SURV ? 'survivor' : PRACTICE ? 'practice' : DRIVE ? 'drive' : RUN_N ? 'run' : CUSTOM ? 'custom' : ARCH_DAY ? 'archive' : 'daily');
   // a drive left half-played: when the page goes to the background mid-drive (closed, or switched away from), once
   // a page load, with how far in it was and whether it was still waiting on the simulator's data
   const liveDrive = { on: false, calls: 0, t0: 0, kind: null, left: false };
@@ -227,6 +227,11 @@
   const DRIVE = PRO_ON ? Number((location.hash.match(/^#drive-(\d+)$/) || [])[1] || 0) : 0;
   // a playoff run (Pro, pro/runs.json): #run-N plays the Nth one, its games in order, like a day of several spots
   const RUN_N = PRO_ON ? Number((location.hash.match(/^#run-(\d+)$/) || [])[1] || 0) : 0;
+  // a scenario of your own (Pro, web/scenario.js): #custom builds one, #custom-<code> plays it (its own saved state and,
+  // like a historic drive, each try its own draws); the rosters it plays with are the site's (rosters/: scenario.py)
+  const SCN = typeof TMDScenario !== 'undefined' ? TMDScenario : null;
+  const CUSTOM_BUILD = PRO_ON && !!SCN && location.hash === '#custom';
+  const CUSTOM = PRO_ON && SCN ? ((location.hash.match(/^#custom-(1(?:-[0-9A-Za-z]{1,4}){21})$/) || [])[1] || '') : '';
   let PRO = null, PRO_RUNS = null;        // pro/drives.json and pro/runs.json, once loaded
   // Pro grades: a drive's score (better than this many % of NFL play-callers) as a letter. 90 and up is an A, green:
   // the drive is passed. The best grade on each drive is kept; the ranks count the drives passed
@@ -263,7 +268,7 @@
   // (the two overtime drives were played as a fourth quarter until their start carried the overtime: startRoot otOf)
   const SPOT_FIXED = { '2018_14_NE_MIA#4172': Date.parse('2026-10-16T22:50:00Z'), '2023_22_SF_KC#4561': Date.parse('2026-10-18T13:00:00Z'),
     '2015_19_GB_ARI#4454': Date.parse('2026-10-18T13:00:00Z') };
-  const stateKey = () => (VS ? `${STORE}:vs:${VS_ROOM}` : SURV ? `${STORE}:surv` : PRACTICE ? PRACTICE_KEY : DRIVE ? `${STORE}:drive:${DRIVE}` : RUN_N ? `${STORE}:run:${RUN_N}` : `${STORE}:day:${dayN}`);
+  const stateKey = () => (VS ? `${STORE}:vs:${VS_ROOM}` : SURV ? `${STORE}:surv` : PRACTICE ? PRACTICE_KEY : DRIVE ? `${STORE}:drive:${DRIVE}` : RUN_N ? `${STORE}:run:${RUN_N}` : CUSTOM ? `${STORE}:custom:${CUSTOM}` : `${STORE}:day:${dayN}`);
   // (not once a restart is under way: a grading still running for the old try must not save it back over the new one)
   let restarting = false;
   const saveState = () => { if (!restarting) save(stateKey(), state); };
@@ -271,7 +276,7 @@
   // state, a reload keeps it): each try a fresh challenge, where the same calls once played out the same way again.
   // The daily (and a past day's, from the archive) stays the day's: the same draws for everyone that day
   const tryOf = () => (state && state.tryAt ? `:${state.tryAt}` : '');
-  const seedKey = () => (VS ? `vs${vs.seed}` : SURV ? `s${state.run}:${state.games.length}` : PRACTICE ? `p${state.run}` : DRIVE ? `drive${DRIVE}${tryOf()}` : RUN_N ? `run${RUN_N}${tryOf()}` : dayN);
+  const seedKey = () => (VS ? `vs${vs.seed}` : SURV ? `s${state.run}:${state.games.length}` : PRACTICE ? `p${state.run}` : DRIVE ? `drive${DRIVE}${tryOf()}` : RUN_N ? `run${RUN_N}${tryOf()}` : CUSTOM ? `custom${CUSTOM}${tryOf()}` : dayN);
   let G = null;                   // the spot being played
   let ui = { step: null, fam: null, oob: false };
   let busy = false, lastFocus = null, deepFocus = null, tick = null, lastBall = null;
@@ -382,10 +387,10 @@
     return `${ordinal(r.down)} & ${goal ? 'Goal' : Math.max(1, Math.round(r.ytg))}`;
   }
   function startRoot(sc) {
-    const st = sc.start;
+    const st = sc.start, kick = st.phase === 'kick';        // (a scenario can open on a kickoff: pos is the kicking team)
     return { t: st.qtr <= 4 ? (4 - st.qtr) * 900 + st.clock : st.clock, pos: st.pos === sc.home ? 0 : 1,
-      score: [st.score[1], st.score[0]], down: st.down, ytg: Math.min(st.ytg, st.yl), yl: st.yl,
-      to: [st.to[1], st.to[0]], clock_running: !!st.running, phase: SNAP, credit: 0, free_kick: false, ...otOf(sc) };
+      score: [st.score[1], st.score[0]], down: kick ? 1 : st.down, ytg: kick ? 10 : Math.min(st.ytg, st.yl), yl: kick ? 65 : st.yl,
+      to: [st.to[1], st.to[0]], clock_running: !!st.running, phase: kick ? KICKOFF : SNAP, credit: 0, free_kick: false, ...otOf(sc) };
   }
   // a spot in overtime (a historic drive: Super Bowl LVIII's, Fitzgerald's): the period it is in, playoff rules or not, and
   // whether the other team has had the ball (behind, or past the period's first snap: they have), so the engine plays the
@@ -399,6 +404,7 @@
     const fresh = st.qtr === 5 && st.score[0] === st.score[1] && st.clock >= len;
     const c = [0, 0];
     if (!fresh) c[1 - pos] = 1;
+    if (st.otc) { c[0] = st.otc[0]; c[1] = st.otc[1]; }       // (a scenario says who has had the ball: web/scenario.js)
     return { ot: { c, po, n: st.qtr - 4, ...(rules === 'sd' || rules === 'msd' ? { r: rules } : {}) } };
   }
   // a spot's matchup: its two teams as they were in that game (web/spots), the real point spread, that
@@ -4664,19 +4670,22 @@
   const roman = (n) => [[50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']].reduce((a, [v, r]) => { while (n >= v) { a += r; n -= v; } return a; }, '');
   function gameTag(sc) {
     const rl = sc.real || {};
+    if (sc.custom) return SCN.TYPES[rl.type] || 'Regular season';
     if (!ROUND[rl.type]) return `${rl.season} · ${COLLEGE_ROUND[rl.type] || `Week ${rl.week}`}`;
     // (the game's date where the data has it; else January after the season, a Super Bowl February from the 2003 season's)
     const d = rl.date ? new Date(`${rl.date}T12:00:00`) : new Date(rl.season + 1, rl.type === 'SB' && rl.season >= 2003 ? 1 : 0, 15);
     const when = `${d.toLocaleDateString('en-US', { month: 'short' })} ${d.getFullYear()}`;
     return `${rl.type === 'SB' ? `Super Bowl ${roman(rl.season - 1965)}` : ROUND[rl.type]} · ${when}`;
   }
-  const matchLine = (sc) => (sc.neutral ? `${teamName(sc.away)} vs ${teamName(sc.home)}${sc.site ? ` · ${sc.site}` : ''}` : `${teamName(sc.away)} at ${teamName(sc.home)}`);
+  // (a scenario's two teams each have their season: "2007 Patriots at 2023 Chiefs")
+  const yrName = (sc, c) => (sc.seasons ? `${sc.seasons[c]} ${teamName(c)}` : teamName(c));
+  const matchLine = (sc) => (sc.neutral ? `${yrName(sc, sc.away)} vs ${yrName(sc, sc.home)}${sc.site ? ` · ${sc.site}` : ''}` : `${yrName(sc, sc.away)} at ${yrName(sc, sc.home)}`);
   // the kind of spot, as this one is: "Tied, or end of the half" says which ("End of the half" above "Down by 4")
   const catLabel = (sc) => (sc.category !== 'tight' ? idx.categories[sc.category] : sc.start.qtr <= 2 ? 'End of the half' : 'Tied game');
   // a featured day's title ("28–3 · Super Bowl LI", src/nflclock/daily_schedule.json), or ''; playTitle: the one of the
   // drive being played, only on a daily (today's or an archive day's) and only on that day's featured spot
   const dayTitle = (n) => { const f = idx.featured && idx.featured[n]; return (f && f.title) || ''; };
-  const playTitle = (sc) => { const f = !SURV && !PRACTICE && !DRIVE && !RUN_N && !VS && idx.featured && featOf(dayN);
+  const playTitle = (sc) => { const f = !SURV && !PRACTICE && !DRIVE && !RUN_N && !CUSTOM && !VS && idx.featured && featOf(dayN);
     return f && f.title && idx.spots[f.spot] && idx.spots[f.spot].id === (sc || G.scen || {}).id ? f.title : ''; };
   function renderIntro() {
     const sc = G.scen, r = G.root, box = $('intro');
@@ -4690,7 +4699,7 @@
     const big = el('div', 'big', state_);
     big.append(el('span', 'left', left));
     if (VS) return renderVsIntro();
-    box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : PRACTICE ? `Practice drive · ${catLabel(sc)}` : DRIVE ? 'Historic drive'
+    box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : PRACTICE ? `Practice drive · ${catLabel(sc)}` : DRIVE ? 'Historic drive' : CUSTOM ? 'Your scenario'
       : RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · Game ${G.si + 1} of ${today.length} · ${PRO_RUNS.runs[RUN_N - 1].games[G.si].round}`
         : (today.length > 1 ? `Spot ${G.si + 1} of ${today.length} · ` : ARCH_DAY ? `No. ${dayN}, from the archive · ` : 'Today’s drive · ') + (sideTaken() ? `${teamName(sc.player)} side · ` : '') + catLabel(sc)),
       ...(playTitle(sc) ? [el('h2', 'title', playTitle(sc))] : []),
@@ -4707,11 +4716,12 @@
     box.append(mu);
     const facts = el('div', 'chips');
     const tos = (n) => (n ? `${n} timeout${n === 1 ? '' : 's'}` : 'no timeouts');
-    [`${r.pos === G.me ? 'Your' : `${teamName(op)}`} ball, ${ddText(r)} ${onSpot(r)}`, `You: ${tos(r.to[G.me])}`,
+    [r.phase === KICKOFF ? (r.pos === G.me ? `You kick off to the ${teamName(op)}` : `The ${teamName(op)} kick off to you`) : `${r.pos === G.me ? 'Your' : `${teamName(op)}`} ball, ${ddText(r)} ${onSpot(r)}`, `You: ${tos(r.to[G.me])}`,
       `${teamName(op)}: ${tos(r.to[1 - G.me])}`].forEach((f) => facts.append(el('span', '', f)));
     // an overtime spot: its rules (a historic drive's are of its time)
     if (r.ot) facts.append(el('span', '', r.ot.r === 'sd' ? 'Sudden death: the first score wins' : r.ot.r === 'msd' ? `${sc.real.season} overtime rules: a touchdown wins it`
       : 'Overtime: each team gets the ball, then the next score wins'));
+    if (sc.custom && !r.ot && clockOf(r.t).q <= 2) facts.append(el('span', '', sc.end === 'half' ? 'It ends at halftime' : 'Played to the final gun'));
     box.append(facts);
     // Play right under the spot, on the first screen without scrolling (players asked); the story and the rest below
     const go = el('button', 'btn play', G.started ? 'Back to the drive' : 'Play');
@@ -4760,7 +4770,8 @@
     if (chl) box.append(chl);
     box.append(todaySoFar());
     const rl = sc.real || {};
-    box.append(el('div', 'from', `The real score, clock, ball and timeouts from that game, with the players who were on the field and how good they were that week.`));
+    box.append(el('div', 'from', sc.custom ? `Your situation, with each team as it lined up that season and every player rated as of the end of its regular season.`
+      : `The real score, clock, ball and timeouts from that game, with the players who were on the field and how good they were that week.`));
     box.append(el('div', 'from legal', 'Fan-made. Not affiliated with or endorsed by the NFL or its teams.'));
     go.focus({ preventScroll: true });
     // the first call's facts, asked for while the intro is read: the worker keeps the answer (game_worker.js), so Play
@@ -6714,8 +6725,35 @@
     d.append(keys);
   }
 
+  // a scenario from the first half played to the final gun (web/scenario.js end: 'game'): at halftime the second half
+  // kicks off to the team the scenario gave it to, three timeouts each (the first half's calls were graded on the
+  // half, as every first-half spot's are)
+  const halfToPlay = (r) => !!(G.scen.custom && G.scen.end === 'game' && r.phase === DONE && r.t >= 1800 && !r.ot);
+  function secondHalf() {
+    const r = G.root, d = $('dock'), recv = G.scen.start.receive2h === G.scen.home ? 0 : 1;
+    drawAll();
+    d.textContent = '';
+    takeBanner(d);
+    const head = el('div', 'ask');
+    head.append(el('h2', '', `Halftime: ${r.score[G.me]}\u2060–\u2060${r.score[1 - G.me]}`),
+      el('span', 'sub', `${recv === G.me ? 'You get' : `The ${teamName(code(recv))} get`} the ball to start the second half. Three timeouts each.`));
+    const b = key(recv === G.me ? 'Receive the kickoff' : 'Kick off', null, 'big', 0), keys = el('div', 'keys');
+    keys.style.setProperty('--cols', 1);
+    b.addEventListener('click', () => {
+      if (busy) return;
+      // (a hair under 30:00 left: the engine plays the second half from it, and the clock reads 15:00 of the third)
+      G.root = { t: 1800 - 1e-6, pos: 1 - recv, score: [r.score[0], r.score[1]], down: 1, ytg: 10, yl: 65, to: [3, 3], clock_running: false,
+        phase: KICKOFF, credit: 0, free_kick: false };
+      addLog(recv === G.me ? `The second half: the ${teamName(code(1 - recv))} kick off to you` : `The second half: you kick off to the ${teamName(code(recv))}`, G.root.t, true);
+      persist();
+      advance();
+    });
+    keys.append(b);
+    d.append(head, keys);
+  }
   async function finishSpot() {
     if (VS) return vsEndCard();
+    if (!G.result && halfToPlay(G.root)) return secondHalf();
     if (!G.result && needsOvertime(G.root)) return G.scen.college ? collegeOvertime() : overtime();
     await regradeWait();
     if (!G.result || (G.result.half === 1 && G.result.v !== 2)) {      // v2: halftime valued at halftime
@@ -6782,13 +6820,14 @@
     const lead0 = sc.start.score[sc.player === sc.home ? 1 : 0] - sc.start.score[sc.player === sc.home ? 0 : 1];
     const drive = !rl.drive ? '' : rl.drive === 'ran out the clock' ? (lead0 > 0 ? 'they ran out the clock' : 'time ran out on them') : `the drive ended in a ${rl.drive}`;
     const realLine = realCall ? `${rl.coach || 'the coach'} called "${realCall}" here${drive ? `; ${drive}` : ''}` : drive ? `with ${rl.coach || 'their coach'} calling it, ${drive}` : '';
-    card.append(el('p', 'real', rl.live ? `Straight from ${rl.date ? new Date(rl.date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }) : 'this week'} (${gameTag(sc)}): see how ${rl.coach || 'the coach'} actually called it.`
+    if (sc.custom) card.append(el('p', 'real', `Your scenario: ${matchLine(sc)}, ${typeSay(rl.type)}.`));
+    else card.append(el('p', 'real', rl.live ? `Straight from ${rl.date ? new Date(rl.date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }) : 'this week'} (${gameTag(sc)}): see how ${rl.coach || 'the coach'} actually called it.`
       : rl.summary ? `In the real game (${gameTag(sc)}): ${rl.summary}.` : realLine ? `In the real game (${gameTag(sc)}), ${realLine}.` : `From the real game (${gameTag(sc)}).`));
     const cc = coachCard(G.decisions, 'You called this one like');
     if (cc) card.append(cc.el);
     card.append(el('p', 'verdict', callsLine(G.decisions)));
     const btn = el('button', 'btn', SURV ? (state.out ? 'Your run' : 'Next game') : PRACTICE ? 'Your score' : runOut ? 'Your run' : G.si < today.length - 1 ? (RUN_N ? 'Next game' : 'Next spot')
-      : DRIVE ? 'Your grade' : RUN_N ? 'Your run' : ARCH_DAY ? 'Your score' : "Today's score");
+      : DRIVE || CUSTOM ? 'Your grade' : RUN_N ? 'Your run' : ARCH_DAY ? 'Your score' : "Today's score");
     btn.type = 'button';
     if (SURV) card.append(...lifeOffer());
     let went = false;                  // once: the await below leaves room for a second tap
@@ -7177,7 +7216,7 @@
   const RESULT_W = 0.03, RESULT_FROM = 6;
   // a percentile shows 1 to 99: a 0 beside a win read as broken, a 100 beside a loss as perfect
   const pctShown = (p) => clip(p, 0.01, 0.99);
-  const resultScored = () => !!(DRIVE || RUN_N || PRACTICE || dayN >= RESULT_FROM || allDecisions().every((x) => x.g === 2));
+  const resultScored = () => !!(DRIVE || RUN_N || CUSTOM || PRACTICE || dayN >= RESULT_FROM || allDecisions().every((x) => x.g === 2));
   // The score (decisions graded as g: 2, decisionFrom): the share of simulated NFL play-callers who did worse than you
   // on the same drive, the calls and the result, as above (RESULT_W a win). Every one of them is measured with your
   // numbers: the costs decisionFrom gave each option (noise counted as nothing), so a call costs a simulated caller
@@ -7195,7 +7234,7 @@
     let groups = spotGroups();
     if (!groups.length) groups = [{ decs, res: 0, start: decs[0].bestWp }];
     const my = groups.reduce((a, g) => a + RESULT_W * g.res - g.decs.reduce((b, x) => b + x.cost, 0), 0);
-    const R = rng(hash('pct3', dayN, DRIVE, RUN_N)), N = 6000;
+    const R = rng(hash('pct3', dayN, DRIVE, RUN_N, ...(CUSTOM ? [CUSTOM] : []))), N = 6000;
     const lnL = Math.log(SKILL_LOOSE), lnS = Math.log(SKILL_SHARP) - lnL, lnM = Math.log(SKILL_MISREAD) - lnL;
     const D = groups.map((g) => g.decs.map((x) => ({ q: x.wps.map((o) => x.q[o.key] || 0), c: x.wps.map((o) => o.c), top: Math.max(...x.wps.map((o) => o.c)) })));
     let better = 0;
@@ -7217,9 +7256,11 @@
       });
       if (m < my - 1e-9) better += 1; else if (Math.abs(m - my) <= 1e-9) better += 0.5;
     }
-    if (DRIVE && groups.some((g) => g.res < 1)) return pctShown(Math.min(better / N, (PASS_AT - 1) / 100));
+    if (mustWin() && groups.some((g) => g.res < 1)) return pctShown(Math.min(better / N, (PASS_AT - 1) / 100));
     return pctShown(better / N);
   }
+  // a historic drive is a mission, and so is a scenario played to the final gun: an A (a pass) takes winning the game
+  const mustWin = () => !!DRIVE || (!!CUSTOM && !!today[0] && today[0].end !== 'half');
   function spotGroups() {
     const out = [];
     for (let i = 0; i < today.length; i++) {
@@ -7236,7 +7277,7 @@
     const groups = spotGroups();
     if (!groups.length) return percentileVsNFL(decs);
     const my = groups.reduce((a, g) => a + RESULT_W * g.res - g.decs.reduce((b, x) => b + x.cost, 0), 0);
-    const R = rng(hash('pct2', dayN, DRIVE, RUN_N)), N = 6000;
+    const R = rng(hash('pct2', dayN, DRIVE, RUN_N, ...(CUSTOM ? [CUSTOM] : []))), N = 6000;
     const lnLo = Math.log(PCT_TAU_LO), lnSpan = Math.log(PCT_TAU_HI) - lnLo;
     const weights = (x, tau) => {
       const w = x.wps.map((o) => (x.q[o.key] || 0) * (tau ? Math.exp((o.wp - x.bestWp) / tau) : 1));
@@ -7262,7 +7303,7 @@
       if (m < my - 1e-9) better += 1; else if (Math.abs(m - my) <= 1e-9) better += 0.5;
     }
     // a historic drive is a mission: an A (a pass) takes winning the game
-    if (DRIVE && groups.some((g) => g.res < 1)) return pctShown(Math.min(better / N, (PASS_AT - 1) / 100));
+    if (mustWin() && groups.some((g) => g.res < 1)) return pctShown(Math.min(better / N, (PASS_AT - 1) / 100));
     return pctShown(better / N);
   }
   // the score against the result, when they disagree (a win scored low, a loss high): one line on why
@@ -7376,16 +7417,16 @@
   // The new try is saved before the page reloads into it (a reload after it goes on with it); the reload takes the
   // workers and any grading still running for the old try with it, and nothing saves the old one after (restarting).
   const RESTART_OK = !(SURV || PRACTICE || VS);
-  const todayDaily = () => !(SURV || PRACTICE || VS || DRIVE || RUN_N || ARCH_DAY);
-  const sideTaken = () => !(SURV || PRACTICE || VS || DRIVE || RUN_N) && !!idx && !!sidesOf(dayN) && today.length === 1;    // the day's drive is a side of two
+  const todayDaily = () => !(SURV || PRACTICE || VS || DRIVE || RUN_N || CUSTOM || ARCH_DAY);
+  const sideTaken = () => !(SURV || PRACTICE || VS || DRIVE || RUN_N || CUSTOM) && !!idx && !!sidesOf(dayN) && today.length === 1;    // the day's drive is a side of two
   const canRestart = () => RESTART_OK && !restarting && !!G && !!state && !state.done && !G.over && !$('play').hidden;
   function restartSync() { const b = $('restartBtn'); if (b) b.hidden = !canRestart(); }
   const playRunning = () => busy || $('field').classList.contains('playing');
   function restartAsk() {
     if (!canRestart()) return;
     if (playRunning()) { toast('Wait for this play to finish'); return; }
-    const what = DRIVE ? 'this drive' : RUN_N ? 'this run' : ARCH_DAY ? 'this day' : 'today’s drive';
-    const note = DRIVE ? 'This try won’t count. The new try gets fresh luck on every snap; your best grade here stays.'
+    const what = DRIVE ? 'this drive' : RUN_N ? 'this run' : CUSTOM ? 'this scenario' : ARCH_DAY ? 'this day' : 'today’s drive';
+    const note = DRIVE || CUSTOM ? 'This try won’t count. The new try gets fresh luck on every snap; your best grade here stays.'
       : RUN_N ? 'This try won’t count. The run starts again from its first game, with fresh luck on every snap.'
         : ARCH_DAY ? 'It starts again from the first snap. Archive days don’t go on any leaderboard.'
           : 'Your streak still counts, but a restarted drive’s score doesn’t go on today’s leaderboard.';
@@ -7405,7 +7446,7 @@
   }
   function restartGo() {
     const n = (state.restarts || 0) + 1;
-    track('restart', { mode: modeName(), calls: allDecisions().length, restarts: n, ...(DRIVE ? { drive: DRIVE } : RUN_N ? { run: RUN_N } : { day: dayN }) });
+    track('restart', { mode: modeName(), calls: allDecisions().length, restarts: n, ...(DRIVE ? { drive: DRIVE } : RUN_N ? { run: RUN_N } : CUSTOM ? { custom: 1 } : { day: dayN }) });
     restarting = true;
     pool.forEach((sl) => { try { sl.w.terminate(); } catch (e) { /* gone already */ } });
     save(stateKey(), { spots: [], current: 0, done: false, tryAt: Date.now(), restarts: n, ...(state.side != null ? { side: state.side } : {}) });
@@ -7451,7 +7492,7 @@
     const cc = coachCard(decs, DRIVE || RUN_N ? 'You coached like' : 'Today you coached like');
     const hhs = today.map((_, i) => (state.spots[i] ? headToHead(i, state.spots[i].result) : null)), hhN = hhs.filter(Boolean);
     const runRec = RUN_N ? today.map((_, i) => { const r = state.spots[i] && state.spots[i].result; return !r ? 0 : r.mine > r.theirs ? 1 : r.mine < r.theirs ? -1 : 0; }) : [];
-    let driveRec = null, drivePrev = null;
+    let driveRec = null, drivePrev = null, scenRec = null, scenPrev = null;
     if (DRIVE) {                      // a historic drive: its own record (the best try kept), not a day's
       const ds = load(`${STORE}:drives`, {});
       drivePrev = ds[DRIVE] || null;
@@ -7467,6 +7508,9 @@
       const rs = load(`${STORE}:runs`, {});
       rs[RUN_N] = { p, wpa, w: runRec.filter((x) => x > 0).length, l: runRec.filter((x) => x < 0).length, n: today.length };
       save(`${STORE}:runs`, rs);
+    } else if (CUSTOM) {              // a scenario: My scenarios' record of it (the best try kept), nothing else
+      scenPrev = scenList()[CUSTOM] || null;
+      scenRec = scenFinish(p);
     } else {
       // (vs: against the real coach, so a badge for beating him counts the days on any phone)
       // (the card drawn again, on a reload: a record already here stays, which may be another phone's, synced in)
@@ -7482,13 +7526,13 @@
       }
       save(`${STORE}:stats`, st);
     }
-    tendFold(decs, DRIVE ? `drive${DRIVE}` : RUN_N ? `run${RUN_N}` : `d${dayN}`);
+    tendFold(decs, DRIVE ? `drive${DRIVE}` : RUN_N ? `run${RUN_N}` : CUSTOM ? `custom${CUSTOM}` : `d${dayN}`);
     const firstFinish = !state.done;
     state.done = true;
     if (firstFinish) {                 // the badges this finish earned (shown on this card, again if it is drawn again)
       const ev = today.map((sc, i) => ({ sc, r: state.spots[i] && state.spots[i].result, decs: (state.spots[i] && state.spots[i].decisions) || [], hh: hhs[i] }));
       if (DRIVE || RUN_N) achCount(ev);
-      state.badges = badgeAward(st, ev);
+      state.badges = CUSTOM ? [] : badgeAward(st, ev);          // (scenarios earn no badges: anyone can build an easy one)
       save(`${STORE}:stats`, st);
     }
     saveState();
@@ -7497,11 +7541,11 @@
     const box = $('done');
     box.textContent = '';
     // the daily streak: days in a row finished, today included, a day a freeze covered too (what brings players back tomorrow)
-    const sk = streakOf(st, DRIVE || RUN_N || ARCH_DAY ? dayOf(new Date()) : dayN), streak = sk.n;
+    const sk = streakOf(st, DRIVE || RUN_N || CUSTOM || ARCH_DAY ? dayOf(new Date()) : dayN), streak = sk.n;
     dayLabelSet();
     if (DRIVE) {
       box.append(driveCard(p, driveRec, drivePrev), driveActions(driveRec));
-    }
+    } else if (CUSTOM) box.append(scenCard(p, scenRec, scenPrev), scenActions(scenRec));
     else {
       box.append(el('div', 'note', RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · your run` : (dayTitle(dayN) && !SURV ? `Day ${dayN} · ${dayTitle(dayN)}` : `Day ${dayN} · your score`)), el('div', 'big-pct', `${Math.round(p * 100)}`),
         el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers${resultScored() ? ', the calls and the result' : ''}`),
@@ -7541,7 +7585,7 @@
     }
     const dbox = dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0)));
     box.append(dbox);
-    if (!DRIVE && !RUN_N && !ARCH_DAY) box.append(practiceNodes());
+    if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) box.append(practiceNodes());
     if (ARCH_DAY || RUN_N) { const a = el('a', 'btn', RUN_N ? 'More runs' : 'Back to the archive'); a.href = '#archive'; box.append(a); }
     box.append(homeBtn());                     // (everything else there is to play)
     if (!ARCH_DAY && !RUN_N && PRO_ON && !isPro() && BOARD.api) box.append(proValueCard());       // the website: what Pro adds, after the free drive
@@ -7575,8 +7619,9 @@
       box.insertBefore(v, box.children[k3] || null);
     }
     const took = sideTaken() ? `As the ${teamName(today[0].player)} (${sideLine(today[0])})` : '';
-    const text = `${DRIVE ? `Two-Minute Drill · ${PRO.drives[DRIVE - 1].title}\nGrade ${gradeOf(Math.round(p * 100)).L}${p * 100 >= PASS_AT - 0.5 ? ' ✅ passed' : ''}` : RUN_N ? `Two-Minute Drill · the ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Two-Minute Drill #${dayN}${dayTitle(dayN) ? ` · ${dayTitle(dayN)}` : ''}${took ? `\n${took}` : ''}`}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
-      `${streak >= 2 ? `\n🔥 ${streak}-day streak` : ''}\n${rows.join('\n')}\nCan you beat me? ${!DRIVE && !RUN_N && !ARCH_DAY ? chLink(p) : SITE}`;
+    const text = `${DRIVE ? `Two-Minute Drill · ${PRO.drives[DRIVE - 1].title}\nGrade ${gradeOf(Math.round(p * 100)).L}${p * 100 >= PASS_AT - 0.5 ? ' ✅ passed' : ''}`
+      : CUSTOM ? `Two-Minute Drill · my scenario: ${matchLine(today[0])}\n${gameTag(today[0])}\nGrade ${gradeOf(Math.round(p * 100)).L}` : RUN_N ? `Two-Minute Drill · the ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Two-Minute Drill #${dayN}${dayTitle(dayN) ? ` · ${dayTitle(dayN)}` : ''}${took ? `\n${took}` : ''}`}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
+      `${streak >= 2 && !CUSTOM ? `\n🔥 ${streak}-day streak` : ''}\n${rows.join('\n')}\nCan you beat me? ${CUSTOM ? scenLink(CUSTOM) : !DRIVE && !RUN_N && !ARCH_DAY ? chLink(p) : SITE}`;
     // sharing is how new players find the game: the button sits right under the result, not below the standings
     const chc = challengeCard(p);
     if (chc) box.insertBefore(chc, box.children[k3] || null);
@@ -7597,25 +7642,25 @@
     const img = el('button', 'btn ghostbtn', 'Share as a picture');
     img.type = 'button';
     img.addEventListener('click', () => shareImage({
-      title: DRIVE ? PRO.drives[DRIVE - 1].title : RUN_N ? `The ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Daily #${dayN}${dayTitle(dayN) ? ` · ${dayTitle(dayN)}` : ''}${took ? ` · ${teamName(today[0].player)} side` : ''}`,
-      score: Math.round(p * 100), grade: DRIVE ? gradeOf(Math.round(p * 100)).L : null,
+      title: DRIVE ? PRO.drives[DRIVE - 1].title : CUSTOM ? `My scenario · ${matchLine(today[0])}` : RUN_N ? `The ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Daily #${dayN}${dayTitle(dayN) ? ` · ${dayTitle(dayN)}` : ''}${took ? ` · ${teamName(today[0].player)} side` : ''}`,
+      score: Math.round(p * 100), grade: DRIVE || CUSTOM ? gradeOf(Math.round(p * 100)).L : null,
       line: `Better than ${Math.round(p * 100)}% of NFL play-callers`, brag: share.brag || null,
       coach: () => (share.text.match(/Coached like ([^\n]+)/) || [])[1] || null,
       vs: met ? (one || `Vs the real coaches: ${recTxt}`) : null, beat: rec[0] > rec[1] ? 1 : rec[1] > rec[0] ? -1 : 0,
-      streak: !DRIVE && !RUN_N && !ARCH_DAY ? streak : 0,
+      streak: !DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY ? streak : 0,
       rows: today.map((sp, i) => ({ team: sp.player, res: (rows[i] || '').split(' ')[1] || '', marks: squeeze((state.spots[i] && state.spots[i].decisions) || []) })) }));
     box.insertBefore(img, dbox);
-    if (!DRIVE && !RUN_N && !ARCH_DAY && weekDays(st, dayN).filter((w) => w.d).length >= 3) {
+    if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY && weekDays(st, dayN).filter((w) => w.d).length >= 3) {
       const wk = el('button', 'btn ghostbtn', 'Share my week');
       wk.type = 'button';
       wk.addEventListener('click', () => weekImage(load(`${STORE}:stats`, { days: {} }), dayN, streak));
       box.insertBefore(wk, dbox);
     }
     box.insertBefore(callsExplained(decs), dbox);
-    if (!DRIVE && !RUN_N && !ARCH_DAY) { const lg = el('p', 'lglink'); lg.hidden = true; box.insertBefore(lg, dbox); leagueNudge(); }
+    if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) { const lg = el('p', 'lglink'); lg.hidden = true; box.insertBefore(lg, dbox); leagueNudge(); }
     badgeShow(box, state.badges || [], firstFinish);
     box.append(countdown(streak >= 1 ? 'Keep the streak: next drive in ' : null));
-    if (!DRIVE && !RUN_N && !ARCH_DAY) box.append(a2hsSlotEl(), reminderNodes());     // the habit: an icon on the phone, a reminder
+    if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) box.append(a2hsSlotEl(), reminderNodes());     // the habit: an icon on the phone, a reminder
     const ad = adBox();
     if (ad) box.append(ad);
     box.append(disclaimer());
@@ -7712,7 +7757,7 @@
   // when a finish or a sync changes the streak (never over practice's own label: a sync landing mid-drive put the day's
   // number and streak up there, as if it were the daily)
   function dayLabelSet() {
-    if (SURV || PRACTICE || DRIVE || RUN_N || VS || ARCH || !idx || !today.length) return;
+    if (SURV || PRACTICE || DRIVE || RUN_N || CUSTOM || VS || ARCH || !idx || !today.length) return;
     const sk = ARCH_DAY ? null : streakOf(load(`${STORE}:stats`, { days: {} }), dayOf(new Date())), stk = sk ? sk.n : 0;
     $('dayLabel').textContent = `No. ${dayN} · ${dayDate(dayN).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${ARCH_DAY ? ' · archive' : ''}${stk >= 2 ? ` · \ud83d\udd25${stk}${sk.pending.length ? '\u2744\ufe0f' : ''}` : ''}`;
   }
@@ -7912,7 +7957,7 @@
   function a2hsSlotEl() { a2hsSlot = el('div', 'a2hsslot'); a2hsFill(a2hsSlot); return a2hsSlot; }
   function a2hsFill(slot) {
     const plat = a2hsEvt ? 'prompt' : IOS_SAFARI ? 'ios' : null;
-    if (!BUILD || STANDALONE || !plat || DRIVE || RUN_N || ARCH_DAY || SURV) return;
+    if (!BUILD || STANDALONE || !plat || DRIVE || RUN_N || CUSTOM || ARCH_DAY || SURV) return;
     if (Object.keys(load(`${STORE}:stats`, { days: {} }).days).length < 2) return;
     const s = load(A2HS_KEY, {}), now = Date.now();
     if (s.done || s.offDay === dayN) return;                        // installed, or closed today
@@ -8234,7 +8279,7 @@
   function todaySoFar() {
     const line = el('div', 'who sofar');
     line.hidden = true;
-    if (SURV || PRACTICE || VS || DRIVE || RUN_N || ARCH_DAY || G.si || G.started || state.done) return line;
+    if (SURV || PRACTICE || VS || DRIVE || RUN_N || CUSTOM || ARCH_DAY || G.si || G.started || state.done) return line;
     (BOARD.ready || Promise.resolve()).then(async () => {
       if (BOARD.mode !== 'api') return;
       const d0 = await (await fetch(`${BOARD.api}/daily?date=${driveDate()}`)).json(), d = d0 && dayFor(d0, true);    // (yours will be fair-scored)
@@ -8261,7 +8306,7 @@
   function dailyBox(p, spotW) {
     const box = el('div', 'board daily');
     box.hidden = true;
-    if (ARCH_DAY || DRIVE || RUN_N) return box;        // the archive, a historic drive, a run: nothing to post
+    if (ARCH_DAY || DRIVE || RUN_N || CUSTOM) return box;        // the archive, a historic drive, a run, a scenario: nothing to post
     const post = async () => {
       const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: driveDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)),
         ...(fairDay() ? { g: 2 } : {}), ...(state.restarts ? { restarted: true } : {}),       // (restarted: off the lists, restartAsk)
@@ -8422,7 +8467,7 @@
     const w = el('div', 'countdown');
     const b = el('b', '', '');
     // (a historic drive or a playoff run stays as it is: what comes at midnight is the next daily)
-    w.append(document.createTextNode(label || (DRIVE || RUN_N ? 'Next daily drive in ' : today.length > 1 ? 'New spots in ' : 'Next drive in ')), b);
+    w.append(document.createTextNode(label || (DRIVE || RUN_N || CUSTOM ? 'Next daily drive in ' : today.length > 1 ? 'New spots in ' : 'Next drive in ')), b);
     const upd = () => {
       if (dayOf(new Date()) > dayN) {           // past midnight on yesterday's screen: the new drive is out
         clearInterval(tick);
@@ -8496,14 +8541,15 @@
     const dl = el('dl', 'facts');
     const add = (k, v) => dl.append(el('dt', '', k), el('dd', '', v));
     const line = sc.game.home_spread;
-    add('Game', `${teamName(sc.away)} at ${teamName(sc.home)}`);
+    add('Game', sc.custom ? matchLine(sc) : `${teamName(sc.away)} at ${teamName(sc.home)}`);
     add('Point spread', Math.abs(line) < 0.5 ? 'Pick’em' : `${teamName(line > 0 ? sc.home : sc.away)} by ${Math.abs(line).toFixed(1)}`);
     [A, H].forEach((t) => {
       add(`${teamName(t.team)}`, `${t.coach || ''}${t.qb && t.qb.name ? ` · QB ${t.qb.name}` : ''}`);
       add('Kicker', `${t.kicker.name || '—'} · rated ${t.kicker.ovr ?? '—'}`);
       add('Punter', `${t.punter.name || '—'} · rated ${t.punter.ovr ?? '—'}`);
     });
-    openModal('This game', [dl, el('p', 'note', `The players who were on the field in that game (${gameTag(sc)}), each rated against his position as of that week, and the real point spread.`)]);
+    openModal('This game', [dl, el('p', 'note', sc.custom ? `${matchLine(sc)}: each team as it lined up in a game of its season, every player rated against his position as of the end of that regular season. The point spread comes from the two teams’ strengths, as real lines do.`
+      : `The players who were on the field in that game (${gameTag(sc)}), each rated against his position as of that week, and the real point spread.`)]);
   }
   // ---- the first drive's tour: a few tips that point at the real screen as it comes up (the spot, the scoreboard, the
   // call, the clock, the graded result), each once, in place of a manual up front. Never a wall: no backdrop, and a tap
@@ -8511,7 +8557,7 @@
   // plays never waits on it. Daily and Survivor only (a Pro drive or Versus is no first visit); kept in storage, so a
   // reload picks up where it was and a finished or skipped tour never comes back. The full help stays on the ?.
   const TOUR_KEY = `${STORE}:tour`;
-  const TOUR_OK = !(VS || VS_LOBBY || DRIVE || RUN_N || ARCH || ARCH_DAY);
+  const TOUR_OK = !(VS || VS_LOBBY || DRIVE || RUN_N || CUSTOM || CUSTOM_BUILD || ARCH || ARCH_DAY);
   const qs = (s) => document.querySelector(s);
   const TOUR = [
     // (past: below, it goes under Play, not over it; keep: what it never covers, the score and the clock it talks about)
@@ -8954,12 +9000,12 @@
   }
   const chName = (c) => c.name || 'Your friend';
   function challengeLine() {
-    const c = !SURV && !PRACTICE && !VS && !DRIVE && !RUN_N && !G.si && !state.done ? chFor(dayN) : null;
+    const c = !SURV && !PRACTICE && !VS && !DRIVE && !RUN_N && !CUSTOM && !G.si && !state.done ? chFor(dayN) : null;
     return c ? el('div', 'who chal', `\ud83c\udfaf ${chName(c)} scored ${c.s} on this drive. Beat it.`) : null;
   }
   function challengeCard(p) {
     const c = chFor(dayN);
-    if (!c || DRIVE || RUN_N) return null;
+    if (!c || DRIVE || RUN_N || CUSTOM) return null;
     const me = Math.round(p * 100), v = el('div', 'h2h-day chal');
     v.append(el('span', 'k', `You vs ${chName(c)}`), el('b', '', me > c.s ? 'You win' : me < c.s ? `${chName(c)} wins` : 'Tied'),
       el('span', 'sub', `${me}\u2013${c.s}. Send it back: your share link challenges them.`));
@@ -9264,8 +9310,20 @@
       const m = st[kind] || (st[kind] = {});
       for (const [k, t] of Object.entries(acc[kind] || {})) if (typeof t === 'number' && !(m[k] <= t)) { m[k] = t; changed = true; }
     }
+    // My scenarios: the newest touch of each, with the best score, the most tries, won if either (worker.js scenMerge)
+    const L = scenList();
+    let lc = false;
+    for (const [c, v] of Object.entries(acc.scen || {})) {
+      const u = L[c];
+      if (!v || typeof v.at !== 'number') continue;
+      const best = [u && u.p, v.p].filter((q) => typeof q === 'number');
+      const m = !u ? { ...v } : { ...(v.at > u.at ? { ...u, ...v, gone: !!v.gone } : u), ...(best.length ? { p: Math.max(...best) } : {}), tries: Math.max(u.tries || 0, v.tries || 0), won: !!(u.won || v.won) };
+      if (!m.gone) delete m.gone;
+      if (JSON.stringify(m) !== JSON.stringify(u)) { L[c] = m; lc = true; }
+    }
+    if (lc) scenSave(L);
     if (changed) { save(`${STORE}:stats`, st); save(`${STORE}:drives`, here.drives); save(`${STORE}:runs`, here.runs); }
-    return changed;
+    return changed || lc;
   }
   let syncQ = Promise.resolve(false);        // one sync at a time, in order (a finish while one is out goes after it)
   function statsSync(force) {
@@ -9274,7 +9332,9 @@
       if (!force && Date.now() - Number(load(SYNC_KEY, 0) || 0) < SYNC_MS) return false;
       const st = load(`${STORE}:stats`, { days: {} });
       const stats = { days: newest(st.days, SYNC_CAP.days), drives: newest(gauntletDrives(load(`${STORE}:drives`, {})), SYNC_CAP.drives), runs: newest(load(`${STORE}:runs`, {}), SYNC_CAP.runs),
-        badges: st.badges || {}, frozen: newest(st.frozen, SYNC_CAP.frozen) };
+        badges: st.badges || {}, frozen: newest(st.frozen, SYNC_CAP.frozen),
+        scen: Object.fromEntries(Object.entries(scenList()).filter(([c, e]) => SCN && SCN.parse(c) && e && typeof e.at === 'number')
+          .map(([c, e]) => [c, { at: e.at, ...(typeof e.p === 'number' ? { p: e.p } : {}), tries: e.tries || 0, won: !!e.won, ...(e.gone ? { gone: true } : {}) }])) };
       let d;
       try { d = await proApi('/auth/stats', { session: authSession(), stats }); } catch (e) {
         if (/signed out/i.test(e.message)) { authLost(); acctBar(); }
@@ -9292,7 +9352,7 @@
     if (homeUp) { renderHome(false, true); return; }
     dayLabelSet();
     const line = document.querySelector('#done .streak');
-    if (!line || !state || !state.done || SURV || PRACTICE || DRIVE || RUN_N || ARCH_DAY) return;
+    if (!line || !state || !state.done || SURV || PRACTICE || DRIVE || RUN_N || CUSTOM || ARCH_DAY) return;
     line.textContent = streakLine(streakOf(load(`${STORE}:stats`, { days: {} }), dayN));
   }
 
@@ -9490,7 +9550,8 @@
     const ul = el('ul');
     [`The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed, with its score and stats`,
       'The historic drives. Mahomes’ 13 seconds, the Minneapolis Miracle, the Helmet Catch, 28–3 and more, each from its real spot',
-      'The playoff runs. A team’s whole postseason, every late-game spot in order. Win them all'].forEach((t) => ul.append(el('li', '', t)));
+      'The playoff runs. A team’s whole postseason, every late-game spot in order. Win them all',
+      ...(SCN ? ['Build a scenario. Any two teams of any season from 2001 on, as they lined up then, in any situation: the 2007 Patriots against the 2023 Chiefs, down 4 with two minutes left'] : [])].forEach((t) => ul.append(el('li', '', t)));
     box.append(ul);
     if (isPro()) {
       box.append(el('p', '', acctPro() ? `Pro is on your account (${ACCT.me.email}): sign in on any device to play it there.` : `Pro is on. Your code: ${proCode()}. Keep it: it unlocks Pro on up to 3 of your devices.`));
@@ -9792,6 +9853,7 @@
     }
     box.append(proCodeCard(false));
     box.append(authNodes());        // Pro by code: keep it on an account; signed in: who, and Sign out
+    if (SCN) box.append(scenEntry());
     gauntletFresh();
     const pro = await loadPro(), ds = load(`${STORE}:drives`, {});
     if (pro && pro.drives.length) {
@@ -9850,6 +9912,370 @@
       list.append(a);
     }
     box.append(list, el('p', 'note', acctPro() ? `Pro is on your account · ${ACCT.me.email}` : `Pro is on this device · code ${proCode()}`));
+  }
+
+  // ------------------------------------------------------- build a scenario ---
+  // Pro (#custom): any two teams of any season the site has rosters for (rosters/index.json, rosters/<season>.json:
+  // src/nflclock/scenario.py), any kind of game and any situation (web/scenario.js: the format, the presets, the checks).
+  // The builder saves its draft as you go (SCN_DRAFT); Kick off plays it at #custom-<code>, a link anyone can open
+  // (Pro plays it; anyone else sees what it is and the Pro pitch). A scenario plays like a historic drive (each try its
+  // own draws, Start over, graded the same way, an A takes winning it) and posts nowhere: My scenarios (SCN_LIST,
+  // synced with the account like the drives: statsSync) keeps each one's best grade and tries.
+  const SCN_DRAFT = `${STORE}:custom:draft`, SCN_LIST = `${STORE}:scen`, SCN_KEEP = 200;
+  let SCN_IDX = null;
+  const SCN_ROS = {};
+  async function scnIndex() {
+    if (!SCN_IDX) SCN_IDX = fetch(asset('rosters/index.json')).then((r) => { if (!r.ok) throw new Error(`rosters ${r.status}`); return r.json(); });
+    try { return await SCN_IDX; } catch (e) { SCN_IDX = null; throw e; }
+  }
+  // a season's teams, fetched when one of its teams is picked (and kept: the builder asks again as you change it)
+  function scnRoster(y) {
+    if (!SCN_ROS[y]) SCN_ROS[y] = fetch(asset(`rosters/${y}.json`)).then((r) => { if (!r.ok) throw new Error(`rosters ${y}: ${r.status}`); return r.json(); });
+    SCN_ROS[y].catch(() => { delete SCN_ROS[y]; });
+    return SCN_ROS[y];
+  }
+  const scnSeason = (ix, y) => (ix.seasons || []).find((s) => s.season === y);
+  const scnTeam = (ix, c, y) => { const s = ix && scnSeason(ix, y); return s ? s.teams.find((t) => t.team === c) : null; };
+  // the franchise's name that season where it is not today's (Washington before the Commanders), else today's
+  const scnNick = (ix, c, y) => { const t = scnTeam(ix, c, y); return t && t.era ? t.era.name : teamName(c); };
+  const scnName = (ix, c, y) => `${y} ${scnNick(ix, c, y)}`;
+  const scenList = () => { const o = load(SCN_LIST, {}); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; };
+  function scenSave(L) {
+    const keep = Object.entries(L).sort((a, b) => (b[1].at || 0) - (a[1].at || 0)).slice(0, SCN_KEEP);
+    save(SCN_LIST, Object.fromEntries(keep));
+  }
+  // played (kicked off): on the list, on top
+  function scenTouch(c) {
+    const L = scenList(), e = L[c] || { tries: 0, won: false };
+    L[c] = { ...e, at: Date.now() };
+    delete L[c].gone;
+    scenSave(L);
+  }
+  // a finished try: the best grade kept, the tries counted once a try (a reload of the end card counts nothing)
+  function scenFinish(p) {
+    const L = scenList(), prev = L[CUSTOM] || null, r0 = state.spots[0] && state.spots[0].result, won = !!(r0 && r0.mine > r0.theirs);
+    const counted = !!prev && prev.try === state.tryAt;
+    const best = prev && typeof prev.p === 'number' ? prev.p : null;
+    const rec = { at: Date.now(), p: Math.max(p, best ?? 0), last: p, tries: ((prev && prev.tries) || 0) + (counted ? 0 : 1), won: won || !!(prev && prev.won),
+      try: state.tryAt, pb: counted ? prev.pb ?? null : best };
+    L[CUSTOM] = rec;
+    scenSave(L);
+    return rec;
+  }
+  // the kind of game in a sentence: "a regular-season game", "the Divisional round", "the Super Bowl"
+  const typeSay = (t) => (t === 'REG' ? 'a regular-season game' : t === 'WC' ? 'the Wild Card round' : `the ${SCN.TYPES[t]}`);
+  const scenLink = (c) => `${location.origin}${location.pathname}${location.search}#custom-${c}`;
+  // a scenario as a line: "2007 Patriots vs 2023 Chiefs", and its situation in a few words
+  function scenLines(sc, ix) {
+    const S = SCN.summary(sc, (c, y) => scnName(ix, c, y));
+    return { title: S.title, sub: `${SCN.TYPES[sc.type]} · ${sc.qtr === 5 ? 'OT' : `Q${sc.qtr}`} ${SCN.clockText(sc.clock)} · ${S.score.toLowerCase()}`, S };
+  }
+  // the summary card (the builder's, a shared link's, the end card's)
+  function scenSummaryEl(sc, ix) {
+    const { S } = scenLines(sc, ix), box = el('div', 'scnsum');
+    const tY = scnTeam(ix, sc.you, sc.ys), tO = scnTeam(ix, sc.opp, sc.os);
+    const head = el('div', 'sh');
+    const sw = (c) => { const x = el('span', `sw${darkOn(color(c)) ? ' dk' : ''}`, c); x.style.background = color(c); return x; };
+    head.append(sw(sc.you), el('b', '', S.title), sw(sc.opp));
+    box.append(head);
+    const fit = ix.spread || { hfa: 2.4, k: 46 };
+    if (tY && tO) {
+      const homeYou = sc.site !== 'away', h = homeYou ? tY : tO, a = homeYou ? tO : tY;
+      const sp = Math.round(((sc.site === 'neutral' ? 0 : fit.hfa) + fit.k * (h.net - a.net)) * 2) / 2, fav = sp >= 0 ? h : a;
+      box.append(el('p', 'rec', `${scnNick(ix, sc.you, sc.ys)} ${tY.record}${tY.qb ? `, ${tY.qb}` : ''} · ${scnNick(ix, sc.opp, sc.os)} ${tO.record}${tO.qb ? `, ${tO.qb}` : ''} · ${Math.abs(sp) < 0.5 ? 'a pick’em' : `${scnNick(ix, fav.team, fav === tY ? sc.ys : sc.os)} by ${Math.abs(sp).toFixed(1)}`}`));
+    }
+    const ul = el('ul');
+    [S.game, `${S.when} · ${S.score}`, S.ball, S.to, S.half, S.ot].filter(Boolean).forEach((t) => ul.append(el('li', '', t)));
+    box.append(ul);
+    return box;
+  }
+  // the Pro screen's way in: Build a scenario, and how many you have played
+  function scenEntry() {
+    const a = el('a', 'scnentry'), n = Object.values(scenList()).filter((e) => e && !e.gone).length;
+    a.href = '#custom';
+    a.append(el('span', 'k', 'New · Build a scenario'), el('b', '', 'Your teams, your situation'),
+      el('span', 'm', `Any two teams from 2001 on, as they lined up that season. Set the game, the clock, the score and the ball, then call it.${n ? ` ${n} played.` : ''}`),
+      el('span', 'cta', 'Build one'));
+    return a;
+  }
+  // a link to a scenario that can't be played (a typo, a season the site no longer has)
+  function scenBad(why) {
+    show('arch');
+    const box = $('arch');
+    box.textContent = '';
+    const a = el('a', 'btn', 'Build a scenario');
+    a.href = '#custom';
+    box.append(el('h2', '', 'Scenario'), el('p', 'lead', 'That scenario link doesn’t work.'), el('p', 'note', why.join(' · ')), a);
+  }
+  // #custom-<code> without Pro: what the scenario is, and the Pro pitch
+  async function renderScenPitch(sc, ix) {
+    show('arch');
+    track('scenario_pitch', {});
+    const box = $('arch');
+    box.textContent = '';
+    box.append(el('h2', '', 'Pro'), el('p', 'lead', 'Someone built this scenario for you to play. Building and playing scenarios is part of Pro.'), scenSummaryEl(sc, ix));
+    box.append(...proNodes(), authNodes());
+  }
+  // the builder's draft: the last one, else today's season's two teams
+  function scenDraft(ix) {
+    const d = load(SCN_DRAFT, null), last = ix.seasons[ix.seasons.length - 1];
+    if (d && typeof d === 'object' && d.you) return { ...SCN.defaults(last.season), ...d };
+    const t = last.teams.map((x) => x.team);
+    return SCN.defaults(last.season, t.includes('KC') ? 'KC' : t[0], t.includes('BUF') ? 'BUF' : t[1]);
+  }
+  async function renderBuilder() {
+    show('arch');
+    track('scenario_builder', { pro: isPro() });
+    const box = $('arch');
+    box.textContent = '';
+    box.append(el('h2', '', 'Build a scenario'));
+    let ix;
+    try { ix = await scnIndex(); } catch (e) {
+      box.append(el('p', 'note', `The rosters did not load (${e.message}). Check your connection and reload.`));
+      return;
+    }
+    const seasons = ix.seasons.map((s) => s.season), first = seasons[0], last = seasons[seasons.length - 1];
+    box.append(el('p', 'lead', `Any two teams from ${first} to ${last}, each as it lined up that season, in any situation you set.`));
+    if (!isPro()) box.append(el('p', 'note scnpro', 'Building is free to try; playing a scenario is part of Pro.'));
+    let sc = scenDraft(ix);
+    const form = el('form', 'scn');
+    form.noValidate = true;
+    form.addEventListener('submit', (e) => e.preventDefault());
+    const uid = (k) => `scn-${k}`;
+    const row = (label, ...kids) => { const r = el('div', 'srow'), l = el('label', 'sl', label); r.append(l, ...kids); if (kids[0] && kids[0].id) l.htmlFor = kids[0].id; return r; };
+    const fieldset = (legend) => { const f = el('fieldset', 'sgrp'); f.append(el('legend', '', legend)); return f; };
+    // a row of buttons, one of them on (aria-pressed): the quarter, the down, the timeouts ...
+    const seg = (name, opts, get, set, label) => {
+      const g = el('div', 'seg');
+      g.setAttribute('role', 'group');
+      if (label) g.setAttribute('aria-label', label);
+      g.dataset.f = name;
+      opts.forEach(([v, t]) => {
+        const b = el('button', '', t);
+        b.type = 'button';
+        b.dataset.v = String(v);
+        b.addEventListener('click', () => { set(v); changed(); });
+        g.append(b);
+      });
+      g.sync = () => g.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === String(get()))));
+      return g;
+    };
+    const num = (name, lo, hi, get, set, label) => {
+      const i = el('input');
+      i.type = 'number'; i.inputMode = 'numeric'; i.min = lo; i.max = hi; i.id = uid(name); i.setAttribute('aria-label', label);
+      i.dataset.f = name;
+      i.addEventListener('input', () => { set(i.value === '' ? NaN : Number(i.value)); changed(false); });
+      i.sync = () => { if (document.activeElement !== i) i.value = Number.isFinite(get()) ? get() : ''; };
+      return i;
+    };
+    const teamSel = (side) => {
+      const t = el('select'), y = el('select');
+      t.id = uid(`${side}team`); y.id = uid(`${side}yr`); t.dataset.f = side;
+      t.setAttribute('aria-label', side === 'you' ? 'Your team' : 'The other team'); y.setAttribute('aria-label', side === 'you' ? 'Your team’s season' : 'Their season');
+      [...seasons].reverse().forEach((s) => y.append(new Option(String(s), String(s))));
+      const key = side === 'you' ? ['you', 'ys'] : ['opp', 'os'];
+      const fill = () => {
+        const teams = (scnSeason(ix, sc[key[1]]) || { teams: [] }).teams.slice().sort((a, b) => scnNick(ix, a.team, sc[key[1]]).localeCompare(scnNick(ix, b.team, sc[key[1]])));
+        t.textContent = '';
+        teams.forEach((x) => t.append(new Option(`${scnNick(ix, x.team, sc[key[1]])} · ${x.record}`, x.team)));
+        if (!teams.some((x) => x.team === sc[key[0]]) && teams.length) sc[key[0]] = teams.find((x) => x.team !== sc[side === 'you' ? 'opp' : 'you']).team;
+      };
+      t.addEventListener('change', () => { sc[key[0]] = t.value; changed(); });
+      y.addEventListener('change', () => {
+        const was = sc[key[1]], same = sc.ys === sc.os;
+        sc[key[1]] = Number(y.value);
+        if (side === 'you' && same) sc.os = sc.ys;          // the same season for both, until you pick theirs on its own
+        if (was !== sc[key[1]]) { scnRoster(sc[key[1]]).catch(() => {}); }
+        changed();
+      });
+      const info = el('p', 'tinfo');
+      t.sync = () => { fill(); t.value = sc[key[0]]; y.value = String(sc[key[1]]); const x = scnTeam(ix, sc[key[0]], sc[key[1]]);
+        info.textContent = x ? `${x.coach || ''}${x.qb ? ` · QB ${x.qb}` : ''}` : ''; };
+      const wrap = el('div', 'tpick');
+      wrap.append(y, t);
+      return { el: wrap, sync: t.sync, info, t, y };
+    };
+    // presets
+    const pre = el('div', 'spre');
+    pre.setAttribute('role', 'group'); pre.setAttribute('aria-label', 'Start from');
+    Object.entries(SCN.PRESETS).forEach(([k, p]) => {
+      const b = key(p.label, p.sub, 'chipkey');
+      b.addEventListener('click', () => { sc = SCN.applyPreset(sc, k); track('scenario_preset', { preset: k }); changed(); });
+      pre.append(b);
+    });
+    const you = teamSel('you'), opp = teamSel('opp');
+    const gT = fieldset('Teams');
+    gT.append(row('You coach', you.el), you.info, row('Against', opp.el), opp.info);
+    const typeSel = el('select');
+    typeSel.id = uid('type'); typeSel.dataset.f = 'type';
+    Object.entries(SCN.TYPES).forEach(([k, t]) => typeSel.append(new Option(t, k)));
+    typeSel.addEventListener('change', () => { const was = sc.type; sc.type = typeSel.value; if (sc.type === 'SB' && was !== 'SB') sc.site = 'neutral'; else if (was === 'SB' && sc.site === 'neutral') sc.site = 'home';
+      if (sc.qtr === 5) { sc.clock = Math.min(sc.clock, SCN.otLen(sc)); sc.to = sc.to.map((x) => Math.min(x, SCN.otTo(sc))); } changed(); });
+    typeSel.sync = () => { typeSel.value = sc.type; };
+    const site = seg('site', [['home', 'Home'], ['away', 'Away'], ['neutral', 'Neutral']], () => sc.site, (v) => { sc.site = v; }, 'Where');
+    const rules = seg('rules', [['you', ''], ['opp', '']], () => sc.rules, (v) => { sc.rules = v; }, 'Whose season’s rules');
+    const rulesRow = row('Rules of', rules);
+    const gG = fieldset('Game');
+    gG.append(row('Game', typeSel), row('Where', site), rulesRow);
+    // the situation
+    const qtr = seg('qtr', [[1, '1st'], [2, '2nd'], [3, '3rd'], [4, '4th'], [5, 'OT']], () => sc.qtr, (v) => {
+      const wasOt = sc.qtr === 5;
+      sc.qtr = v;
+      if (v === 5) { sc.clock = SCN.otLen(sc); sc.to = [SCN.otTo(sc), SCN.otTo(sc)]; } else if (wasOt) sc.clock = Math.min(sc.clock, 900);
+    }, 'Quarter');
+    const clk = el('input');
+    clk.id = uid('clock'); clk.inputMode = 'numeric'; clk.placeholder = '2:00'; clk.setAttribute('aria-label', 'Time left in the quarter (minutes:seconds)'); clk.dataset.f = 'clock';
+    clk.addEventListener('input', () => {
+      const m = /^\s*(\d{1,2})(?::(\d{1,2}))?\s*$/.exec(clk.value) || /^\s*(\d{1,2})(\d{2})\s*$/.exec(clk.value);
+      sc.clock = m ? Number(m[1]) * 60 + Number(m[2] || 0) : NaN;
+      if (m && m[2] && Number(m[2]) > 59) sc.clock = NaN;
+      changed(false);
+    });
+    clk.addEventListener('blur', () => { if (Number.isFinite(sc.clock)) clk.value = SCN.clockText(sc.clock); });
+    clk.sync = () => { if (document.activeElement !== clk) clk.value = Number.isFinite(sc.clock) ? SCN.clockText(sc.clock) : ''; };
+    const sY = num('scoreY', 0, 99, () => sc.score[0], (v) => { sc.score[0] = v; }, 'Your score'), sO = num('scoreO', 0, 99, () => sc.score[1], (v) => { sc.score[1] = v; }, 'Their score');
+    const scoreRow = el('div', 'pair');
+    const lab = (t, i) => { const l = el('label', 'mini', t); l.htmlFor = i.id; const w = el('span', 'pi'); w.append(l, i); return w; };
+    scoreRow.append(lab('You', sY), lab('Them', sO));
+    const start = seg('start', [['snap', 'A snap'], ['kick', 'A kickoff']], () => sc.start, (v) => { sc.start = v; }, 'It starts with');
+    const ball = seg('ball', [['you', 'You'], ['opp', 'Them']], () => sc.ball, (v) => { sc.ball = v; }, 'Who has the ball');
+    const ballRow = row('Ball', ball);
+    // the ball's spot, for the team that has it: its own 25 is 75 yards to go
+    let own = !(sc.yl <= 50);           // (which half the ball is in, kept while the yard line is being typed)
+    const side = seg('side', [['own', 'Own'], ['opp', 'Their']], () => (own ? 'own' : 'opp'), (v) => {
+      own = v === 'own';
+      const n = sc.yl > 50 ? 100 - sc.yl : sc.yl;
+      if (Number.isFinite(n)) sc.yl = own && n < 50 ? 100 - n : n;
+    }, 'Side of the field');
+    const ylIn = num('yl', 1, 50, () => (sc.yl > 50 ? 100 - sc.yl : sc.yl), (v) => { sc.yl = !Number.isFinite(v) ? NaN : own && v < 50 ? 100 - v : v; }, 'Yard line');
+    const spotRow = row('On the', side, ylIn);
+    const down = seg('down', [[1, '1st'], [2, '2nd'], [3, '3rd'], [4, '4th']], () => sc.down, (v) => { sc.down = v; }, 'Down');
+    const ytg = num('ytg', 1, 40, () => sc.ytg, (v) => { sc.ytg = v; }, 'Yards to go');
+    const ddRow = row('Down', down), ytgRow = row('To go', ytg);
+    const toY = seg('toY', [[0, '0'], [1, '1'], [2, '2'], [3, '3']], () => sc.to[0], (v) => { sc.to[0] = v; }, 'Your timeouts');
+    const toO = seg('toO', [[0, '0'], [1, '1'], [2, '2'], [3, '3']], () => sc.to[1], (v) => { sc.to[1] = v; }, 'Their timeouts');
+    const otp = seg('otp', [[0, 'First possession'], [1, 'They’ve had it'], [2, 'Both have']], () => sc.otp, (v) => { sc.otp = v; }, 'Overtime possessions');
+    const otRow = row('Overtime', otp);
+    const end = seg('end', [['half', 'Ends at the half'], ['game', 'Whole game']], () => sc.end, (v) => { sc.end = v; }, 'Play to');
+    const r2h = seg('r2h', [['you', 'You'], ['opp', 'Them']], () => sc.r2h, (v) => { sc.r2h = v; }, 'Ball after halftime');
+    const endRow = row('Play to', end), r2hRow = row('After half', r2h);
+    const gS = fieldset('Situation');
+    gS.append(row('Quarter', qtr), row('Clock', clk), row('Score', scoreRow), row('Starts with', start), ballRow, spotRow, ddRow, ytgRow,
+      row('Your TOs', toY), row('Their TOs', toO), otRow, endRow, r2hRow);
+    const errs = el('ul', 'serr');
+    errs.setAttribute('aria-live', 'polite');
+    const sum = el('div', 'ssum');
+    const go = el('button', 'btn alt', isPro() ? 'Kick off' : 'Kick off (Pro)'), link = el('button', 'btn ghostbtn', 'Copy the link'), reset = el('button', 'linkbtn', 'Start from scratch');
+    go.type = 'button'; link.type = 'button'; reset.type = 'button';
+    go.addEventListener('click', () => {
+      if (!SCN.ok(sc, ix)) return;
+      const c = SCN.code(SCN.tidy(sc));
+      if (isPro()) scenTouch(c);
+      track('scenario_start', { type: sc.type, qtr: sc.qtr, kick: sc.start === 'kick', eras: `${sc.ys}-${sc.os}`, pro: isPro() });
+      location.hash = `#custom-${c}`;
+    });
+    link.addEventListener('click', () => { if (SCN.ok(sc, ix)) shareText(scenLink(SCN.code(SCN.tidy(sc))), sum, 'scenario'); });
+    reset.addEventListener('click', () => { try { localStorage.removeItem(SCN_DRAFT); } catch (e) { /* storage off */ } sc = scenDraft(ix); changed(); });
+    const acts = el('div', 'row sacts');
+    acts.append(go, link);
+    const syncs = [you.sync, opp.sync, typeSel.sync, site.sync, rules.sync, qtr.sync, clk.sync, sY.sync, sO.sync, start.sync, ball.sync, side.sync, ylIn.sync,
+      down.sync, ytg.sync, toY.sync, toO.sync, otp.sync, end.sync, r2h.sync];
+    function changed(full = true) {
+      if (full && Number.isFinite(sc.yl) && sc.yl !== 50) own = sc.yl > 50;
+      if (full) syncs.forEach((f) => f());
+      rulesRow.hidden = sc.ys === sc.os;
+      const bs = rules.querySelectorAll('button');
+      bs[0].textContent = `Yours (${sc.ys})`; bs[1].textContent = `Theirs (${sc.os})`;
+      const kick = sc.start === 'kick';
+      ballRow.querySelector('.sl').textContent = kick ? 'Receiving' : 'Ball';
+      spotRow.hidden = kick; ddRow.hidden = kick; ytgRow.hidden = kick;
+      otRow.hidden = sc.qtr !== 5;
+      endRow.hidden = sc.qtr > 2; r2hRow.hidden = sc.qtr > 2 || sc.end === 'half';
+      [toY, toO].forEach((g) => g.querySelectorAll('button').forEach((b) => { b.hidden = sc.qtr === 5 && Number(b.dataset.v) > SCN.otTo(sc); }));
+      const bad = SCN.check(sc, ix);
+      errs.textContent = '';
+      bad.forEach(([, m]) => errs.append(el('li', '', m)));
+      form.querySelectorAll('[data-f]').forEach((x) => x.classList.toggle('bad', bad.some(([f]) => f === x.dataset.f || (f === 'score' && /^score/.test(x.dataset.f)) || (f === 'to' && /^to/.test(x.dataset.f)))));
+      go.disabled = link.disabled = !!bad.length;
+      sum.textContent = '';
+      if (!bad.length) sum.append(scenSummaryEl(SCN.tidy(sc), ix));
+      save(SCN_DRAFT, sc);
+    }
+    form.append(gT, gG, gS);
+    box.append(el('h3', '', 'Start from'), pre, form, errs, sum, acts, reset);
+    box.append(el('p', 'note', `Seasons ${first}–${last}: each team as it lined up in a game late in its regular season (the latest for this season, ${last}, through week ${ix.seasons[ix.seasons.length - 1].thru}), with every player rated as of then, its quarterback, kicker and punter, and its strength. Before ${first} nothing names who started on the line, so those seasons are left out. The overtime is the one of its time; the playoffs never end tied. Scenarios post to no leaderboard: they aren’t the same for everyone.`));
+    // My scenarios
+    box.append(el('h3', '', 'My scenarios'));
+    const mine = el('div', 'days');
+    const list = Object.entries(scenList()).filter(([c, e]) => e && !e.gone && SCN.parse(c)).sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
+    if (!list.length) mine.append(el('p', 'note', isPro() ? 'The scenarios you play show here, with your best grade on each. Signed in, they follow you to any device.' : 'Your scenarios show here once you play them.'));
+    list.forEach(([c, e]) => {
+      const s0 = SCN.parse(c), L = scenLines(s0, ix), a = el('a', 'day drive scn'), x = el('button', 'scnx', '×');
+      a.href = `#custom-${c}`;
+      const right = typeof e.p === 'number' ? el('span', 'gr') : el('span', 'sc', 'Play');
+      if (typeof e.p === 'number') right.append(gradeBadge(Math.round(e.p * 100)), el('small', '', String(Math.round(e.p * 100))));
+      a.append(el('b', '', L.title), el('span', 'm', L.sub), right);
+      x.type = 'button'; x.setAttribute('aria-label', `Remove ${L.title}`);
+      x.addEventListener('click', () => {
+        const all = scenList();
+        all[c] = { ...(all[c] || {}), at: Date.now(), gone: true };
+        scenSave(all); statsSync(true);
+        wrap.remove();
+      });
+      const wrap = el('div', 'scnrow');
+      wrap.append(a, x);
+      mine.append(wrap);
+    });
+    box.append(mine);
+    changed();
+    scnRoster(sc.ys).catch(() => {});          // (the files the Kick off will want, while the builder is read)
+    if (sc.os !== sc.ys) scnRoster(sc.os).catch(() => {});
+  }
+  // the end of a scenario: its grade (an A, the game won, passes it, as a historic drive), your best and tries
+  function scenCard(p, rec) {
+    const score = Math.round(p * 100), g = gradeOf(score), sc = today[0], hard = mustWin();
+    const r0 = state.spots[0] && state.spots[0].result, won = !!(r0 && r0.mine > r0.theirs);
+    const box = el('div', `gradecard ${g.c}`), top = el('div', 'gtop'), txt = el('div', 'gtxt');
+    txt.append(el('div', 'gk', `Your scenario · ${matchLine(sc)}`), el('div', 'gres', g.pass ? 'Passed' : hard && !won ? 'Win it to pass' : score >= PASS_AT - 10 ? 'So close' : 'Not yet'),
+      el('div', 'gsc', `${score} · better than ${score}% of NFL play‑callers, the calls and the result`));
+    top.append(el('div', 'gbig', g.L), txt);
+    box.append(top);
+    const bar = el('div', 'gbar'), fill = el('i');
+    fill.style.width = `${Math.min(100, score)}%`;
+    bar.append(fill, el('b', 'gmark'));
+    bar.setAttribute('aria-hidden', 'true');
+    box.append(bar);
+    const lines = [];
+    if (scoreWhy(p)) lines.push(scoreWhy(p));
+    if (!g.pass) lines.push(hard && !won ? `A pass takes winning the game: a loss or a tie tops out at ${PASS_AT - 1}.` : `${PASS_AT} passes: ${PASS_AT - score} more ${PASS_AT - score === 1 ? 'point' : 'points'}.`);
+    const pb = rec && rec.pb;
+    if (typeof pb === 'number' && pb * 100 >= score + 0.5) lines.push(`Your best here: ${Math.round(pb * 100)} (${gradeOf(Math.round(pb * 100)).L}).`);
+    else if (typeof pb === 'number' && score > Math.round(pb * 100)) lines.push(`New best: up from ${Math.round(pb * 100)}.`);
+    if (rec && rec.tries > 1) lines.push(`Try ${rec.tries}.`);
+    if (lines.length) box.append(el('p', 'gnote', lines.join(' ')));
+    if (SCN_IDX && sc.scn) {
+      const d = el('details', 'greal');
+      d.append(el('summary', '', 'The scenario'));
+      SCN_IDX.then((ix) => d.append(scenSummaryEl(sc.scn, ix))).catch(() => {});
+      box.append(d);
+    }
+    return box;
+  }
+  function scenActions(rec) {
+    const row = el('div', 'row pacts');
+    const again = el('button', 'btn', rec && rec.p * 100 >= PASS_AT - 0.5 ? 'Play it again' : 'Try again');
+    again.type = 'button';
+    again.addEventListener('click', () => { try { localStorage.removeItem(stateKey()); } catch (e) { /* storage off */ } track('scenario_retry', {}); location.reload(); });
+    const edit = el('a', 'btn ghostbtn', 'Change the scenario');
+    edit.href = '#custom';
+    edit.addEventListener('click', () => { save(SCN_DRAFT, today[0].scn); });
+    const share = el('button', 'btn ghostbtn', 'Send it to a friend');
+    share.type = 'button';
+    share.addEventListener('click', () => shareText(`Can you win this one? ${matchLine(today[0])}, ${typeSay(today[0].real.type)}. Two-Minute Drill Pro:\n${scenLink(CUSTOM)}`, share, 'scenario'));
+    const all = el('a', 'btn ghostbtn', 'My scenarios');
+    all.href = '#custom';
+    row.append(again, edit, share, all);
+    return row;
   }
 
   // -------------------------------------------------------------- versus ---
@@ -10529,7 +10955,7 @@
     sheetSetup();
     boardInit();
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
-    $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
+    $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE || CUSTOM || CUSTOM_BUILD ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
     $('modeArch').hidden = !PRO_ON;
     if (PRO_BUILT && !PRO_ON) {
       const at = () => { if (!PRO_ON && Date.now() >= PRO_AT) proLaunch(); };
@@ -10579,7 +11005,7 @@
     // (not while a play runs: the redraw would wipe the animation; the next draw picks up the new size)
     window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); fitDock(fitKeys); }, 150); });
     show('boot');
-    if (!(VS || VS_LOBBY || ARCH || ARCH_DAY || DRIVE || RUN_N || HOME_PG)) fetchData();      // the daily, survivor, practice
+    if (!(VS || VS_LOBBY || ARCH || ARCH_DAY || DRIVE || RUN_N || CUSTOM || CUSTOM_BUILD || HOME_PG)) fetchData();      // the daily, survivor, practice
     try {
       idx = await fetch(asset('game.json')).then((r) => { if (!r.ok) throw new Error('game data ' + r.status); return r.json(); });
       idx.calls.forEach((c) => { CALL[c.id] = c; });
@@ -10608,6 +11034,19 @@
       }
       // a link to a drive or run there is none of (#run-0, #drive-99): to the Pro screen, which says so
       if (PRO_ON && /^#(drive|run)-\d+$/.test(location.hash) && !DRIVE && !RUN_N) { badProLink(); return; }
+      // a scenario: the builder, or one to play (checked first; without Pro, what it is and the Pro pitch)
+      // (from the builder's foot, a reload would land halfway down the page: a scenario opens at the top)
+      if (CUSTOM || CUSTOM_BUILD) { try { history.scrollRestoration = 'manual'; } catch (e) { /* older browsers */ } scrollTo(0, 0); }
+      if (CUSTOM_BUILD) { await renderBuilder(); return; }
+      if (PRO_ON && SCN && /^#custom-/.test(location.hash) && !CUSTOM) { scenBad(['A scenario’s code has 22 parts: this one is cut short or mistyped']); return; }
+      let scnIx = null, scnSc = null;
+      if (CUSTOM) {
+        scnSc = SCN.parse(CUSTOM);
+        try { scnIx = await scnIndex(); } catch (e) { scenBad([`The rosters did not load (${e.message}). Check your connection and reload`]); return; }
+        const bad = !scnSc ? ['That is not a scenario’s code'] : SCN.check(scnSc, scnIx).map(([, m]) => m);
+        if (bad.length) { scenBad(bad); return; }
+        if (!isPro()) { await renderScenPitch(scnSc, scnIx); return; }
+      }
       if (ARCH || (ARCH_DAY && (!isPro() || ARCH_DAY >= dayOf(now))) || ((DRIVE || RUN_N) && !isPro())) { await renderArchive(now); return; }
       if (SURV) {
         state = load(stateKey(), null) || newRun();
@@ -10639,6 +11078,17 @@
           return sc;
         });
         $('dayLabel').textContent = `Run · ${run.title}`;
+      } else if (CUSTOM) {
+        const [ry, ro] = await Promise.all([scnRoster(scnSc.ys), scnRoster(scnSc.os)]);
+        const { spot, teams } = SCN.spotOf(scnSc, ry, ro, scnIx.spread);
+        // (the franchise's name of the time: Washington before the Commanders)
+        for (const [c, y] of [[scnSc.you, scnSc.ys], [scnSc.opp, scnSc.os]]) { const t = scnTeam(scnIx, c, y); if (t && t.era && TEAMS[c]) TEAMS[c] = [t.era.name, TEAMS[c][1]]; }
+        today = [buildScen(spot, teams)];
+        today[0].scn = scnSc;
+        const S = scenLines(scnSc, scnIx).S;
+        today[0].story = `${S.game[0].toUpperCase()}${S.game.slice(1)}. ${scnName(scnIx, scnSc.you, scnSc.ys)} (${scnTeam(scnIx, scnSc.you, scnSc.ys).record}) against the ${scnName(scnIx, scnSc.opp, scnSc.os)} (${scnTeam(scnIx, scnSc.opp, scnSc.os).record}). ${S.ot}.`;
+        $('dayLabel').textContent = `Scenario · ${S.title}`;
+        scenTouch(CUSTOM);
       } else if (DRIVE) {
         PRO = await loadPro();
         const d = PRO && PRO.drives[DRIVE - 1];

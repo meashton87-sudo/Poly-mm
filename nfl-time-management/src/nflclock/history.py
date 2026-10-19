@@ -103,7 +103,7 @@ class History:
         """seasons: every season a spot can come from; pbp: the enriched play-by-play (data.load) covering them, for
         the team ratings of seasons before the bundle's."""
         self.bundle, self.lib = bundle, lib
-        self.seasons, self.pbp_full, self.extra_tr = tuple(sorted(seasons)), pbp, {}
+        self.seasons, self.pbp_full, self.extra_tr, self.extra_kp = tuple(sorted(seasons)), pbp, {}, {}
         self.part = {}
         for s in self.seasons:
             p = _participation(s)
@@ -634,6 +634,19 @@ class History:
             self.extra_tr[season] = TR.team_ratings(p, [season], current=False)
         return pd.concat([self.extra_tr[season], tr], ignore_index=True)
 
+    def specialist_ratings(self, season: int) -> tuple:
+        """The bundle's as-of kicker and punter ratings (2023 on), plus the season's own (ratings.kicker_ratings and
+        punter_ratings on the play-by-play of it and the two before) for a season before them."""
+        kr, pr = self.bundle.kicker_ratings, self.bundle.punter_ratings
+        if season >= int(kr["season"].min()) or self.pbp_full is None:
+            return kr, pr
+        if season not in self.extra_kp:
+            p = self.pbp_full[self.pbp_full["season"].between(season - 2, season)]
+            self.extra_kp[season] = (TR.kicker_ratings(p, self.bundle.fg_model, [season], current=False),
+                                     TR.punter_ratings(p, [season], current=False))
+        k, q = self.extra_kp[season]
+        return pd.concat([k, kr], ignore_index=True), pd.concat([q, pr], ignore_index=True)
+
     def _strength(self, team: str, season: int, week: int, game_id: str, qb_id, play_id: float | None = None) -> dict:
         tr = self.team_ratings(season)
         rows = tr[(tr["team"] == team) & ((tr["season"] < season) | ((tr["season"] == season) & (tr["week"] < week)))]
@@ -678,22 +691,24 @@ class History:
             "base": {k: round(float(r[k]), 5) for k in ("off_pass", "off_rush", "def_pass", "def_rush", "proe")},
             "qb": {"name": self.names.get(qb_id), "adjustment": round(live.QB_SHARE_OF_PASSING * (qb_rating - mix_rating), 5)},
             "injury_adjustment": {"off_pass": 0.0, "off_rush": 0.0, "def_pass": 0.0, "def_rush": 0.0},
-            "kicker": specialist("kicker_player_id", self.bundle.kicker_ratings, "kicker_player_id"),
-            "punter": specialist("punter_player_id", self.bundle.punter_ratings, "punter_player_id"),
+            "kicker": specialist("kicker_player_id", self.specialist_ratings(season)[0], "kicker_player_id"),
+            "punter": specialist("punter_player_id", self.specialist_ratings(season)[1], "punter_player_id"),
             "league": {k: round(float(r[k]), 5) for k in ("mu_pass", "mu_rush", "home_pass", "home_rush")},
         }
 
     def teams(self, game_id: str, season: int, week: int, play_id: float, home: str, away: str, coaches: dict,
-              drive: bool = False) -> dict:
+              drive: bool = False, only: str | None = None) -> dict:
         """{'home': team, 'away': team} in the daily game's team format, as of that game. drive (a historic drive: Pro):
         the lineups of the drive that starts at the snap, everyone who touched the ball on it on the field (the
-        offense's and the defense's), the line in its depth chart's slots."""
+        offense's and the defense's), the line in its depth chart's slots. only ('home' or 'away'): that team alone."""
         R = self.ratings(season)
         rt = R.week(season, week)
         card = self.card(season, week)
         dr = self._drive(game_id, season, play_id) if drive else None
         out = {}
         for side, team in (("home", home), ("away", away)):
+            if only and side != only:
+                continue
             units = self._snap_units(game_id, season, play_id, team, self._game_positions(R, game_id) if season < 2023 else None)
             if len(units) < 2:
                 units = {**self._snapcount_units(R, game_id, team), **units}

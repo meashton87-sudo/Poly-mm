@@ -24,3 +24,4 @@ _site_*/
 browser_test_out/
 board/assets/pro/*.json
 board/assets/vs/
+web/rosters/

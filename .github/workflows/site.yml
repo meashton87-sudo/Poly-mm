@@ -80,10 +80,18 @@ jobs:
         continue-on-error: true           # before launch the daily game ships either way; the worker keeps its last Pro data
         run: python -c "from nflclock import pro; print(pro.build())"
 
+      # Pro's scenarios (#custom, web/scenario.js): every team of every season from 2001 on, as it lined up late in its
+      # regular season and how good everyone was then, a file a season (web/rosters, about 3.7 MB, 0.6 MB gzipped;
+      # nflclock.scenario). site.py ships them, each stamped, loaded only when the builder opens and a season is picked.
+      # About 12 minutes (the play-by-play windows the Pro export just read are reused). Without them the builder says so.
+      - name: Export the scenario builder's rosters (Pro)
+        continue-on-error: true
+        run: python -c "from nflclock import scenario; print(scenario.build())"
+
       # nothing ships unless all of this passes: a failure here leaves the last good site up
       - name: Check the game before it ships
         run: |
-          npx --yes eslint@8.57.0 --no-eslintrc -c web/eslint.json web/game.js web/motion.js web/engine.js web/game_worker.js web/vs_core.js
+          npx --yes eslint@8.57.0 --no-eslintrc -c web/eslint.json web/game.js web/motion.js web/engine.js web/game_worker.js web/vs_core.js web/scenario.js
           node web/game_smoke.js
           node web/defense_calibration.js
           node web/motion_test.js
@@ -103,7 +111,7 @@ jobs:
           pip install playwright==1.48.0
           python -m playwright install --with-deps chromium
           python scripts/site.py _site_test
-          python scripts/browser_test.py _site_test --daily 6 --survivor 3 --games 2 --jobs 2 --out browser_test_out
+          python scripts/browser_test.py _site_test --daily 6 --survivor 3 --games 2 --jobs 2 --out browser_test_out $([ -f web/rosters/index.json ] && echo --scenario 3)
 
       - if: failure()
         uses: actions/upload-artifact@v4

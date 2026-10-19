@@ -192,6 +192,60 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .arch .day .gr { display: inline-flex; align-items: center; gap: 6px; }
 .arch .day .gr small { font: 700 12px var(--body); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 18px; text-align: right; }
 .arch .day.passed { border-color: var(--sq-g); background: linear-gradient(100deg, color-mix(in srgb, var(--sq-g) 14%, transparent), transparent 70%); }
+/* Build a scenario (Pro, #custom): the builder, its summary card, My scenarios */
+.arch .scn { display: grid; gap: 10px; }
+.arch .sgrp { margin: 0; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); display: grid; gap: 8px; min-width: 0; }
+.arch .sgrp legend { padding: 0 6px; font: 800 12px var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.arch .srow { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 4px 10px; align-items: center; }
+.arch .srow[hidden] { display: none; }
+.arch .srow > :nth-child(n+3) { grid-column: 2; }
+.arch .srow .sl { font: 700 13px var(--body); color: var(--muted); }
+.arch .srow:has(#scn-yl) { grid-template-columns: 84px minmax(0, 1fr) 72px; }
+.arch .srow:has(#scn-yl) > :nth-child(n+3) { grid-column: auto; }
+.arch .scn select, .arch .scn input { width: 100%; min-width: 0; min-height: 42px; font: 700 15px var(--body); padding: 8px 10px; border-radius: 9px; border: 1px solid var(--line);
+  background: var(--paper); color: var(--ink); letter-spacing: 0; text-transform: none; }
+.arch .scn input[type=number] { -moz-appearance: textfield; text-align: center; }
+.arch .scn #scn-ytg { max-width: 96px; justify-self: start; }
+.arch .scn .bad, .arch .scn .seg.bad button[aria-pressed="true"] { border-color: var(--sq-r); box-shadow: 0 0 0 1px var(--sq-r); }
+.arch .tpick { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 6px; }
+.arch .tinfo { margin: -2px 0 2px 94px; font-size: 12.5px; color: var(--muted); min-height: 1em; }
+.arch .seg { display: flex; flex-wrap: wrap; gap: 4px; }
+.arch .seg button { flex: 1 1 0; min-width: 44px; min-height: 40px; padding: 6px 8px; border-radius: 9px; border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+  font: 700 13.5px/1.15 var(--body); cursor: pointer; }
+.arch .seg button[hidden] { display: none; }
+.arch .seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.arch .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.arch .pi { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; align-items: center; }
+.arch .pi .mini { font: 700 12.5px var(--body); color: var(--muted); }
+.arch .spre { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.arch .spre .key { min-height: 52px; padding: 7px 10px; text-align: left; border-radius: 10px; font: 800 13.5px/1.2 var(--body); }
+.arch .spre .key small { display: block; font: 600 11.5px/1.25 var(--body); color: var(--muted); margin-top: 2px; }
+.arch .serr { margin: 0; padding: 10px 12px 10px 30px; border-radius: 10px; background: color-mix(in srgb, var(--sq-r) 12%, transparent); color: var(--sq-r-ink); font: 600 13.5px var(--body); }
+.arch .serr:empty { display: none; }
+.scnsum { display: grid; gap: 6px; padding: 12px 14px; border: 2px solid var(--ink); border-radius: 12px; background: var(--card); }
+.scnsum .sh { display: flex; align-items: center; gap: 8px; }
+.scnsum .sh b { font: 900 20px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; flex: 1 1 auto; text-align: center; }
+.scnsum .sw { flex: none; display: inline-grid; place-items: center; min-width: 36px; height: 24px; padding: 0 5px; border-radius: 6px; color: #fff; font: 800 11px var(--body); }
+.scnsum .sw.dk { color: #121a15; }
+.scnsum .rec { margin: 0; font-size: 13px; color: var(--muted); text-align: center; }
+.scnsum ul { margin: 0; padding-left: 18px; display: grid; gap: 2px; font-size: 14px; }
+.arch .sacts .btn { flex: 1 1 150px; }
+.arch .btn:disabled { opacity: .45; cursor: not-allowed; }
+.arch .scnpro { margin: 0; font-weight: 700; color: var(--gold-ink); }
+.arch .scnrow { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 4px; align-items: stretch; }
+.arch .day.scn { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; }
+.arch .day.scn b { font-size: 15px; line-height: 1.15; }
+.arch .day.scn .m { grid-column: 1; grid-row: 2; font-size: 12.5px; color: var(--muted); }
+.arch .day.scn > :last-child { grid-column: 2; grid-row: 1 / 3; }
+.arch .scnx { border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--muted); font: 700 18px/1 var(--body); cursor: pointer; }
+.scnentry { display: grid; gap: 3px; padding: 13px 14px; border-radius: 12px; border: 1px solid var(--line); border-top: 4px solid var(--gold); color: inherit; text-decoration: none;
+  background: linear-gradient(160deg, var(--gold-soft), transparent 70%), var(--card); }
+.scnentry .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--gold-ink); }
+.scnentry b { font: 900 22px/1.05 var(--display); text-transform: uppercase; }
+.scnentry .m { font-size: 13.5px; color: var(--muted); }
+.scnentry .cta { justify-self: start; margin-top: 4px; font: 800 13px var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--sq-g-ink); }
+.gradecard .greal .scnsum { margin-top: 8px; }
+@media (max-width: 380px) { .arch .srow, .arch .tpick { grid-template-columns: 72px minmax(0, 1fr); } .arch .tinfo { margin-left: 82px; } }
 /* Pro grades: a letter in its color, green (A) is a pass */
 .grade { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; font: 900 17px/1 var(--display); color: var(--sq-ink); background: var(--muted); }
 .grade.g { background: var(--sq-g); } .grade.y { background: var(--sq-y); } .grade.o { background: var(--sq-o); } .grade.r { background: var(--sq-r); }
@@ -1224,4 +1278,5 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
 
 <script src="motion.js"></script>
 <script src="vs_core.js"></script>
+<script src="scenario.js"></script>
 <script src="game.js"></script>

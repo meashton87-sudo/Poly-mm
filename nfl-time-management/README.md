@@ -431,6 +431,33 @@ the daily (score, calls explained, the real coach), with "Another practice drive
 the day's score, the stats, the streak, tendencies or the lists. Its progress is saved on its own (`tmd:v3:practice`):
 a refresh mid-drive picks it up where it was. Before the day's drive is done, `#practice` opens the day's drive.
 
+**Build a scenario** (Pro, `#custom`; `web/scenario.js`, `game.js` renderBuilder): pick your team and the other, each with
+its own season (2001 to this one: the 2007 Patriots against the 2023 Chiefs is fine), the kind of game (regular season,
+Wild Card, Divisional, Conference Championship, Super Bowl; home, away or a neutral site, the Super Bowl's), the
+quarter (or overtime), the clock, the score, who has the ball, where, the down and distance and each team's timeouts,
+or a kickoff to start; a first-half scenario ends at the half or plays on through the second. Presets set the classic
+ones (a two-minute drill down 4, four-minute offense up 3, the end of the half, 4th and short, a goal-line stand,
+overtime). Nothing impossible gets through: a distance past the goal line, a clock past the quarter's 15:00 (an
+overtime's period), more points than there has been time for, an overtime lead the rules of its time would have ended
+(sudden death before 2010 in the playoffs and 2012 in the regular season, then a touchdown wins it, then both teams get
+the ball: `pro.py overtime_rules`, the same table in `scenario.js`). A summary card says what it is, with the point
+spread the two teams' strengths make (`nflclock/scenario.py` spread_fit: 2.2 points of home field and 44 points per net
+EPA a play, on every regular-season line since 2001, a standard error of 3.9 points). Kick off plays it at `#custom-<code>`
+(the code holds every field, so a link rebuilds the same scenario anywhere; without Pro it shows what it is and the Pro
+pitch): the same engine, grading and end card as a historic drive (each try its own draws, Start over, an A takes the
+win when it is played to the final gun, the playoffs never end tied), and no leaderboard, since nobody's scenario is
+anybody else's. My scenarios (the builder's list) keeps each one's best grade and tries, and follows a signed-in
+account (`/auth/stats` scen). The teams: `nflclock.scenario.build` writes `web/rosters/index.json` (every season's
+teams, records, coaches, quarterbacks and strengths) and `web/rosters/<season>.json` (the 32 in the daily game's team
+format), each team as it lined up in its latest regular-season game before the last week with its usual quarterback
+and kicker (`history.History.teams`: participation from 2016, snap counts from 2012, depth charts from 2001; 1999 and
+2000 have no record of who started on the line, so they are left out), everyone rated as of the end of that regular
+season, kickers and punters on their own ratings of the time (`History.specialist_ratings`). The site loads the index
+when the builder opens and a season's file only when one of its teams is picked (3.7 MB in all, about 30 kB gzipped a
+season). From 2003 to 2008 the play-by-play names no receiver on an incompletion, so a catch stands for 1.63 targets in the
+receivers' ratings, and before snap counts the busiest players in the league stand in for the starters a rating is
+scaled against (`overall.py`).
+
 **Analytics events** (the website's Google tag only; `track()` in `game.js`), for deciding what to improve:
 `drive_start` (mode, kind of spot, day), `play_call` (mode, family, call, routes changed, out of bounds),
 `defense_call` (call), `draw_run`, `draw_rpo`, `draw_pass`, `draw_def` and `draw_st` (a drawn call snapped: mode, the call
@@ -443,7 +470,8 @@ select), `help_open` (a tap on ?; auto: the three-line help a first visit to a P
 `install_accepted` (via launch: first opened from the home screen) and `install_dismissed` (close or the
 browser's prompt), `sim_ready` (packed data or JSON, ms since load, ms a player
 sat waiting on it), `info_mismatch` (a spot's first-call facts, shipped with it, differ from the simulator's: spot id), `drive_leave` (the page went to the background mid-drive: calls made, seconds in, still
-loading), `stats_open`, `stats_page_link`, `replay`, `name_set`, `leaderboard_tab` (day or week), `practice_start` (from the
+loading), `scenario_builder` (pro), `scenario_preset` (preset), `scenario_start` (type, quarter, kickoff, the two seasons, pro),
+`scenario_pitch`, `scenario_retry`, `stats_open`, `stats_page_link`, `replay`, `name_set`, `leaderboard_tab` (day or week), `practice_start` (from the
 daily card or a practice card), `practice_finish` (practice drive number, kind, score, snaps), `restart_ask` (mode: Start over
 tapped) and `restart` (mode, calls made, restarts so far, the drive, run or day: confirmed). Share opens the phone's share sheet
 where there is one. In Google Analytics: Reports, Engagement, Events (custom fields need registering as custom

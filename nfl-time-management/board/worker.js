@@ -479,10 +479,11 @@ async function signedByStripe(req, body, secret) {
 //   POST /auth/logout  { session }      -> { ok }
 //   POST /auth/link    { session, code, key } -> { email, pro, code }   a valid Pro code (on this device: the device
 //                                          limit applies) joins the account; a code belongs to one account only
-//   POST /auth/stats   { session, stats? } -> { stats: { days, drives, runs, badges, frozen } }   the page's record
-//                                          (its stats days, the historic drives, the playoff runs, the badges earned,
-//                                          the days a streak freeze covered) merged into the account's, the best of
-//                                          each kept (statsMerge), and the merged record back; without stats, a read
+//   POST /auth/stats   { session, stats? } -> { stats: { days, drives, runs, badges, frozen, scen } }   the page's
+//                                          record (its stats days, the historic drives, the playoff runs, the badges
+//                                          earned, the days a streak freeze covered, the scenarios built) merged into
+//                                          the account's, the best of each kept (statsMerge), and the merged record
+//                                          back; without stats, a read
 //   POST /auth/remind  { session, on }  -> the account, { remind }   the daily email (Resend; off: 503 without it)
 //   POST /auth/unsub?r=&t=  (or { r, t }) -> { ok }               the email's unsubscribe link (one click, no sign-in):
 //                                          r the account's opaque reference, t its HMAC (mailSecret); a mail app's
@@ -672,6 +673,7 @@ async function auth(req, env, storage, hits, h, url) {
     if (JSON.stringify(merged.days) !== JSON.stringify(have.days)) await storage.put(`stats:d:${acct}`, merged.days);
     if (JSON.stringify([merged.drives, merged.runs]) !== JSON.stringify([have.drives, have.runs])) await storage.put(`stats:x:${acct}`, { drives: merged.drives, runs: merged.runs });
     if (JSON.stringify([merged.badges, merged.frozen]) !== JSON.stringify([have.badges, have.frozen])) await storage.put(`stats:m:${acct}`, { badges: merged.badges, frozen: merged.frozen });
+    if (JSON.stringify(merged.scen) !== JSON.stringify(have.scen)) await storage.put(`stats:s:${acct}`, merged.scen);
     return json({ stats: merged }, 200, h);
   }
   if (p === '/auth/remind') {
@@ -729,13 +731,16 @@ async function readBody(req) {
 // ---- Stats that follow the account (/auth/stats): the page keeps its record in the browser (game.js: the stats days,
 // the historic drives, the playoff runs); signed in, it is merged into the account's and back, so a streak and the
 // drives passed survive a new phone. Kept as stats:d:<acct> (the days: what a league board reads), stats:x:<acct>
-// (drives and runs) and stats:m:<acct> (badges and frozen days). Each entry is checked and rebuilt from its numbers
+// (drives and runs), stats:m:<acct> (badges and frozen days) and stats:s:<acct> (My scenarios: { code: { at, p?, tries,
+// won, gone? } }, keyed by the scenario's code, web/scenario.js; the newest touch of each stands, with the best score,
+// the most tries and won if either was; removed, gone: true until it is played again; over SCEN_MAX, the newest). Each entry is checked and rebuilt from its numbers
 // (nothing else of a post is kept); a kind with more entries than its cap, or not an object, refuses the post. Merged,
 // the higher score of each day, drive or run stands (a drive: the most tries, won if either was); over a
 // cap, the newest. Badges ({ id: when earned }) and frozen days ({ day: when the freeze was
 // spent }) are a union, the earliest time of each kept: earned on either phone is earned (the page knows which ids
 // are real; the worker only checks their shape, so a new badge needs no deploy here).
 const STATS_CAP = { days: [99999, 2000], drives: [999, 500], runs: [999, 500] };      // [highest key, most entries]
+const SCEN_MAX = 200, SCEN_RE = /^1(?:-[0-9A-Za-z]{1,4}){21}$/;     // My scenarios (game.js scenRec), a scenario's code (web/scenario.js CODE_RE)
 const GONE_BADGE = 'madden';        // (a retired badge: never kept)
 const BADGES_MAX = 64, FROZEN_MAX = 500, BADGE_RE = /^[a-z][a-z0-9]{0,15}$/;      // (about 20 badges today; a freeze a week at most)
 const num = (x, lo, hi) => (typeof x === 'number' && Number.isFinite(x) && x >= lo && x <= hi ? x : null);
@@ -772,6 +777,17 @@ function cleanStats(s) {
       if (e) out[kind][k] = e;
     }
   }
+  // My scenarios: { code: { at, p?, tries, won, gone? } }
+  const sc = s.scen ?? {};
+  if (typeof sc !== 'object' || Array.isArray(sc)) return 'stats.scen: an object wanted';
+  if (Object.keys(sc).length > SCEN_MAX) return `stats.scen: at most ${SCEN_MAX}`;
+  out.scen = {};
+  for (const [k, v] of Object.entries(sc)) {
+    const at = v && typeof v === 'object' ? num(v.at, 0, 1e14) : null;
+    if (!SCEN_RE.test(k) || at === null) continue;
+    const p = num(v.p, 0, 1);
+    out.scen[k] = { at: Math.round(at), ...(p !== null ? { p } : {}), tries: Math.round(num(v.tries, 0, 1e5) ?? 0), won: v.won === true, ...(v.gone === true ? { gone: true } : {}) };
+  }
   // the badges and the frozen days: { key: a time (ms) }, the key a badge id or a day number
   for (const [kind, max, ok] of [['badges', BADGES_MAX, (k) => BADGE_RE.test(k) && k !== GONE_BADGE], ['frozen', FROZEN_MAX, (k) => /^[1-9]\d{0,4}$/.test(k) && +k <= STATS_CAP.days[0]]]) {
     const o = s[kind] ?? {};
@@ -803,14 +819,27 @@ function statsMerge(a, b) {
   const fz = union(a.frozen, b.frozen), bd = union(a.badges, b.badges);
   out.frozen = Object.fromEntries(Object.keys(fz).map(Number).sort((x, y) => x - y).slice(-FROZEN_MAX).map((k) => [k, fz[k]]));
   out.badges = Object.fromEntries(Object.entries(bd).sort((x, y) => x[1] - y[1] || (x[0] < y[0] ? -1 : 1)).slice(0, BADGES_MAX));
+  out.scen = scenMerge(a.scen, b.scen);
   return out;
+}
+// a scenario on two phones: the newest touch stands (removed or not), with the best score, the most tries, won if either
+function scenMerge(x, y) {
+  const m = { ...(x || {}) };
+  for (const [k, v] of Object.entries(y || {})) {
+    const u = m[k];
+    if (!u) { m[k] = v; continue; }
+    const w = v.at > u.at ? v : u, best = [u.p, v.p].filter((q) => typeof q === 'number');
+    const { gone, p: _p, ...rest } = w;
+    m[k] = { ...rest, ...(best.length ? { p: Math.max(...best) } : {}), tries: Math.max(u.tries || 0, v.tries || 0), won: !!(u.won || v.won), ...(gone ? { gone } : {}) };
+  }
+  return Object.fromEntries(Object.entries(m).sort((p, q) => q[1].at - p[1].at || (p[0] < q[0] ? -1 : 1)).slice(0, SCEN_MAX));
 }
 async function statsOf(storage, acct) {
   const x = (await storage.get(`stats:x:${acct}`)) || {}, m = (await storage.get(`stats:m:${acct}`)) || {};
   const d = (await storage.get(`stats:d:${acct}`)) || {}, b = { ...(m.badges || {}) };
   delete b[GONE_BADGE];                    // (kept from before it was retired: read back without it, and without its find's coach)
   const days = Object.fromEntries(Object.entries(d).map(([k, v]) => [k, v && v.madden ? statEntry('days', v) : v]).filter(([, v]) => v));
-  return { days, drives: x.drives || {}, runs: x.runs || {}, badges: b, frozen: m.frozen || {} };
+  return { days, drives: x.drives || {}, runs: x.runs || {}, badges: b, frozen: m.frozen || {}, scen: (await storage.get(`stats:s:${acct}`)) || {} };
 }
 
 // ---- Friend leagues: a private group of accounts (a name and a join link) with its own board of the daily: each
