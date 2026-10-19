@@ -68,10 +68,14 @@ DOTS = """() => {
 # anything else answered empty), with a Pro code stored, so any site build can play a scenario
 PRO_CODE = "TMD-TEST-TEST-TEST"
 STUB_ASKED: set = set()
+# the community stub (comm=True: board/worker.js /scen/*, an account signed in as "Tester" with a username): what was
+# posted and played, the list read back from it
+COMM: dict = {"rows": [], "plays": [], "posts": []}
+SESSION = "ab" * 32
 TRACE_HALF = False          # what else the pages asked the stub (printed at the end)
 
 
-async def pro_context(ctx, base: str, pro: bool = True) -> None:
+async def pro_context(ctx, base: str, pro: bool = True, comm: bool = False) -> None:
     async def page_(route):
         r = await route.fetch()
         body = re.sub(r'<meta name="scn-at"[^>]*>', '', await r.text()).replace("<head>", f'<head><meta name="pro" content="on"><meta name="board-api" content="{base}/__board">', 1)
@@ -79,8 +83,25 @@ async def pro_context(ctx, base: str, pro: bool = True) -> None:
 
     async def board(route):
         path = urllib.parse.urlsplit(route.request.url).path.removeprefix("/__board")
+        body = json.loads(route.request.post_data or "{}") if route.request.method == "POST" else {}
+        ok = lambda d: route.fulfill(status=200, content_type="application/json", body=json.dumps(d))
         if path == "/restore":
             await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "code": PRO_CODE}))
+        elif comm and path == "/auth":
+            await ok({"google": False, "email": True})
+        elif comm and path == "/auth/me":
+            await ok({"email": "tester@example.com", "name": "Tester", "pro": False})
+        elif comm and path == "/scen/list":
+            await ok({"sort": body.get("sort", "top"), "page": 0, "rows": COMM["rows"], "total": len(COMM["rows"]), "next": None})
+        elif comm and path == "/scen/post":
+            COMM["posts"].append(body)
+            row = {"id": f"TEST{len(COMM['rows']):04d}", "code": body.get("code"), "title": body.get("title"), "name": "Tester", "at": "2026-10-19T17:00:00Z",
+                   "n": 12, "f": 10, "w": 4, "best": 0.93, "mine": True}
+            COMM["rows"].append(row)
+            await ok({"row": row})
+        elif comm and path == "/scen/play":
+            COMM["plays"].append(body)
+            await ok({"counted": True})
         else:                     # (accounts off: no way to sign in; nothing else is asked of it on these pages)
             STUB_ASKED.add(path)
             await route.fulfill(status=200, content_type="application/json", body="{}")
@@ -88,6 +109,8 @@ async def pro_context(ctx, base: str, pro: bool = True) -> None:
     await ctx.route(f"{base}/__board/**", board)
     if pro:
         await ctx.add_init_script(f"try {{ localStorage.setItem('tmd:v3:pro', JSON.stringify({{ code: '{PRO_CODE}', at: Date.now() }})); }} catch (e) {{}}")
+    if comm:
+        await ctx.add_init_script(f"try {{ localStorage.setItem('tmd:v3:session', JSON.stringify('{SESSION}')); localStorage.setItem('tmd:v3:seen', 'true'); }} catch (e) {{}}")
 
 
 # a random scenario that passes its checks (web/scenario.js random, on the rosters' index the page itself loads), the
@@ -882,6 +905,100 @@ async def scenario_pitch(browser, base: str) -> list[str]:
     return out
 
 
+async def scenario_community(browser, base: str, shots: str = "") -> list[str]:
+    """Community scenarios (#community, game.js renderCommunity; board/worker.js /scen/*, the stub): the builder's title
+    on the summary card and in the link, Post to Community (signed in, a username) sending the code and the title, the
+    list showing it (title, creator, plays, won), its tap opening the scenario's link (without Pro: the pitch, titled);
+    with Pro the link plays it and asks the board to count the play. shots: a folder for 390x844 screenshots."""
+    out: list[str] = []
+    COMM.update(rows=[], plays=[], posts=[])
+    errs: list[str] = []
+    title = "Brady's last stand"
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    await pro_context(ctx, base, pro=False, comm=True)
+    page = await ctx.new_page()
+    page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+    try:
+        await page.goto(f"{base}/index.html#archive")
+        await page.wait_for_selector("#arch a.scnentry.comm[href='#community']", timeout=30000)
+        async with page.expect_event("load"):
+            await page.goto(f"{base}/index.html#custom")
+        await page.wait_for_selector("#scn-title", timeout=30000)
+        await page.locator("#arch .spre .key").first.click()
+        await page.fill("#scn-title", title)
+        got = await page.evaluate("() => (document.querySelector('#arch .ssum .scnsum .stl') || {}).textContent || ''")
+        if got != title:
+            out.append(f"the summary card does not show the title: {got!r}")
+        if shots:
+            await page.locator("#scn-title").scroll_into_view_if_needed()
+            await page.evaluate("() => scrollBy(0, -120)")
+            await page.screenshot(path=f"{shots}/builder-title.png")
+        await page.locator("#arch .sacts button", has_text="Post to Community").click()
+        await page.wait_for_selector("#arch .spost a[href='#community']", timeout=10000)
+        if not COMM["posts"] or COMM["posts"][-1].get("title") != title or not re.match(r"^1(?:-[0-9A-Za-z]{1,4}){21}$", COMM["posts"][-1].get("code", "")) \
+                or COMM["posts"][-1].get("session") != SESSION:
+            out.append(f"Post to Community sent {COMM['posts'][-1:]!r}")
+        # a second scenario on the list, posted by someone else and not played yet
+        code0 = COMM["rows"][0]["code"] if COMM["rows"] else ""
+        sc = await page.evaluate(SCEN_PICK, [5, 1])
+        COMM["rows"].append({"id": "OTHER001", "code": sc["code"], "title": "Fourth and forever", "name": "Someone", "at": "2026-10-19T16:00:00Z", "n": 0, "f": 0, "w": 0, "best": None})
+        async with page.expect_event("load"):
+            await page.goto(f"{base}/index.html#community")
+        await page.wait_for_selector("#arch .clist a.day.comm", timeout=30000)
+        rows = await page.evaluate("() => [...document.querySelectorAll('#arch .clist a.day.comm')].map((a) => ({ text: a.innerText, href: a.getAttribute('href'), del: a.parentElement.classList.contains('scnrow') && !!a.parentElement.querySelector('.scnx') }))")
+        if len(rows) != 2:
+            out.append(f"the list shows {len(rows)} scenarios, not 2: {rows!r}")
+        else:
+            t0 = rows[0]["text"]
+            if title not in t0 or "by Tester" not in t0 or "12 plays" not in t0 or "40% won" not in t0 or "Pro" not in t0 or not rows[0]["del"]:
+                out.append(f"the posted scenario's row: {t0!r}")
+            if "0 plays" not in rows[1]["text"] or "won" in rows[1]["text"] or rows[1]["del"]:
+                out.append(f"an unplayed scenario's row: {rows[1]['text']!r}")
+            if not rows[0]["href"].startswith(f"#custom-{code0}~"):
+                out.append(f"the row's link: {rows[0]['href']!r}")
+        if BAD_TEXT.search(await page.evaluate("() => document.getElementById('arch').innerText")):
+            out.append("broken text on the community list")
+        if shots:
+            await page.screenshot(path=f"{shots}/community.png")
+            await page.screenshot(path=f"{shots}/community-full.png", full_page=True)
+        async with page.expect_event("load"):
+            await page.locator("#arch .clist a.day.comm").first.click()
+        await page.wait_for_selector("#arch .scnsum", timeout=30000)
+        got = await page.evaluate("() => ({ stl: (document.querySelector('#arch .scnsum .stl') || {}).textContent || '', pro: !!document.querySelector('#arch .pro .btn') })")
+        if got["stl"] != title or not got["pro"]:
+            out.append(f"without Pro the community scenario is not the titled pitch: {got!r}")
+        if COMM["plays"]:
+            out.append("a pitch counted a play")
+    except Exception as e:
+        out.append(f"community: {e}")
+    finally:
+        await ctx.close()
+    # with Pro: the link plays it, under its title, and the board is asked to count the play
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    await pro_context(ctx, base, pro=True, comm=True)
+    page = await ctx.new_page()
+    page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+    try:
+        href = COMM["rows"][0]["code"] + "~" + urllib.parse.quote(title) if COMM["rows"] else "x"
+        await page.goto(f"{base}/index.html#custom-{href}")
+        await page.wait_for_selector("#intro .btn", timeout=30000)
+        lab = await page.evaluate("() => document.getElementById('dayLabel').textContent")
+        if title not in lab:
+            out.append(f"the scenario plays without its title: {lab!r}")
+        for _ in range(50):
+            if COMM["plays"]:
+                break
+            await page.wait_for_timeout(100)
+        if not COMM["plays"] or COMM["plays"][0].get("code") != COMM["rows"][0]["code"] or COMM["plays"][0].get("done"):
+            out.append(f"the play was not reported: {COMM['plays']!r}")
+    except Exception as e:
+        out.append(f"community play: {e}")
+    finally:
+        out.extend(errs)
+        await ctx.close()
+    return out
+
+
 async def snap_reach(browser, base: str) -> list[str]:
     """The snap needs no scrolling: on a phone (390x844, 375x667) and a desktop, a pass's Snap key, the run keys and a
     drawn run's Run it, the defense's Call it (the full call and the three keys) and the kicks' keys are all on the screen
@@ -981,6 +1098,10 @@ async def main(a) -> int:
             print("a scenario's link without Pro (the pitch, the scenario's summary), a bad link: " + ("ok" if not pitch else "FAIL")
                   + "".join(f"\n      {x}" for x in pitch), flush=True)
             reach += pitch
+            comm = await scenario_community(browser, base, a.shots)
+            print("community scenarios (a title, Post to Community, the list, a tap: the pitch or the game, the play counted): " + ("ok" if not comm else "FAIL")
+                  + "".join(f"\n      {x}" for x in comm), flush=True)
+            reach += comm
             half = await scenario_half(browser, base)
             print("a first half played to the final gun (the halftime card, the third quarter's kickoff): " + ("ok" if not half else "FAIL")
                   + "".join(f"\n      {x}" for x in half), flush=True)
@@ -1079,6 +1200,7 @@ if __name__ == "__main__":
     ap.add_argument("--survivor", type=int, default=4, help="survivor episodes")
     ap.add_argument("--games", type=int, default=3, help="games per survivor episode")
     ap.add_argument("--scenario", type=int, default=0, help="Pro scenario episodes (game.js #custom: the builder, then a random scenario played out)")
+    ap.add_argument("--shots", default="", help="a folder for the community test's 390x844 screenshots")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--day-step", type=int, default=1, help="seed step between daily episodes (9: the same day each time)")
     ap.add_argument("--jobs", type=int, default=3, help="episodes at once")

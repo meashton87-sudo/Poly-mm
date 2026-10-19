@@ -447,7 +447,22 @@ EPA a play, on every regular-season line since 2001, a standard error of 3.9 poi
 pitch): the same engine, grading and end card as a historic drive (each try its own draws, Start over, an A takes the
 win when it is played to the final gun, the playoffs never end tied), and no leaderboard, since nobody's scenario is
 anybody else's. My scenarios (the builder's list) keeps each one's best grade and tries, and follows a signed-in
-account (`/auth/stats` scen). The teams: `nflclock.scenario.build` writes `web/rosters/index.json` (every season's
+account (`/auth/stats` scen). A scenario can have a title (40 characters at most, optional): shown on its card, as the
+drive's label and on My scenarios, and carried in its link after the code (`#custom-<code>~<title>`, `scenario.js`
+link/parseLink; a link without one works as before, and the title is no part of the code, so a scenario is one
+scenario whatever it is called). A title with a slur or an obscenity is refused in the builder and dropped from a link
+(`scenario.js` blocked, the board's own list and rule).
+
+**Community scenarios** (`#community`, from the Pro screen under Build a scenario and from the builder;
+`game.js` renderCommunity, `board/worker.js` /scen/*): Post to Community (in the builder; an account with a username and a
+title) puts a scenario on a list anyone can read, sorted by most played, hot (plays for their age) or new, 20 a page:
+its title, the two teams and the situation, the creator's username, how many have played it, the share of finished
+tries that won the game and the top grade posted. A tap opens its link: Pro plays it, anyone else gets what it is and
+the Pro pitch. Every try of a posted scenario counts a play when it starts and a finish (won or not) when it ends, once
+a day a device or account. The board refuses a title or username with a slur or obscenity, takes 5 posts a day an
+account, keeps one post a scenario (posting a code already there answers with that post), keeps 300 at most (past it a
+new post takes the place of the least played) and lets the creator take a post down; `DELETE /scen?id=` with the admin
+token takes any post off. The teams: `nflclock.scenario.build` writes `web/rosters/index.json` (every season's
 teams, records, coaches, quarterbacks and strengths) and `web/rosters/<season>.json` (the 32 in the daily game's team
 format), each team as it lined up in its latest regular-season game before the last week with its usual quarterback
 and kicker (`history.History.teams`: participation from 2016, snap counts from 2012, depth charts from 2001; 1999 and
@@ -470,8 +485,10 @@ select), `help_open` (a tap on ?; auto: the three-line help a first visit to a P
 `install_accepted` (via launch: first opened from the home screen) and `install_dismissed` (close or the
 browser's prompt), `sim_ready` (packed data or JSON, ms since load, ms a player
 sat waiting on it), `info_mismatch` (a spot's first-call facts, shipped with it, differ from the simulator's: spot id), `drive_leave` (the page went to the background mid-drive: calls made, seconds in, still
-loading), `scenario_builder` (pro), `scenario_preset` (preset), `scenario_start` (type, quarter, kickoff, the two seasons, pro),
-`scenario_pitch`, `scenario_retry`, `stats_open`, `stats_page_link`, `replay`, `name_set`, `leaderboard_tab` (day or week), `practice_start` (from the
+loading), `scenario_builder` (pro), `scenario_preset` (preset), `scenario_start` (type, quarter, kickoff, the two seasons, pro, titled),
+`scenario_pitch`, `scenario_retry`, `scen_post` (a post to Community: existing, type, quarter), `scen_comm_open` (pro),
+`scen_comm_sort` (sort), `scen_comm_tap` (sort, plays, pro), `scen_comm_play` and `scen_comm_finish` (won: a try of a
+posted scenario counted), `scen_comm_delete`, `stats_open`, `stats_page_link`, `replay`, `name_set`, `leaderboard_tab` (day or week), `practice_start` (from the
 daily card or a practice card), `practice_finish` (practice drive number, kind, score, snaps), `restart_ask` (mode: Start over
 tapped) and `restart` (mode, calls made, restarts so far, the drive, run or day: confirmed). Share opens the phone's share sheet
 where there is one. In Google Analytics: Reports, Engagement, Events (custom fields need registering as custom

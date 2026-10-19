@@ -100,7 +100,16 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   historic drive (stateKey :custom:<code>, each try its own draws: seedKey; Start over; mustWin) and posts nowhere: no
   daily list, stats day, streak or badge. A first-half one played to the final gun kicks off the second half
   (secondHalf); startRoot/otOf read a kickoff start and who has had the ball in overtime (start.otc): spot_info.js
-  copies them. My scenarios (tmd:v3:scen) syncs with the account (worker.js stats:s:<acct>, scenMerge).
+  copies them. My scenarios (tmd:v3:scen) syncs with the account (worker.js stats:s:<acct>, scenMerge). A title (scenario.js TITLE_MAX)
+  rides in the link only (#custom-<code>~<title>: link/parseLink), never in the code (state, stats and the community key
+  on the code). scenario.js blocked() is a copy of worker.js blocked() (the builder's hint, a link's title): change both
+  (worker_test.mjs checks they agree).
+- Community scenarios (game.js renderCommunity #community, commPost, commPlay; worker.js /scen/*): comm:list (the posts:
+  code, title, username, time, the account never sent out; written by a post or a removal only), comm:n (the counts: the
+  one value a play rewrites), comm:pd:<UTC date>:... once-a-day marks (hashes only; the day's first play clears the day
+  before's). Posting takes an account with a username; titles and names blocked() refused (and left out of the list),
+  COMM_POSTS a day an account, one post a code, COMM_MAX kept. browser_test.py scenario_community (with --scenario)
+  drives it against its stub.
 - The Gauntlet (board/worker.js /race*): the contest on the historic drives, over (RACE_TO, Oct 16 2026). Its game code
   (game.js racePanel, the race bar, #gauntlet) was removed in #125; the worker endpoints and web/admin.html remain, so
   what follows describes them. game.js keeps only GAUNTLET_FROM / gauntletFresh (the drive records from its start). A Pro code enters once under

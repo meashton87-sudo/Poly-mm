@@ -261,7 +261,11 @@
   const SCN_AT = Date.parse((document.querySelector('meta[name="scn-at"]') || {}).content || '') || 0;
   const SCN = typeof TMDScenario !== 'undefined' && Date.now() >= SCN_AT ? TMDScenario : null;
   const CUSTOM_BUILD = PRO_ON && !!SCN && location.hash === '#custom';
-  const CUSTOM = PRO_ON && SCN ? ((location.hash.match(/^#custom-(1(?:-[0-9A-Za-z]{1,4}){21})$/) || [])[1] || '') : '';
+  // (a title rides after the code: #custom-<code>~<title>, scenario.js link; the scenario is its code, whatever its title)
+  const CUSTOM = PRO_ON && SCN ? ((location.hash.match(/^#custom-(1(?:-[0-9A-Za-z]{1,4}){21})(?:~.*)?$/) || [])[1] || '') : '';
+  const CUSTOM_TITLE = CUSTOM ? SCN.parseLink(location.hash.slice('#custom-'.length)).title : '';
+  // the scenarios players have posted (Pro screen; board/worker.js /scen/*): #community lists them, a tap plays one by its link
+  const COMMUNITY = PRO_ON && !!SCN && location.hash === '#community';
   let PRO = null, PRO_RUNS = null;        // pro/drives.json and pro/runs.json, once loaded
   // Pro grades: a drive's score (better than this many % of NFL play-callers) as a letter. 90 and up is an A, green:
   // the drive is passed. The best grade on each drive is kept; the ranks count the drives passed
@@ -8587,7 +8591,7 @@
   // plays never waits on it. Daily and Survivor only (a Pro drive or Versus is no first visit); kept in storage, so a
   // reload picks up where it was and a finished or skipped tour never comes back. The full help stays on the ?.
   const TOUR_KEY = `${STORE}:tour`;
-  const TOUR_OK = !(VS || VS_LOBBY || DRIVE || RUN_N || CUSTOM || CUSTOM_BUILD || ARCH || ARCH_DAY);
+  const TOUR_OK = !(VS || VS_LOBBY || DRIVE || RUN_N || CUSTOM || CUSTOM_BUILD || COMMUNITY || ARCH || ARCH_DAY);
   const qs = (s) => document.querySelector(s);
   const TOUR = [
     // (past: below, it goes under Play, not over it; keep: what it never covers, the score and the clock it talks about)
@@ -9364,7 +9368,7 @@
       const stats = { days: newest(st.days, SYNC_CAP.days), drives: newest(gauntletDrives(load(`${STORE}:drives`, {})), SYNC_CAP.drives), runs: newest(load(`${STORE}:runs`, {}), SYNC_CAP.runs),
         badges: st.badges || {}, frozen: newest(st.frozen, SYNC_CAP.frozen),
         scen: Object.fromEntries(Object.entries(scenList()).filter(([c, e]) => SCN && SCN.parse(c) && e && typeof e.at === 'number')
-          .map(([c, e]) => [c, { at: e.at, ...(typeof e.p === 'number' ? { p: e.p } : {}), tries: e.tries || 0, won: !!e.won, ...(e.gone ? { gone: true } : {}) }])) };
+          .map(([c, e]) => [c, { at: e.at, ...(typeof e.p === 'number' ? { p: e.p } : {}), tries: e.tries || 0, won: !!e.won, ...(e.gone ? { gone: true } : {}), ...(e.title ? { title: e.title } : {}) }])) };
       let d;
       try { d = await proApi('/auth/stats', { session: authSession(), stats }); } catch (e) {
         if (/signed out/i.test(e.message)) { authLost(); acctBar(); }
@@ -9872,7 +9876,7 @@
     let bad = null;
     try { bad = sessionStorage.getItem(`${STORE}:badlink`); sessionStorage.removeItem(`${STORE}:badlink`); } catch (e) { /* storage off */ }
     if (bad) box.append(el('p', 'note badlink', `There is no ${bad}${isPro() ? ': here are the ones there are.' : '.'}`));
-    if (SCN) box.append(scenEntry());        // Build a scenario first on the Pro screen, with Pro or without (building is free to try)
+    if (SCN) box.append(scenEntry(), commEntry());        // Build a scenario first on the Pro screen, with Pro or without (building is free to try), then what others built
     if (!isPro()) {
       box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''}, the historic drives and the playoff runs: play any of them, graded like the day it ran.`));
       if (PRO_LIVE === null && (proCode() || authSession())) {     // a code (or a session) is kept here but the board could not confirm it
@@ -9974,10 +9978,10 @@
     const keep = Object.entries(L).sort((a, b) => (b[1].at || 0) - (a[1].at || 0)).slice(0, SCN_KEEP);
     save(SCN_LIST, Object.fromEntries(keep));
   }
-  // played (kicked off): on the list, on top
-  function scenTouch(c) {
+  // played (kicked off): on the list, on top (under its title, when the link has one)
+  function scenTouch(c, title) {
     const L = scenList(), e = L[c] || { tries: 0, won: false };
-    L[c] = { ...e, at: Date.now() };
+    L[c] = { ...e, at: Date.now(), ...(title ? { title } : {}) };
     delete L[c].gone;
     scenSave(L);
   }
@@ -9987,9 +9991,10 @@
     const counted = !!prev && prev.try === state.tryAt;
     const best = prev && typeof prev.p === 'number' ? prev.p : null;
     const rec = { at: Date.now(), p: Math.max(p, best ?? 0), last: p, tries: ((prev && prev.tries) || 0) + (counted ? 0 : 1), won: won || !!(prev && prev.won),
-      try: state.tryAt, pb: counted ? prev.pb ?? null : best };
+      try: state.tryAt, pb: counted ? prev.pb ?? null : best, ...((CUSTOM_TITLE || (prev && prev.title)) ? { title: CUSTOM_TITLE || prev.title } : {}) };
     L[CUSTOM] = rec;
     scenSave(L);
+    if (!counted) commPlay({ done: true, won, p });
     return rec;
   }
   // the kind of game in a sentence: "a regular-season game", "the Divisional round", "the Super Bowl"
@@ -9998,7 +10003,7 @@
   // a scenario as a line: "2007 Patriots vs 2023 Chiefs", and its situation in a few words
   function scenLines(sc, ix) {
     const S = SCN.summary(sc, (c, y) => scnName(ix, c, y));
-    return { title: S.title, sub: `${SCN.TYPES[sc.type]} · ${sc.qtr === 5 ? 'OT' : `Q${sc.qtr}`} ${SCN.clockText(sc.clock)} · ${S.score.toLowerCase()}`, S };
+    return { title: S.title, name: S.name, sub: `${SCN.TYPES[sc.type]} · ${sc.qtr === 5 ? 'OT' : `Q${sc.qtr}`} ${SCN.clockText(sc.clock)} · ${S.score.toLowerCase()}`, S };
   }
   // the summary card (the builder's, a shared link's, the end card's)
   function scenSummaryEl(sc, ix) {
@@ -10007,6 +10012,7 @@
     const head = el('div', 'sh');
     const sw = (c) => { const x = el('span', `sw${darkOn(color(c)) ? ' dk' : ''}`, c); x.style.background = color(c); return x; };
     head.append(sw(sc.you), el('b', '', S.title), sw(sc.opp));
+    if (S.name) box.append(el('div', 'stl', S.name));         // (its title, above the two teams)
     box.append(head);
     const fit = ix.spread || { hfa: 2.4, k: 46 };
     if (tY && tO) {
@@ -10067,6 +10073,9 @@
     const seasons = ix.seasons.map((s) => s.season), first = seasons[0], last = seasons[seasons.length - 1];
     box.append(el('p', 'lead', `Any two teams from ${first} to ${last}, each as it lined up that season, in any situation you set.`));
     if (!isPro()) box.append(el('p', 'note scnpro', 'Building is free to try; playing a scenario is part of Pro.'));
+    const seeC = el('a', 'linkbtn', 'See what others built: Community scenarios');
+    seeC.href = '#community';
+    box.append(seeC);
     let sc = scenDraft(ix);
     const form = el('form', 'scn');
     form.noValidate = true;
@@ -10133,6 +10142,14 @@
       b.addEventListener('click', () => { sc = SCN.applyPreset(sc, k); track('scenario_preset', { preset: k }); changed(); });
       pre.append(b);
     });
+    // its title (optional; posting it to Community takes one): shown on the card, in the link and on the list
+    const ttl = el('input');
+    ttl.id = uid('title'); ttl.dataset.f = 'title'; ttl.maxLength = SCN.TITLE_MAX; ttl.autocomplete = 'off'; ttl.spellcheck = true;
+    ttl.placeholder = 'e.g. Brady’s last stand'; ttl.setAttribute('aria-label', `Title (optional, ${SCN.TITLE_MAX} characters at most)`);
+    ttl.addEventListener('input', () => { sc.title = ttl.value; changed(false); });
+    ttl.sync = () => { if (document.activeElement !== ttl) ttl.value = sc.title || ''; };
+    const gN = fieldset('Title');
+    gN.append(row('Name it', ttl));
     const you = teamSel('you'), opp = teamSel('opp');
     const gT = fieldset('Teams');
     gT.append(row('You coach', you.el), you.info, row('Against', opp.el), opp.info);
@@ -10196,19 +10213,22 @@
     errs.setAttribute('aria-live', 'polite');
     const sum = el('div', 'ssum');
     const go = el('button', 'btn alt', isPro() ? 'Kick off' : 'Kick off (Pro)'), link = el('button', 'btn ghostbtn', 'Copy the link'), reset = el('button', 'linkbtn', 'Start from scratch');
-    go.type = 'button'; link.type = 'button'; reset.type = 'button';
+    const post = el('button', 'btn ghostbtn', 'Post to Community'), posted = el('p', 'note spost');
+    go.type = 'button'; link.type = 'button'; reset.type = 'button'; post.type = 'button';
+    posted.setAttribute('aria-live', 'polite');
     go.addEventListener('click', () => {
       if (!SCN.ok(sc, ix)) return;
-      const c = SCN.code(SCN.tidy(sc));
-      if (isPro()) scenTouch(c);
-      track('scenario_start', { type: sc.type, qtr: sc.qtr, kick: sc.start === 'kick', eras: `${sc.ys}-${sc.os}`, pro: isPro() });
-      location.hash = `#custom-${c}`;
+      const t = SCN.tidy(sc), c = SCN.code(t);
+      if (isPro()) scenTouch(c, t.title);
+      track('scenario_start', { type: sc.type, qtr: sc.qtr, kick: sc.start === 'kick', eras: `${sc.ys}-${sc.os}`, pro: isPro(), titled: !!t.title });
+      location.hash = `#custom-${SCN.link(t)}`;
     });
-    link.addEventListener('click', () => { if (SCN.ok(sc, ix)) shareText(scenLink(SCN.code(SCN.tidy(sc))), sum, 'scenario'); });
+    link.addEventListener('click', () => { if (SCN.ok(sc, ix)) shareText(scenLink(SCN.link(SCN.tidy(sc))), sum, 'scenario'); });
+    post.addEventListener('click', () => commPost(() => SCN.ok(sc, ix) && SCN.tidy(sc), post, posted, ttl));
     reset.addEventListener('click', () => { try { localStorage.removeItem(SCN_DRAFT); } catch (e) { /* storage off */ } sc = scenDraft(ix); changed(); });
     const acts = el('div', 'row sacts');
-    acts.append(go, link);
-    const syncs = [you.sync, opp.sync, typeSel.sync, site.sync, rules.sync, qtr.sync, clk.sync, sY.sync, sO.sync, start.sync, ball.sync, side.sync, ylIn.sync,
+    acts.append(go, link, post);
+    const syncs = [ttl.sync, you.sync, opp.sync, typeSel.sync, site.sync, rules.sync, qtr.sync, clk.sync, sY.sync, sO.sync, start.sync, ball.sync, side.sync, ylIn.sync,
       down.sync, ytg.sync, toY.sync, toO.sync, otp.sync, end.sync, r2h.sync];
     function changed(full = true) {
       if (full && Number.isFinite(sc.yl) && sc.yl !== 50) own = sc.yl > 50;
@@ -10226,14 +10246,14 @@
       errs.textContent = '';
       bad.forEach(([, m]) => errs.append(el('li', '', m)));
       form.querySelectorAll('[data-f]').forEach((x) => x.classList.toggle('bad', bad.some(([f]) => f === x.dataset.f || (f === 'score' && /^score/.test(x.dataset.f)) || (f === 'to' && /^to/.test(x.dataset.f)))));
-      go.disabled = link.disabled = !!bad.length;
+      go.disabled = link.disabled = post.disabled = !!bad.length;
       sum.textContent = '';
       if (!bad.length) sum.append(scenSummaryEl(SCN.tidy(sc), ix));
       save(SCN_DRAFT, sc);
     }
-    form.append(gT, gG, gS);
-    box.append(el('h3', '', 'Start from'), pre, form, errs, sum, acts, reset);
-    box.append(el('p', 'note', `Seasons ${first}–${last}: each team as it lined up in a game late in its regular season (the latest for this season, ${last}, through week ${ix.seasons[ix.seasons.length - 1].thru}), with every player rated as of then, its quarterback, kicker and punter, and its strength. Before ${first} nothing names who started on the line, so those seasons are left out. The overtime is the one of its time; the playoffs never end tied. Scenarios post to no leaderboard: they aren’t the same for everyone.`));
+    form.append(gN, gT, gG, gS);
+    box.append(el('h3', '', 'Start from'), pre, form, errs, sum, acts, posted, reset);
+    box.append(el('p', 'note', `Seasons ${first}–${last}: each team as it lined up in a game late in its regular season (the latest for this season, ${last}, through week ${ix.seasons[ix.seasons.length - 1].thru}), with every player rated as of then, its quarterback, kicker and punter, and its strength. Before ${first} nothing names who started on the line, so those seasons are left out. The overtime is the one of its time; the playoffs never end tied. Scenarios post to no leaderboard: they aren’t the same for everyone. Posted to Community, a scenario shows how many have played it and how many won.`));
     // My scenarios
     box.append(el('h3', '', 'My scenarios'));
     const mine = el('div', 'days');
@@ -10241,10 +10261,11 @@
     if (!list.length) mine.append(el('p', 'note', isPro() ? 'The scenarios you play show here, with your best grade on each. Signed in, they follow you to any device.' : 'Your scenarios show here once you play them.'));
     list.forEach(([c, e]) => {
       const s0 = SCN.parse(c), L = scenLines(s0, ix), a = el('a', 'day drive scn'), x = el('button', 'scnx', '×');
-      a.href = `#custom-${c}`;
+      const tt = e.title ? SCN.cleanTitle(e.title) : '';
+      a.href = `#custom-${SCN.link({ ...s0, title: tt })}`;
       const right = typeof e.p === 'number' ? el('span', 'gr') : el('span', 'sc', 'Play');
       if (typeof e.p === 'number') right.append(gradeBadge(Math.round(e.p * 100)), el('small', '', String(Math.round(e.p * 100))));
-      a.append(el('b', '', L.title), el('span', 'm', L.sub), right);
+      a.append(el('b', '', tt || L.title), el('span', 'm', tt ? `${L.title} · ${L.sub}` : L.sub), right);
       x.type = 'button'; x.setAttribute('aria-label', `Remove ${L.title}`);
       x.addEventListener('click', () => {
         const all = scenList();
@@ -10266,7 +10287,7 @@
     const score = Math.round(p * 100), g = gradeOf(score), sc = today[0], hard = mustWin();
     const r0 = state.spots[0] && state.spots[0].result, won = !!(r0 && r0.mine > r0.theirs);
     const box = el('div', `gradecard ${g.c}`), top = el('div', 'gtop'), txt = el('div', 'gtxt');
-    txt.append(el('div', 'gk', `Your scenario · ${matchLine(sc)}`), el('div', 'gres', g.pass ? 'Passed' : hard && !won ? 'Win it to pass' : score >= PASS_AT - 10 ? 'So close' : 'Not yet'),
+    txt.append(el('div', 'gk', `Your scenario · ${CUSTOM_TITLE || matchLine(sc)}`), el('div', 'gres', g.pass ? 'Passed' : hard && !won ? 'Win it to pass' : score >= PASS_AT - 10 ? 'So close' : 'Not yet'),
       el('div', 'gsc', `${score} · better than ${score}% of NFL play‑callers, the calls and the result`));
     top.append(el('div', 'gbig', g.L), txt);
     box.append(top);
@@ -10301,11 +10322,154 @@
     edit.addEventListener('click', () => { save(SCN_DRAFT, today[0].scn); });
     const share = el('button', 'btn ghostbtn', 'Send it to a friend');
     share.type = 'button';
-    share.addEventListener('click', () => shareText(`Can you win this one? ${matchLine(today[0])}, ${typeSay(today[0].real.type)}. Two-Minute Drill Pro:\n${scenLink(CUSTOM)}`, share, 'scenario'));
+    share.addEventListener('click', () => shareText(`Can you win this one?${CUSTOM_TITLE ? ` “${CUSTOM_TITLE}”:` : ''} ${matchLine(today[0])}, ${typeSay(today[0].real.type)}. Two-Minute Drill Pro:\n${scenLink(SCN.link({ ...today[0].scn, title: CUSTOM_TITLE }))}`, share, 'scenario'));
     const all = el('a', 'btn ghostbtn', 'My scenarios');
     all.href = '#custom';
     row.append(again, edit, share, all);
     return row;
+  }
+
+  // ------------------------------------------------------ community scenarios ---
+  // #community (board/worker.js /scen/*): scenarios players built and posted under a title, by their username. Anyone
+  // can read the list (most played, hot, new; COMM_PAGE a page); a tap opens the scenario's link (#custom-<code>~<title>),
+  // which plays it with Pro and is the Pro pitch without. Posting (the builder's Post to Community) takes an account with a
+  // username and a title; the board refuses a title or name blocked() and more than a few posts a day, and keeps a post
+  // of the same scenario (its code) once. A try of a posted scenario counts a play when it starts and a finish (won or
+  // not, its score) when it ends, once a day a device or account (commPlay: every scenario played asks; one not posted
+  // counts nothing).
+  const COMM_SORT_KEY = `${STORE}:commsort`, COMM_SORTS = { top: 'Most played', hot: 'Hot', new: 'New' };
+  function commPlay(extra) {
+    if (!CUSTOM) return;
+    (async () => {
+      await BOARD.ready;
+      if (!BOARD.api) return;
+      const r = await fetch(`${BOARD.api}/scen/play`, POST_JSON({ code: CUSTOM, key: deviceKey(), ...withSession(), ...(extra || {}) }));
+      const d = r.ok ? await r.json() : {};
+      if (d.counted) track(extra && extra.done ? 'scen_comm_finish' : 'scen_comm_play', extra && extra.done ? { won: !!extra.won } : {});
+    })().catch(() => { /* never in the way of the game */ });
+  }
+  // the Pro screen's way in, under Build a scenario
+  function commEntry() {
+    const a = el('a', 'scnentry comm');
+    a.href = '#community';
+    a.append(el('span', 'k', 'Community'), el('b', '', 'Scenarios players built'),
+      el('span', 'm', 'Play what other players set up and see how many have played each one and how many won. Post yours from the builder.'),
+      el('span', 'cta', 'Browse'));
+    return a;
+  }
+  // the builder's Post to Community: a title, an account and a username first (each asked for in turn), then the board
+  async function commPost(get, btn, out, ttl) {
+    const sc = get();
+    if (!sc) return;
+    const say = (t, bad) => { out.textContent = t; out.classList.toggle('bad', !!bad); };
+    if ((sc.title || '').length < 3) {
+      say('Give it a title first (3 to 40 characters): it is what people see on the list.', true);
+      ttl.classList.add('bad'); ttl.focus();
+      return;
+    }
+    if (SCN.blocked(sc.title)) { say('That title is not allowed: pick another.', true); ttl.focus(); return; }
+    await BOARD.ready;
+    if (!BOARD.api || !(await authCfg())) { say('Posting needs the website’s backend: try again on nfl2mindrill.com.', true); return; }
+    if (!signedIn()) {
+      if (!authSession()) { signInSheet(el('p', 'lead', 'Your scenario goes on the list under your username: log in or sign up to post it.')); return; }
+      await proVerify();
+      if (!signedIn()) { signInSheet(el('p', 'lead', 'Log in again to post it.')); return; }
+    }
+    if (!ACCT.me.name) { nameSheet(true, () => commPost(get, btn, out, ttl)); return; }
+    btn.disabled = true;
+    say('Posting…');
+    try {
+      const d = await proApi('/scen/post', { session: authSession(), code: SCN.code(sc), title: sc.title });
+      track('scen_post', { existing: !!d.existing, type: sc.type, qtr: sc.qtr });
+      out.textContent = '';
+      out.classList.remove('bad');
+      const see = el('a', '', 'See it on Community');
+      see.href = '#community';
+      out.append(d.existing ? `Already posted${d.row.title !== sc.title ? ` as “${d.row.title}”` : ''} by ${d.row.name}. ` : `Posted as “${d.row.title}”. `, see);
+    } catch (e) {
+      if (/signed out/i.test(e.message)) { authLost(); acctBar(); signInSheet(el('p', 'lead', 'Log in again to post it.')); say(''); }
+      else say(e.message, true);
+    }
+    btn.disabled = false;
+  }
+  async function renderCommunity() {
+    show('arch');
+    track('scen_comm_open', { pro: isPro() });
+    const box = $('arch');
+    box.textContent = '';
+    const back = el('a', 'linkbtn', '← Pro');
+    back.href = '#archive';
+    box.append(back, el('h2', '', 'Community scenarios'), el('p', 'lead', `Scenarios other players built: their teams, their situation. Tap one to play it${isPro() ? '' : ' (playing is part of Pro)'}.`));
+    const build = el('a', 'linkbtn', 'Build and post your own');
+    build.href = '#custom';
+    box.append(build);
+    let sort = load(COMM_SORT_KEY, 'top');
+    if (!COMM_SORTS[sort]) sort = 'top';
+    const tabs = el('div', 'seg csort');
+    tabs.setAttribute('role', 'group'); tabs.setAttribute('aria-label', 'Sort by');
+    const list = el('div', 'days clist'), more = el('button', 'btn ghostbtn', 'Load more'), note = el('p', 'note');
+    list.setAttribute('aria-live', 'polite');
+    more.type = 'button'; more.hidden = true;
+    Object.entries(COMM_SORTS).forEach(([k, t]) => {
+      const b = el('button', '', t);
+      b.type = 'button'; b.dataset.v = k;
+      b.addEventListener('click', () => { if (sort === k) return; sort = k; save(COMM_SORT_KEY, k); track('scen_comm_sort', { sort: k }); fill(0); });
+      tabs.append(b);
+    });
+    box.append(tabs, list, more, note);
+    await BOARD.ready;
+    let ix;
+    try { ix = await scnIndex(); } catch (e) { list.append(el('p', 'note', `The rosters did not load (${e.message}). Check your connection and reload.`)); return; }
+    if (!BOARD.api) { list.append(el('p', 'note', 'The community list needs the website’s backend.')); return; }
+    let page = 0, ask = 0;
+    const row = (x) => {
+      const sc = SCN.parse(x.code);
+      if (!sc || !SCN.ok(sc, ix)) return null;          // (a season the site no longer has)
+      const L = scenLines(sc, ix), a = el('a', 'day drive scn comm');
+      a.href = `#custom-${SCN.link({ ...sc, title: x.title })}`;
+      a.addEventListener('click', () => track('scen_comm_tap', { sort, n: x.n, pro: isPro() }));
+      const won = x.f ? Math.round((100 * x.w) / x.f) : null;
+      const stats = `by ${x.name} · ${x.n} ${x.n === 1 ? 'play' : 'plays'}${won !== null ? ` · ${won}% won` : ''}${typeof x.best === 'number' ? ` · top grade ${gradeOf(Math.round(x.best * 100)).L}` : ''}`;
+      const mine = (scenList()[x.code] || {});
+      const right = typeof mine.p === 'number' ? el('span', 'gr') : el('span', 'sc', isPro() ? 'Play' : 'Pro');
+      if (typeof mine.p === 'number') right.append(gradeBadge(Math.round(mine.p * 100)), el('small', '', String(Math.round(mine.p * 100))));
+      a.append(el('b', '', x.title), el('span', 'm', `${L.title} · ${L.sub}`), el('span', 'm cst', stats), right);
+      if (!x.mine) return a;
+      const wrap = el('div', 'scnrow'), del = el('button', 'scnx', '×');
+      del.type = 'button'; del.setAttribute('aria-label', `Take down ${x.title}`);
+      del.addEventListener('click', async () => {
+        if (!confirm(`Take “${x.title}” off Community? Its plays go with it.`)) return;
+        try { await proApi('/scen/delete', { session: authSession(), id: x.id }); track('scen_comm_delete'); wrap.remove(); toast('Taken down'); } catch (e) { toast(e.message); }
+      });
+      wrap.append(a, del);
+      return wrap;
+    };
+    async function fill(p) {
+      const n = ++ask;
+      tabs.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === sort)));
+      if (!p) { list.textContent = ''; list.append(el('p', 'note', 'Loading…')); }
+      more.disabled = true;
+      let d;
+      try {
+        const r = await fetch(`${BOARD.api}/scen/list`, POST_JSON({ sort, page: p, ...withSession() }));
+        if (!r.ok) throw new Error(`list ${r.status}`);
+        d = await r.json();
+      } catch (e) {
+        if (n !== ask) return;
+        if (!p) list.textContent = '';
+        list.append(el('p', 'note', `The list did not load (${e.message}). Check your connection and try again.`));
+        more.disabled = false;
+        return;
+      }
+      if (n !== ask) return;            // (a newer sort asked since)
+      if (!p) list.textContent = '';
+      d.rows.map(row).filter(Boolean).forEach((x) => list.append(x));
+      if (!p && !list.children.length) list.append(el('p', 'note', 'Nothing posted yet. Build one and be the first: tap Post to Community in the builder.'));
+      page = p; more.hidden = d.next == null; more.disabled = false;
+      note.textContent = d.total ? `${d.total} ${d.total === 1 ? 'scenario' : 'scenarios'} posted. A play counts once a day a player; “won” is the share of finished tries that won the game.` : '';
+    }
+    more.addEventListener('click', () => fill(page + 1));
+    await fill(0);
   }
 
   // -------------------------------------------------------------- versus ---
@@ -10985,7 +11149,7 @@
     sheetSetup();
     boardInit();
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
-    $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE || CUSTOM || CUSTOM_BUILD ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
+    $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE || CUSTOM || CUSTOM_BUILD || COMMUNITY ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
     $('modeArch').hidden = !PRO_ON;
     if (PRO_BUILT && !PRO_ON) {
       const at = () => { if (!PRO_ON && Date.now() >= PRO_AT) proLaunch(); };
@@ -11035,7 +11199,7 @@
     // (not while a play runs: the redraw would wipe the animation; the next draw picks up the new size)
     window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); fitDock(fitKeys); }, 150); });
     show('boot');
-    if (!(VS || VS_LOBBY || ARCH || ARCH_DAY || DRIVE || RUN_N || CUSTOM || CUSTOM_BUILD || HOME_PG)) fetchData();      // the daily, survivor, practice
+    if (!(VS || VS_LOBBY || ARCH || ARCH_DAY || DRIVE || RUN_N || CUSTOM || CUSTOM_BUILD || COMMUNITY || HOME_PG)) fetchData();      // the daily, survivor, practice
     try {
       idx = await fetch(asset('game.json')).then((r) => { if (!r.ok) throw new Error('game data ' + r.status); return r.json(); });
       idx.calls.forEach((c) => { CALL[c.id] = c; });
@@ -11066,12 +11230,14 @@
       if (PRO_ON && /^#(drive|run)-\d+$/.test(location.hash) && !DRIVE && !RUN_N) { badProLink(); return; }
       // a scenario: the builder, or one to play (checked first; without Pro, what it is and the Pro pitch)
       // (from the builder's foot, a reload would land halfway down the page: a scenario opens at the top)
-      if (CUSTOM || CUSTOM_BUILD) { try { history.scrollRestoration = 'manual'; } catch (e) { /* older browsers */ } scrollTo(0, 0); }
+      if (CUSTOM || CUSTOM_BUILD || COMMUNITY) { try { history.scrollRestoration = 'manual'; } catch (e) { /* older browsers */ } scrollTo(0, 0); }
       if (CUSTOM_BUILD) { await renderBuilder(); return; }
+      if (COMMUNITY) { await renderCommunity(); return; }
       if (PRO_ON && SCN && /^#custom-/.test(location.hash) && !CUSTOM) { scenBad(['A scenario’s code has 22 parts: this one is cut short or mistyped']); return; }
       let scnIx = null, scnSc = null;
       if (CUSTOM) {
         scnSc = SCN.parse(CUSTOM);
+        if (scnSc && CUSTOM_TITLE) scnSc.title = CUSTOM_TITLE;
         try { scnIx = await scnIndex(); } catch (e) { scenBad([`The rosters did not load (${e.message}). Check your connection and reload`]); return; }
         const bad = !scnSc ? ['That is not a scenario’s code'] : SCN.check(scnSc, scnIx).map(([, m]) => m);
         if (bad.length) { scenBad(bad); return; }
@@ -11117,8 +11283,10 @@
         today[0].scn = scnSc;
         const S = scenLines(scnSc, scnIx).S;
         today[0].story = `${S.game[0].toUpperCase()}${S.game.slice(1)}. ${scnName(scnIx, scnSc.you, scnSc.ys)} (${scnTeam(scnIx, scnSc.you, scnSc.ys).record}) against the ${scnName(scnIx, scnSc.opp, scnSc.os)} (${scnTeam(scnIx, scnSc.opp, scnSc.os).record}). ${S.ot}.`;
-        $('dayLabel').textContent = `Scenario · ${S.title}`;
-        scenTouch(CUSTOM);
+        if (S.name) today[0].story = `“${S.name}”. ${today[0].story}`;
+        $('dayLabel').textContent = `Scenario · ${S.name || S.title}`;
+        scenTouch(CUSTOM, CUSTOM_TITLE);
+        commPlay();
       } else if (DRIVE) {
         PRO = await loadPro();
         const d = PRO && PRO.drives[DRIVE - 1];

@@ -15,12 +15,15 @@
  *   rules               two seasons: whose season's rules ('you' or 'opp')
  * code() writes one as a short link-safe code (#custom-<code>), parse() reads it back; check() lists what is wrong
  * with one (an impossible state: a distance past the goal line, a clock past the quarter's length, an overtime lead
- * the rules of its time would have ended); spotOf() turns one into a spot and its two teams in the daily game's
+ * the rules of its time would have ended); title (optional, TITLE_MAX characters) is the scenario's name: it rides along
+ * in the link (link(), parseLink(): #custom-<code>~<title>, the code alone as before) but is no part of the code, so a
+ * scenario is one scenario whatever it is called; spotOf() turns one into a spot and its two teams in the daily game's
  * format (dailygame.py spot_record, history.py teams). The page (game.js), node (web/game_smoke.js) and the tests
  * (tests/test_scenario.py) share it. */
 (function (global) {
   'use strict';
   const VERSION = '1';
+  const TITLE_MAX = 40;
   const TYPES = { REG: 'Regular season', WC: 'Wild Card', DIV: 'Divisional round', CON: 'Conference Championship', SB: 'Super Bowl' };
   const QUARTER = 900;
   // the regular season's overtime was 15:00 until 2017, 10:00 since; the playoffs' always 15:00
@@ -73,6 +76,7 @@
     const out = [];
     const bad = (f, m) => out.push([f, m]);
     if (!sc || typeof sc !== 'object') return [['all', 'Not a scenario']];
+    if (sc.title && titleBad(sc.title)) bad('title', titleBad(sc.title));
     if (!hasTeam(idx, sc.you, sc.ys)) bad('you', `There are no ${sc.ys} rosters for that team`);
     if (!hasTeam(idx, sc.opp, sc.os)) bad('opp', `There are no ${sc.os} rosters for that team`);
     if (sc.you === sc.opp) bad('opp', 'Pick two different teams');
@@ -117,6 +121,35 @@
   }
   const ok = (sc, idx) => !check(sc, idx).length;
 
+  // A title is shown to whoever opens the link (and, posted, on the Community list): slurs and obscenities are refused,
+  // spelled any way. The same lists and rule as board/worker.js blocked() (the board refuses a public one; this is the
+  // page's hint): change both (board/worker_test.mjs checks they agree)
+  const SUB = ['nigg', 'niga', 'nigr', 'faggot', 'retard', 'kike', 'chink', 'wetback', 'tranny', 'beaner', 'raghead',
+    'towelhead', 'fuck', 'fck', 'shit', 'cunt', 'pussy', 'whore', 'slut', 'bitch', 'hitler', 'kkk', 'cocksuck', 'motherf',
+    'dildo', 'blowjob', 'handjob', 'jizz', 'porn', 'penis', 'vagina', 'molest', 'incest', 'boob', 'titties', 'onlyfans',
+    'siegheil', 'heilhit', 'gasthe', 'killall', 'nazi'];
+  const WORD = ['ass', 'asses', 'asshole', 'dick', 'dicks', 'cock', 'cocks', 'fag', 'fags', 'twat', 'wank', 'piss', 'hoe',
+    'hoes', 'nig', 'dyke', 'homo', 'tit', 'tits', 'cum', 'anal', 'sex', 'sexy', 'spic', 'coon', 'gook', 'rape', 'raped',
+    'rapist', 'pedo', 'fuk', 'nude', 'naked', 'jihad', 'terrorist'];
+  const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', 8: 'b', 9: 'g', '@': 'a', $: 's', '!': 'i', '|': 'i', '+': 't' };
+  function blocked(name) {
+    const low = String(name || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '');
+    const mapped = [...low].map((c) => LEET[c] ?? c).join('');
+    const squash = (x) => x.replace(/[^a-z]/g, '').replace(/(.)\1+/g, '$1');
+    const whole = squash(mapped), joined = mapped.replace(/[^a-z]/g, '');
+    if (SUB.some((w) => { const sw = squash(w); return (sw.length >= 4 && whole.includes(sw)) || joined.includes(w); })) return true;
+    const words = mapped.split(/[^a-z]+/).filter(Boolean);
+    return words.some((w) => WORD.includes(w) || WORD.includes(squash(w)));
+  }
+  // a title as kept: control characters out, spaces as one, trimmed, TITLE_MAX at most (worker.js clean)
+  const cleanTitle = (t) => String(t ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, TITLE_MAX);
+  // what is wrong with a title ('' for none or a good one)
+  function titleBad(t) {
+    const raw = String(t ?? '').replace(/\s+/g, ' ').trim();
+    if (raw.length > TITLE_MAX) return `A title is ${TITLE_MAX} characters at most`;
+    return raw && blocked(raw) ? 'That title is not allowed: pick another' : '';
+  }
+
   // the code: VERSION and every field, '-' between (a team's code and the numbers never hold one)
   const LETTER = { site: { home: 'h', away: 'a', neutral: 'n' }, who: { you: 'y', opp: 'o' }, start: { snap: 's', kick: 'k' }, end: { half: 'h', game: 'g' } };
   const unletter = (m, c) => Object.keys(m).find((k) => m[k] === c);
@@ -136,6 +169,15 @@
       rules: unletter(LETTER.who, f[20]), end: unletter(LETTER.end, f[21]) };
     return Object.values(sc).some((v) => v === undefined || (typeof v === 'number' && Number.isNaN(v))) || sc.score.concat(sc.to).some(Number.isNaN) ? null : sc;
   }
+  // the link's part after #custom-: the code, then ~ and the title (URI-encoded) when it has one
+  const link = (sc) => { const t = cleanTitle(sc.title); return `${code(sc)}${t ? `~${encodeURIComponent(t)}` : ''}`; };
+  // { code, title } from a link's part ('' for a title that is missing, broken or not allowed: the scenario plays without it)
+  function parseLink(s) {
+    const str = String(s || ''), i = str.indexOf('~');
+    let title = '';
+    if (i >= 0) { try { title = cleanTitle(decodeURIComponent(str.slice(i + 1))); } catch (e) { title = ''; } }
+    return { code: i >= 0 ? str.slice(0, i) : str, title: title && !blocked(title) ? title : '' };
+  }
   // fields that don't matter for this situation take their defaults, so one scenario has one code
   function tidy(sc) {
     const out = { ...sc, score: sc.score.slice(), to: sc.to.slice() };
@@ -143,6 +185,8 @@
     if (out.qtr !== 5) out.otp = 0;
     if (out.qtr > 2) { out.r2h = 'opp'; out.end = 'game'; }
     if (out.ys === out.os) out.rules = 'you';
+    const t = cleanTitle(out.title);
+    if (t) out.title = t; else delete out.title;
     return out;
   }
 
@@ -198,7 +242,7 @@
     const ball = sc.start === 'kick' ? (mine ? `${opp} kick off to you` : `You kick off to ${opp}`)
       : `${mine ? 'Your' : `${opp}’`} ball, ${ordinal(sc.down)} & ${sc.ytg >= sc.yl ? 'goal' : sc.ytg} on ${mine ? spotSay(sc.yl, true).replace('your own', 'your') : spotSay(sc.yl, false).replace('their own', 'their')}`;
     return {
-      title: `${you} vs ${opp}`,
+      title: `${you} vs ${opp}`, name: cleanTitle(sc.title) || null,
       game: `${TYPES[sc.type]}${sc.site === 'neutral' ? ', neutral site' : sc.site === 'home' ? ', at home' : ', on the road'}`,
       when, score: lead > 0 ? `Up ${sc.score[0]}–${sc.score[1]}` : lead < 0 ? `Down ${sc.score[0]}–${sc.score[1]}` : `Tied ${sc.score[0]}–${sc.score[1]}`,
       ball, to: `Timeouts: you ${sc.to[0]}, ${opp} ${sc.to[1]}`,
@@ -238,7 +282,7 @@
     return null;
   }
 
-  const TMDScenario = { VERSION, TYPES, PRESETS, OT_SAY, overtime, defaults, applyPreset, check, ok, code, parse, tidy, category, strength, spreadOf,
+  const TMDScenario = { VERSION, TITLE_MAX, blocked, cleanTitle, titleBad, link, parseLink, TYPES, PRESETS, OT_SAY, overtime, defaults, applyPreset, check, ok, code, parse, tidy, category, strength, spreadOf,
     spotOf, summary, random, rulesSeason, otLen, otTo, maxScore, clockText };
   if (typeof module !== 'undefined' && module.exports) module.exports = TMDScenario;
   else global.TMDScenario = TMDScenario;

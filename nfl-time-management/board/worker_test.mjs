@@ -1,6 +1,7 @@
 // Tests for the leaderboard Worker, its Durable Object run in memory:   node board/worker_test.mjs
 import assert from 'node:assert';
 import worker, { Board } from './worker.js';
+import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 const sha256hex = async (x) => createHash('sha256').update(x).digest('hex');
 
@@ -182,6 +183,17 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   store.set('runs', (store.get('runs') || []).concat([{ name: 'b!tch', best: 999, at: '2026-01-01', kh: 'x' }]));
   b = await (await call('GET')).json();
   assert.ok(!b.rows.some((x) => x.name === 'b!tch'), 'a stored row with such a name is left out');
+}
+// a scenario's title on the page (web/scenario.js blocked: the builder's hint, a shared link's title) is refused just as
+// the board refuses it: the same lists and rule
+{
+  const SC = createRequire(import.meta.url)('../web/scenario.js');
+  const names = ['sh1t h3ad', 'Dickerson', 'F U C K', 'b!tch', 'Cassel', 'Hancock', 'Spygate revenge', 'N1663R', 'ass', 'Bass Pro', 'phuck', 'Fuuuuck yes',
+    'Raped by the refs', 'Hitler', 'Kkk', 'Sexy Rexy', 'Peyton’s last ride', 'Brady 28–3', 'tits', 'Titans comeback', 'porn star', 'Cocksure', 'Dyke', 'Pedo', 'p3d0'];
+  const board_ = [];
+  for (const name of names) board_.push((await (await call('POST', { name, best: 1, key: 'parity-device-key-00001' })).json()).refused === true);
+  assert.deepStrictEqual(names.map(SC.blocked), board_, 'the page and the board agree');
+  assert.ok(names.some(SC.blocked) && !names.every(SC.blocked));
 }
 // the rare-coach find is retired: a result never carries a claim code, and its public list is gone
 {
@@ -1071,7 +1083,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual((await au('/auth/stats', { session: sc, stats: { scen: Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`${S1.slice(0, -1)}${i}`, { at: 1 }])) } })).status, 400, 'too many scenarios');
   d = await ok(await au('/auth/stats', { session: sc, stats: { scen: { [S1]: { at: 1790000000000, p: 0.42, tries: 2, won: false, title: 'x' }, [S2]: { at: 1790000001000, tries: 0 },
     'not-a-code': { at: 1 }, [S1.replace('NE', 'N!')]: { at: 1 }, [`${S2}-x`]: { at: 1 }, '1-NE-2007': { at: 1 } } } }), 'scenarios');
-  assert.deepStrictEqual(d.stats.scen, { [S2]: { at: 1790000001000, tries: 0, won: false }, [S1]: { at: 1790000000000, p: 0.42, tries: 2, won: false } }, 'scen cleaned, newest first');
+  assert.deepStrictEqual(d.stats.scen, { [S2]: { at: 1790000001000, tries: 0, won: false }, [S1]: { at: 1790000000000, p: 0.42, tries: 2, won: false, title: 'x' } }, 'scen cleaned (its title kept), newest first');
   d = await ok(await au('/auth/stats', { session: sc, stats: { scen: { [S1]: { at: 1790000005000, p: 0.3, tries: 3, won: true }, [S2]: { at: 1790000002000, tries: 0, gone: true } } } }), 'the other phone\'s scenarios');
   assert.deepStrictEqual(d.stats.scen, { [S1]: { at: 1790000005000, p: 0.42, tries: 3, won: true }, [S2]: { at: 1790000002000, tries: 0, won: false, gone: true } }, 'the best, the most tries, won if either; a removal follows');
   d = await ok(await au('/auth/stats', { session: sc, stats: { scen: { [S2]: { at: 1790000009000, p: 0.9, tries: 1, won: true } } } }), 'played again');
@@ -1181,6 +1193,118 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.ok(!store.has(`league:${code}`), 'gone');
   assert.strictEqual((await lg('join', { session: sb, code })).status, 404);
   assert.ok((await ok(await lg('create', { session: sa, name: 'Room Again' }), 'room again')).league, 'a place free again');
+
+  // Community scenarios: posted under a title by an account with a username, a list anyone reads (most played, hot,
+  // new), plays, finishes and wins counted once a day a device or account, the creator's delete, the admin's removal
+  {
+    const cs = (path, body, o) => au(`/scen/${path}`, body, o);
+    const list = async (q = '') => (await call('GET', null, { path: `/scen/list${q}` })).json();
+    const C1 = '1-NE-2007-KC-2023-SB-n-4-120-17-21-y-s-75-1-10-2-3-0-o-y-g', C2 = '1-LA-2026-SEA-2026-REG-h-4-57-11-14-y-s-54-1-10-1-3-0-o-y-g', C3 = '1-GB-2010-PIT-2010-SB-n-4-300-21-24-y-s-80-1-10-1-1-0-o-y-g';
+    assert.deepStrictEqual(await list(), { sort: 'top', page: 0, rows: [], total: 0, next: null }, 'empty');
+    assert.strictEqual((await cs('post', { session: 'f'.repeat(64), code: C1, title: 'Spygate revenge' })).status, 401, 'signed out');
+    r = await cs('post', { session: sc, code: C1, title: 'Spygate revenge' });
+    assert.deepStrictEqual([r.status, (await r.json()).noName], [409, true], 'a username first');
+    for (const [code, title] of [['1-NE-2007', 'Good title'], [`${C1}-x`, 'Good title'], [C1, ''], [C1, 'ab'], [C1, 'x'.repeat(41)]]) {
+      assert.strictEqual((await cs('post', { session: sa, code, title })).status, 400, `bad post ${code} ${title}`);
+    }
+    for (const title of ['sh1t show', 'F U C K the Pats', 'b!tch better have my 4th down']) {
+      r = await cs('post', { session: sa, code: C1, title });
+      assert.deepStrictEqual([r.status, (await r.json()).refused], [409, true], `title refused: ${title}`);
+    }
+    r = await cs('post', { session: sa, code: C1, title: '  Spygate   revenge  ' });
+    assert.strictEqual(r.status, 200, 'posted');
+    const p1 = (await r.json()).row;
+    assert.deepStrictEqual([p1.code, p1.title, p1.name, p1.n, p1.f, p1.w, p1.best, p1.mine], [C1, 'Spygate revenge', 'Amy Hawk', 0, 0, 0, null, true]);
+    assert.match(p1.id, /^[A-Z2-9]{8}$/);
+    r = await cs('post', { session: sb, code: C1, title: 'Same one, another title' });
+    d = await r.json();
+    assert.deepStrictEqual([r.status, d.existing, d.row.id, d.row.title, d.row.mine], [200, true, p1.id, 'Spygate revenge', undefined], 'the same code: the post there is');
+    const p2 = (await ok(await cs('post', { session: sb, code: C2, title: 'Rams rally' }), 'ben posts')).row;
+    assert.strictEqual(p2.name, 'Ben Bolt');
+    let L = await list();
+    assert.deepStrictEqual([L.total, L.rows.map((x) => x.title)], [2, ['Rams rally', 'Spygate revenge']], 'no plays yet: the newest first');
+    assert.ok(L.rows.every((x) => !('acct' in x) && !('mine' in x)), 'never the account');
+    assert.ok(!/g:7000|@/.test(JSON.stringify(L)), 'no account ids or addresses on the list');
+    d = await ok(await cs('list', { session: sa, sort: 'new' }), 'amy reads');
+    assert.deepStrictEqual(d.rows.map((x) => [x.title, !!x.mine]), [['Rams rally', false], ['Spygate revenge', true]], 'her own marked');
+    // plays: once a day a device (or an account), a finish and a win once a day too, the best score kept
+    const kP = 'player-device-key-0000001', kQ = 'player-device-key-0000002';
+    assert.strictEqual((await cs('play', { code: C1 })).status, 400, 'a key or a session');
+    assert.strictEqual((await cs('play', { code: 'nope', key: kP })).status, 400, 'a code');
+    assert.deepStrictEqual(await ok(await cs('play', { code: C3, key: kP }), 'not posted'), { counted: false }, 'a code not posted counts nothing');
+    d = await ok(await cs('play', { code: C1, key: kP }), 'play');
+    assert.deepStrictEqual([d.counted, d.row.n], [true, 1]);
+    d = await ok(await cs('play', { code: C1, key: kP }), 'again');
+    assert.deepStrictEqual([d.counted, d.row.n], [false, 1], 'the same device the same day: once');
+    d = await ok(await cs('play', { code: C1, key: kP, done: true, won: false, p: 0.41 }), 'lost');
+    assert.deepStrictEqual([d.row.n, d.row.f, d.row.w, d.row.best], [1, 1, 0, 0.41]);
+    d = await ok(await cs('play', { code: C1, key: kP, done: true, won: true, p: 0.93 }), 'won');
+    assert.deepStrictEqual([d.row.n, d.row.f, d.row.w, d.row.best], [1, 1, 1, 0.93], 'a win the same day counts once; the best score');
+    d = await ok(await cs('play', { code: C1, key: kP, done: true, won: true, p: 0.5 }), 'won again');
+    assert.deepStrictEqual([d.counted, d.row.w, d.row.best], [false, 1, 0.93], 'once');
+    await ok(await cs('play', { code: C1, key: kQ, done: true, won: false, p: 2 }), 'a finish starts a play too; a score out of range is not kept');
+    d = await ok(await cs('play', { code: C1, session: sb, key: kQ }), 'ben signed in');
+    assert.deepStrictEqual([d.row.n, d.row.f, d.row.best], [3, 2, 0.93], 'signed in: the account counts, not the device');
+    assert.strictEqual((await ok(await cs('play', { code: C1, session: sb, key: 'ben-new-phone-key-000001' }), 'ben elsewhere')).counted, false, 'the account once a day, any phone');
+    await ok(await cs('play', { code: C2, key: kP }), 'rams');
+    assert.ok([...store.keys()].filter((k) => k.startsWith('comm:pd:')).every((k) => !k.includes(kP) && !k.includes('g:7000')), 'only hashes kept');
+    // the day after: the day before's marks cleared, the device counts again
+    const realNow = Date.now;
+    Date.now = () => realNow() + 864e5;
+    const RD = globalThis.Date;
+    globalThis.Date = class extends RD { constructor(...a) { super(...(a.length ? a : [RD.now() + 864e5])); } static now() { return RD.now() + 864e5; } };
+    d = await ok(await cs('play', { code: C1, key: kP }), 'tomorrow');
+    assert.deepStrictEqual([d.counted, d.row.n], [true, 4], 'a new day: counted again');
+    const tom = new Date().toISOString().slice(0, 10);
+    assert.ok([...store.keys()].filter((k) => k.startsWith('comm:pd:')).every((k) => k.startsWith(`comm:pd:${tom}:`)), 'the day before\'s marks gone');
+    globalThis.Date = RD; Date.now = realNow;
+    L = await list();
+    assert.deepStrictEqual(L.rows.map((x) => [x.title, x.n]), [['Spygate revenge', 4], ['Rams rally', 1]], 'most played first');
+    assert.deepStrictEqual((await list('?sort=new')).rows.map((x) => x.title), ['Rams rally', 'Spygate revenge'], 'newest first');
+    // hot: plays for their age (an old post with more plays below a new one with fewer)
+    const cl = store.get('comm:list');
+    cl.find((x) => x.id === p1.id).at -= 40 * 864e5;
+    store.set('comm:list', cl);
+    assert.deepStrictEqual((await list('?sort=hot')).rows.map((x) => x.title), ['Rams rally', 'Spygate revenge'], 'hot');
+    assert.deepStrictEqual((await list('?sort=junk')).sort, 'top', 'an unknown sort: most played');
+    // posting: COMM_POSTS a day an account (a post of a code there is costs nothing)
+    for (let i = 0; i < 4; i++) assert.strictEqual((await cs('post', { session: sb, code: `1-LA-2026-SEA-2026-REG-h-4-${60 + i}-11-14-y-s-54-1-10-1-3-0-o-y-g`, title: `Rams rally ${i + 2}` })).status, 200, `post ${i}`);
+    assert.strictEqual((await cs('post', { session: sb, code: C2, title: 'Rams rally' })).status, 200, 'his own again: the post there is');
+    r = await cs('post', { session: sb, code: C3, title: 'Steel curtain' });
+    assert.strictEqual(r.status, 429, 'six in a day');
+    assert.match((await r.json()).error, /5 posts today/);
+    L = await list();
+    assert.deepStrictEqual([L.total, L.next], [6, null]);
+    // pages of COMM_PAGE
+    const many = Array.from({ length: 23 }, (_, i) => ({ id: `ZZZZZZ${String.fromCharCode(65 + i)}${String.fromCharCode(65 + i)}`.slice(0, 8), c: `1-GB-2010-PIT-2010-SB-n-4-${100 + i}-21-24-y-s-80-1-10-1-1-0-o-y-g`, t: `Filler ${i}`, nm: 'Ben Bolt', at: 1, acct: 'g:700002' }));
+    store.set('comm:list', [...store.get('comm:list'), ...many]);
+    L = await list();
+    assert.deepStrictEqual([L.total, L.rows.length, L.next], [29, 20, 1], 'a page');
+    L = await list('?page=1');
+    assert.deepStrictEqual([L.rows.length, L.next], [9, null], 'the last page');
+    // a stored post with a blocked title or name is left out
+    store.set('comm:list', [...store.get('comm:list'), { id: 'BADBADBA', c: C3, t: 'b!tch please', nm: 'Ben Bolt', at: 2, acct: 'g:700002' }]);
+    assert.ok(!(await list('?sort=new&page=1')).rows.some((x) => x.id === 'BADBADBA') && (await list()).total === 29, 'not listed');
+    store.set('comm:list', store.get('comm:list').filter((x) => x.id !== 'BADBADBA' && !x.id.startsWith('ZZZZZZ')));
+    // full: a new post takes the least played one's place
+    const full = store.get('comm:list'), base = full.length;
+    store.set('comm:list', [...full, ...Array.from({ length: 300 - base }, (_, i) => ({ id: `FL${String(i).padStart(6, '0')}`, c: `1-GB-2010-PIT-2010-SB-n-4-${400 + i}-21-24-y-s-80-1-10-1-1-0-o-y-g`, t: `Filler ${i}`, nm: 'Ben Bolt', at: 10 + i, acct: 'g:700002' }))]);
+    assert.ok(JSON.stringify(store.get('comm:list')).length < 100e3, 'a full list well inside a value');
+    d = await ok(await cs('post', { session: sa, code: C3, title: 'Steel curtain' }), 'into a full list');
+    L = store.get('comm:list');
+    assert.deepStrictEqual([L.length, L.some((x) => x.t === 'Filler 0'), L.some((x) => x.t === 'Steel curtain'), L.some((x) => x.id === p1.id)], [300, false, true, true], 'the oldest unplayed went');
+    store.set('comm:list', L.filter((x) => !x.t.startsWith('Filler')));
+    // delete: the creator only; the admin token takes any off
+    assert.strictEqual((await cs('delete', { session: sb, id: p1.id })).status, 404, 'not his');
+    assert.deepStrictEqual(await ok(await cs('delete', { session: sa, id: p1.id }), 'hers'), { ok: true });
+    assert.ok(!(await list()).rows.some((x) => x.id === p1.id) && !(p1.id in store.get('comm:n')), 'gone, counts too');
+    assert.deepStrictEqual(await ok(await cs('play', { code: C1, key: kQ }), 'after'), { counted: false }, 'a play of it counts nothing now');
+    assert.strictEqual((await call('DELETE', null, { path: `/scen?id=${p2.id}` })).status, 403, 'no token');
+    d = await ok(await call('DELETE', null, { path: `/scen?id=${p2.id}`, auth: `Bearer ${env.ADMIN_TOKEN}` }), 'admin');
+    assert.deepStrictEqual([d.removed, (await list()).rows.some((x) => x.id === p2.id)], [1, false], 'the admin took it off');
+    assert.strictEqual((await call('GET', null, { path: '/scen/post' })).status, 405);
+    store.delete('comm:list'); store.delete('comm:n');
+  }
 
   // the daily email: opt-in (only with Resend set up), one a day by the cron, an unsubscribe link in each
   assert.strictEqual((await au('/auth/remind', { session: sa, on: true })).status, 503, 'no Resend: off');
