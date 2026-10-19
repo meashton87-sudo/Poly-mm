@@ -416,11 +416,6 @@ def labeled_plays(seasons=SEASONS, seed: int = 11) -> pd.DataFrame:
         # ball carriers trying to get out of bounds (trailing late) vs. staying in bounds (leading late)
         "want_oob": (half == 2) & (hs <= 300) & (margin < 0),
         "stay_in": (half == 2) & (hs <= 300) & (margin > 0),
-        # ... and needing out (the "Get out of bounds" fit, oob_odds): the last two minutes of a half, one timeout or
-        # none, the first half or level or one score down in the second (trailing by 20 with five minutes left, or
-        # with three timeouts, a receiver turns upfield)
-        "need_oob": (hs <= 120) & (s["posteam_timeouts_remaining"].fillna(3).to_numpy() <= 1)
-                    & ((half == 1) | ((half == 2) & (margin <= 0) & (margin >= -8))),
         "event": _events(s, pen, aborted, td_def),
         "pen_name": np.where(pen, s["penalty_type"].fillna("Penalty").to_numpy(), ""),
         "look": _look(s),
@@ -573,63 +568,25 @@ def call_frequencies(lib: pd.DataFrame, prior: float = 20.0) -> np.ndarray:
     return f / f.sum(1, keepdims=True)
 
 
-OOB_SHRINK = 10              # plays of the prior (family odds, then the base rate) added to each fit: light shrinkage
-OOB_MIN = 50                 # plays with the motive (and, a route, without) before a family's or a route's odds are fit
-
-
-def oob_odds(lib: pd.DataFrame, motive: str = "need_oob") -> np.ndarray:
-    """Odds multiplier on getting out of bounds, by call, against plays with no clock motive: "need_oob", the
-    ball carrier trying to (the offense needed the clock stopped: 1-5x); "stay_in", trying not to (it led late and
-    wanted the clock running; NFL 2016-2026: outside runs 3.9% out of bounds against 10%, short outside throws 16%
-    against 25%: 0.2-1x). The family's multiplier; oob_route_odds refines it by the target's route."""
-    return oob_route_odds(lib, motive)[0]
-
-
-def oob_route_odds(lib: pd.DataFrame, motive: str = "need_oob") -> tuple[np.ndarray, np.ndarray]:
-    """The multiplier by call (each OOB family's, as oob_odds), and by call and the target's NGS route (calls x
-    ROUTES; route 0, not charted, is the family's): one family odds is an average over routes that break to the
-    sideline and routes over the middle. NFL 2022-2026 completions, out of bounds with no clock motive / needing
-    out (need_oob): out 38% / 57% (518 plays), flat 33% / 62% (156), deep out 52% / 58%, corner 29% / 31%,
-    wheel 33% / 47% (17: too few, its family's), hitch 8% / 11%, slant 2% / 3%, in 7% / 6%, post 4% / 4%; with no
-    timeout left, out 63% and flat 77%. On those outside-breaking routes a catch with 5+ yards after it stays in
-    bounds 60% of the time with no motive and 41% needing out, the same odds ratio as the short catches (2.3 and
-    2.0), so one multiplier per route, not one by yards after the catch. The old motive, any deficit in the last
-    five minutes with any timeouts, found a quick out 42% out of bounds and the short outside family 1.13x: the
-    toggle did all but nothing. Each route's odds are shrunk toward its family's (OOB_SHRINK plays) and kept to
-    [lo, hi]: 1-5x when trying (getting out is never less likely for trying, and 5 leaves room for the flat's 3.3x
-    without letting a thin route run away), 0.2-1x staying in; a route with fewer than OOB_MIN plays either way
-    takes its family's."""
-    nr = len(ROUTES)
-    out, by_route = np.ones(len(CALLS)), np.ones((len(CALLS), nr))
+def oob_odds(lib: pd.DataFrame, motive: str = "want_oob") -> np.ndarray:
+    """Odds multiplier on getting out of bounds, by call, against plays with no clock motive: "want_oob", the
+    ball carrier trying to (the offense trailed late, wanted the clock stopped: 1-3x); "stay_in", trying not to
+    (it led late and wanted the clock running; NFL 2016-2026: outside runs 3.9% out of bounds against 10%,
+    short outside throws 16% against 25%: 0.2-1x)."""
+    out = np.ones(len(CALLS))
     ok = ~lib["penalty"] & (lib["yards"] >= 0)
     if motive == "stay_in":
         ok &= ~lib["incomplete"]
-    lo, hi = (1.0, 5.0) if motive != "stay_in" else (0.2, 1.0)
-    calm = ~lib["want_oob"] & ~lib["stay_in"] & (~lib["need_oob"] if motive != "stay_in" else True)
-    route = lib["ngs_route"].to_numpy()
-    lodds = lambda p: p / (1 - p)
+    lo, hi = (1.0, 3.0) if motive == "want_oob" else (0.2, 1.0)
     for fam, members in OOB_FAMILIES.items():
-        cols = [CALL_INDEX[c] for c in members]
-        m = lib["call"].isin(cols) & ok
-        base = lib.loc[m & calm, "oob"]
+        m = lib["call"].isin([CALL_INDEX[c] for c in members]) & ok
+        base = lib.loc[m & ~lib["want_oob"] & ~lib["stay_in"], "oob"]
         want = lib.loc[m & lib[motive], "oob"]
-        if len(want) < OOB_MIN or base.mean() <= 0:
+        if len(want) < 50 or base.mean() <= 0:
             continue
-        p0 = base.mean()
-        p1 = (want.sum() + OOB_SHRINK * p0) / (len(want) + OOB_SHRINK)
-        f = float(np.clip(lodds(p1) / lodds(p0), lo, hi))
-        out[cols] = f
-        by_route[cols, :] = f
-        for r in range(1, nr):
-            mr = m & (route == r) & ~lib["incomplete"]      # among catches: where he went with the ball
-            b, w = lib.loc[mr & calm, "oob"], lib.loc[mr & lib[motive], "oob"]
-            if len(b) < OOB_MIN or len(w) < OOB_MIN or not 0 < b.mean() < 1:
-                continue
-            q0 = b.mean()
-            prior = lodds(q0) * f / (1 + lodds(q0) * f)          # the family's odds on this route's base rate
-            q1 = (w.sum() + OOB_SHRINK * prior) / (len(w) + OOB_SHRINK)
-            by_route[cols, r] = float(np.clip(lodds(q1) / lodds(q0), lo, hi))
-    return out, by_route
+        p0, p1 = base.mean(), (want.sum() + 10 * base.mean()) / (len(want) + 10)   # light shrinkage
+        out[[CALL_INDEX[c] for c in members]] = float(np.clip((p1 / (1 - p1)) / (p0 / (1 - p0)), lo, hi))
+    return out
 
 
 # -------------------------------------------------------------- ratings ---
@@ -846,10 +803,8 @@ def export(lib: pd.DataFrame, path) -> dict:
         "pool_shift": _b64(pool_shifts(lib, items, offsets).astype(np.float32)),
         "dc_effects": dc_effects(lib, items, offsets, pool_of),
         "freq": _b64(call_frequencies(lib).astype(np.float32).ravel()),
-        # the "Get out of bounds" (and leading late, stay in) multipliers by call, and by call and route (engine.js
-        # pbTilt reads a charted play's route from the second)
-        **{k: v.round(3).tolist() for k, v in zip(("oob_odds", "oob_route"), oob_route_odds(lib))},
-        **{k: v.round(3).tolist() for k, v in zip(("stay_odds", "stay_route"), oob_route_odds(lib, "stay_in"))},
+        "oob_odds": oob_odds(lib).round(3).tolist(),
+        "stay_odds": oob_odds(lib, "stay_in").round(3).tolist(),
         "seasons": list(SEASONS),
     }
     path.write_text(json.dumps(out, separators=(",", ":"), allow_nan=False))

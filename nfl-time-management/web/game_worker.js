@@ -47,20 +47,19 @@ function info(sim, root) {
   const margin = root.score[o] - root.score[1 - o];
   const fk = fineKey(gameMode(half, tHalf, margin), root.down, root.ytg, root.yl);
   // per-call odds for this offense against this defense: the same tilted weights the plays are drawn with
-  // (and trying to get out: the weights the carrier going for the sideline draws with, each play's route's own)
-  const cdf = sim.pbCdf[o].cdf, cdfO = sim.pbCdf[o].cdfOob;
+  const cdf = sim.pbCdf[o].cdf;
   const calls = P.calls.map((c, ci) => {
     const pool = P.poolOf[ci * P.nFine + fk], lo = P.offsets[pool], hi = P.offsets[pool + 1];
-    let n = 0, w = 0, yds = 0, oob = 0, conv = 0, inc = 0, prev = pool, wo = 0, oobo = 0, prevO = pool;
+    let n = 0, w = 0, yds = 0, oob = 0, conv = 0, inc = 0, prev = pool;
     for (let i = lo; i < hi; i++) {
-      const r = P.items[i], f = P.flags[r], wi = cdf[i] - prev, woi = cdfO[i] - prevO;
-      prev = cdf[i]; prevO = cdfO[i];
+      const r = P.items[i], f = P.flags[r], wi = cdf[i] - prev;
+      prev = cdf[i];
       if (f & 1) continue;   // penalties
       n++; w += wi; yds += wi * P.yards[r]; if (f & 8) oob += wi; if (f & 4) inc += wi;
-      wo += woi; if (f & 8) oobo += woi;
       if (P.yards[r] >= root.ytg || (f & 16)) conv += wi;
     }
-    const pOob = w ? oob / w : 0, pTry = wo > 0 ? oobo / wo : 0;
+    const pOob = w ? oob / w : 0, odds = P.oobOdds[ci];
+    const pTry = pOob > 0 ? (pOob * odds) / (pOob * odds + 1 - pOob) : 0;
     return { id: c.id, freq: P.freq[fk * P.calls.length + ci], avg: w ? yds / w : 0, oob: pOob, oobTry: pTry,
       conv: w ? conv / w : 0, inc: w ? inc / w : 0, n };
   });
