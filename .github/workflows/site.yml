@@ -37,7 +37,7 @@ jobs:
       SCN_AT: "2026-10-19T17:00:00Z"   # Build a scenario (#custom) stays hidden until this time (UTC; 1 p.m. ET); "" for at once
       VS_ON: "off"            # "on" turns on Versus (two players live) on the site; the Pro preview always has it
       ADS_ON: "on"           # "on" shows the ads (AdSense and the units in web/ads); "off": no ads anywhere, and no extra life
-      EZOIC_ADSTXT: "nfl2mindrill.com"   # Ezoic's sellers added to ads.txt (fetched each deploy; "" leaves them out)
+      EZOIC_ADSTXT: "nfl2mindrill.com"   # /ads.txt redirects to Ezoic's ads.txt manager for this domain ("" : our own ads.txt)
       EZOIC_ON: "off"           # "on": Ezoic's privacy + header scripts on every page (EzoicAds step 2); "off" leaves them out
       EZOIC_GAME_IDS: ""        # Ezoic placeholder ids (its dashboard) for the game's cards: day's end, survivor card, run over
       FULLDEF_ON: "on"       # "on" turns on the full defensive call (personnel, front, coverage, rush) in the daily and survivor; the Pro preview always has it

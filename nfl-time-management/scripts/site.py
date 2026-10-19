@@ -353,22 +353,6 @@ EZOIC_HEAD = ('<script data-cfasync="false" src="https://cmp.gatekeeperconsent.c
 EZOIC_ADSTXT = "https://srv.adstxtmanager.com/19390/{domain}"     # Ezoic's ads.txt manager (docs.ezoic.com, ads.txt setup)
 
 
-def ezoic_adstxt(domain: str) -> list[str]:
-    """Ezoic's authorized sellers for this domain, as their manager serves them today (the deploy refreshes it). A
-    failed fetch leaves them out with a warning: the site still ships, with our own lines."""
-    import urllib.request
-    try:
-        with urllib.request.urlopen(urllib.request.Request(EZOIC_ADSTXT.format(domain=domain), headers={"User-Agent": "nfl2mindrill-build"}), timeout=30) as r:
-            text = r.read().decode("utf-8", "replace")
-    except OSError as e:
-        print(f"warning: Ezoic ads.txt not fetched ({e}); ads.txt has our own lines only")
-        return []
-    if "," not in text:
-        print("warning: Ezoic ads.txt came back without seller lines; left out")
-        return []
-    return [text.strip()]
-
-
 def ads_head(adsense: str | None, ad_slot: str | None, later: bool = False) -> str:
     out = banner_meta()
     if not adsense:
@@ -611,9 +595,12 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     # ads.txt: who may sell this site's ad space (Google's line, with our id, then any other network's lines)
     extra = (WEB / "ads" / "ads.txt").read_text().strip() if (WEB / "ads" / "ads.txt").exists() and not no_ads else ""
     lines = ([f"google.com, {adsense.replace('ca-', '', 1)}, DIRECT, f08c47fec0942fa0"] if adsense else []) + ([extra] if extra else [])
-    if ezoic and not no_ads:                 # Ezoic's sellers (their ads.txt manager), after ours: fetched at build time, so
-        lines += ezoic_adstxt(ezoic)         # our own lines stay (a redirect to theirs would drop the AdSense one)
-    if lines:
+    if ezoic and not no_ads:
+        # Ezoic manages ads.txt (their ads.txt manager; Ezoic asks for this redirect before it submits the site to Google):
+        # Cloudflare Pages' _redirects sends /ads.txt there, and no ads.txt of our own is written. Other lines (AdSense's)
+        # go in through Ezoic's ads.txt manager
+        (out / "_redirects").write_text(f"/ads.txt {EZOIC_ADSTXT.format(domain=ezoic)} 301\n")
+    elif lines:
         (out / "ads.txt").write_text("\n".join(lines) + "\n")
     for slot in SLOT_SIZE:                   # each unit's own page (its frame's)
         if slot_code(slot):
@@ -654,7 +641,7 @@ if __name__ == "__main__":
     ap.add_argument("--site-url", help="the site's address for link previews (default https://<domain>, else nfl2mindrill.com)")
     ap.add_argument("--adsense", help="Google AdSense publisher id (ca-pub-...); empty: no ads")
     ap.add_argument("--ad-slot", help="an AdSense display ad unit's slot id, shown between games; empty: AdSense's own placement only")
-    ap.add_argument("--ezoic", metavar="DOMAIN", help="add Ezoic's sellers (their ads.txt manager, for this domain) to ads.txt")
+    ap.add_argument("--ezoic", metavar="DOMAIN", help="/ads.txt redirects to Ezoic's ads.txt manager for this domain (Cloudflare Pages _redirects)")
     ap.add_argument("--ezoic-head", action="store_true", help="Ezoic's privacy and header scripts at the top of every page")
     ap.add_argument("--ezoic-ids", help="Ezoic placeholder ids for the game's cards: end of the day's drive, survivor's card after a game, survivor's run over (e.g. 101,102,103)")
     ap.add_argument("--no-ads", action="store_true", help="no ads anywhere on the site (overrides --adsense and web/ads)")
