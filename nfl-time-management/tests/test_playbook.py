@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 
-from nflclock.playbook import CALLS, EVENTS, ROUTE_CODE, ROUTES, SHELL_CODE, SHELLS, _charting, look_bucket, strong_side
+from nflclock.playbook import (CALL_INDEX, CALLS, EVENTS, ROUTE_CODE, ROUTES, SHELL_CODE, SHELLS, _charting,
+                               look_bucket, oob_odds, oob_route_odds, strong_side)
 
 
 def test_strong_side_is_the_wide_side_of_the_field():
@@ -39,3 +40,36 @@ def test_ngs_charting_is_packed_for_the_browser():
     assert SHELLS[c["cover"][0] & 15] == "cover1" and c["cover"][0] >> 4 == 1 and c["cover"][1] >> 4 == 2
     assert c["rush"][0] == 5 | 16 | 32 and c["rush"][1] == 4 | 32 and c["rush"][2] == 0
     assert c["ttt"].tolist() == [23, 30, 0]
+
+
+def _oob_lib(rows):
+    """Library rows for the out-of-bounds fit: (call, route, motive, n, n out of bounds)."""
+    out = []
+    for call, route, motive, n, k in rows:
+        for i in range(n):
+            out.append({"call": CALL_INDEX[call], "ngs_route": ROUTES.index(route), "oob": i < k, "penalty": False,
+                        "incomplete": False, "yards": 5.0, "want_oob": motive == "want", "stay_in": motive == "stay",
+                        "need_oob": motive == "need"})
+    return pd.DataFrame(out)
+
+
+def test_get_out_of_bounds_odds_follow_the_route():
+    # an out goes out of bounds 40% of the time with no motive and 70% needing out; a slant 2% either way (a touch over
+    # 1x: shrunk toward its family); a wheel is
+    # too thin to fit (its family's odds); a trailing-by-20 snap (want_oob) is neither the motive nor the base
+    lib = _oob_lib([("quick_strong", "out", None, 1000, 400), ("quick_strong", "out", "need", 200, 140),
+                    ("quick_strong", "slant", None, 1000, 20), ("quick_strong", "slant", "need", 200, 4),
+                    ("quick_strong", "wheel", None, 100, 30), ("quick_strong", "wheel", "need", 10, 9),
+                    ("quick_strong", "out", "want", 500, 200)])
+    fam, by_route = oob_route_odds(lib)
+    c = CALL_INDEX["quick_strong"]
+    assert np.array_equal(fam, oob_odds(lib))
+    assert fam[c] == by_route[c, 0] == by_route[CALL_INDEX["quick_weak"], 0]          # the family's, its calls alike
+    out, slant, wheel = (by_route[c, ROUTES.index(r)] for r in ("out", "slant", "wheel"))
+    assert 3.0 < out < 3.5 and 1.0 <= slant < 1.1 and wheel == fam[c] and out > fam[c] > 1.0
+    assert by_route[CALL_INDEX["deep_strong"]].tolist() == [1.0] * len(ROUTES)         # no plays: no effect
+    # staying in bounds: below 1, never under 0.2
+    lib = _oob_lib([("quick_strong", "out", None, 1000, 400), ("quick_strong", "out", "stay", 200, 20),
+                    ("quick_strong", "hitch", None, 1000, 80), ("quick_strong", "hitch", "stay", 100, 8)])
+    fam, by_route = oob_route_odds(lib, "stay_in")
+    assert 0.2 <= by_route[c, ROUTES.index("out")] < fam[c] < 0.9 < by_route[c, ROUTES.index("hitch")] <= 1.0
