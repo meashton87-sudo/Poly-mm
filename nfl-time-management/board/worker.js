@@ -732,7 +732,7 @@ async function readBody(req) {
 // the historic drives, the playoff runs); signed in, it is merged into the account's and back, so a streak and the
 // drives passed survive a new phone. Kept as stats:d:<acct> (the days: what a league board reads), stats:x:<acct>
 // (drives and runs), stats:m:<acct> (badges and frozen days) and stats:s:<acct> (My scenarios: { code: { at, p?, tries,
-// won, gone? } }, keyed by the scenario's code, web/scenario.js; the newest touch of each stands, with the best score,
+// won, gone?, title? } }, keyed by the scenario's code, web/scenario.js; the newest touch of each stands, with the best score,
 // the most tries and won if either was; removed, gone: true until it is played again; over SCEN_MAX, the newest). Each entry is checked and rebuilt from its numbers
 // (nothing else of a post is kept); a kind with more entries than its cap, or not an object, refuses the post. Merged,
 // the higher score of each day, drive or run stands (a drive: the most tries, won if either was); over a
@@ -777,7 +777,7 @@ function cleanStats(s) {
       if (e) out[kind][k] = e;
     }
   }
-  // My scenarios: { code: { at, p?, tries, won, gone? } }
+  // My scenarios: { code: { at, p?, tries, won, gone?, title? } }
   const sc = s.scen ?? {};
   if (typeof sc !== 'object' || Array.isArray(sc)) return 'stats.scen: an object wanted';
   if (Object.keys(sc).length > SCEN_MAX) return `stats.scen: at most ${SCEN_MAX}`;
@@ -786,7 +786,9 @@ function cleanStats(s) {
     const at = v && typeof v === 'object' ? num(v.at, 0, 1e14) : null;
     if (!SCEN_RE.test(k) || at === null) continue;
     const p = num(v.p, 0, 1);
-    out.scen[k] = { at: Math.round(at), ...(p !== null ? { p } : {}), tries: Math.round(num(v.tries, 0, 1e5) ?? 0), won: v.won === true, ...(v.gone === true ? { gone: true } : {}) };
+    const title = clean(v.title, COMM_TITLE[1]);      // (its name, the builder's title: the account's own, never shown to anyone else)
+    out.scen[k] = { at: Math.round(at), ...(p !== null ? { p } : {}), tries: Math.round(num(v.tries, 0, 1e5) ?? 0), won: v.won === true, ...(v.gone === true ? { gone: true } : {}),
+      ...(title ? { title } : {}) };
   }
   // the badges and the frozen days: { key: a time (ms) }, the key a badge id or a day number
   for (const [kind, max, ok] of [['badges', BADGES_MAX, (k) => BADGE_RE.test(k) && k !== GONE_BADGE], ['frozen', FROZEN_MAX, (k) => /^[1-9]\d{0,4}$/.test(k) && +k <= STATS_CAP.days[0]]]) {
@@ -953,6 +955,138 @@ async function league(req, env, storage, hits, h, url) {
     // the day's scores first, best first; then who has not played yet, longest streak first
     rows.sort((x, y) => (y.today ?? -1) - (x.today ?? -1) || y.streak - x.streak || x.name.localeCompare(y.name));
     return json({ code, name: lg.name, n: lg.members.length, day, owner: lg.owner === acct, rows }, 200, h);
+  }
+  return json({ error: 'not found' }, 404, h);
+}
+
+// ---- Community scenarios (game.js #community): a scenario built in the builder (web/scenario.js, its code), posted
+// under a title by a signed-in account with a username, on a list anyone can read; tapping one plays it as its link does
+// (Pro). Each one counts its plays (a try started), finishes, wins and the best score posted, one of each a day for a
+// device or an account (the page's device key, or the account: only their hashes kept, and only for the day).
+//   GET    /scen/list?sort=top&page=0         -> { rows: [{ id, code, title, name, at, n, f, w, best }], page, next, total }
+//                                               sort: top (most played), hot (plays for their age) or new; COMM_PAGE a page
+//   POST   /scen/list { sort, page, session } -> the same, the account's own posts marked mine: true
+//   POST   /scen/post { session, code, title } -> { row }, or { row, existing: true }: a code posted already
+//                                               (by anyone) is the post there is. title COMM_TITLE characters, never a
+//                                               blocked() one; the creator is the account's username; COMM_POSTS a day an account
+//   POST   /scen/play { code, key, session?, done?, won?, p? } -> { counted, row? }   a try of a scenario started (done:
+//                                               finished, won, its score p 0-1); a code not posted counts nothing
+//   POST   /scen/delete { session, id }        -> { ok }        the creator takes a post down
+//   DELETE /scen?id=X  (Authorization: Bearer <ADMIN_TOKEN>) -> { removed }   a post off the list, for good
+// Kept as comm:list ([{ id, c: code, t: title, nm: name, at, acct }]: written by a post or a removal only, the account
+// never sent out), comm:n ({ id: { n, f, w, b } }: the counts, a small value, the one a play rewrites) and the day's
+// once-a-day marks (comm:pd:<UTC date>:<id>:<s|f|w>:<who>; the day's first play clears the day before's). At most
+// COMM_MAX posts: past it a new post takes the place of the least played (the oldest of those). Scores are the page's
+// own, not checked (as on the boards); the plays and wins are counted from devices, at RATE_PER_MIN an IP.
+const COMM_PATHS = ['/scen', '/scen/list', '/scen/post', '/scen/play', '/scen/delete'];
+const COMM_MAX = 300, COMM_PAGE = 20, COMM_POSTS = 5, COMM_DAY = 864e5, COMM_TITLE = [3, 40], COMM_ID = 8;
+const COMM_SORTS = ['top', 'hot', 'new'];
+const commList = async (storage) => { const l = await storage.get('comm:list'); return Array.isArray(l) ? l : []; };
+const commCounts = async (storage) => (await storage.get('comm:n')) || {};
+const commRow = (e, c, acct) => ({ id: e.id, code: e.c, title: e.t, name: e.nm, at: new Date(e.at).toISOString(), n: (c && c.n) || 0, f: (c && c.f) || 0,
+  w: (c && c.w) || 0, best: c && typeof c.b === 'number' ? c.b : null, ...(acct && e.acct === acct ? { mine: true } : {}) });
+// hot: plays for their age (a day-old post's plays count most, a month-old one's about a twentieth as much)
+const commHot = (e, c, now) => ((c && c.n) || 0) / ((now - e.at) / COMM_DAY + 2) ** 1.5;
+function commSorted(list, counts, sort, now = Date.now()) {
+  const n = (e) => (counts[e.id] && counts[e.id].n) || 0;
+  const by = sort === 'new' ? (a, b) => b.at - a.at : sort === 'hot' ? (a, b) => commHot(b, counts[b.id], now) - commHot(a, counts[a.id], now) || b.at - a.at
+    : (a, b) => n(b) - n(a) || b.at - a.at;
+  return list.filter((e) => !blocked(e.t) && !blocked(e.nm)).sort(by);
+}
+// the day's once-a-day marks: the first play of a new day (UTC) clears the day before's
+async function commDay(storage, date) {
+  if ((await storage.get('comm:pday')) === date) return;
+  for (const [k] of await storage.list({ prefix: 'comm:pd:' })) if (!k.startsWith(`comm:pd:${date}:`)) await storage.delete(k);
+  await storage.put('comm:pday', date);
+}
+async function community(req, env, storage, hits, h, url) {
+  const p = url.pathname;
+  if (p === '/scen') {
+    if (req.method !== 'DELETE') return json({ error: 'method' }, 405, h);
+    if (!isAdmin(req, env)) return json({ error: 'forbidden' }, 403, h);
+    const id = String(url.searchParams.get('id') || ''), list = await commList(storage), left = list.filter((e) => e.id !== id);
+    if (left.length !== list.length) {
+      const counts = await commCounts(storage);
+      delete counts[id];
+      await storage.put('comm:list', left); await storage.put('comm:n', counts);
+    }
+    return json({ removed: list.length - left.length }, 200, h);
+  }
+  if (p === '/scen/list' && !['GET', 'POST'].includes(req.method)) return json({ error: 'method' }, 405, h);
+  if (p !== '/scen/list' && req.method !== 'POST') return json({ error: 'method' }, 405, h);
+  const body = req.method === 'POST' ? await readBody(req) : {};
+  if (body === null) return json({ error: 'bad json' }, 400, h);
+  if (body === false) return json({ error: 'too big' }, 413, h);
+  if (p === '/scen/list') {
+    const q = req.method === 'GET' ? Object.fromEntries(url.searchParams) : body;
+    const sort = COMM_SORTS.includes(q.sort) ? q.sort : 'top', page = Math.max(0, Math.min(999, Math.floor(Number(q.page)) || 0));
+    const acct = body.session ? await sessionAcct(storage, env, body.session) : null;
+    const counts = await commCounts(storage), all = commSorted(await commList(storage), counts, sort);
+    const rows = all.slice(page * COMM_PAGE, (page + 1) * COMM_PAGE).map((e) => commRow(e, counts[e.id], acct));
+    return json({ sort, page, rows, total: all.length, next: (page + 1) * COMM_PAGE < all.length ? page + 1 : null }, 200, h);
+  }
+  if (limited(req, hits)) return json({ error: 'slow down' }, 429, h);
+  if (p === '/scen/play') {
+    const code = String(body.code || '');
+    if (!SCEN_RE.test(code)) return json({ error: 'a scenario code wanted' }, 400, h);
+    const acct = body.session ? await sessionAcct(storage, env, body.session) : null, key = String(body.key || '');
+    if (!acct && !KEY_RE.test(key)) return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
+    const list = await commList(storage), e = list.find((x) => x.c === code);
+    if (!e) return json({ counted: false }, 200, h);
+    const date = new Date().toISOString().slice(0, 10), who = (await sha256(acct ? `acct:${acct}` : `key:${key}`)).slice(0, 20);
+    await commDay(storage, date);
+    const counts = await commCounts(storage), c = { n: 0, f: 0, w: 0, ...(counts[e.id] || {}) };
+    // once a day each: a try started (a finish is one too), a finish (its score kept when it is the best), a win
+    const once = async (kind) => { const k = `comm:pd:${date}:${e.id}:${kind}:${who}`; if (await storage.get(k)) return false; await storage.put(k, 1); return true; };
+    let counted = false;
+    if (await once('s')) { c.n += 1; counted = true; }
+    if (body.done === true) {
+      const sc = num(body.p, 0, 1);
+      if (await once('f')) { c.f += 1; counted = true; }
+      if (body.won === true && await once('w')) { c.w += 1; counted = true; }
+      if (sc !== null && !(c.b >= sc)) { c.b = Math.round(sc * 1000) / 1000; counted = true; }
+    }
+    if (counted) { counts[e.id] = c; await storage.put('comm:n', counts); }
+    return json({ counted, row: commRow(e, c, acct) }, 200, h);
+  }
+  if (!authOn(env)) return json({ error: 'sign-in is not set up' }, 503, h);
+  const acct = await sessionAcct(storage, env, body.session), a = acct && await storage.get(`acct:${acct}`);
+  if (!a) return json({ error: 'signed out', signedOut: true }, 401, h);
+  if (p === '/scen/delete') {
+    const id = String(body.id || ''), list = await commList(storage), e = list.find((x) => x.id === id);
+    if (!e || e.acct !== acct) return json({ error: 'no such post of yours' }, 404, h);
+    const counts = await commCounts(storage);
+    delete counts[id];
+    await storage.put('comm:list', list.filter((x) => x.id !== id)); await storage.put('comm:n', counts);
+    return json({ ok: true }, 200, h);
+  }
+  if (p === '/scen/post') {
+    const code = String(body.code || '');
+    if (!SCEN_RE.test(code)) return json({ error: 'That is not a scenario’s code.' }, 400, h);
+    const list = await commList(storage), counts = await commCounts(storage), had = list.find((x) => x.c === code);
+    if (had && !blocked(had.t) && !blocked(had.nm)) return json({ row: commRow(had, counts[had.id], acct), existing: true }, 200, h);
+    if (!a.name) return json({ error: 'Pick a username first: the post shows it.', noName: true }, 409, h);
+    const title = clean(body.title, COMM_TITLE[1] + 1);
+    if (title.length < COMM_TITLE[0] || title.length > COMM_TITLE[1]) return json({ error: `A title is ${COMM_TITLE[0]} to ${COMM_TITLE[1]} characters.` }, 400, h);
+    if (blocked(title)) return json({ error: 'That title is not allowed. Pick another.', refused: true, field: 'title' }, 409, h);
+    if (blocked(a.name)) return json({ error: 'Your username is not allowed on the list. Change it first.', refused: true, field: 'name' }, 409, h);
+    if (await mailLimited(storage, `cp:${acct}`, COMM_POSTS, COMM_DAY)) return json({ error: `That’s ${COMM_POSTS} posts today: post more tomorrow.` }, 429, h);
+    let id;
+    do id = Array.from(crypto.getRandomValues(new Uint8Array(COMM_ID)), (x) => PRO_ALPHABET[x % PRO_ALPHABET.length]).join(''); while (list.some((x) => x.id === id));
+    const e = { id, c: code, t: title, nm: a.name, at: Date.now(), acct };
+    let kept = list.filter((x) => x.c !== code);         // (a blocked post of the same code: replaced)
+    if (kept.length >= COMM_MAX) {
+      // full: the least played goes (the oldest of those)
+      const n = (x) => (counts[x.id] && counts[x.id].n) || 0;
+      const out = kept.slice().sort((x, y) => n(x) - n(y) || x.at - y.at)[0];
+      kept = kept.filter((x) => x !== out);
+      delete counts[out.id];
+    }
+    kept.push(e);
+    counts[id] = { n: 0, f: 0, w: 0 };
+    for (const x of list) if (!kept.includes(x)) delete counts[x.id];
+    await storage.put('comm:list', kept); await storage.put('comm:n', counts);
+    return json({ row: commRow(e, counts[id], acct) }, 200, h);
   }
   return json({ error: 'not found' }, 404, h);
 }
@@ -1231,6 +1365,7 @@ export async function handle(req, env, storage, hits) {
   if (PRO_PATHS.includes(url.pathname)) return pro(req, env, storage, hits, h, url);
   if (AUTH_PATHS.includes(url.pathname)) return auth(req, env, storage, hits, h, url);
   if (LEAGUE_PATHS.includes(url.pathname)) return league(req, env, storage, hits, h, url);
+  if (COMM_PATHS.includes(url.pathname)) return community(req, env, storage, hits, h, url);
   if (url.pathname === '/race' || url.pathname.startsWith('/race/')) return race(req, env, storage, hits, h, url);
   if (url.pathname === '/daily') return daily(req, env, storage, hits, h, url);
   if (url.pathname === '/week') return week(req, env, storage, h, url);
@@ -1540,7 +1675,7 @@ export default {
   fetch(req, env) {
     const url = new URL(req.url);
     if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me'].includes(url.pathname)) return versus(req, env, url);
-    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, '/board', '/daily', '/week', '/days'].includes(url.pathname)) return handle(req, env, null, null);
+    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, ...COMM_PATHS, '/board', '/daily', '/week', '/days'].includes(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },
   // the cron trigger (wrangler.toml): the day's reminder emails, sent by the Board (its storage); the day is the run's

@@ -224,6 +224,18 @@ if (fs.existsSync(path.join(dir, 'rosters', 'index.json'))) {
     const sc = SC.random(R, rix, g % 10 === 0 ? { qtr: 2, end: 'game' } : g % 7 === 0 ? { qtr: 5 } : undefined);
     assert.ok(sc && SC.ok(sc, rix), `a random scenario ${g}`);
     assert.deepStrictEqual(SC.parse(SC.code(sc)), sc, 'its code reads back');
+    if (g < 6) {
+      // a title rides in the link, never in the code: the same scenario whatever it is called; an old link (no title) reads
+      // the same; a broken or refused title is dropped, the scenario kept; a refused one fails check()
+      const t = ['Brady’s last stand', '  28–3   again ~ part 2 ', 'x'.repeat(60), 'sh1t show', '%E0%A4%A', ''][g];
+      const named = { ...sc, title: t }, ln = SC.link(SC.tidy(named)), back = SC.parseLink(ln);
+      assert.strictEqual(SC.code(named), SC.code(sc), 'a title is no part of the code');
+      assert.strictEqual(back.code, SC.code(sc), `the link's code ${ln}`);
+      assert.strictEqual(back.title, SC.blocked(t) ? '' : SC.cleanTitle(t), `the link's title ${ln}`);
+      assert.deepStrictEqual(SC.parseLink(SC.code(sc)), { code: SC.code(sc), title: '' }, 'an old link');
+      assert.strictEqual(SC.ok(named, rix), !SC.titleBad(t), `a title checked: ${t}`);
+      assert.strictEqual(SC.summary(SC.tidy(named), (c, y) => `${y} ${c}`).name, SC.cleanTitle(t) || null, 'the card names it');
+    }
     const { spot, teams } = SC.spotOf(sc, roster(sc.ys), roster(sc.os), rix.spread);
     const game = { home: teams.home, away: teams.away, home_spread: spot.spread, indoor: false, wind: 0, temp: null, league: spot.league,
       home_coach: teams.home.coach, away_coach: teams.away.coach, season: spot.real.season };

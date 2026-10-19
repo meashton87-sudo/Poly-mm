@@ -245,6 +245,18 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .scnentry .m { font-size: 13.5px; color: var(--muted); }
 .scnentry .cta { justify-self: start; margin-top: 4px; font: 800 13px var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--sq-g-ink); }
 .gradecard .greal .scnsum { margin-top: 8px; }
+.scnsum .stl { font: 900 15px/1.15 var(--display); text-transform: uppercase; letter-spacing: .06em; color: var(--gold-ink); text-align: center; overflow-wrap: anywhere; }
+.scnentry.comm { border-top-color: var(--sq-g); background: linear-gradient(160deg, color-mix(in srgb, var(--sq-g) 10%, transparent), transparent 70%), var(--card); }
+.scnentry.comm .k { color: var(--sq-g-ink); }
+.arch .spost { margin: 0; }
+.arch .spost:empty { display: none; }
+.arch .spost.bad { color: var(--sq-r-ink); font-weight: 600; }
+.arch .csort { margin-top: 4px; }
+.arch .day.scn.comm { grid-template-rows: auto auto auto; }
+.arch .day.scn.comm b { overflow-wrap: anywhere; }
+.arch .day.scn.comm .m { white-space: normal; }
+.arch .day.scn.comm .cst { grid-row: 3; color: var(--ink); font-weight: 600; }
+.arch .day.scn.comm > :last-child { grid-row: 1 / 4; }
 @media (max-width: 380px) { .arch .srow, .arch .tpick { grid-template-columns: 72px minmax(0, 1fr); } .arch .tinfo { margin-left: 82px; } }
 /* Pro grades: a letter in its color, green (A) is a pass */
 .grade { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; font: 900 17px/1 var(--display); color: var(--sq-ink); background: var(--muted); }
