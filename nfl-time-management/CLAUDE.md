@@ -53,7 +53,11 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
 - The daily schedule is frozen in `src/nflclock/daily_schedule.json` (committed: every spot id in order and each
   day's three spots, as it went live). Never regenerate it with `dailygame.freeze()` from a fresh build: that moves
   days people have played or are playing. Extend it only by adding days at the end; never reorder it. Its
-  `featured` map puts a famous spot (any first-down snap, with a story shown on the intro) on a future day.
+  `featured` map puts a famous spot (any first-down snap, with a story shown on the intro) on a future day, or two sides
+  of one game (`sides`: each an id, kind, note and summary, the real drive's story; the first is the day's `id`): the
+  player picks one (game.js sidesOf/renderSidePick, kept per device in `:side:<day>`, the day's state and its stats day),
+  it is the day's drive, and the /daily post says which (side: the team's code; worker.js keeps each side's count,
+  histogram and average beside the day's, stats.html shows them).
 - Decisions are graded "as of" the week of the game: no ratings may use later games.
 - Versus (board/match.js): the room plays the football (web/vs_core.js holds the college-overtime rules, shared with the
   page); phones only send calls. Each snap's seed is drawn fresh by the room and never sent to a phone (a phone that

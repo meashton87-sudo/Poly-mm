@@ -634,7 +634,7 @@ class History:
             self.extra_tr[season] = TR.team_ratings(p, [season], current=False)
         return pd.concat([self.extra_tr[season], tr], ignore_index=True)
 
-    def _strength(self, team: str, season: int, week: int, game_id: str, qb_id) -> dict:
+    def _strength(self, team: str, season: int, week: int, game_id: str, qb_id, play_id: float | None = None) -> dict:
         tr = self.team_ratings(season)
         rows = tr[(tr["team"] == team) & ((tr["season"] < season) | ((tr["season"] == season) & (tr["week"] < week)))]
         if not len(rows):          # the ratings start in 2023: a 2023 week 1 game takes the team's first rating
@@ -652,6 +652,12 @@ class History:
             # receiving team), else of its kickoffs; the punter of its punts
             kick = g[g["play_type"].isin(["field_goal", "extra_point"])] if col == "kicker_player_id" else g
             ids = kick[col].dropna()
+            # (the one who kicked from the spot's snap on, else the last one before it: a kicker hurt earlier in the game
+            # is not the one the team had then, the Rams' Grupe on Oct 18, 2026, whose punter kicked from the first quarter on)
+            if play_id is not None and col == "kicker_player_id" and len(ids):
+                k = kick[kick[col].notna()]
+                later, before = k[k["play_id"] >= play_id][col], k[k["play_id"] < play_id][col]
+                ids = later if len(later) else before.tail(1) if len(before) else ids
             if not len(ids) and col == "kicker_player_id":
                 ids = self.pbp[(self.pbp["game_id"] == game_id) & (self.pbp["defteam"] == team) & (self.pbp["play_type"] == "kickoff")][col].dropna()
             if not len(ids):        # no kick of that kind in the game: the team's latest one before it, else its next
@@ -664,6 +670,8 @@ class History:
             t = tab[(tab[key] == pid) & ((tab["season"] < season) | ((tab["season"] == season) & (tab["week"] < week)))]
             rating = float(t.sort_values(["season", "week"])["rating"].iloc[-1]) if len(t) else 0.0
             wk = tab[(tab["season"] == season) & (tab["week"] == tab.loc[(tab["season"] == season) & (tab["week"] < week), "week"].max())]
+            if not len(t) and col == "kicker_player_id" and len(wk) and pid in set(g["punter_player_id"].dropna()):
+                rating = float(wk["rating"].min())      # the punter kicking (no kicker left): no better than the league's worst
             pct = float((wk["rating"] < rating).mean()) if len(wk) else 0.5
             return {"name": self.names.get(pid), "rating": round(rating, 4), "ovr": O.specialist_ovr(pct)}
         return {
@@ -737,7 +745,7 @@ class History:
                 d = self.pbp[(self.pbp["game_id"] == game_id) & (self.pbp["posteam"] == team) & (self.pbp["qb_dropback"] == 1)]
                 ids = d["passer_player_id"].dropna()
                 qb_id = Counter(ids).most_common(1)[0][0] if len(ids) else None
-            st = self._strength(team, season, week, game_id, qb_id)
+            st = self._strength(team, season, week, game_id, qb_id, play_id)
             out[side] = {
                 "team": team, "coach": CO.coach_name(coaches.get(side), team, season), "base": st["base"], "qb": st["qb"],
                 "injury_adjustment": st["injury_adjustment"], "kicker": st["kicker"], "punter": st["punter"],

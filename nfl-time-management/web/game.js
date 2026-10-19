@@ -4661,7 +4661,7 @@
   // a featured day's title ("28–3 · Super Bowl LI", src/nflclock/daily_schedule.json), or ''; playTitle: the one of the
   // drive being played, only on a daily (today's or an archive day's) and only on that day's featured spot
   const dayTitle = (n) => { const f = idx.featured && idx.featured[n]; return (f && f.title) || ''; };
-  const playTitle = (sc) => { const f = !SURV && !PRACTICE && !DRIVE && !RUN_N && !VS && idx.featured && idx.featured[dayN];
+  const playTitle = (sc) => { const f = !SURV && !PRACTICE && !DRIVE && !RUN_N && !VS && idx.featured && featOf(dayN);
     return f && f.title && idx.spots[f.spot] && idx.spots[f.spot].id === (sc || G.scen || {}).id ? f.title : ''; };
   function renderIntro() {
     const sc = G.scen, r = G.root, box = $('intro');
@@ -4677,7 +4677,7 @@
     if (VS) return renderVsIntro();
     box.append(el('div', 'cat', SURV ? `Survivor · Game ${state.games.length + 1}` : PRACTICE ? `Practice drive · ${catLabel(sc)}` : DRIVE ? 'Historic drive'
       : RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · Game ${G.si + 1} of ${today.length} · ${PRO_RUNS.runs[RUN_N - 1].games[G.si].round}`
-        : (today.length > 1 ? `Spot ${G.si + 1} of ${today.length} · ` : ARCH_DAY ? `No. ${dayN}, from the archive · ` : 'Today’s drive · ') + catLabel(sc)),
+        : (today.length > 1 ? `Spot ${G.si + 1} of ${today.length} · ` : ARCH_DAY ? `No. ${dayN}, from the archive · ` : 'Today’s drive · ') + (sideTaken() ? `${teamName(sc.player)} side · ` : '') + catLabel(sc)),
       ...(playTitle(sc) ? [el('h2', 'title', playTitle(sc))] : []),
       el('div', 'game', `${gameTag(sc)} · ${matchLine(sc)}`), big);
     const mu = el('div', 'matchup');
@@ -4709,7 +4709,21 @@
       G.started = true; persist(); enterField();
     });
     box.append(go);
-    const rc = (sc.real || {}).coach, feat = !SURV && idx.featured && idx.featured[dayN];
+    // a day of two sides, before the first snap: the other side is still one tap away (nothing has been played)
+    const ss = sideTaken() && !G.started && !state.done && !(state.spots || []).some((x) => x && x.decisions && x.decisions.length) ? sidesOf(dayN) : null;
+    if (ss) {
+      const k = (sideOf(dayN) ?? 0) === 0 ? 1 : 0, osp = idx.spots[ss[k].spot], sw = el('button', 'btn ghostbtn sideswap', `Take over as the ${teamName(osp.player)} instead`);
+      sw.type = 'button';
+      sw.addEventListener('click', () => {
+        save(SIDE_KEY(dayN), k);
+        save(stateKey(), { spots: [], current: 0, done: false, tryAt: Date.now(), side: k, ...(state.restarts ? { restarts: state.restarts } : {}) });
+        track('side_pick', { day: dayN, side: osp.player, swap: true });
+        restarting = true;            // (nothing saves the old side's state after this)
+        location.reload();
+      });
+      box.append(sw);
+    }
+    const rc = (sc.real || {}).coach, feat = !SURV && idx.featured && featOf(dayN);
     const tale = feat && feat.note && idx.spots[feat.spot] && idx.spots[feat.spot].id === sc.id ? feat.note : sc.story;
     if (tale) {
       // a long story folds to a few lines (a tap opens it)
@@ -6981,7 +6995,7 @@
 
   // ------------------------------------------------------------ survivor ---
   // the pool: every fourth-quarter spot (each one plays to the final gun), none twice in a run until all are used
-  const featuredSpots = () => new Set(Object.values(idx.featured || {}).map((f) => f.spot));   // a day's story, not survivor's
+  const featuredSpots = () => new Set(Object.values(idx.featured || {}).flatMap((f) => (f.sides || [f]).map((x) => x.spot)));   // a day's story (both sides), not survivor's
   const survPool = () => { const f = featuredSpots(); return idx.spots.map((sp, i) => (sp.start.qtr >= 4 && !f.has(i) ? i : -1)).filter((i) => i >= 0); };
   function newRun() {
     return { run: Math.floor(Math.random() * 2 ** 31), spots: [], current: 0, pick: null, won: 0, games: [], played: [], out: false };
@@ -7315,6 +7329,7 @@
   // workers and any grading still running for the old try with it, and nothing saves the old one after (restarting).
   const RESTART_OK = !(SURV || PRACTICE || VS);
   const todayDaily = () => !(SURV || PRACTICE || VS || DRIVE || RUN_N || ARCH_DAY);
+  const sideTaken = () => !(SURV || PRACTICE || VS || DRIVE || RUN_N) && !!idx && !!sidesOf(dayN) && today.length === 1;    // the day's drive is a side of two
   const canRestart = () => RESTART_OK && !restarting && !!G && !!state && !state.done && !G.over && !$('play').hidden;
   function restartSync() { const b = $('restartBtn'); if (b) b.hidden = !canRestart(); }
   const playRunning = () => busy || $('field').classList.contains('playing');
@@ -7345,7 +7360,7 @@
     track('restart', { mode: modeName(), calls: allDecisions().length, restarts: n, ...(DRIVE ? { drive: DRIVE } : RUN_N ? { run: RUN_N } : { day: dayN }) });
     restarting = true;
     pool.forEach((sl) => { try { sl.w.terminate(); } catch (e) { /* gone already */ } });
-    save(stateKey(), { spots: [], current: 0, done: false, tryAt: Date.now(), restarts: n });
+    save(stateKey(), { spots: [], current: 0, done: false, tryAt: Date.now(), restarts: n, ...(state.side != null ? { side: state.side } : {}) });
     location.reload();
   }
   // a drive played again from the snap: its saved state cleared (its best grade stays)
@@ -7407,7 +7422,8 @@
     } else {
       // (vs: against the real coach, so a badge for beating him counts the days on any phone)
       // (the card drawn again, on a reload: a record already here stays, which may be another phone's, synced in)
-      if (!state.done || !st.days[dayN]) st.days[dayN] = { p, wpa, coach: cc ? cc.name : null, ...(hhN.length ? { vs: Math.sign(hhN.reduce((a, h) => a + h.v, 0)) } : {}) };
+      if (!state.done || !st.days[dayN]) st.days[dayN] = { p, wpa, coach: cc ? cc.name : null, ...(hhN.length ? { vs: Math.sign(hhN.reduce((a, h) => a + h.v, 0)) } : {}),
+        ...(sidesOf(dayN) ? { side: today[0].player } : {}) };          // (a day of two sides: the one taken)
       // a missed day the streak's freezes now cover (this day played after it): kept, told about on this card
       const fz = st.frozen || (st.frozen = {}), sk0 = streakOf(st, ARCH_DAY ? dayOf(new Date()) : dayN);
       const newly = [...sk0.frozen].filter((k) => !fz[k]);
@@ -7445,6 +7461,13 @@
         Object.assign(el('div', 'pct-lab brag'), { hidden: true }),
         el('div', 'streak', RUN_N ? 'Playoff run' : ARCH_DAY ? 'From the archive' : streakLine(sk)));
       if (todayDaily() && state.restarts) box.append(el('p', 'note rsnote', 'Restarted: this counts for your streak and stats, not on today’s leaderboard.'));
+      if (sideTaken()) {            // a day of two sides: the one taken, and what that team really did from there
+        const sp = today[0], sb = el('div', 'sidetook');
+        sb.style.setProperty('--tc', color(sp.player));
+        sb.append(el('b', '', `You took the ${teamName(sp.player)}`), el('span', '', `${sideLine(sp)} · ${sideLead(sp)}`));
+        if (sp.real && sp.real.summary) sb.append(el('p', 'real', `What the ${teamName(sp.player)} really did: ${sp.real.summary}.`));
+        box.append(sb);
+      }
       if (!RUN_N && state.froze && state.froze.length) box.append(el('div', 'frz', `❄️ Streak saved by a freeze${state.froze.length > 1 ? ` (${state.froze.length} days)` : ''}: ${state.froze.length > 1 ? 'the days you missed count' : 'the day you missed counts'}`));
     }
     if (RUN_N) {                      // the run's record against the real one; a loss ended it (state.out: that game)
@@ -7503,7 +7526,8 @@
         el('span', 'sub', `${rec[0]} better, ${rec[1]} worse${rec[2] ? `, ${rec[2]} the same` : ''}`));
       box.insertBefore(v, box.children[k3] || null);
     }
-    const text = `${DRIVE ? `Two-Minute Drill · ${PRO.drives[DRIVE - 1].title}\nGrade ${gradeOf(Math.round(p * 100)).L}${p * 100 >= PASS_AT - 0.5 ? ' ✅ passed' : ''}` : RUN_N ? `Two-Minute Drill · the ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Two-Minute Drill #${dayN}${dayTitle(dayN) ? ` · ${dayTitle(dayN)}` : ''}`}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
+    const took = sideTaken() ? `As the ${teamName(today[0].player)} (${sideLine(today[0])})` : '';
+    const text = `${DRIVE ? `Two-Minute Drill · ${PRO.drives[DRIVE - 1].title}\nGrade ${gradeOf(Math.round(p * 100)).L}${p * 100 >= PASS_AT - 0.5 ? ' ✅ passed' : ''}` : RUN_N ? `Two-Minute Drill · the ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Two-Minute Drill #${dayN}${dayTitle(dayN) ? ` · ${dayTitle(dayN)}` : ''}${took ? `\n${took}` : ''}`}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
       `${streak >= 2 ? `\n🔥 ${streak}-day streak` : ''}\n${rows.join('\n')}\nCan you beat me? ${!DRIVE && !RUN_N && !ARCH_DAY ? chLink(p) : SITE}`;
     // sharing is how new players find the game: the button sits right under the result, not below the standings
     const chc = challengeCard(p);
@@ -7525,7 +7549,7 @@
     const img = el('button', 'btn ghostbtn', 'Share as a picture');
     img.type = 'button';
     img.addEventListener('click', () => shareImage({
-      title: DRIVE ? PRO.drives[DRIVE - 1].title : RUN_N ? `The ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Daily #${dayN}${dayTitle(dayN) ? ` · ${dayTitle(dayN)}` : ''}`,
+      title: DRIVE ? PRO.drives[DRIVE - 1].title : RUN_N ? `The ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Daily #${dayN}${dayTitle(dayN) ? ` · ${dayTitle(dayN)}` : ''}${took ? ` · ${teamName(today[0].player)} side` : ''}`,
       score: Math.round(p * 100), grade: DRIVE ? gradeOf(Math.round(p * 100)).L : null,
       line: `Better than ${Math.round(p * 100)}% of NFL play-callers`, brag: share.brag || null,
       coach: () => (share.text.match(/Coached like ([^\n]+)/) || [])[1] || null,
@@ -8193,6 +8217,7 @@
     const post = async () => {
       const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: driveDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)),
         ...(fairDay() ? { g: 2 } : {}), ...(state.restarts ? { restarted: true } : {}),       // (restarted: off the lists, restartAsk)
+        ...(sidesOf(dayN) ? { side: today[0].player } : {}),          // (a day of two sides: which, for the side's own numbers)
         ...(myName() ? { name: myName(), ...withSession() } : {}) }));
       if (!res.ok) throw new Error(`daily ${res.status}`);
       return res.json();
@@ -8699,8 +8724,62 @@
   // famous spot (with its story on the intro) instead of the scheduled one
   function dayIds(n) {
     const row = idx.schedule[(n - 1) % idx.schedule.length], kinds = Object.keys(idx.categories);
-    const want = kinds[(n - 1) % kinds.length], feat = idx.featured && idx.featured[n];
+    const want = kinds[(n - 1) % kinds.length], feat = featOf(n);
     return feat ? [feat.spot] : [row.find((i) => idx.spots[i].category === want) ?? row[(n - 1) % row.length]];
+  }
+  // Pick your side: a featured day can offer two takeovers of one real game (daily_schedule.json sides, each a spot):
+  // the player takes one, and it is the day's drive (one result a day as ever, scored the same). The pick is kept on
+  // the device (SIDE_KEY), in the day's state and its stats day (side: the team, synced), so a reload, a restart or
+  // another phone signed in keeps it. featOf: the day's featured entry as played (the side taken; before a pick, the first)
+  const sidesOf = (n) => { const f = idx.featured && idx.featured[n]; return f && Array.isArray(f.sides) && f.sides.length > 1 ? f.sides : null; };
+  const SIDE_KEY = (n) => `${STORE}:side:${n}`;
+  function sideOf(n) {
+    const ss = sidesOf(n);
+    if (!ss) return null;
+    const ok = (k) => Number.isInteger(k) && k >= 0 && k < ss.length;
+    const k = load(SIDE_KEY(n), null), st = load(`${STORE}:day:${n}`, null), rec = (load(`${STORE}:stats`, { days: {} }).days || {})[n];
+    if (ok(k)) return k;
+    if (st && ok(st.side)) return st.side;
+    const j = rec && rec.side ? ss.findIndex((x) => idx.spots[x.spot].player === rec.side) : -1;
+    return j >= 0 ? j : null;
+  }
+  function featOf(n) {
+    const f = idx.featured && idx.featured[n], ss = sidesOf(n);
+    if (!ss) return f || null;
+    const k = sideOf(n) ?? 0;
+    return { ...f, spot: ss[k].spot, note: ss[k].note || f.note, side: k };
+  }
+  // a side's takeover in a line: "2:48, own 14, 2 timeouts each" / "0:47, own 35, no timeouts (Rams 2)"
+  function sideLine(sp) {
+    const s0 = sp.start, me = sp.player === sp.home ? 1 : 0, opp = me ? sp.away : sp.home, c = Math.ceil(s0.clock);
+    const yl = Math.round(s0.yl), at = yl === 50 ? 'midfield' : yl > 50 ? `own ${100 - yl}` : `opp ${yl}`;
+    const a = s0.to[me], b = s0.to[1 - me], tos = (x) => (x ? `${x} timeout${x === 1 ? '' : 's'}` : 'no timeouts');
+    return `${Math.floor(c / 60)}:${String(c % 60).padStart(2, '0')}, ${at}, ${a === b ? `${a || 'no'} timeout${a === 1 ? '' : 's'} each` : `${tos(a)} (${teamName(opp)} ${b})`}`;
+  }
+  const sideLead = (sp) => { const me = sp.player === sp.home ? 1 : 0, d = sp.start.score[me] - sp.start.score[1 - me]; return d > 0 ? `Up by ${d}` : d < 0 ? `Down by ${-d}` : 'Tied'; };
+  // a side's button: the team's colors, the takeover, the score; tapped, the pick is kept and go(k) runs
+  function sideBtn(n, k, go, tag = 'button') {
+    const sp = idx.spots[sidesOf(n)[k].spot], b = el(tag, `sidepick${darkOn(color(sp.player)) ? ' dk' : ''}`);
+    if (tag === 'button') b.type = 'button'; else b.href = '#daily';
+    b.style.setProperty('--tc', color(sp.player));
+    b.dataset.side = String(k);
+    b.append(el('b', '', `Take over as the ${teamName(sp.player)}`), el('span', '', sideLine(sp)), el('small', '', `${sideLead(sp)} · ${sp.start.qtr === 4 ? '4th quarter' : `Q${sp.start.qtr}`}`));
+    b.addEventListener('click', (e) => { save(SIDE_KEY(n), k); track('side_pick', { day: n, side: sp.player }); go(k, e); });
+    return b;
+  }
+  // the day's intro before the pick: the game, its story and the two takeovers (resolves with the side taken)
+  function renderSidePick(n) {
+    return new Promise((done) => {
+      const ss = sidesOf(n), sp = idx.spots[ss[0].spot], f = idx.featured[n], box = $('intro');
+      box.textContent = '';
+      show('intro');
+      box.append(el('div', 'cat', `${ARCH_DAY ? `No. ${n}, from the archive` : 'Today’s drive'} · Pick your side`),
+        ...(f.title ? [el('h2', 'title', f.title)] : []), el('div', 'game', `${gameTag(sp)} · ${matchLine(sp)}`));
+      const row = el('div', 'sidepicks');
+      ss.forEach((_, k) => row.append(sideBtn(n, k, (j) => done(j))));
+      box.append(row, el('div', 'who', 'One drive today: pick a side and call it to the final gun. Your pick is your day’s drive.'));
+      if (f.note) box.append(el('p', 'story', f.note));
+    });
   }
   const dayDate = (n) => { const d = new Date(idx.launch + 'T12:00:00'); d.setDate(d.getDate() + n - 1); return d; };
 
@@ -9538,7 +9617,7 @@
   // the card for today's drive: the spot (its kind, the score and clock, the game) and Play; mid-drive, Continue; done,
   // your score, your result one tap away and the countdown to the next one. The streak under it either way
   function homeDaily(n, st, sk) {
-    const sp = idx.spots[dayIds(n)[0]], feat = idx.featured && idx.featured[n], s0 = sp.start;
+    const sp = idx.spots[dayIds(n)[0]], feat = idx.featured && idx.featured[n], s0 = sp.start, pick = sidesOf(n) && sideOf(n) == null;
     const meH = sp.player === sp.home, lead = s0.score[meH ? 1 : 0] - s0.score[meH ? 0 : 1];
     const ck = `${Math.floor(s0.clock / 60)}:${String(Math.ceil(s0.clock) % 60).padStart(2, '0')}`;
     const left = s0.qtr > 4 ? `${ck} left in overtime` : `${ck} left in the ${s0.qtr === 4 ? 'game' : s0.qtr === 2 ? 'half' : s0.qtr === 3 ? 'third quarter' : 'first quarter'}`;
@@ -9549,10 +9628,15 @@
     const card = el('section', `hhero ${status}`);
     card.setAttribute('aria-label', 'Today’s drive');
     const top = el('div', 'hk');
-    top.append(el('span', '', `Today’s drive · No. ${n}`), el('span', 'tag', done ? 'Done ✓' : going ? 'In progress' : feat ? 'Featured' : catLabel(sp)));
+    top.append(el('span', '', `Today’s drive · No. ${n}`), el('span', 'tag', done ? 'Done ✓' : going ? 'In progress' : pick ? 'Pick a side' : feat ? 'Featured' : catLabel(sp)));
     card.append(top);
     if (dayTitle(n)) card.append(el('div', 'httl', dayTitle(n)));
-    if (done && rec) {
+    if (pick && !done) {            // a day of two sides, none taken yet: the game, and a button for each takeover
+      card.append(el('div', 'hm', `${matchLine(sp)} · ${gameTag(sp)}`));
+      const row = el('div', 'sidepicks');
+      sidesOf(n).forEach((_, k) => row.append(sideBtn(n, k, () => { track('home_tap', { to: 'daily_side' }); scrollTo(0, 0); }, 'a')));
+      card.append(row);
+    } else if (done && rec) {
       const p = Math.round(rec.p * 100), sc = el('div', 'hscore');
       sc.append(el('b', '', String(p)), el('span', '', `Better than ${p}% of NFL play‑callers`));
       card.append(sc, el('div', 'hm', `${lead > 0 ? `Up by ${lead}` : lead < 0 ? `Down by ${-lead}` : 'Tied'}, ${left} · ${matchLine(sp)}`));
@@ -9565,7 +9649,7 @@
     const go = el('a', `btn${done ? ' ghostbtn' : ''}`, done ? 'See your result' : going ? 'Continue the drive' : 'Play today’s drive');
     go.href = '#daily';
     go.dataset.to = `daily_${status}`;
-    card.append(go);
+    if (!(pick && !done)) card.append(go);
     const foot = el('div', 'hfoot');
     const streak = sk.n >= 2 ? `🔥 ${sk.n}-day streak` : sk.n === 1 ? '🔥 1-day streak' : '';
     if (done) {
@@ -10516,6 +10600,7 @@
         today[0].story = d.note;
         $('dayLabel').textContent = `Drive · ${d.title}`;
       } else {
+        if (sidesOf(dayN) && sideOf(dayN) == null) await renderSidePick(dayN);       // a day of two sides: the pick first
         const ids = dayIds(dayN);
         const teams = await loadTeams(ids);
         today = ids.map((i) => buildScen(idx.spots[i], teams[i]));
@@ -10528,6 +10613,7 @@
     if (stale(load(stateKey(), null))) { try { localStorage.removeItem(stateKey()); } catch (e) { /* storage off */ } }
     const fresh = !load(stateKey(), null);
     state = load(stateKey(), null) || { spots: [], current: 0, done: false, tryAt: Date.now() };     // tryAt: this try (a drive's record)
+    if (!(PRACTICE || DRIVE || RUN_N) && sidesOf(dayN) && state.side == null) state.side = sideOf(dayN);     // (the side taken, kept with the day)
     if (!$('modal').hidden) { /* a question already up (the unsubscribe link's): the welcome waits for the next visit */ }
     else if (!load(`${STORE}:seen`, false)) { if (TOUR_OK) tourStart(true); else openHelp(true); save(`${STORE}:seen`, true); } else tourStart(false);
     drawTiles();

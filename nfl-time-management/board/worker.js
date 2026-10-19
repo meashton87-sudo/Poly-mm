@@ -6,7 +6,7 @@
 //   DELETE /board?name=Eli  (Authorization: Bearer <ADMIN_TOKEN>)          remove a row (no ADMIN_TOKEN secret: off)
 //   GET    /daily?date=2026-10-14                         -> that day's players: { n, hist, spots, top }
 //   GET    /days                                           -> every day played: { days: [{ date, n, avg, best }] }
-//   POST   /daily  { date, key, p, spots: [w, ...], name?, g?, restarted? }  -> the same, after counting your result
+//   POST   /daily  { date, key, p, spots: [w, ...], name?, g?, restarted?, side? }  -> the same, after counting your result
 //                                                             (1-3 spots: the day's drive, or the three spots days had
 //                                                             before), and week: the week to that date with your own line
 //                                                             (you; old: your days in it scored the old way, in no week)
@@ -33,6 +33,10 @@
 // not in the fair set either (whatever its g). Out of
 // n too, so n is always the histogram's total (the page's rank and median read both). The day counts them on their
 // own (nr); the answer's you carries restarted: true.
+// A day that offers two takeovers of one real game (game.js sidesOf: the player picks a side, which is the day's drive)
+// says which with side (the team's code, 'LA'): the day's numbers stay the whole day's, both sides together, and each
+// side also keeps its own count, histogram and average (sides: { LA: { n, avg, hist } }, the fair set's too); SIDES_MAX
+// sides a day at most (a post naming another still counts, only not by side).
 // Players are identified by name (a game among friends): trimmed, control characters dropped, 1-24 characters,
 // matched case-insensitively. The first post under a name claims it for that device's key (a random string the page
 // keeps; only its SHA-256 is stored), so nobody else can overwrite your score. Signed in ({ session } with the post:
@@ -147,7 +151,9 @@ async function ownerOf(storage, lower) {
 }
 const claim = (storage, lower, kh) => storage.put(`claim:${lower}`, kh);
 const emptyDay = () => ({ n: 0, hist: new Array(101).fill(0), spots: [0, 1, 2].map(() => ({ n: 0, sum: 0, hist: new Array(101).fill(0) })), top: [] });
+const SIDE_RE = /^[A-Z]{2,4}$/, SIDES_MAX = 4;      // side: a team's code (above)
 const setView = (d) => ({ n: d.n, hist: d.hist, spots: d.spots.map((x) => ({ n: x.n, avg: x.n ? x.sum / x.n : 0, hist: x.hist })),
+  ...(d.sides ? { sides: Object.fromEntries(Object.entries(d.sides).map(([k, x]) => [k, { n: x.n, avg: x.n ? x.sum / x.n / 100 : 0, hist: x.hist }])) } : {}),
   top: shown(d.top).slice(0, DAY_TOP).map(({ name, p }) => ({ name, p })) });
 // (fair: the day's fair-scored set, when any post was: above)
 const dayView = (d) => ({ ...setView(d), nr: d.nr || 0, ...(d.f ? { fair: setView(d.f) } : {}) });
@@ -320,10 +326,12 @@ async function daily(req, env, storage, hits, h, url) {
   const spots = Array.isArray(body && body.spots) ? body.spots : null, raw = clean(body && body.name), restarted = !!(body && body.restarted === true);
   const refused = !!raw && blocked(raw), name = refused ? '' : raw;   // a refused name: the result counts, unnamed
   const fair = body.g === 2;                                          // every call graded the fair way (above)
+  const side = body.side == null ? null : body.side;                  // the side taken, on a day that offers two (above)
   if (!dateOk(date)) return json({ error: 'date (YYYY-MM-DD, today) wanted' }, 400, h);
   if (!(typeof p === 'number' && p >= 0 && p <= 1)) return json({ error: 'p (0-1) wanted' }, 400, h);
   if (!spots || spots.length < 1 || spots.length > 3 || !spots.every((w) => typeof w === 'number' && w >= -1 && w <= 1)) return json({ error: 'spots (1-3, each -1 to 1) wanted' }, 400, h);
   if (!KEY_RE.test(devKey)) return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
+  if (side !== null && !(typeof side === 'string' && SIDE_RE.test(side))) return json({ error: 'side (a team code, 2-4 capital letters) wanted' }, 400, h);
   const kh = await sha256(devKey);                 // before the reads: from here to the writes is storage only
   const ak = name ? await acctNameKey(storage, env, body.session, name.toLowerCase()) : null, nk = ak || kh;    // who owns the name: the account (its username), else this device
   const mine = `dk:${date}:${kh}`;
@@ -345,7 +353,7 @@ async function daily(req, env, storage, hits, h, url) {
       await storage.put(`day:${date}`, day);
       if (unclaimed) await claim(storage, name.toLowerCase(), nk);
     }
-    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots, ...(prev.g === 2 ? { g: 2 } : {}), ...(prev.restarted ? { restarted: true } : {}) },
+    return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots, ...(prev.g === 2 ? { g: 2 } : {}), ...(prev.restarted ? { restarted: true } : {}), ...(prev.side ? { side: prev.side } : {}) },
       week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}) }, 200, h);
   }
   const pt = Math.round(p * 100);
@@ -353,6 +361,14 @@ async function daily(req, env, storage, hits, h, url) {
     set.n += 1;
     set.hist[pt] += 1;
     spots.forEach((w, i) => { const x = set.spots[i]; x.n += 1; x.sum += w; x.hist[Math.max(0, Math.min(100, Math.round(w * 100) + 50))] += 1; });
+    if (side) {          // (and its side's own numbers: a points sum for the average, a histogram)
+      const ss = set.sides || {};
+      if (ss[side] || Object.keys(ss).length < SIDES_MAX) {
+        const x = ss[side] || (ss[side] = { n: 0, sum: 0, hist: new Array(101).fill(0) });
+        x.n += 1; x.sum += pt; x.hist[pt] += 1;
+        set.sides = ss;
+      }
+    }
   };
   if (restarted) day.nr = (day.nr || 0) + 1;        // off the day's numbers and lists, the fair set's too (above)
   else {
@@ -360,7 +376,7 @@ async function daily(req, env, storage, hits, h, url) {
     if (fair) { day.f = day.f || emptyDay(); count(day.f); }
     if (name && !taken) await listed(storage, day, date, name, nk, p, fair);
   }
-  const you = { p, spots, ...(fair ? { g: 2 } : {}), ...(restarted ? { restarted: true } : {}) };
+  const you = { p, spots, ...(fair ? { g: 2 } : {}), ...(restarted ? { restarted: true } : {}), ...(side ? { side } : {}) };
   await storage.put(mine, { ...you, ...(name && !taken && !restarted ? { name } : {}) });
   await storage.put(`day:${date}`, day);
   if (unclaimed && name) await claim(storage, name.toLowerCase(), nk);
@@ -730,7 +746,8 @@ function statEntry(kind, v) {
   if (kind === 'days') {
     const c = typeof v.coach === 'string' ? clean(v.coach, 40) : '', coach = c === 'John Madden' ? '' : c;      // (a retired rare find: no coach)
     const vs = num(v.vs, -1, 1);           // against the real coach that day: better 1, the same 0, worse -1
-    return { p, wpa, coach: coach || null, ...(vs !== null ? { vs: Math.sign(vs) } : {}) };
+    return { p, wpa, coach: coach || null, ...(vs !== null ? { vs: Math.sign(vs) } : {}),
+      ...(typeof v.side === 'string' && SIDE_RE.test(v.side) ? { side: v.side } : {}) };      // (the side taken, a day that offered two)
   }
   if (kind === 'drives') {
     const last = num(v.last, 0, 1), at = num(v.at, 0, 1e14);

@@ -58,6 +58,11 @@ section { display: grid; gap: 8px; }
 .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; text-align: center; }
 .facts b { display: block; font: 900 26px/1 var(--display); font-variant-numeric: tabular-nums; }
 .facts span { font-size: 12px; color: var(--muted); }
+/* a day with two sides of one game (board/worker.js sides): each side's players and average */
+.sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.sides div { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; border-left: 5px solid var(--sc, var(--turf)); }
+.sides b { display: block; font: 800 15px/1.2 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.sides span { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 /* the day's scores in ten buckets */
 .hist { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 2px; align-items: end; height: 110px; border-bottom: 1px solid var(--line); }
 .hist div { background: var(--turf); border-radius: 4px 4px 0 0; min-height: 2px; position: relative; }
@@ -118,6 +123,14 @@ ol.top b { font: 900 18px var(--display); }
   const long = (s) => dateOf(s).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
   const localToday = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   let days = [], pick = -1;
+  // a day that offered two sides of one game: each side by its team (the codes the worker keeps, game.js TEAMS)
+  const SIDE_NAME = { ARI: ['Cardinals', '#97233F'], ATL: ['Falcons', '#A71930'], BAL: ['Ravens', '#241773'], BUF: ['Bills', '#00338D'],
+    CAR: ['Panthers', '#0085CA'], CHI: ['Bears', '#0B162A'], CIN: ['Bengals', '#FB4F14'], CLE: ['Browns', '#FF3C00'], DAL: ['Cowboys', '#003594'],
+    DEN: ['Broncos', '#FB4F14'], DET: ['Lions', '#0076B6'], GB: ['Packers', '#203731'], HOU: ['Texans', '#03202F'], IND: ['Colts', '#002C5F'],
+    JAX: ['Jaguars', '#006778'], KC: ['Chiefs', '#E31837'], LV: ['Raiders', '#A5ACAF'], LAC: ['Chargers', '#0080C6'], LA: ['Rams', '#003594'],
+    MIA: ['Dolphins', '#008E97'], MIN: ['Vikings', '#4F2683'], NE: ['Patriots', '#002244'], NO: ['Saints', '#D3BC8D'], NYG: ['Giants', '#0B2265'],
+    NYJ: ['Jets', '#125740'], PHI: ['Eagles', '#004C54'], PIT: ['Steelers', '#FFB612'], SF: ['49ers', '#AA0000'], SEA: ['Seahawks', '#69BE28'],
+    TB: ['Buccaneers', '#D50A0A'], TEN: ['Titans', '#4B92DB'], WAS: ['Commanders', '#5A1414'] };
 
   async function get(path) {
     const r = await fetch(API + path, { cache: 'no-store' });
@@ -184,6 +197,18 @@ ol.top b { font: 900 18px var(--display); }
       const c = el('div'); c.append(el('b', '', String(v)), el('span', '', l)); facts.append(c);
     });
     box.append(facts);
+    // both sides together above; each side's own below (the side taken, the day's choice)
+    const sides = Object.entries(x.sides || {}).filter(([, v]) => v && v.n);
+    if (sides.length) {
+      const sb = el('div', 'sides');
+      sides.forEach(([c, v]) => {
+        const t = el('div'), nm = SIDE_NAME[c] ? SIDE_NAME[c][0] : c;
+        if (SIDE_NAME[c]) t.style.setProperty('--sc', SIDE_NAME[c][1]);
+        t.append(el('b', '', `${nm} side`), el('span', '', `${fmt(v.n)} player${v.n === 1 ? '' : 's'} · average ${Math.round(v.avg * 100)}`));
+        sb.append(t);
+      });
+      box.append(el('p', 'k', 'By the side they took'), sb);
+    }
     if (mixed) box.append(el('p', 'note', `The ${fmt(all.n - x.n)} scores posted on ${long(d.date)} before the fair-score fix were worked out the old way, which let the simulation’s noise count and ran them high. They aren’t shown; everything here is the ${fmt(x.n)} player${x.n === 1 ? '' : 's'} scored the fair way since.`));
     // the scores in ten buckets (0-9 ... 90-100), counts above the bars
     const buckets = Array.from({ length: 10 }, (_, k) => x.hist.slice(k * 10, k === 9 ? 101 : k * 10 + 10).reduce((a, c) => a + c, 0));
