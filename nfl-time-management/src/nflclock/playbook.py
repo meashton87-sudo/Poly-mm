@@ -98,7 +98,7 @@ STANDARD_PASSES = [CALL_INDEX[c] for c in ("quick_strong", "quick_weak", "quick_
 GAP = {"end": "out", "tackle": "tackle", "guard": "inside"}
 FTN_URL = "https://github.com/nflverse/nflverse-data/releases/download/ftn_charting/ftn_charting_{season}.parquet"
 FTN_FLAGS = ["is_play_action", "is_screen_pass", "is_qb_out_of_pocket", "is_qb_sneak", "is_throw_away", "is_rpo",
-             "is_trick_play", "is_motion", "is_drop", "is_interception_worthy"]
+             "is_trick_play", "is_motion", "is_drop", "is_interception_worthy", "is_catchable_ball", "is_contested_ball"]
 FTN_LOOK = ["starting_hash", "qb_location", "n_defense_box", "n_blitzers"]
 # Next Gen Stats charting per play (nflverse pbp_participation): the animation runs the targeted receiver's real
 # route against the real coverage, with the real number of pass rushers, pressure and time to throw
@@ -153,6 +153,7 @@ def _ftn(seasons=SEASONS) -> pd.DataFrame:
     f["play_id"] = pd.to_numeric(f["play_id"], errors="coerce")
     for c in FTN_FLAGS:
         f[c] = f[c].fillna(False).astype(bool)
+    f["ftn"] = True                    # (the play was charted: after the merge, the plays FTN never saw are False)
     return f.drop_duplicates(["game_id", "play_id"])
 
 
@@ -196,6 +197,19 @@ def _charting(s: pd.DataFrame) -> dict:
     ttt = np.clip(np.round(ttt.fillna(0).to_numpy() * 10), 0, 255).astype(np.uint8)
     return {"route": route, "cover": shell | (mz << 4), "rush": rushers | (pressure << 4) | (charted << 5) | (full << 6), "ttt": ttt,
             "pers": personnel_code(col("offense_personnel")), "dpers": defense_db_count(col("defense_personnel"))}
+
+
+def _ball(s: pd.DataFrame, thrown: np.ndarray) -> np.ndarray:
+    """How the ball got there, for the animation (FTN charting and the play-by-play's passes defensed), packed: charted
+    (bit 0: FTN charted the play), catchable (1), contested (2), a defender credited with defending it (3: nflverse
+    pass_defense_1_player_id, a breakup); 0 for a play not thrown. Of 2022-2025's incompletions 41% were uncatchable
+    with nobody credited (a bad ball), 27% defended or contested (broken up), 12% thrown away, 11% dropped, 6% nearly
+    intercepted and 4% catchable but not caught (off his fingertips). game.js missOf reads it."""
+    col = lambda c: s[c].fillna(False).to_numpy().astype(bool) if c in s else np.zeros(len(s), bool)
+    pd_ = s["pass_defense_1_player_id"].notna().to_numpy() if "pass_defense_1_player_id" in s else np.zeros(len(s), bool)
+    b = col("ftn").astype(np.uint8) | (col("is_catchable_ball").astype(np.uint8) << 1) | (col("is_contested_ball").astype(np.uint8) << 2)
+    b = b | (pd_.astype(np.uint8) << 3)
+    return np.where(np.asarray(thrown, bool), b, 0).astype(np.uint8)
 
 
 def _charted_in_full(s: pd.DataFrame, has_cover: np.ndarray) -> np.ndarray:
@@ -256,7 +270,8 @@ def personnel_code(p: pd.Series) -> np.ndarray:
 
 
 def _extras(seasons=SEASONS) -> pd.DataFrame:
-    cols = ["game_id", "play_id", "run_location", "run_gap", "rusher_player_id", "passer_player_id", "receiver_player_id", "fumble"]
+    cols = ["game_id", "play_id", "run_location", "run_gap", "rusher_player_id", "passer_player_id", "receiver_player_id", "fumble",
+            "pass_defense_1_player_id"]
     return pd.concat([pd.read_parquet(config.RAW_DIR / f"play_by_play_{s}.parquet", columns=cols) for s in seasons],
                      ignore_index=True)
 
@@ -286,7 +301,7 @@ def labeled_plays(seasons=SEASONS, seed: int = 11) -> pd.DataFrame:
     s = s.merge(_extras(seasons), on=["game_id", "play_id"], how="left")
     s = s.merge(_ftn(seasons), on=["game_id", "play_id"], how="left")
     s = s.merge(_participation(seasons), on=["game_id", "play_id"], how="left")
-    for c in FTN_FLAGS:
+    for c in FTN_FLAGS + ["ftn"]:
         s[c] = s[c].fillna(False).astype(bool)
     pen = (s["play_type"] == "no_play").to_numpy()
     drop = s["qb_dropback"].fillna(0).eq(1).to_numpy()
@@ -424,7 +439,7 @@ def labeled_plays(seasons=SEASONS, seed: int = 11) -> pd.DataFrame:
         "event": _events(s, pen, aborted, td_def),
         "pen_name": np.where(pen, s["penalty_type"].fillna("Penalty").to_numpy(), ""),
         "look": _look(s),
-        "air": air, "carrier": carrier, "caught": caught,
+        "air": air, "carrier": carrier, "caught": caught, "ball": _ball(s, thrown),
         **{f"ngs_{k}": v for k, v in _charting(s).items()},
     })
     out = out[~(turnover & ~valid_to)].reset_index(drop=True)
@@ -834,6 +849,8 @@ def export(lib: pd.DataFrame, path) -> dict:
             # for the animation only: air yards (-128 = not thrown), carrier group (bits 0-2) and broken tackle (bit 3)
             "air": _b64(np.where(lib["air"].isna(), -128, np.clip(lib["air"].fillna(0), -20, 100)).astype(np.int8)),
             "carry": _b64((lib["who"].to_numpy().astype(np.uint8) | (lib["bt"].to_numpy().astype(np.uint8) << np.uint8(3)))),
+            # and how the ball got there (_ball: FTN catchable, contested; a defender credited with defending it)
+            "ball": _b64(lib["ball"].to_numpy().astype(np.uint8)),
             # the animation: NGS route, coverage, pass rush and time to throw (_charting); Versus' defensive calls
             # draw against the real coverage, rush, box and defensive personnel
             **{k: _b64(lib[f"ngs_{k}"].to_numpy().astype(np.uint8)) for k in ("route", "cover", "rush", "ttt", "pers", "dpers")},

@@ -95,6 +95,8 @@ function describe(row) {
   }
   if (P.air && P.air[row] !== -128) out.air = P.air[row];
   if (P.carry) { const c = P.carry[row]; out.who = ['', 'QB', 'RB', 'WR', 'TE'][c & 7] || ''; out.bt = !!(c & 8); }
+  // how the ball got there (FTN charting, the play-by-play's passes defensed): game.js missOf draws the incompletion from it
+  if (P.ball && (P.ball[row] & 1)) { const b = P.ball[row]; out.catchable = !!(b & 2); out.contested = !!(b & 4); out.defended = !!(b & 8); }
   if (P.ngs) {        // Next Gen Stats charting: the target's route, the coverage, the rush, the time to throw
     const g = P.ngs, rt = g.route[row], cv = g.cover[row], ru = g.rush[row], tt = g.ttt[row];
     if (rt) out.route = P.routeNames[rt];

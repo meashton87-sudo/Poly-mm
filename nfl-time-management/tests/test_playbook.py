@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from nflclock.playbook import (CALL_INDEX, CALLS, EVENTS, ROUTE_CODE, ROUTES, SHELL_CODE, SHELLS, _charting,
+from nflclock.playbook import (CALL_INDEX, CALLS, EVENTS, ROUTE_CODE, ROUTES, SHELL_CODE, SHELLS, _ball, _charting,
                                look_bucket, oob_odds, oob_route_odds, strong_side)
 
 
@@ -40,6 +40,14 @@ def test_ngs_charting_is_packed_for_the_browser():
     assert SHELLS[c["cover"][0] & 15] == "cover1" and c["cover"][0] >> 4 == 1 and c["cover"][1] >> 4 == 2
     assert c["rush"][0] == 5 | 16 | 32 and c["rush"][1] == 4 | 32 and c["rush"][2] == 0
     assert c["ttt"].tolist() == [23, 30, 0]
+
+
+def test_ftn_ball_facts_are_packed_for_the_browser():
+    # how the ball got there (game.js missOf): charted (bit 0), catchable (1), contested (2), a defender credited with
+    # defending it (3); a play FTN never charted, or one not thrown, is 0
+    s = pd.DataFrame({"ftn": [True, True, False, True], "is_catchable_ball": [True, False, False, True],
+                      "is_contested_ball": [False, True, False, True], "pass_defense_1_player_id": [None, "00-1", None, "00-2"]})
+    assert _ball(s, np.array([True, True, True, False])).tolist() == [1 | 2, 1 | 4 | 8, 0, 0]
 
 
 def _oob_lib(rows):

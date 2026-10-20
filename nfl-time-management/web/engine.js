@@ -467,6 +467,7 @@
         // what happened on each real play (narration only): event, penalty called, pre-snap look
         event: R.event ? decode(R.event) : null, pen: R.pen ? decode(R.pen) : null, look: R.look ? decode(R.look) : null,
         air: R.air ? decode(R.air) : null, carry: R.carry ? decode(R.carry) : null,    // the animation: air yards, carrier, broken tackle
+        ball: R.ball ? decode(R.ball) : null,          // and how the ball got there (playbook.py _ball: FTN catchable, contested, defended)
         // the animation: NGS route, coverage, pass rush, time to throw (playbook.py _charting)
         ngs: R.route ? { route: decode(R.route), cover: decode(R.cover), rush: decode(R.rush), ttt: decode(R.ttt), pers: R.pers ? decode(R.pers) : null,
           dpers: R.dpers ? decode(R.dpers) : null } : null,
