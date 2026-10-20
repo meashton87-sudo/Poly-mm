@@ -32,6 +32,7 @@ import math
 import http.server
 import random
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -87,6 +88,76 @@ PAGE = "index.html"
 CUT = lambda url: False
 
 
+# Live Drills (game.js #live; board/live.js): the stub board serves a recorded game's drills as the real watcher made
+# them (board/live_replay.mjs: Pittsburgh at Cincinnati, Oct 16, 2025, the feed 30 s behind each play, the cron once a
+# minute), one cron minute (a step) at a time as the test moves it on, every time in it moved to now. two: a second game
+# open too; stale: the worker's last look at the feed 5 minutes old. Off (on: False) the stub answers /live as nothing.
+LIVE: dict = {"on": False, "steps": None, "i": 0, "two": False, "stale": False, "asked": []}
+LIVE_TIMES = ("now", "polled", "upd", "opened", "closed", "at", "wall")
+
+
+def live_steps() -> list:
+    if LIVE["steps"] is None:
+        r = subprocess.run(["node", str(Path(__file__).resolve().parents[1] / "board" / "live_replay.mjs"), "30"], capture_output=True, text=True, timeout=600)
+        if r.returncode:
+            raise RuntimeError(f"live_replay.mjs: {r.stderr[-500:]}")
+        LIVE["steps"] = json.loads(r.stdout)["steps"]
+    return LIVE["steps"]
+
+
+def live_shift(o, by: int):
+    """A recorded answer's times moved by `by` ms (the replay ran on the game's own clock)."""
+    if isinstance(o, dict):
+        return {k: (v + by if k in LIVE_TIMES and isinstance(v, (int, float)) and not isinstance(v, bool) else live_shift(v, by)) for k, v in o.items()}
+    if isinstance(o, list):
+        return [live_shift(v, by) for v in o]
+    return o
+
+
+def live_two(d: dict) -> dict:
+    """The same drill as another game's (Buffalo at Kansas City), for two open at once."""
+    sw = {"PIT": "BUF", "CIN": "KC"}
+    t = json.loads(json.dumps(d))
+    t["id"] = t["id"].replace("2025101600", "2025101601")
+    for k in ("home", "away", "player", "opp"):
+        if k in t:
+            t[k] = sw.get(t[k], t[k])
+    if t.get("now"):
+        t["now"]["pos"] = sw.get(t["now"]["pos"], t["now"]["pos"])
+    return t
+
+
+def live_answer(url: str) -> tuple[int, dict]:
+    """The stub's GET /live, /live/drill and /live/archive (board/live.js), at the step the test is on."""
+    u = urllib.parse.urlsplit(url)
+    path, q = u.path.removeprefix("/__board"), dict(urllib.parse.parse_qsl(u.query))
+    steps = live_steps()
+    st = steps[max(0, min(LIVE["i"], len(steps) - 1))]
+    now = int(time.time() * 1000)
+    by = now - st["now"]
+    LIVE["asked"].append((time.time(), path, q.get("id", "")))
+    stale = (lambda d: {**d, "polled": now - 300_000}) if LIVE["stale"] else (lambda d: d)
+    if path == "/live":
+        drills = [stale(d) for d in live_shift(st["live"], by)["drills"]]
+        if LIVE["two"] and drills:
+            drills.append(live_two(drills[0]))
+        return 200, {**live_shift(st["live"], by), "drills": drills}
+    if path == "/live/drill":
+        did = q.get("id", "")
+        two = did.startswith("2025101601-")
+        d = st["drills"].get(did.replace("2025101601-", "2025101600-") if two else did)
+        if not d:
+            return 404, {"error": "no such drill"}
+        d = stale(live_shift(d, by))
+        return 200, {"now": now, "poll": 12, "stale": 180000, "drill": live_two(d) if two else d}
+    if path == "/live/archive":
+        last = steps[-1]["drills"].values()
+        return 200, {"now": now, "drills": [{"id": d["id"], "home": d["home"], "away": d["away"], "player": d["player"], "coach": None, "date": d["date"], "start": d["start"],
+                                             "n": len(d["snaps"]), "how": (d.get("end") or {}).get("how"), "score": (d.get("end") or {}).get("score")}
+                                            for d in sorted(last, key=lambda x: -x.get("closed", 0)) if d["status"] == "over"]}
+    return 404, {"error": "not found"}
+
+
 def page_route(base: str) -> re.Pattern:
     """The game's page itself (any #mode or ?query), for a route that rewrites it."""
     return re.compile("^" + re.escape(f"{base}/") + r"(?:index\.html)?(?:[?#].*)?$")
@@ -98,7 +169,10 @@ async def board_stub(route, path: str, comm: bool = False, headers: dict | None 
     live pages' board requests with it too (headers: its CORS, the stub being another host than the page's)."""
     body = json.loads(route.request.post_data or "{}") if route.request.method == "POST" else {}
     ok = lambda d: route.fulfill(status=200, content_type="application/json", body=json.dumps(d), headers=headers)
-    if path == "/restore":
+    if LIVE["on"] and (path == "/live" or path.startswith("/live/")):
+        code, d = live_answer(route.request.url)
+        await route.fulfill(status=code, content_type="application/json", body=json.dumps(d), headers=headers)
+    elif path == "/restore":
         await ok({"ok": True, "code": PRO_CODE})
     elif comm and path == "/auth":
         await ok({"google": False, "email": True})
@@ -137,11 +211,13 @@ def rewritten(r) -> dict:
     return {k: v for k, v in r.headers.items() if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")}
 
 
-async def pro_context(ctx, base: str, pro: bool = True, comm: bool = False) -> None:
+async def pro_context(ctx, base: str, pro: bool = True, comm: bool = False, live: bool = False) -> None:
     async def page_(route):
         r = await route.fetch()
-        # (the page's own board address, if it has one, goes: only the stub's is left)
-        body = re.sub(r'<meta name="(?:scn-at|board-api)"[^>]*>', '', await r.text()).replace("<head>", f'<head><meta name="pro" content="on"><meta name="board-api" content="{base}/__board">', 1)
+        # (the page's own board address, if it has one, goes: only the stub's is left; live: the page may ask it about
+        # live drills, as a build with --live does)
+        body = re.sub(r'<meta name="(?:scn-at|board-api)"[^>]*>', '', await r.text()).replace("<head>", f'<head><meta name="pro" content="on"><meta name="board-api" content="{base}/__board">'
+                                                                                              + ('<meta name="live" content="on">' if live else ""), 1)
         await route.fulfill(status=r.status, headers=rewritten(r), body=body)
 
     async def board(route):
@@ -1848,6 +1924,217 @@ async def survivor_best(browser, base: str, seed: int = 3) -> list[str]:
     return out
 
 
+# where a drill is in the recorded game: the first step it is open with n snaps in, the step it is over
+def live_step(drill: str, n: int | None = None, over: bool = False) -> int:
+    for i, st in enumerate(live_steps()):
+        d = st["drills"].get(drill)
+        if d and (d["status"] == "over" if over else d["status"] == "open" and (n is None or len(d["snaps"]) == n)):
+            return i
+    raise RuntimeError(f"the replay has no step with {drill} {'over' if over else f'open, {n} snaps in'}")
+
+
+# (the screen's words as written, not as the styles set them in capitals)
+LIVE_SEEN = """() => { const q = (s) => document.querySelector(s), dk = q('#dock');
+  return { cmp: !!q('#dock .livecmp'), wait: !!q('#dock .livewait'), keys: !!q('#dock .keys.fam .key'), end: !!q('#done:not([hidden]) .big-pct, #done:not([hidden]) .lead'),
+    text: dk ? dk.textContent : '', done: q('#done') && !q('#done').hidden ? q('#done').innerText.toLowerCase() : '', bar: (q('#bar') || {}).innerText || '',
+    state: Object.fromEntries(Object.keys(localStorage).filter((k) => k.startsWith('tmd:v3:live:')).map((k) => [k, JSON.parse(localStorage.getItem(k))])) }; }"""
+
+
+async def live_wait(page, what: str, secs: float = 45) -> dict:
+    """Until the live screen shows `what` (cmp, wait, keys, end); the screen then."""
+    t0 = time.time()
+    while time.time() - t0 < secs:
+        got = await page.evaluate(LIVE_SEEN)
+        if got[what]:
+            got["secs"] = time.time() - t0
+            return got
+        await page.wait_for_timeout(250)
+    raise TimeoutError(f"the live screen never showed {what}: {(await page.evaluate(LIVE_SEEN))['text'][:300]!r}")
+
+
+async def live_call(page, fam: int = 0) -> None:
+    """A call on the live screen, with the normal keys: a family (0 Run, 2 RPO), then its first play."""
+    await page.locator("#dock .keys.fam .key").nth(fam).click()
+    await page.locator("#dock .plays .prow .sides .key").first.click()
+
+
+async def live_drill(browser, base: str, shots: str = "") -> list[str]:
+    """Live Drills (game.js #live, behind <meta name="live">), on the stub board serving the recorded game as the real
+    watcher made it (live_answer): the banner on Home while a drill is open; the live screen on the real situation, with
+    the real lineups; a call, the wait for the real play, the real play (the next poll) beside yours, both graded; a
+    reload keeping the drill where it was; the drive to its end (a holding flag, the touchdown), the end card, the share
+    text and picture; joining a drive mid-way (Pittsburgh's timeouts, a kneel), a second game open at once, the feed gone
+    quiet (never shown as live); a finished drill replayed (Pro); nothing open. shots: 390x844 screenshots."""
+    out: list[str] = []
+    errs: list[str] = []
+    td, fg = "2025101600-4108", "2025101600-4239"           # Pittsburgh's touchdown drive, Cincinnati's field goal drive
+    LIVE.update(on=True, i=live_step(td, 0), two=False, stale=False, asked=[])
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True, accept_downloads=True)
+    await pro_context(ctx, base, pro=False, live=True)
+    await ctx.add_init_script("try { localStorage.setItem('tmd:v3:seen', 'true'); } catch (e) {}")
+    page = await ctx.new_page()
+    page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+    page.on("console", lambda m: m.type == "error" and "ERR_" not in m.text and errs.append(f"console error: {m.text[:300]}"))
+    timing: dict = {}
+    try:
+        # Home: the banner, the drill open in it
+        await page.goto(f"{base}/{PAGE}#home")
+        await page.wait_for_selector("#liveBar:not([hidden])", timeout=30000)
+        bar = await page.evaluate("() => ({ text: document.getElementById('liveBar').textContent, href: document.getElementById('liveBar').getAttribute('href') })")
+        if not ("Pittsburgh at Cincinnati" in bar["text"] and "2:46 left" in bar["text"] and "Call it" in bar["text"]) or bar["href"] != f"#live-{td}":
+            out.append(f"the banner: {bar!r}")
+        if shots:
+            await page.wait_for_timeout(1200)          # (the field's players fade in)
+            await page.screenshot(path=f"{shots}/live-banner.png")
+        # the live screen: the real situation, the normal call keys
+        async with page.expect_event("load"):
+            await page.locator("#liveBar").click()
+        got = await live_wait(page, "keys")
+        if not all(x in got["bar"] for x in ("24", "30", "2:46")):
+            out.append(f"the scoreboard is not the real one: {got['bar']!r}")
+        lineup = await page.evaluate("() => [...document.querySelectorAll('#field g.dot.me')].map((g) => g.getAttribute('aria-label') || '').filter((x) => /Quarterback/.test(x))")
+        if not lineup:
+            out.append("no quarterback of the real lineup on the field")
+        # a call, then the wait for the real play
+        await live_call(page, 0)
+        got = await live_wait(page, "wait")
+        if "Your call is in" not in got["text"] or "real play" not in got["text"]:
+            out.append(f"the wait: {got['text'][:200]!r}")
+        st = got["state"].get(f"tmd:v3:live:{td}") or {}
+        if not (st.get("calls") or {}).get("0"):
+            out.append(f"the call was not kept: {st!r}"[:300])
+        if shots:
+            await page.wait_for_timeout(1200)          # (the field's players fade in)
+            await page.screenshot(path=f"{shots}/live-waiting.png")
+        # the real play comes in: the page has it at its next poll (every 12 s), both calls graded side by side
+        LIVE["i"] = live_step(td, 1)
+        t0 = time.time()
+        got = await live_wait(page, "cmp", 60)
+        timing["first"] = round(time.time() - t0, 1)
+        if not ("Deep shot, strong side" in got["text"] and "Incomplete" in got["text"] and "You" in got["text"] and ("better" in got["text"] or "Even" in got["text"])):
+            out.append(f"the two calls: {got['text'][:400]!r}")
+        if BAD_TEXT.search(got["text"]):
+            out.append(f"broken text on the result: {got['text'][:300]!r}")
+        if shots:
+            await page.wait_for_timeout(1200)          # (the field's players fade in)
+            await page.screenshot(path=f"{shots}/live-result.png")
+        # a reload: the drill where it was (the same result, graded once)
+        res0 = ((got["state"].get(f"tmd:v3:live:{td}") or {}).get("res") or {}).get("0")
+        await page.reload()
+        got = await live_wait(page, "cmp")
+        if ((got["state"].get(f"tmd:v3:live:{td}") or {}).get("res") or {}).get("0") != res0:
+            out.append("a reload graded the snap again")
+        # on: the holding flag (a call the feed names, its result wiped out), then the touchdown
+        await page.locator("#liveNext").click()
+        await live_wait(page, "keys")
+        await live_call(page, 2)
+        await live_wait(page, "wait")
+        LIVE["i"] = live_step(td, 2)
+        t0 = time.time()
+        got = await live_wait(page, "cmp", 60)
+        timing["second"] = round(time.time() - t0, 1)
+        if "Flag: offensive holding" not in got["text"]:
+            out.append(f"the flag: {got['text'][:300]!r}")
+        await page.locator("#liveNext").click()
+        await live_wait(page, "keys")
+        await live_call(page, 0)
+        await live_wait(page, "wait")
+        LIVE["i"] = live_step(td, over=True)
+        got = await live_wait(page, "cmp", 60)
+        if "Touchdown" not in got["text"]:
+            out.append(f"the touchdown: {got['text'][:300]!r}")
+        if (await page.locator("#liveNext").text_content()).strip() != "See how you did":
+            out.append("after the last snap the button is not the end card's")
+        await page.locator("#liveNext").click()
+        got = await live_wait(page, "end")
+        if not (re.search(r"\bof 3 snaps you called better than", got["done"]) and "two-minute drill · live" in got["done"]
+                and "call it live:" in got["done"] and "the real drive: touchdown" in got["done"] and "oct 16" in got["done"]):
+            out.append(f"the end card: {got['done'][:500]!r}")
+        if BAD_TEXT.search(got["done"]):
+            out.append("broken text on the end card")
+        if shots:
+            await page.wait_for_timeout(1200)          # (the field's players fade in)
+            await page.screenshot(path=f"{shots}/live-end.png")
+            await page.screenshot(path=f"{shots}/live-end-full.png", full_page=True)
+        async with page.expect_download(timeout=20000) as dl:
+            await page.locator("#done button", has_text="Share as a picture").click()
+        if not (await dl.value).suggested_filename.endswith(".png"):
+            out.append("the share picture is not a png")
+        polls = [t for t, p, i in LIVE["asked"] if p == "/live/drill" and i == td]
+        gaps = [b - a for a, b in zip(polls, polls[1:]) if b - a > 5]
+        if gaps and max(gaps) > 16:
+            out.append(f"the page asked for its drill {max(gaps):.0f} s apart (every 12 s wanted)")
+        # joining Cincinnati's drive mid-way: from where it is now (Pittsburgh's timeout taken, first and goal coming)
+        LIVE["i"] = live_step(fg, 4)
+        LIVE["two"] = True
+        async with page.expect_event("load"):
+            await page.goto(f"{base}/{PAGE}#live")
+        got = await live_wait(page, "keys")
+        if "1:39" not in got["bar"]:
+            out.append(f"joined mid-drive, not where it is now: {got['bar']!r}")
+        await live_call(page, 0)
+        got = await live_wait(page, "wait")
+        if "Also live: Buffalo at Kansas City" not in got["text"]:
+            out.append(f"the second game open is not offered: {got['text'][:300]!r}")
+        LIVE["i"] = live_step(fg, 5)
+        got = await live_wait(page, "cmp", 60)
+        if "Kneel" not in got["text"]:
+            out.append(f"the real kneel: {got['text'][:300]!r}")
+        if "Before the snap: Timeout, Pittsburgh" not in got["text"]:
+            out.append(f"Pittsburgh's timeout before the snap: {got['text'][:300]!r}")
+        # the feed gone quiet: never shown as live, waiting on the next play; the banner gone too
+        LIVE["stale"] = True
+        await page.locator("#liveNext").click()
+        got = await live_wait(page, "wait", 30)
+        if "the live feed has sent nothing" not in got["text"]:
+            out.append(f"a stale drill shown as live: {got['text'][:300]!r}")
+        if shots:
+            await page.wait_for_timeout(1200)          # (the field's players fade in)
+            await page.screenshot(path=f"{shots}/live-stale.png")
+        await page.goto(f"{base}/{PAGE}#home")
+        await page.wait_for_timeout(2500)
+        if await page.locator("#liveBar:not([hidden])").count():
+            out.append("the banner shows a stale drill")
+        LIVE.update(stale=False, two=False)
+        # nothing open: what live drills are and the drills played (Pro replays them)
+        LIVE["i"] = 0
+        async with page.expect_event("load"):
+            await page.goto(f"{base}/{PAGE}#live")
+        await page.wait_for_selector("#arch .livest", timeout=30000)
+        await page.wait_for_selector("#arch .days a.live", timeout=15000)
+        idle = await page.evaluate("() => document.getElementById('arch').textContent")
+        if "No game is in a two-minute spot right now" not in idle or not re.search("Drills played|Last night’s drills", idle):
+            out.append(f"nothing open: {idle[:300]!r}")
+    except Exception as e:
+        out.append(f"live: {e}")
+    finally:
+        await ctx.close()
+    # a finished drill, replayed with Pro: each real call shown as soon as yours is in
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    await pro_context(ctx, base, pro=True, live=True)
+    await ctx.add_init_script("try { localStorage.setItem('tmd:v3:seen', 'true'); } catch (e) {}")
+    page = await ctx.new_page()
+    page.on("pageerror", lambda e: errs.append(f"script error (replay): {e}"))
+    try:
+        LIVE["i"] = len(live_steps()) - 1
+        await page.goto(f"{base}/{PAGE}#live-{fg}")
+        got = await live_wait(page, "keys")
+        if "2:15" not in got["bar"]:
+            out.append(f"the replay does not start at the drive's first snap: {got['bar']!r}")
+        await live_call(page, 0)
+        got = await live_wait(page, "cmp", 40)
+        if "Quick pass, strong side" not in got["text"]:
+            out.append(f"the replay's first real call: {got['text'][:300]!r}")
+    except Exception as e:
+        out.append(f"live replay: {e}")
+    finally:
+        out.extend(errs)
+        await ctx.close()
+        LIVE.update(on=False, i=0)
+    print(f"live drill: the real play on the page {timing.get('first', '?')} s and {timing.get('second', '?')} s after the stub had it (a 12 s poll, then both calls graded)", flush=True)
+    return out
+
+
 async def main(a) -> int:
     srv, port = serve(Path(a.site).resolve())
     stamped = stamps_of(Path(a.site))
@@ -1873,6 +2160,11 @@ async def main(a) -> int:
         print("survivor's best run follows the account (another phone's best on a phone with nothing saved, a run played here kept on the account, a fresh phone signed in): "
               + ("ok" if not sb else "FAIL") + "".join(f"\n      {x}" for x in sb), flush=True)
         reach += sb
+        if a.live:
+            lv = await live_drill(browser, base, a.shots)
+            print("live drills (the banner, a call, the real play beside it, a reload, the end card and share, joining mid-drive, two games, a quiet feed, a replay): "
+                  + ("ok" if not lv else "FAIL") + "".join(f"\n      {x}" for x in lv), flush=True)
+            reach += lv
         if a.scenario:
             pitch = await scenario_pitch(browser, base)
             print("a scenario's link without Pro (the pitch, the scenario's summary), a bad link: " + ("ok" if not pitch else "FAIL")
@@ -1933,6 +2225,7 @@ if __name__ == "__main__":
     ap.add_argument("--daily", type=int, default=6, help="daily episodes (each a different day)")
     ap.add_argument("--survivor", type=int, default=4, help="survivor episodes")
     ap.add_argument("--games", type=int, default=3, help="games per survivor episode")
+    ap.add_argument("--live", type=int, default=1, help="the live drill episode (game.js #live, the meta put on the page, the stub serving a recorded game's drills); 0: none")
     ap.add_argument("--scenario", type=int, default=0, help="Pro scenario episodes (game.js #custom: the builder, then a random scenario played out)")
     ap.add_argument("--shots", default="", help="a folder for the community test's 390x844 screenshots")
     ap.add_argument("--seed", type=int, default=1)
