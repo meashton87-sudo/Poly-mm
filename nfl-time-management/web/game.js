@@ -82,6 +82,8 @@
   // on claude.ai, where the page has no build stamp, the site's name)
   const HOME = (document.querySelector('meta[name="home"]') || {}).content || 'nfl2mindrill.com';      // (site.py --domain)
   const SITE = BUILD && location.host ? location.host.replace(/^www\./, '') : HOME;
+  // while the site moves (site.py --old-domain): the old address, whose /move hands a player's progress over (web/move.js)
+  const OLD_HOME = ((document.querySelector('meta[name="old-home"]') || {}).content || '').trim();
   // Share: the phone's share sheet where there is one (a group chat in a tap), else the clipboard, else select it
   async function shareText(text, pre, what) {
     if (navigator.share && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
@@ -9834,6 +9836,15 @@
     links.setAttribute('aria-label', 'About the game');
     [['about', 'About'], ['how-it-works', 'How it works'], ['privacy', 'Privacy']].forEach(([href, t]) => { const a = el('a', '', t); a.href = href; links.append(a); });
     box.append(links);
+    // the site moved: a browser with nothing saved here (no day played, never handed over) can still bring its progress
+    // from the old address, whose /move page hands it over as every old page does (its redirect rule leaves /move alone)
+    if (OLD_HOME && BUILD && !Object.keys(st.days || {}).length && !load(`${STORE}:movedin`, null)) {
+      const p = el('p', 'note hmove'), a = el('a', '', 'Bring your streak and stats over');
+      a.href = `${location.protocol}//${OLD_HOME}/move#back=${encodeURIComponent('/')}`;
+      a.addEventListener('click', () => track('home_tap', { to: 'move' }));
+      p.append(`Played on ${OLD_HOME} before? `, a);
+      box.append(p);
+    }
     // where each tap goes, for the analytics (one event a tap; the next page's own events follow)
     box.querySelectorAll('a[data-to]').forEach((a) => a.addEventListener('click', () => { track('home_tap', { to: a.dataset.to }); scrollTo(0, 0); }));
     if (!redraw) track('home_open', { daily: day.status, auto: !!auto, pro: isPro(), streak: sk.n });

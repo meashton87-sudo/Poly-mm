@@ -201,7 +201,9 @@ the worker's SITE, ALLOWED_ORIGINS and OLD_SITES (board/site_vars.mjs, run befor
   of its own: /restore counts devices by that key (3 a code). It leaves `tmd:v3:movedin`; game.js movedNote says once
   that the game moved, and from an old home-screen icon (navigator.standalone / display-mode on the old page) how to add
   the new one. /move on the old address (move.html) is the same handover back to `#back=<path>`: a redirect rule
-  leaves /move alone so a player can still bring their progress after the old address 301s.
+  leaves /move alone so a player can still bring their progress after the old address 301s (the home page's link,
+  game.js renderHome, for a browser with nothing saved: `<meta name="old-home">`). The link preview card for an
+  address is web/og.<address>.png when there is one (og_card.html drawn with that address), else og.png.
 - Tests: scripts/move_test.py (Chromium, both real host names mapped to one local server: everything carried, Pro
   checked with the old key, nothing overwritten, a forged link refused, /move, a large record, the home-screen note),
   tests/test_site_move.py, worker_test.mjs (site_vars, the old origin still the site's own). Change move.js and

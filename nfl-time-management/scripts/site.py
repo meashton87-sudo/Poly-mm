@@ -513,6 +513,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
             extra += f"<meta name=\"pro-at\" content=\"{html.escape(pro_at, quote=True)}\">"
         if pro and scn_at:                   # Build a scenario (#custom) stays hidden until this time (ISO, UTC)
             extra += f"<meta name=\"scn-at\" content=\"{html.escape(scn_at, quote=True)}\">"
+    if handover:                             # the old address, for the home page's way to bring progress over (/move)
+        extra += f"<meta name=\"old-home\" content=\"{html.escape(next(o for o in map(bare_host, olds) if o != bare_host(domain)), quote=True)}\">"
     if google_client_id:                     # Sign in with Google on the Pro tab (the board checks the same client id)
         extra += f"<meta name=\"google-client-id\" content=\"{html.escape(google_client_id, quote=True)}\">"
     if fulldef:                              # the full defensive call in the daily and survivor: off until it is approved
@@ -525,6 +527,9 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         commit = ""
     for f in FILES:
         shutil.copy2(WEB / f, out / f)
+    card = WEB / f"og.{bare_host(home)}.png"      # the link preview card drawn for this address (og_card.html), if there is one
+    if card.exists():
+        shutil.copy2(card, out / "og.png")
     # game.json without the time it was built (version.json keeps it): the data is rebuilt on every deploy, and that
     # alone would give the file a new stamp each time
     game = json.loads((WEB / "game.json").read_text())

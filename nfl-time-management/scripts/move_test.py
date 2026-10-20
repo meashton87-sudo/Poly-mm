@@ -11,7 +11,7 @@ and #hash on the new address; every key carried; the #fragment gone from the add
 handover; the game on the new address with the streak and Pro (the old device key: the same device to the board, not a
 new one of its three); what is already on the new address never overwritten (the record merged); Pro's key kept with
 Pro; a made-up link (no old address behind it) imports nothing; /move#back=; a large record; the note from a home-screen
-icon; an old address with nothing saved.
+icon; the home page's link through /move; an old address with nothing saved.
 """
 from __future__ import annotations
 
@@ -286,7 +286,22 @@ def main() -> int:
         check("add to home screen" in pg.inner_text("#mBody").lower(), "opened from the old home-screen icon: how to add the new one")
         ctx.close()
 
-        # 9. nothing saved on the old address: the same page on the new one all the same
+        # 9. after the old address 301s (its rule leaves /move alone): a player who never came back through it brings
+        # their progress from the new home page's link
+        ctx, pg, errs = fresh()
+        seed(pg, OLD, OLD_DATA)
+        pg.goto(f"http://{NEW}/")
+        link = pg.get_by_text("Bring your streak and stats over")
+        link.wait_for(timeout=30000)
+        check(f"Played on {OLD} before?" in pg.inner_text(".hmove"), "nothing saved on the new address: the home page offers to bring it over")
+        link.click()
+        pg.wait_for_url(f"http://{NEW}/", timeout=15000)
+        pg.wait_for_function("() => /🔥5/.test(document.getElementById('dayLabel').textContent)", timeout=30000)
+        check(pg.locator(".hmove").count() == 0, "brought over through /move: the streak is here, the link gone")
+        check(not errs, f"no script errors ({errs[:3]})")
+        ctx.close()
+
+        # 10. nothing saved on the old address: the same page on the new one all the same
         ctx, pg, errs = fresh()
         url = land(pg, f"http://www.{OLD}/how-it-works?x=1#calls", f"http://{NEW}/how-it-works?x=1#calls")
         check(url == f"http://{NEW}/how-it-works?x=1#calls", f"nothing saved: the same page on the new address ({url})")
