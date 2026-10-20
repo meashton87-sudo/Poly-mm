@@ -399,7 +399,7 @@
         this.punt.how[i] = land ? (fl[j] >> 3) & 7 : PUNT_RETURNED;
         this.punt.ret[i] = land && this.punt.how[i] === PUNT_RETURNED ? Math.max(0, yl[j] - net[j] - land[j]) : 0;
       });
-      // the real returns of punts fielded at the 5 or deeper (173 in 2020-25, ending at the 15 on average, one a
+      // the real returns of punts fielded at the 5 or deeper (210 in 2020-25, ending at the 15 on average, four of them a
       // touchdown): a returner who runs one out of the end zone (_punt 'ezret')
       this.puntDeep = Int32Array.from(land ? [...Array(n).keys()].filter((i) => !this.punt.blocked[i] && !this.punt.touchback[i]
         && this.punt.how[i] === PUNT_RETURNED && this.punt.yl[i] - this.punt.net[i] - this.punt.ret[i] <= PUNT_DEEP) : []);
