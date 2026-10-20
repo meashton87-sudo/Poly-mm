@@ -1655,7 +1655,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
     throw new Error(`no network in the test: ${u}`);
   };
   const run = await R.replay(R.FIXTURE, { lag: 30e3 });
-  const drills = run.steps[run.steps.length - 1].drills, byPlay = (pid) => Object.values(drills).find((d) => d.id.endsWith(`-${pid}`));
+  const drills = run.steps[run.steps.length - 1].drills, byPlay = (pid) => Object.values(drills).find((d) => d.snaps[0].id === pid);   // (by its first snap)
   assert.deepStrictEqual(Object.values(drills).map((d) => [d.player, d.snaps.length, d.end.how]).sort(),
     [['CIN', 10, 'field goal'], ['CIN', 4, 'punt'], ['PIT', 2, 'end of game'], ['PIT', 3, 'touchdown']].sort(), 'the four two-minute drives of the last 4:26');
   // Pittsburgh's touchdown: the incompletion, the holding flag on a quick pass, the 68-yard touchdown
@@ -1686,11 +1686,19 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual(perMin(/scoreboard/), 1); assert.strictEqual(perMin(/summary/), 1);
   assert.ok(run.asked.filter((x) => /summary/.test(x.url)).length <= 30, 'the game only while it is near a two-minute spot');
   // what a page reads mid-drive: the drill open, where the ball is now, its timeouts, never a stale spot
-  const mid = run.steps.find((x) => x.live.drills.some((d) => d.id.endsWith('-4262') && d.n === 3));
+  const mid = run.steps.find((x) => x.live.drills.some((d) => d.id === fg.id && d.n === 3));
   assert.ok(mid && mid.live.on && mid.live.poll === 12, 'open, asked every 12 s');
   assert.deepStrictEqual(mid.live.drills[0].now, { qtr: 4, clock: 107, score: [31, 30], pos: 'CIN', down: 2, ytg: 8, yl: 35, to: [2, 2], running: false }, 'after Pittsburgh\'s timeout');
   assert.strictEqual(mid.live.drills[0].polled, mid.now, 'read this minute');
   assert.ok(run.steps.every((x) => x.live.drills.length <= 1), 'one drill at a time in one game');
+  // each drill opens before its first snap, as soon as the scoreboard has the ball in a two-minute spot (its id: the
+  // play that gave the offense the ball), so every call of the drive can be made before the real one
+  for (const d of Object.values(drills)) {
+    const first = run.steps.find((x) => x.live.drills.some((y) => y.id === d.id)), at = first.live.drills.find((y) => y.id === d.id);
+    assert.strictEqual(at.n, 0, `${d.id} opened before its first snap`);
+    assert.deepStrictEqual(at.now, d.snaps[0].before, `${d.id}: where the first snap was run from`);
+  }
+  assert.deepStrictEqual(Object.keys(drills).sort(), ['2025101600-3971', '2025101600-4108', '2025101600-4239', '2025101600-4492'], 'after the punt, the punt, the kickoff, the kickoff');
   assert.deepStrictEqual(run.storage.store.get('arch').map((x) => x.player), ['PIT', 'CIN', 'PIT', 'CIN'], 'the archive, newest first');
   assert.ok(!run.storage.store.get('rej'), 'nothing rejected from a good feed');
   assert.strictEqual(xs.length, 0, 'no post to X without its secrets');
@@ -1734,7 +1742,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.deepStrictEqual(ticked, { now: 1760670000000 });
 
   // the post to X when a drill opens: only with all four secrets, signed (OAuth 1.0a, X's own worked example), once a
-  // drill, never for one first seen already over (Pittsburgh's last 7 seconds came and went inside a minute)
+  // drill, never for one first seen already over
   assert.strictEqual(await L.oauthSign('POST', 'https://api.twitter.com/1.1/statuses/update.json', { status: 'Hello Ladies + Gentlemen, a signed OAuth request!', include_entities: 'true',
     oauth_consumer_key: 'xvz1evFS4wEEPTGEFPHBog', oauth_nonce: 'kYjzVBB8Y0ZFabxSWbWovY3uYSQ2pTgmZeNu2VS4cg', oauth_signature_method: 'HMAC-SHA1', oauth_timestamp: '1318622958',
     oauth_token: '370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb', oauth_version: '1.0' }, 'kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw', 'LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE'), 'hCtSmYh+iHYCEqBWrE7C7hYmtUk=');
@@ -1743,9 +1751,10 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual(xs.length, 0, 'three secrets of four: nothing');
   await R.replay(R.FIXTURE, { env: xenv });
   assert.deepStrictEqual(xs.map((x) => x.body.text), [
-    'Live now: Cincinnati ball at its own 22, up 6, 4:21 left. Call it before the coach does → https://2mindrills.com/#live',
-    'Live now: Pittsburgh ball at its own 42, down 6, 2:39 left. Call it before the coach does → https://2mindrills.com/#live',
-    'Live now: Cincinnati ball at its own 45, down 1, 2:00 left. Call it before the coach does → https://2mindrills.com/#live']);
+    'Live now: Cincinnati ball at its own 22, up 6, 4:26 left. Call it before the coach does → https://2mindrills.com/#live',
+    'Live now: Pittsburgh ball at its own 42, down 6, 2:46 left. Call it before the coach does → https://2mindrills.com/#live',
+    'Live now: Cincinnati ball at its own 30, down 1, 2:15 left. Call it before the coach does → https://2mindrills.com/#live',
+    'Live now: Pittsburgh ball at its own 35, down 2, 0:07 left. Call it before the coach does → https://2mindrills.com/#live']);
   assert.ok(xs.every((x) => /^OAuth oauth_consumer_key="ck", oauth_nonce="[0-9a-f]{32}", oauth_signature="[^"]+", oauth_signature_method="HMAC-SHA1", oauth_timestamp="\d+", oauth_token="at", oauth_version="1.0"$/.test(x.auth)));
   assert.strictEqual(L.xText(xenv, { ...fg, coach: 'Zac Taylor', now: fg.snaps[3].before }), 'Live now: Cincinnati ball at the Pittsburgh 35, down 1, 1:47 left. Call it before Taylor does → https://2mindrills.com/#live');
 
@@ -1757,7 +1766,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
     const get = async (url) => { n++; if (down) throw new Error('503'); const f = R.feedAt(fx, L.LIVE_CLOCK.now, 30e3); return url === FEED.BOARD ? f.board : f.summary; };
     for (let T = t0 - 60 * 60e3; T <= t0; T += 60e3) { L.LIVE_CLOCK.now = T; await L.tick(e2, st, T, get); }
     const id = (await st.get('open'))[0], polled = (await st.get(`d:${id}`)).polled;
-    assert.ok(id.endsWith('-4262') && polled === t0, 'Cincinnati\'s drive open, read just now');
+    assert.ok(id === '2025101600-4239' && polled === t0, 'Cincinnati\'s drive open, read just now');
     down = true; n = 0;
     for (let T = t0 + 60e3; T <= t0 + 15 * 60e3; T += 60e3) { L.LIVE_CLOCK.now = T; await L.tick(e2, st, T, get); }
     assert.ok(n <= 10, `backing off: ${n} requests in 15 minutes`);
@@ -1775,7 +1784,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
     const bad = await R.replay(broken, { lag: 30e3 });
     const rej = bad.storage.store.get('rej'), fin = bad.steps[bad.steps.length - 1].drills;
     assert.ok(rej && rej.n > 0 && /play 4346: pass: no down, distance or spot/.test(rej.last[0].why), 'counted, with its reason');
-    const cin = Object.values(fin).find((d) => d.id.endsWith('-4262'));
+    const cin = fin['2025101600-4239'];
     assert.ok(cin && cin.snaps.length === 3 && cin.status === 'open', 'the drill stopped where the feed went wrong, never past it');
     assert.ok(logs.some((x) => /live feed: rejected/.test(x)));
     // the scoreboard's shape changed: nothing read, counted

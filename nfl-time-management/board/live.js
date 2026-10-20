@@ -143,14 +143,22 @@ export function drillsOf(g, plays, anchor) {
   // the passers of each team (a rushing passer is a quarterback run)
   const qbs = {};
   plays.forEach((p) => { if ((p.kind === 'pass' || p.kind === 'sack') && p.by && p.team) (qbs[p.team] = qbs[p.team] || new Set()).add(p.by); });
-  // the possessions: [{ team, items: [play index], end: index of the play that ended it, how }]
+  // the possessions: [{ team, items: [play index], end: index of the play that ended it, how, anchor }]. A possession's
+  // anchor is the play that gave its team the ball (a kickoff, a punt, a turnover, a score, the half's end): known before
+  // its first snap, so its drill can open (and keep its id) before the first play is run
   const poss = [];
-  let cur = null;
-  const close = (how, end) => { if (cur) { cur.how = how; cur.end = end; poss.push(cur); cur = null; } };
+  let cur = null, lastChange = null, gaveBy = null, handed = false;
+  // (handed: the ball changed hands at a spot, the next team's ball now: after a kickoff, a punt, a turnover, a missed
+  // kick or on downs; after a score or a half's end a kickoff comes first)
+  const close = (how, end) => {
+    if (cur) { cur.how = how; cur.end = end; gaveBy = cur.team; poss.push(cur); cur = null; }
+    if (plays[end]) lastChange = plays[end].id;
+    handed = ['punt', 'turnover', 'downs', 'missed field goal'].includes(how);
+  };
   plays.forEach((p, i) => {
     if (FEED.isSnap(p.kind)) {
       if (cur && cur.team !== p.team) { const lp = plays[cur.lastSnap]; close(lp && lp.down === 4 && !lp.turnover ? 'downs' : 'turnover', cur.lastSnap); }
-      if (!cur) cur = { team: p.team, items: [], lastSnap: -1 };
+      if (!cur) cur = { team: p.team, items: [], lastSnap: -1, anchor: lastChange || p.id };
       cur.items.push(i);
       cur.lastSnap = i;
       if (!p.nullified && (p.td || p.turnover || p.kind === 'fg' || p.kind === 'punt' || /\bsafety\b/i.test(p.text))) close(endOf(p), i);
@@ -159,11 +167,16 @@ export function drillsOf(g, plays, anchor) {
       // the end of the first or third quarter: the drive goes on; of a half, regulation or overtime: it ends
       if ([1, 3].includes(p.period)) { if (cur) cur.items.push(i); }
       else close(p.period === 2 ? 'end of half' : p.period === 4 && p.score[0] === p.score[1] ? 'end of regulation' : 'end of game', i);
-    } else if (p.kind === 'kickoff' || p.kind === 'pat') close('turnover', i);       // (a possession already ended: nothing to close)
+    } else if (p.kind === 'kickoff' || p.kind === 'pat') {      // (a possession already ended: nothing to close)
+      close(p.kind === 'kickoff' ? 'turnover' : 'touchdown', i);
+      handed = p.kind === 'kickoff';
+      if (p.kind === 'kickoff' && p.team) gaveBy = p.team;
+    }
   });
   if (cur && g.state === 'post') close('end of game', plays.length - 1);
-  const open = cur;
-  if (open) { open.how = null; open.end = null; poss.push(open); }
+  if (cur) { cur.how = null; cur.end = null; poss.push(cur); }
+  // the ball changed hands and the next snap is not in yet: the scoreboard says who has it and where
+  else if (g.state === 'in' && g.sit && lastChange && handed && g.sit.pos !== gaveBy) poss.push({ team: g.sit.pos, items: [], lastSnap: -1, anchor: lastChange, how: null, end: null });
   // overtime: who has had the ball before each possession of it ([home, away], game.js otOf start.otc)
   const otHad = {}, otcOf = new Map();
   poss.forEach((q) => {
@@ -196,35 +209,40 @@ export function drillsOf(g, plays, anchor) {
       } else pre.push(p.kind === 'timeout' ? (p.toBy ? `Timeout, ${cityOf(p.toBy)}` : 'Timeout') : p.kind === 'warning' ? 'Two-minute warning'
         : p.kind === 'end' ? `End of the ${['first', 'second', 'third', 'fourth'][p.period - 1] || ''} quarter` : clean(p.text));
     });
-    // the drill: from the first call in a two-minute spot of a one-score game (not a kneel-out) to the end of the possession
-    const k0 = decisions.findIndex((d) => d.before && twoMin(d.before) && Math.abs(d.before.score[0] - d.before.score[1]) <= ONE_SCORE && !kneelsOut(g, d.before));
-    if (k0 < 0) continue;
-    const ds = decisions.slice(k0);
+    // the drill: from the first call in a two-minute spot of a one-score game (not a kneel-out) to the end of the
+    // possession; an open possession whose next call is one (where the ball is now) opens before that snap
+    const spot = (x) => !!x && twoMin(x) && Math.abs(x.score[0] - x.score[1]) <= ONE_SCORE && !kneelsOut(g, x);
+    const k0 = decisions.findIndex((d) => spot(d.before));
+    const lastDec = decisions.length ? decisions[decisions.length - 1].p : null;
+    const now = q.how ? null : nowOf(g, plays, q, lastDec, toBefore, otcOf.get(q));
+    if (k0 < 0 && !spot(now)) continue;
+    const ds = k0 < 0 ? [] : decisions.slice(k0);
     if (ds.some((d) => !d.before)) continue;             // (anything unknown inside it: no drill rather than a wrong one)
     const snaps = ds.map((d, n) => ({ n, id: d.p.id, before: d.before, what: d.p.kind, call: d.p.kind === 'timeout' ? 'timeout' : callOf(d.p, qbs[q.team] || new Set()),
       side: d.p.pass ? `${d.p.pass.deep ? 'deep' : 'short'} ${d.p.pass.side}` : d.p.run ? (d.p.run.gap === 'middle' ? 'up the middle' : `${d.p.run.side} ${d.p.run.gap}`) : null,
       who: d.p.by, raw: clean(d.p.text), yards: Math.round(d.p.yards || 0), res: resultOf(d.p), pre: d.pre, wall: d.p.wall }));
     snaps.forEach((s, n) => { s.after = n + 1 < snaps.length ? snaps[n + 1].before : null; });
     const opp = q.team === g.home ? g.away : g.home;
-    const d = { id: `${g.id}-${snaps[0].id}`, game: g.id, season: g.season, week: g.week, type: g.type, date: g.at ? new Date(g.at).toISOString() : null,
-      home: g.home, away: g.away, player: q.team, opp, indoor: !!g.indoor, spread: g.spread || 0, r2h, start: snaps[0].before, snaps, status: q.how ? 'over' : 'open',
-      now: null, end: null };
+    const d = { id: `${g.id}-${q.anchor}`, game: g.id, season: g.season, week: g.week, type: g.type, date: g.at ? new Date(g.at).toISOString() : null,
+      home: g.home, away: g.away, player: q.team, opp, indoor: !!g.indoor, spread: g.spread || 0, r2h, start: snaps.length ? snaps[0].before : now, snaps,
+      status: q.how ? 'over' : 'open', now: null, end: null };
     if (q.how) {
       const e = plays[q.end];
       const said = { 'end of half': 'The end of the half', 'end of game': 'The final gun', 'end of regulation': 'The end of regulation: overtime' }[q.how];
       d.end = { how: q.how, text: e && FEED.isSnap(e.kind) ? resultOf(e) : said || (e ? clean(e.text) : ''), score: (e ? e.score : last.score).slice() };
-    } else d.now = nowOf(g, plays, q, snaps, toBefore);
+    } else d.now = now;
     out.push(d);
   }
   return out;
 }
-// the open drill's next call: the spot after its last play (the scoreboard's when the plays have none), the score and
-// timeouts now, the clock as the scoreboard has it when nothing has happened since (else the last play's)
-function nowOf(g, plays, q, snaps, toBefore) {
-  const last = plays[plays.length - 1], ls = snaps[snaps.length - 1], lp = plays.find((p) => p.id === ls.id);
+// an open possession's next call: the spot after its last play (the scoreboard's when the plays have none: a foul
+// before the snap, a new possession), the score and timeouts now, the clock as the scoreboard has it when nothing has
+// happened since (else the last play's). lp: the possession's last call's play, if any
+function nowOf(g, plays, q, lp, toBefore, otc) {
+  const last = plays[plays.length - 1];
   let spot = lp && lp.next && lp.next.team === q.team ? lp.next : null;
   const sb = g.sit && g.sit.pos === q.team ? g.sit : null;
-  if (last !== lp && last.kind === 'penalty' && sb) spot = sb;           // (a foul before the snap moved the ball: the scoreboard's)
+  if (last !== lp && (last.kind === 'penalty' || !lp) && sb) spot = sb;  // (a foul before the snap moved the ball, or no call yet: the scoreboard's)
   if (!spot && sb) spot = sb;
   const to = toAfter(g, plays, toBefore);
   if (!spot || !to || !g.score) return null;
@@ -232,7 +250,7 @@ function nowOf(g, plays, q, snaps, toBefore) {
   const clock = same && g.clock != null && g.clock <= last.clock ? g.clock : last.clock;
   const nx = { period: last.period, clock };
   return { qtr: last.period, clock, score: g.score.slice(), pos: q.team, down: spot.down, ytg: Math.min(spot.ytg, spot.yl), yl: spot.yl, to,
-    running: !stoppedAfter(last, nx) && !(lp && lp.next && lp.next.team !== q.team), ...(ls.before.otc ? { otc: ls.before.otc } : {}) };
+    running: !stoppedAfter(last, nx) && !(lp && lp.next && lp.next.team !== q.team), ...(otc ? { otc } : {}) };
 }
 // the timeouts left after the last play: the count before it, less its own
 function toAfter(g, plays, toBefore) {
@@ -310,7 +328,8 @@ export async function tick(env, s, now, get = getJson) {
     if (g.to && g.state === 'in') gs.anchor = { to: g.to.slice(), id: plays[plays.length - 1].id };
     await s.put(gk, gs);
     out.read.push(g.id);
-    for (const d of drillsOf(g, plays, gs.anchor)) {
+    const built = drillsOf(g, plays, gs.anchor), ids = new Set(built.map((d) => d.id)), team = new Set(built.filter((d) => d.status === 'open').map((d) => d.player));
+    for (const d of built) {
       const k = `d:${d.id}`, was = await s.get(k);
       if (was && was.status === 'over') continue;          // a finished drill stays as it was
       const atOf = new Map((was ? was.snaps : []).map((x) => [x.id, x.at]));
@@ -319,16 +338,24 @@ export async function tick(env, s, now, get = getJson) {
       d.opened = was ? was.opened : now;
       d.upd = !was || sig(was) !== sig(d) ? now : was.upd;
       d.polled = now;
+      d.miss = 0;
       if (d.status === 'over') d.closed = now;
       d.coach = (await coachOf(env, d.player)) || null;
       await s.put(k, d);
       if (!was && d.status === 'open') { open.push(d.id); out.opened.push(d.id); await xHook(env, s, d, now); }
       if (d.status === 'over') { if (open.includes(d.id)) out.closed.push(d.id); open = open.filter((x) => x !== d.id); await archive(s, d); }
     }
-    // this game's other open drills read now too (the feed reread): they are as fresh
-    for (const id of open.filter((x) => x.startsWith(`${g.id}-`))) {
+    // an open drill this read did not make (its spot moved out of two-minute range before its first snap, the feed
+    // changed its plays): after three reads in a row without it, one with no snap is taken back, any other closed
+    for (const id of open.filter((x) => x.startsWith(`${g.id}-`) && !ids.has(x))) {
       const d = await s.get(`d:${id}`);
-      if (d && d.polled !== now) { d.polled = now; await s.put(`d:${id}`, d); }
+      if (!d) { open = open.filter((x) => x !== id); continue; }
+      d.miss = (d.miss || 0) + 1;
+      if (d.miss < 3 && !(team.has(d.player) && !d.snaps.length)) { await s.put(`d:${id}`, d); continue; }      // (one with no snap that a newer one of its team replaced: at once)
+      open = open.filter((x) => x !== id);
+      if (!d.snaps.length) { await s.delete(`d:${id}`); continue; }
+      await closeLost(s, d, now);
+      out.closed.push(id);
     }
   }
   // an open drill the feed has lost (no good read of its game for IDLE_MS): closed, kept in the archive as far as it went
@@ -337,13 +364,19 @@ export async function tick(env, s, now, get = getJson) {
     if (d && d.status === 'open' && now - d.polled <= IDLE_MS) continue;
     open = open.filter((x) => x !== id);
     if (!d) continue;
-    Object.assign(d, { status: 'over', closed: now, now: null, end: { how: 'feed', text: 'The live feed stopped sending plays', score: d.snaps.length ? (d.snaps[d.snaps.length - 1].after || d.snaps[d.snaps.length - 1].before).score : d.start.score } });
-    await s.put(`d:${id}`, d);
-    await archive(s, d);
+    if (!d.snaps.length) { await s.delete(`d:${id}`); continue; }        // (never played: nothing to keep)
+    await closeLost(s, d, now);
     out.closed.push(id);
   }
   await s.put('open', open);
   return out;
+}
+// a drill the feed lost: closed as far as it went, on the archive's list
+async function closeLost(s, d, now) {
+  const ls = d.snaps[d.snaps.length - 1];
+  Object.assign(d, { status: 'over', closed: now, now: null, end: { how: 'feed', text: 'The live feed stopped sending plays', score: (ls.after || ls.before).score } });
+  await s.put(`d:${d.id}`, d);
+  await archive(s, d);
 }
 // a finished drill on the archive's list (the newest ARCH_KEEP; an older one's snaps go with it)
 async function archive(s, d) {
@@ -400,10 +433,11 @@ export async function xAuth(env, method, url, now, nonce = randHex(16)) {
 export const X_URL = 'https://api.x.com/2/tweets';
 async function xHook(env, s, d, now) {
   if (!xOn(env)) return;
-  const day = new Date(now).toISOString().slice(0, 10), x = (await s.get('x')) || { day, n: 0 };
+  const day = new Date(now).toISOString().slice(0, 10), x = (await s.get('x')) || { day, n: 0, ids: [] };
   if (x.day !== day) { x.day = day; x.n = 0; }
-  if (x.n >= X_DAY_MAX) return;
+  if (x.n >= X_DAY_MAX || (x.ids || []).includes(d.id)) return;        // (once a drill, ever: one taken back and opened again too)
   x.n += 1;
+  x.ids = [d.id, ...(x.ids || [])].slice(0, 50);
   await s.put('x', x);                       // (counted before it goes: a post that failed is not tried again)
   try {
     const r = await fetch(X_URL, { method: 'POST', body: JSON.stringify({ text: xText(env, d) }),
