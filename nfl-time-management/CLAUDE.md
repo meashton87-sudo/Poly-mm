@@ -33,6 +33,7 @@ node board/vs_pairs_test.mjs          # Versus: every one of the 992 matchups (3
 node board/vs_balance_test.mjs        # Versus: the defense's effects as the game plays them; every defensive option is the answer to something
 node web/defense_calibration.js       # the full defense against real NFL plays: pressure, sacks, time to throw, yards... by rush, coverage, box
 node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real engine, misbehaving phones; every match replayed and checked
+python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser chromium --minutes 5   # the daily bot check (daily-check.yml) on a build you serve; engine, report likewise
 ```
 
 ## Rules
@@ -65,6 +66,11 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   and (AFC), New York (NFC) and (AFC) for the shared markets (game.js teamShort "LA (NFC)" where room is tight), a moved
   franchise by its city of the time (web/scenario.js ERA = scenario.py ERA_NAME: St. Louis, San Diego, Oakland). A city
   takes a singular verb and no article ("Dallas has the ball", "Take over as Dallas"). tests/test_names.py checks.
+- The daily bot check (scripts/daily_check.py, .github/workflows/daily-check.yml) plays the live site: nothing it does may
+  reach an ad network, analytics or the real board (bot ad impressions would get the ad accounts banned). Its Guard cuts
+  off every request to another host than the site's own and hands the page a stub board in place of its
+  `<meta name="board-api">`, so the page's board address must keep coming only from that meta (its selftest fails on a
+  page that still names the real board). Findings go in its report; only the harness breaking turns the run red.
 - Versus (board/match.js): the room plays the football (web/vs_core.js holds the college-overtime rules, shared with the
   page); phones only send calls. Each snap's seed is drawn fresh by the room and never sent to a phone (a phone that
   knew it could see what a call does before making it). lazy_sim_test.mjs and vs_stress.mjs need board/assets/vs (the

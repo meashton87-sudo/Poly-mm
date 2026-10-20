@@ -403,6 +403,19 @@ key the page keeps; the board stores only its hash), so nobody else can post und
 not verified. Names are cleaned and capped at 24 characters, only the site's origin may call it, and with an
 `ADMIN_TOKEN` secret `DELETE /board?name=...` removes a row.
 
+**The daily bot check** (`.github/workflows/daily-check.yml`, every day at 10:00 UTC and on demand;
+`scripts/daily_check.py`). Bots play the live site with `scripts/browser_test.py`'s driver pointed at its real address,
+in Chromium as a desktop and an Android phone and in WebKit as an iPhone, about 40 minutes each: the day's drive, both
+sides of a two-sided day, the coming week's drives, survivor, practice, a Pro scenario, the Pro screen, the builder and
+the community list, reloads mid-drive, rapid taps, an older Safari and private browsing, timing the first paint and the
+first call and counting what got in the way. Every file the page names is fetched by its stamp and checked against it,
+and `web/game_smoke.js` and three `web/game_sweep.js` runs (new seeds each day) play thousands of whole drives on those
+very files. The report (`daily_check_report.json` and `.md`, with the failures' screenshots) is the run's summary and
+its `daily-check-report` artifact; what the bots find never turns the run red, only the check itself breaking does. The
+bots never reach anything real: every request off the site (ads, analytics, sign-in, Stripe) is cut off in the browser,
+the page is handed a stub board in place of its own and the real board's address is cut off and reported, and each
+browser proves all that on itself before it plays.
+
 **Everyone today** (the website's daily stats, `board/worker.js` `/daily`). When you finish the day's drive,
 your score and each spot's win chance post once (your first finish of the day counts; a replay changes nothing) and
 the summary shows how you compare with everyone who played that day: the share of players you beat, the day's
