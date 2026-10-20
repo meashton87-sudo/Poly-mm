@@ -49,7 +49,10 @@ def test_featured_sides(tmp_path):
         assert ft["id"] == ss[0]["id"] and ft["category"] == ss[0]["category"]
         assert all(s["category"] in G.CATEGORIES for s in ss)
         assert len({s["id"].split("#")[0] for s in ss}) == 1, "two sides of one game"
-        assert [i for i, _ in f["spots"] if i in {s["id"] for s in ss}] == [], "a side is not also an ordinary spot"
+        # a side may also be an ordinary spot (Dallas' last drive of Sep 27, 2026, on days 115 and 326): the build gives the
+        # featured day its own copy after every other spot, so no frozen index moves; the kind is the same in both
+        kinds = dict(map(tuple, f["spots"]))
+        assert all(kinds.get(s["id"], s["category"]) == s["category"] for s in ss), "a side's kind as an ordinary spot"
     game = {"launch": f["launch"], "schedule": [[0]],
             "spots": [{"id": "a", "category": "drill"}, {"id": "g#1", "category": "protect"}, {"id": "g#2", "category": "drill"}],
             "featured": {"8": {"spot": 1, "note": "n", "title": "T", "sides": [{"spot": 1, "summary": "s1"}, {"spot": 2, "note": "m"}]}}}
@@ -59,3 +62,12 @@ def test_featured_sides(tmp_path):
     assert out["spots"] == [["a", "drill"]], "the sides' spots stay off the ordinary list"
     assert out["featured"]["8"] == {"id": "g#1", "category": "protect", "note": "n", "title": "T",
                                     "sides": [{"id": "g#1", "category": "protect", "summary": "s1"}, {"id": "g#2", "category": "drill", "note": "m"}]}
+    # a side that is also an ordinary spot: the build's copy for the day (after every other spot) leaves the list, the
+    # ordinary one stays where its days find it
+    game["spots"].append({"id": "a", "category": "drill"})
+    game["featured"]["8"]["sides"][1] = {"spot": 3, "summary": "s2"}
+    (tmp_path / "game.json").write_text(json.dumps(game))
+    G.freeze(tmp_path / "game.json", tmp_path / "frozen.json")
+    out = json.loads((tmp_path / "frozen.json").read_text())
+    assert out["spots"] == [["a", "drill"], ["g#2", "drill"]] and out["schedule"] == [[0]]
+    assert out["featured"]["8"]["sides"][1] == {"id": "a", "category": "drill", "summary": "s2"}
