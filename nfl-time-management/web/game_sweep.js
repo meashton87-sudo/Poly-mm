@@ -58,6 +58,14 @@ function check(before, r, tag) {
   const k0 = r.log.find((e) => e.ev === 'play' || e.ev === 'fg' || e.ev === 'punt');
   if (k0 && b.phase === 0 && !r.done && b.clock_running && (k0.ev !== 'play' || k0.incomplete || k0.td || k0.tdDef || k0.safety || k0.turnover || k0.onDowns))
     flag('the clock ran on after a play that stops it', `${tag} ${JSON.stringify(k0)}`);
+  // out of bounds inside the window (NFL: the last 2:00 of the first half, the last 5:00 of the second, judged where
+  // the play ends): the clock stays stopped until the snap, whichever team had the ball (a player saw the other team
+  // run out of bounds and the clock run on); outside it the clock starts again once the ball is spotted
+  if (k0 && k0.ev === 'play' && k0.oob && !k0.penalty && !k0.incomplete && !k0.turnover && b.phase === 0 && !r.done) {
+    const inWin = k0.t - halfEnd < (halfEnd > 0 ? 120 : 300) - 1e-6;      // (at 5:00 itself, by a hair either way: not yet)
+    count(inWin ? 'out of bounds, last 2:00/5:00 (clock stopped)' : 'out of bounds, earlier (clock restarts)');
+    if (inWin && b.clock_running) flag('the clock ran on after going out of bounds late', `${tag} ${JSON.stringify(k0)}`);
+  }
   // a half never ends on an accepted defensive foul (an untimed down); no try after a touchdown as the fourth quarter
   // runs out when it cannot change the result (a margin of 3 or more); only a team behind declares an onside kick
   const k1 = r.log.find((e) => e.ev === 'play');
@@ -227,7 +235,7 @@ idx.spots.forEach((sp, si) => {
           : pick >= 5 && pick <= 7 ? routePick(n + g + si)
           : { to_off: false, play: P.calls[ci].kind, call: calls[ci], oob: n % 2 === 0, tempo: cur.clock_running ? ['urgent', 'hurry', 'normal', 'milk'][n % 4] : undefined, pers: [undefined, 12, 21, 13][n % 4] };
       } else if (cur.phase === 0) {
-        action = { to_def: n % 5 === 0, st: ['block', 'safe', 'rush', 'return'][(n + g) % 4] };
+        action = { to_def: n % 5 === 0, st: ['block', 'safe', 'rush', 'return', 'ezret'][(n + g) % 5] };
         if (n % 4 === 1) action.def = ['blitz', 'load', 'soft'][n % 3];
         else if (n % 4) action.dc = fullDef(n + g + si), action.read = true;      // the full call (personnel, front, coverage, rush)
       }
@@ -253,6 +261,14 @@ idx.spots.forEach((sp, si) => {
           if (r.root.pos !== e.team || r.root.down !== 1) flag('roughing did not give the kicking team a first down', `game ${si}.${g} step ${n}`);
         }
         if (e.foul && !((e.ev === 'fg' && action.st === 'block') || (e.ev === 'punt' && action.st === 'rush'))) flag('a roughing flag without the rush', `game ${si}.${g} step ${n} ${tag}`);
+        // their punt into the end zone: with the return set up he takes a knee there (a touchback at the 20); asked to
+        // run it out, he brings it out
+        if (e.ev === 'punt' && !e.blocked && !e.foul) {
+          if (e.touchback) count(`${tag}: touchbacks`);
+          if (e.touchback && !r.done && r.root.phase === 0 && r.root.yl !== 80) flag('a punt touchback not at the 20', `game ${si}.${g} step ${n} ${JSON.stringify(e)}`);
+          if (action.st === 'return' && e.land <= 0 && !e.touchback) flag('a punt fielded in the end zone was run out without asking', `game ${si}.${g} step ${n} ${JSON.stringify(e)}`);
+          if (action.st === 'ezret' && e.land <= 0 && !e.touchback) count(`${tag}: run out of the end zone`);
+        }
       }
       if (action.def) lookHit(r, { blitz: 10, load: 4, soft: 1 }[action.def]);
       if (action.dc) for (const e of r.log) if (e.ev === 'play' && e.call >= 0) {

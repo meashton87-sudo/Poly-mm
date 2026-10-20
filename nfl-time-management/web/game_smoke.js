@@ -253,6 +253,92 @@ for (let k = 0; k < 100; k++) {
     `his passes ${a.epa.toFixed(3)} -> ${b.epa.toFixed(3)} EPA, caught ${(100 * a.comp).toFixed(1)}% -> ${(100 * b.comp).toFixed(1)}%, sacked ${(100 * a.sack).toFixed(1)}% -> ${(100 * b.sack).toFixed(1)}%, ` +
     `picked ${(100 * a.pick).toFixed(1)}% -> ${(100 * b.pick).toFixed(1)}%; the drive's win chance ${(100 * w0).toFixed(1)}% -> ${(100 * w1).toFixed(1)}%`);
 }
+// players' reports, each checked against the real rate:
+// (1) "defensive offside is not an automatic first down": a real 5-yard defensive foul (offside, neutral zone,
+// encroachment, too many men) is a first down only when its 5 yards reach the line to gain; holding, pass interference,
+// illegal contact, roughing are a first down whatever the distance (library.py auto_first_down). The real rows, played
+// on 1st and 10, 3rd and 2 and 2nd and 20 through the engine's own _scrimmage
+{
+  const P = eng.pb, S0 = { t: 900, pos: 0, s: [7, 7], down: 1, ytg: 10, yl: 50, to: [3, 3], running: false, credit: 0, phase: 0, freeKick: false, plays: 0 };
+  const g0 = sim._geom({ ...root, t: 900 }), u = new Float64Array(8);
+  const rowsOf = (names) => { const ix = names.map((n) => P.penNames.indexOf(n)); const out = []; for (let r = 0; r < P.yards.length; r++) if ((P.flags[r] & 1) && ix.includes(P.pen[r]) && P.yards[r] === 5) out.push(r); return out; };
+  const after = (r, down, ytg) => { const S = { ...S0, s: [7, 7], to: [3, 3], down, ytg }; sim._scrimmage(S, g0, u, 0, 1, 0, false, false, r, -1, 0, null, false); return S; };
+  const five = rowsOf(['Defensive Offside', 'Neutral Zone Infraction', 'Encroachment', 'Defensive Too Many Men on Field']);
+  const auto = rowsOf(['Defensive Holding', 'Illegal Contact', 'Illegal Use of Hands']);
+  assert.ok(five.length > 500 && auto.length > 300, `5-yard fouls in the playbook: ${five.length}, automatic: ${auto.length}`);
+  let fd1 = 0, fd3 = 0, fdAuto = 0;
+  for (const r of five) {
+    const a = after(r, 1, 10), b = after(r, 3, 2);
+    assert.ok(a.down === 1 && Math.abs(a.ytg - 5) < 1e-9, `a 5-yard ${P.penNames[P.pen[r]]} on 1st and 10 is 1st and 5: ${a.down} and ${a.ytg}`);
+    if (a.down === 1 && a.ytg === 10) fd1++;
+    if (b.down === 1 && b.ytg === 10) fd3++;
+  }
+  for (const r of auto) { const a = after(r, 2, 20); if (a.down === 1 && a.ytg === 10) fdAuto++; }
+  assert.ok(fd1 === 0 && fd3 === five.length && fdAuto === auto.length, `fouls' first downs: 1st & 10 ${fd1}, 3rd & 2 ${fd3}/${five.length}, automatic on 2nd & 20 ${fdAuto}/${auto.length}`);
+  console.log(`5-yard defensive fouls (${five.length} real rows): a first down on 1st & 10 ${fd1}, on 3rd & 2 ${fd3}; holding/illegal contact/hands (${auto.length}) on 2nd & 20: ${fdAuto}`);
+}
+// (2) "I keep getting fumbles on hail mary": the Hail Mary's real plays (playbook.py: a deep heave or its sack or
+// scramble in the last 12 seconds of a half, 38-70 yards out; no lateral chains) fumble at the real rate or less:
+// nflverse 2016-26, 504 of them, 5.0% had a fumble (mostly strip-sacks), 2.6% lost (none on a lateral: those are not
+// Hail Marys). Drawn from every 5th spot's two teams, at 0:06 from midfield and from their 40, against each look
+{
+  let n = 0, fum = 0, lost = 0, picks = 0, tds = 0;
+  idx.spots.forEach((sp, si) => {
+    if (si % 5) return;
+    const S = eng.simulator(eng.makeContext(scen(sp).game, { receive2h: sp.start.receive2h }));
+    for (const yl of [50, 60]) for (let k = 0; k < 40; k++) {
+      const at = { ...root, t: 6, phase: 0, score: [17, 20], pos: 0, down: 1, ytg: 10, yl, to: [0, 1], clock_running: false };
+      const e = S.step(at, { action: { to_off: false, play: 'pass', call: 'hail_mary', looks: [0, 1, 2, 4, 8][k % 5] }, seed: 31 * si + 7 * yl + k }).log.find((x) => x.ev === 'play');
+      const ev = e && e.row >= 0 ? eng.pb.eventNames[eng.pb.event[e.row]] : '';
+      n++; if (/fumble|strip|scoop|bad_snap/.test(ev)) { fum++; if (e.turnover) lost++; }
+      if (/interception|pick/.test(ev)) picks++; if (e && e.td) tds++;
+    }
+  });
+  assert.ok(fum / n >= 0.01 && fum / n <= 0.08 && lost / n <= 0.04, `Hail Mary fumbles: ${(100 * fum / n).toFixed(1)}% (lost ${(100 * lost / n).toFixed(1)}%), real 5.0% (2.6%)`);
+  console.log(`Hail Mary (${n}): fumbles ${(100 * fum / n).toFixed(1)}% (lost ${(100 * lost / n).toFixed(1)}%; real 5.0%, 2.6%), interceptions ${(100 * picks / n).toFixed(1)}%, touchdowns ${(100 * tds / n).toFixed(1)}%`);
+}
+// (3) "a returner who catches a punt in the end zone should be able to kneel it or let it go": their punt with your
+// return set up (st 'return') never comes out of the end zone (a touchback at the 20: 939 of the 945 real punts that
+// got there were); asked to run it out ('ezret') he brings out what reaches it, to where real returns of punts fielded
+// at the 5 or deeper went (the 15 on average): worse than the 20, as the grade says
+{
+  const out = {};
+  for (const st of [undefined, 'return', 'ezret']) {
+    let n = 0, tb = 0, ran = 0, start = 0;
+    for (let k = 0; k < 3000; k++) {
+      const at = { ...root, t: 1500, phase: 0, score: [10, 10], pos: 0, down: 4, ytg: 10, yl: [45, 50, 55, 60][k % 4], to: [3, 3], clock_running: false };
+      const r = sim.step(at, { action: { to_off: false, play: 'punt', ...(st ? { st } : {}) }, seed: 4000 + k });
+      const e = r.log.find((x) => x.ev === 'punt');
+      if (!e || e.blocked || e.retTd) continue;
+      n++; if (e.touchback) tb++;
+      start += 100 - r.root.yl;                 // (where they start: a touchback at the 20)
+      if (e.land <= 0 && !e.touchback) ran++;
+      assert.ok(!e.touchback || r.root.yl === 80, `a punt touchback at the 20: ${JSON.stringify(e)}`);
+      if (st === 'return') assert.ok(e.land > 0 || e.touchback, `fielded in the end zone with the return set up: a touchback (${JSON.stringify(e)})`);
+    }
+    out[st || 'plain'] = { tb: tb / n, ran: ran / n, start: start / n };
+  }
+  assert.ok(out.return.tb >= out.plain.tb && out.return.ran === 0, `punts: the return set up downs it in the end zone: ${JSON.stringify(out)}`);
+  // (run out, a few are still downed in the end zone: a return of no gain from the goal line)
+  assert.ok(out.ezret.tb < out.return.tb * 0.35 && out.ezret.ran > 0.5 * out.return.tb && out.ezret.start < out.return.start, `punts: run it out brings them out: ${JSON.stringify(out)}`);
+  console.log('their punts from 45-60 yards out:', Object.entries(out).map(([k, v]) => `${k}: touchbacks ${(100 * v.tb).toFixed(1)}%, run out of the end zone ${(100 * v.ran).toFixed(1)}%, they start at their ${v.start.toFixed(1)}`).join('; '));
+}
+// (4) "two straight 26-yard field goals missed": the kick's odds by distance are the real ones (nflverse 2016-26, made
+// 20-29 yards: 97.8% of 2,492; 26 yards 97.6% of 253) and no kicker on any spot (the punter kicking included: Los
+// Angeles' Ethan Evans, Oct 18, 2026, rated no better than the league's worst kicker) drops a 26-yarder below 95%
+{
+  let lo = 1, who = '', s20 = 0, n20 = 0;
+  idx.spots.forEach((sp, si) => {
+    const S = eng.simulator(eng.makeContext(scen(sp).game, { receive2h: sp.start.receive2h }));
+    for (const t of [0, 1]) {
+      const p = S.fgProb(26, t);
+      if (p < lo) { lo = p; who = `${sp.id} ${(t ? TEAMS[si].away : TEAMS[si].home).kicker.name}`; }
+      for (let d = 20; d <= 29; d++) { s20 += S.fgProb(d, t); n20++; }
+    }
+  });
+  assert.ok(lo >= 0.95 && s20 / n20 > 0.965 && s20 / n20 < 0.99, `field goals: 26 yards at least ${lo.toFixed(3)} (${who}); 20-29 ${(s20 / n20).toFixed(3)}`);
+  console.log(`field goals: 20-29 yards ${(100 * s20 / n20).toFixed(1)}% on average (real 97.8%), a 26-yarder at least ${(100 * lo).toFixed(1)}% (${who})`);
+}
 // Build a scenario (Pro, web/scenario.js, web/rosters: nflclock.scenario): every team-season the builder offers is a
 // full team; random valid scenarios of every era, regular season and playoffs, overtime and kickoffs included, play to
 // the end in the engine as game.js plays them (its startRoot, a second half from a first-half one, overtime started as

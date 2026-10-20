@@ -194,6 +194,26 @@ SKETCH = """() => {
   return { ctx, men, los, up: Math.sign(ahead[1] - los[1]) || -1, ppy: Math.abs(ahead[1] - los[1]) / 5 };
 }"""
 SNAP = "() => [document.getElementById('dock').innerText, document.getElementById('bar').innerText].join('|')"
+# the timeout where the page offers it (game.js clockOptions, defTimeoutOk, promptChoice fgdef/puntdef): with the clock
+# running, on your call (wanting time: the first half, or not ahead), on your defense late in a half, and on their kick
+# late; a timeout key, switch or field button when you have one, "No timeouts left" (.noto) when you have none (a
+# player missed the option on a day whose side starts with none, and on their punt it was not there at all)
+TIMEOUT_UI = """() => {
+  const D = window.__draw; if (!D || !D.get) return null;
+  const { G, busy } = D.get(), r = G && G.root;
+  if (busy || !r || r.phase !== 0 || G.over || !r.clock_running || r.try2) return null;      // (busy: a call on its way)
+  const dock = document.getElementById('dock'), h = dock.querySelector('.ask h2'), head = h ? h.textContent : '';
+  const me = G.me, left = r.t > 1800 ? r.t - 1800 : r.t, late = left <= (r.t <= 1800 ? 300 : 120);
+  let where = null, want = false;
+  if (r.pos === me && head === 'Your call') { where = 'offense'; want = r.t > 1800 || r.score[me] <= r.score[1 - me]; }
+  else if (r.pos !== me && head === 'Your defense') { where = 'defense'; want = late; }
+  else if (r.pos !== me && /punting|field goal/.test(head)) { where = /punting/.test(head) ? 'punt' : 'field goal'; want = late; }
+  if (!where) return null;
+  const btn = document.getElementById('toBtn');
+  const keys = [...dock.querySelectorAll('button')].map((b) => b.textContent.trim());      // (not innerText: the keys are set in capitals)
+  const shown = keys.some((k) => /^(Timeout|Ice the kicker)/.test(k)) || !!document.getElementById('toSwitch') || !!(btn && !btn.hidden);
+  return { where, t: r.t, to: r.to[me], want, shown, note: !!dock.querySelector('.noto') };
+}"""
 # short fields (game.js offField): from the 20 in to the 1, and backed up on its own 5 to 1, for both teams, every
 # coverage you can call (as it lines up) and every shell the plays are drawn against (a run, quick, screen, deep,
 # play-action, rollout and Hail Mary pass, and a field goal or a punt), nobody is ever off the ground (past an end line
@@ -646,7 +666,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
         first = False                     # (a scenario's file carries no first-call facts: the simulator answers)
     timing: dict = {}                # ms: the front door, the drive's page, its intro and first call, a reload's way back
     friction = {"taps_to_first_call": 0, "modals": [], "snap": 0, "snap_out": 0, "snap_why": [], "covered": 0, "covered_by": [],
-                "races": 0, "wait_s": 0.0, "wait_max_s": 0.0, "loading_s": 0.0, "loading_max_s": 0.0, "turned": 0}
+                "races": 0, "wait_s": 0.0, "wait_max_s": 0.0, "loading_s": 0.0, "loading_max_s": 0.0, "turned": 0, "timeouts": {}}
     if mode not in ("survivor", "scenario"):
         # the bare address is the front door: Home, with today's drive on it
         await page.goto(f"{base}/{PAGE}")
@@ -930,6 +950,19 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     t_start += since - t_fz          # (the fuzz's minutes don't count against the episode's 900 s)
                     print(f"{name}: drawing fuzz, {tot['n']} drawings, {tot['plays']} plays on the field, {tot['real']} simulated")
                 elif st == "choose":
+                    tu = await look(page, TIMEOUT_UI)
+                    if tu and tu["want"]:
+                        tk = f"{tu['where']}, " + (f"{tu['to']} left" if tu["to"] else "none left")
+                        friction["timeouts"][tk] = friction["timeouts"].get(tk, 0) + 1
+                        wrong = (tu["to"] > 0 and not tu["shown"]) or (tu["to"] == 0 and (tu["shown"] or not tu["note"]))
+                        if wrong:          # (looked at again a moment later: a dock still being drawn is not a missing key)
+                            await page.wait_for_timeout(400)
+                            tu2 = await look(page, TIMEOUT_UI)
+                            if tu2 and tu2["want"] and tu2["t"] == tu["t"] and tu2["where"] == tu["where"] and \
+                                    ((tu2["to"] > 0 and not tu2["shown"]) or (tu2["to"] == 0 and (tu2["shown"] or not tu2["note"]))):
+                                problems.append(f"the timeout on {tu2['where']}: {tu2['to']} left, " + ("no timeout to call" if tu2["to"] > 0 else
+                                                ("a timeout offered" if tu2["shown"] else "nothing says there are none")) + f" ({tu2})")
+                                continue
                     if first_call:
                         first_call = False
                         if not await page.evaluate("() => performance.getEntriesByName('tmd:first-info').length"):
@@ -1075,11 +1108,12 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             tackles = await page.evaluate("() => window.__tackleLog || []")
             fps = await page.evaluate("() => window.__fpLog || []")
             offs = await page.evaluate("() => window.__offLog || []")
+            oobs = await page.evaluate("() => window.__oobLog || []")
             kept = await page.evaluate("() => (window.__drawLog || []).length")
             snaps = await page.evaluate("() => window.__drawSnaps || []")
             jank = await page.evaluate("() => window.__jank || null")
         except Exception:
-            seps, tackles, fps, offs, kept, snaps, jank = [], [], [], [], 0, [], None
+            seps, tackles, fps, offs, oobs, kept, snaps, jank = [], [], [], [], [], 0, [], None
         shot = None
         if problems:
             status = "fail"
@@ -1090,7 +1124,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 shot = None
         await ctx.close()
     return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
-            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "trail": trail if problems else [],
+            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "oobs": oobs, "trail": trail if problems else [],
             "day": day, "side": picked, "timing": timing, "friction": friction, "jank": jank, "shot": shot.name if shot else None}
 
 
@@ -1607,6 +1641,19 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     say(f"plays with a man or the ball off the field: {len(offs)}")
     if offs:
         fail("off-field", f"FAIL: off the field {offs[:5]}")
+    # out of bounds on the field just when the engine has the play out of bounds (its clock stops on it late in a half):
+    # the man with the ball at the whistle past the sideline, or in
+    ob = [x for r in results for x in r.get("oobs", [])]
+    odd = [x for x in ob if x.get("oob") != x.get("shown")]
+    say(f"carries to the whistle: {len(ob)}, out of bounds {sum(1 for x in ob if x.get('oob'))} (theirs {sum(1 for x in ob if x.get('oob') and not x.get('mine'))}), "
+        f"shown otherwise than played: {len(odd)}")
+    if odd:
+        fail("out-of-bounds", f"FAIL: out of bounds on the field but not in the play, or the other way: {odd[:5]}")
+    tos = {}
+    for r in results:
+        for k, v in ((r.get("friction") or {}).get("timeouts") or {}).items():
+            tos[k] = tos.get(k, 0) + v
+    say(f"the timeout checked where it is offered (the clock running, time wanted): {tos or 'none came up'}")
     # a short throw with a man running free deep reads as a QB who missed him (players saw it): report how often
     sh = [x for r in results for x in r.get("seps", []) if x.get("caught") and x.get("air", 99) <= 6]
     say(f"short completions: {len(sh)}, with a deep man 5+ yards clear: {sum(1 for x in sh if x.get('openDeep', 0) > 0)}")
