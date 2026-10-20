@@ -12,7 +12,8 @@ name: Two-Minute Drill website
 # serves it; unset: scripts/site.py DEFAULT_DOMAIN), OLD_DOMAIN (only while the site moves: the address(es) it moves
 # from, whose visitors web/move.js hands over, saved progress and all; nfl-time-management/DOMAIN_MOVE.md) and
 # BOARD_API (the leaderboard Worker's URL; see board.yml). The worker's SITE and ALLOWED_ORIGINS follow SITE_DOMAIN and
-# OLD_DOMAIN (board/site_vars.mjs), as does the Ezoic ads.txt redirect.
+# OLD_DOMAIN (board/site_vars.mjs), as does the Ezoic ads.txt redirect. With SITE_DOMAIN set to another address and
+# OLD_DOMAIN unset, OLD_DOMAIN is nfl2mindrill.com: the first address always hands its visitors over.
 on:
   push:
     branches: [main]
@@ -139,7 +140,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
-          OLD_DOMAIN: ${{ vars.OLD_DOMAIN }}
+          OLD_DOMAIN: ${{ vars.OLD_DOMAIN || (vars.SITE_DOMAIN != '' && vars.SITE_DOMAIN != 'nfl2mindrill.com' && 'nfl2mindrill.com' || '') }}
         working-directory: nfl-time-management/board
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "no Cloudflare token: skipped"; exit 0; fi
@@ -154,12 +155,12 @@ jobs:
           npx --yes wrangler@4.144.0 deploy
 
       - name: Assemble the site
-        run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --old-domain "${{ vars.OLD_DOMAIN }}" --board-api "${{ vars.BOARD_API }}" --ga "${{ vars.GA_ID || 'G-4QQ8N62SMB' }}" --adsense "${{ vars.ADSENSE_ID || 'ca-pub-7590842699855700' }}" --ad-slot "${{ vars.ADSENSE_SLOT }}" $([ "$PRO_ON" = on ] && echo --pro || true) $([ "$PRO_ON" = on ] && [ -n "$PRO_AT" ] && echo --pro-at "$PRO_AT" || true) $([ "$PRO_ON" = on ] && [ -n "$SCN_AT" ] && echo --scn-at "$SCN_AT" || true) $([ "$VS_ON" = on ] && echo --vs || true) $([ "$FULLDEF_ON" = on ] && echo --fulldef || true) $([ "$ADS_ON" = on ] || echo --no-ads) $([ "$ADS_ON" = on ] && [ -n "$EZOIC_ADSTXT" ] && echo --ezoic "$EZOIC_ADSTXT" || true) $([ "$ADS_ON" = on ] && [ "$EZOIC_ON" = on ] && echo --ezoic-head || true) $([ "$ADS_ON" = on ] && [ "$EZOIC_ON" = on ] && [ -n "$EZOIC_GAME_IDS" ] && echo --ezoic-ids "$EZOIC_GAME_IDS" || true) --google-client-id "${{ vars.GOOGLE_CLIENT_ID || '1079340119845-i8p0d0c57dmoa1hluqkm15ofi33oe9ms.apps.googleusercontent.com' }}"
+        run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --old-domain "${{ vars.OLD_DOMAIN || (vars.SITE_DOMAIN != '' && vars.SITE_DOMAIN != 'nfl2mindrill.com' && 'nfl2mindrill.com' || '') }}" --board-api "${{ vars.BOARD_API }}" --ga "${{ vars.GA_ID || 'G-4QQ8N62SMB' }}" --adsense "${{ vars.ADSENSE_ID || 'ca-pub-7590842699855700' }}" --ad-slot "${{ vars.ADSENSE_SLOT }}" $([ "$PRO_ON" = on ] && echo --pro || true) $([ "$PRO_ON" = on ] && [ -n "$PRO_AT" ] && echo --pro-at "$PRO_AT" || true) $([ "$PRO_ON" = on ] && [ -n "$SCN_AT" ] && echo --scn-at "$SCN_AT" || true) $([ "$VS_ON" = on ] && echo --vs || true) $([ "$FULLDEF_ON" = on ] && echo --fulldef || true) $([ "$ADS_ON" = on ] || echo --no-ads) $([ "$ADS_ON" = on ] && [ -n "$EZOIC_ADSTXT" ] && echo --ezoic "$EZOIC_ADSTXT" || true) $([ "$ADS_ON" = on ] && [ "$EZOIC_ON" = on ] && echo --ezoic-head || true) $([ "$ADS_ON" = on ] && [ "$EZOIC_ON" = on ] && [ -n "$EZOIC_GAME_IDS" ] && echo --ezoic-ids "$EZOIC_GAME_IDS" || true) --google-client-id "${{ vars.GOOGLE_CLIENT_ID || '1079340119845-i8p0d0c57dmoa1hluqkm15ofi33oe9ms.apps.googleusercontent.com' }}"
 
       # While the site moves (OLD_DOMAIN set): the new address's pages call the worker, so nothing ships naming it until
       # the worker answers it (the step above can be skipped: no Pro data, no deploy, the worker keeps the addresses it had)
       - name: The worker answers the new address
-        if: vars.OLD_DOMAIN != '' && vars.SITE_DOMAIN != '' && vars.BOARD_API != ''
+        if: (vars.OLD_DOMAIN != '' || (vars.SITE_DOMAIN != '' && vars.SITE_DOMAIN != 'nfl2mindrill.com')) && vars.SITE_DOMAIN != '' && vars.BOARD_API != ''
         env:
           SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
           BOARD_API: ${{ vars.BOARD_API }}
