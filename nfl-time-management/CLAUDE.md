@@ -26,7 +26,7 @@ node web/game_smoke.js                # daily game: every spot's two real teams,
 node web/game_sweep.js                # daily game: every spot x call x tempo, whole games, football invariants, points to the right team, the called play is the play run (~3 min)
 node web/score_sweep.js               # daily score: real spots played out by random, league-mix, sharp and greedy players, scored by game.js's own code (~15 min on 4 cores)
 node web/motion_test.js               # daily game animation: player motion stays in the tracking envelope, routes, coverage
-node board/worker_test.mjs            # the website's survivor leaderboard (Cloudflare Worker + Durable Object), storage in memory
+node board/worker_test.mjs            # the website's survivor leaderboard (Cloudflare Worker + Durable Objects), storage in memory; live drills' replay
 node board/match_test.mjs             # Versus: rooms, lobby, ladder in memory (board/vs_world.mjs), a stand-in engine (a second)
 node board/lazy_sim_test.mjs          # Versus: the room's lazily built simulator equals the engine's, table by table and play by play
 node board/vs_pairs_test.mjs          # Versus: every one of the 992 matchups (32 teams, home and away) played to the end, the rules on every snap
@@ -197,6 +197,19 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   it stays on the day's whole list, and wn.d keeps null for it (still the name's one result of the day; a fair one never
   replaces it). The weeks kept before that were made fair once (fairWeeks: wn nulls, wk:<D>..<D+6> rebuilt from wn,
   marked fairweek:<D>); the end card's This week says so to its player (the week's old).
+
+- Live Drills (board/live.js, board/live_espn.js, game.js the live drills section, #live): the worker's Live Durable
+  Object watches the live feed (the cron's minute) and turns a real two-minute drive into a drill; the page plays it
+  with the normal call keys and grades your call and the real one in one decision from the real snap's own situation.
+  Only live_espn.js knows the feed's shape: everything it reads is checked, a payload not as expected is rejected,
+  counted (GET /live/admin) and logged, and no drill is opened or changed on it (no drill rather than a wrong one).
+  The switch is the worker's LIVE_ON variable (the Cloudflare dashboard: instant) and POST /live/admin (pause and
+  resume); the site's <meta name="live"> (site.py --live, site.yml LIVE_ON) only lets the page ask. Off, the cron does
+  no work and the page asks once. Never show a drill as live when the worker has not read it for 3 minutes (board
+  STALE_MS = game.js LIVE_STALE; POLL_S = LIVE_POLL: change both). The bots never reach the feed: the page only talks to
+  the worker, which the stub answers (browser_test.py LIVE: the recorded game, board/live_replay.mjs on
+  board/live_replay.json, made by scripts/live_fixture.py from nflverse; daily_check.py answers /live with nothing).
+  The X post when a drill opens needs all four X_* secrets.
 
 ## Moving the site to a new address
 The owner's steps, in order, are in DOMAIN_MOVE.md (nfl2mindrill.com to 2mindrills.com). In the code the address is
