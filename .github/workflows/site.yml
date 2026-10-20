@@ -8,8 +8,11 @@ name: Two-Minute Drill website
 # The build and the checks run on every trigger; publishing to Pages is opt-in, so a site hosted elsewhere (a server
 # building with scripts/site.py) never has Pages claiming its hostname. To publish here: Settings > Pages > Source:
 # "GitHub Actions", and the repository variable PAGES_DEPLOY = true (Settings > Secrets and variables > Actions >
-# Variables). Optional variables: SITE_DOMAIN (custom domain, e.g. nfl2mindrill.com; set only on the one host
-# that serves it) and BOARD_API (the leaderboard Worker's URL; see board.yml).
+# Variables). Optional variables: SITE_DOMAIN (the site's address, its custom domain; set only on the one host that
+# serves it; unset: scripts/site.py DEFAULT_DOMAIN), OLD_DOMAIN (only while the site moves: the address(es) it moves
+# from, whose visitors web/move.js hands over, saved progress and all; nfl-time-management/DOMAIN_MOVE.md) and
+# BOARD_API (the leaderboard Worker's URL; see board.yml). The worker's SITE and ALLOWED_ORIGINS follow SITE_DOMAIN and
+# OLD_DOMAIN (board/site_vars.mjs), as does the Ezoic ads.txt redirect.
 on:
   push:
     branches: [main]
@@ -37,7 +40,7 @@ jobs:
       SCN_AT: "2026-10-19T17:00:00Z"   # Build a scenario (#custom) stays hidden until this time (UTC; 1 p.m. ET); "" for at once
       VS_ON: "off"            # "on" turns on Versus (two players live) on the site; the Pro preview always has it
       ADS_ON: "on"           # "on" shows the ads (AdSense and the units in web/ads); "off": no ads anywhere, and no extra life
-      EZOIC_ADSTXT: "nfl2mindrill.com"   # /ads.txt redirects to Ezoic's ads.txt manager for this domain ("" : our own ads.txt)
+      EZOIC_ADSTXT: "site"   # /ads.txt redirects to Ezoic's ads.txt manager for the site's own domain (SITE_DOMAIN), or a domain named here ("" : our own ads.txt)
       EZOIC_ON: "off"           # "on": Ezoic's privacy + header scripts on every page (EzoicAds step 2); "off" leaves them out
       EZOIC_GAME_IDS: ""        # Ezoic placeholder ids (its dashboard) for the game's cards: day's end, survivor card, run over
       FULLDEF_ON: "on"       # "on" turns on the full defensive call (personnel, front, coverage, rush) in the daily and survivor; the Pro preview always has it
@@ -95,7 +98,7 @@ jobs:
       # nothing ships unless all of this passes: a failure here leaves the last good site up
       - name: Check the game before it ships
         run: |
-          npx --yes eslint@8.57.0 --no-eslintrc -c web/eslint.json web/game.js web/motion.js web/engine.js web/game_worker.js web/vs_core.js web/scenario.js
+          npx --yes eslint@8.57.0 --no-eslintrc -c web/eslint.json web/game.js web/motion.js web/engine.js web/game_worker.js web/vs_core.js web/scenario.js web/move.js
           node web/game_smoke.js
           node web/defense_calibration.js
           node web/motion_test.js
@@ -116,6 +119,9 @@ jobs:
           python -m playwright install --with-deps chromium
           python scripts/site.py _site_test
           python scripts/browser_test.py _site_test --daily 6 --survivor 3 --games 2 --jobs 2 --out browser_test_out $([ -f web/rosters/index.json ] && echo --scenario 3)
+          # the address move's handover (web/move.js): two addresses on one local server, every key carried, nothing overwritten
+          python scripts/site.py _site_move --no-minify --domain 2mindrills.com --old-domain nfl2mindrill.com --board-api https://board.example --pro
+          python scripts/move_test.py _site_move
 
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -142,16 +148,32 @@ jobs:
           rm -rf assets/vs && mkdir -p assets/vs && cp ../_site_test/engine_data.pack ../_site_test/playbook.pack ../web/teams.json assets/vs/
           node worker_test.mjs && node match_test.mjs && node lazy_sim_test.mjs && node vs_pairs_test.mjs "$GITHUB_RUN_NUMBER" && node vs_balance_test.mjs
           node vs_stress.mjs 400 "$GITHUB_RUN_NUMBER" 24       # 400 whole matches, real engine, phones misbehaving: all must check out
-          # (moving address: the new one is the site the emails link to; the old one still allowed while visitors are handed over)
-          OLD_ORIGINS=$(echo "$OLD_DOMAIN" | tr ',' '\n' | sed '/^$/d' | sed 's#.*#https://&,https://www.&#' | paste -sd, -)
-          if [ -n "$SITE_DOMAIN" ]; then sed -i "s#^ALLOWED_ORIGINS = .*#ALLOWED_ORIGINS = \"https://$SITE_DOMAIN,https://www.$SITE_DOMAIN${OLD_ORIGINS:+,$OLD_ORIGINS},https://nfl2mindrill.pages.dev,https://nfl2mindrill-pro-preview.pages.dev\"#" wrangler.toml; sed -i "s#^SITE = .*#SITE = \"https://$SITE_DOMAIN\"#" wrangler.toml; fi
+          # the worker's addresses from the site's: SITE (emails, sign-in links, Stripe's way back), ALLOWED_ORIGINS (the
+          # new address, the old one while its visitors are handed over, the Pages previews); unset SITE_DOMAIN: as is
+          node site_vars.mjs wrangler.toml
           npx --yes wrangler@4.144.0 deploy
 
       - name: Assemble the site
         run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --old-domain "${{ vars.OLD_DOMAIN }}" --board-api "${{ vars.BOARD_API }}" --ga "${{ vars.GA_ID || 'G-4QQ8N62SMB' }}" --adsense "${{ vars.ADSENSE_ID || 'ca-pub-7590842699855700' }}" --ad-slot "${{ vars.ADSENSE_SLOT }}" $([ "$PRO_ON" = on ] && echo --pro || true) $([ "$PRO_ON" = on ] && [ -n "$PRO_AT" ] && echo --pro-at "$PRO_AT" || true) $([ "$PRO_ON" = on ] && [ -n "$SCN_AT" ] && echo --scn-at "$SCN_AT" || true) $([ "$VS_ON" = on ] && echo --vs || true) $([ "$FULLDEF_ON" = on ] && echo --fulldef || true) $([ "$ADS_ON" = on ] || echo --no-ads) $([ "$ADS_ON" = on ] && [ -n "$EZOIC_ADSTXT" ] && echo --ezoic "$EZOIC_ADSTXT" || true) $([ "$ADS_ON" = on ] && [ "$EZOIC_ON" = on ] && echo --ezoic-head || true) $([ "$ADS_ON" = on ] && [ "$EZOIC_ON" = on ] && [ -n "$EZOIC_GAME_IDS" ] && echo --ezoic-ids "$EZOIC_GAME_IDS" || true) --google-client-id "${{ vars.GOOGLE_CLIENT_ID || '1079340119845-i8p0d0c57dmoa1hluqkm15ofi33oe9ms.apps.googleusercontent.com' }}"
 
-      # Cloudflare Pages (no bandwidth cap; project nfl2mindrill, at nfl2mindrill.pages.dev until the domain points at
-      # it). Needs the CLOUDFLARE_API_TOKEN secret with the "Cloudflare Pages: Edit" permission (and
+      # While the site moves (OLD_DOMAIN set): the new address's pages call the worker, so nothing ships naming it until
+      # the worker answers it (the step above can be skipped: no Pro data, no deploy, the worker keeps the addresses it had)
+      - name: The worker answers the new address
+        if: vars.OLD_DOMAIN != '' && vars.SITE_DOMAIN != '' && vars.BOARD_API != ''
+        env:
+          SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
+          BOARD_API: ${{ vars.BOARD_API }}
+        run: |
+          for i in 1 2 3 4 5 6; do
+            got=$(curl -s -o /dev/null -D - -H "Origin: https://$SITE_DOMAIN" "${BOARD_API%/}/pro" | tr -d '\r' | grep -i '^access-control-allow-origin:' | cut -d' ' -f2)
+            if [ "$got" = "https://$SITE_DOMAIN" ]; then echo "the worker answers https://$SITE_DOMAIN"; exit 0; fi
+            echo "the worker answers ${got:-nothing} for https://$SITE_DOMAIN; again in 20 s"; sleep 20
+          done
+          echo "::error::the worker does not answer https://$SITE_DOMAIN (its ALLOWED_ORIGINS): the site is not published. Deploy the worker (board.yml, Run workflow) or set ALLOWED_ORIGINS in the Cloudflare dashboard, then run this again."
+          exit 1
+
+      # Cloudflare Pages (no bandwidth cap; project nfl2mindrill, at nfl2mindrill.pages.dev, answering on the site's
+      # custom domain(s): the old one too while the site moves). Needs the CLOUDFLARE_API_TOKEN secret with the "Cloudflare Pages: Edit" permission (and
       # CLOUDFLARE_ACCOUNT_ID); without them, or if it fails, GitHub Pages still publishes.
       - name: Publish to Cloudflare Pages
         continue-on-error: true

@@ -112,6 +112,9 @@ function blocked(name) {
 }
 const shown = (rows) => rows.filter((r) => !blocked(r.name));
 
+// the site's address (wrangler.toml SITE, from the GitHub variable SITE_DOMAIN: board/site_vars.mjs), without a trailing /
+const siteOf = (env) => String(env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, '');
+const listOf = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
 function cors(req, env) {
   const allowed = String(env.ALLOWED_ORIGINS || '*').split(',').map((s) => s.trim()).filter(Boolean);
   const origin = req.headers.get('Origin') || '';
@@ -388,7 +391,8 @@ const proOn = (env) => !!env.STRIPE_SECRET;
 // a test-mode key (sk_test_/rk_test_) only ever pays from somewhere other than the site itself (the Pro preview):
 // the site with a test key would send real buyers to a page that takes no real card
 const testKey = (env) => /^(sk|rk)_test_/.test(String(env.STRIPE_SECRET || ''));
-const isSite = (env, origin) => { const s = String(env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, ''); return origin === s || origin === s.replace('://', '://www.'); };
+// the site's own pages: SITE and its www., and while the site moves the old address(es) (OLD_SITES; board/site_vars.mjs)
+const isSite = (env, origin) => { const s = siteOf(env); return origin === s || origin === s.replace('://', '://www.') || listOf(env.OLD_SITES).includes(origin); };
 function proCode() {
   const b = crypto.getRandomValues(new Uint8Array(12));
   const s = Array.from(b, (x) => PRO_ALPHABET[x % PRO_ALPHABET.length]).join('');     // 256 % 31 = 8: a slight lean, fine for a code
@@ -597,9 +601,10 @@ async function mailLimited(storage, key, max = MAIL_MAX, win = MAIL_WINDOW) {
   await storage.put(k, hitsAt);
   return false;
 }
+// where a link in an email, or Stripe's way back, goes: the page that asked (an allowed origin), else the site
 const siteFor = (req, env) => {
-  const allowed = String(env.ALLOWED_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean), origin = req.headers.get('Origin') || '';
-  return String(allowed.includes(origin) && origin !== '*' ? origin : env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, '');
+  const origin = req.headers.get('Origin') || '';
+  return listOf(env.ALLOWED_ORIGINS).includes(origin) && origin !== '*' ? origin.replace(/\/+$/, '') : siteOf(env);
 };
 async function auth(req, env, storage, hits, h, url) {
   if (url.pathname === '/auth') return req.method === 'GET' ? json({ google: googleOn(env), email: emailOn(env) }, 200, h) : json({ error: 'method' }, 405, h);
@@ -1138,7 +1143,7 @@ async function reminders(env, storage, date) {
   }
   if (due.length >= cap) await storage.put('remind:from', `rmd:${due[due.length - 1]}`);
   else if (from) await storage.delete('remind:from');      // (every account due is in this run)
-  const site = String(env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, ''), api = String(env.API_URL || '').replace(/\/+$/, '');
+  const site = siteOf(env), api = String(env.API_URL || '').replace(/\/+$/, '');
   let sent = 0, failed = 0;
   for (let i = 0; i < due.length; i += REMIND_BATCH) {
     const batch = [];
@@ -1195,8 +1200,8 @@ async function pro(req, env, storage, hits, h, url) {
     const acct = body.session ? await sessionAcct(storage, env, body.session) : null;
     if (body.session && !acct) return json({ error: 'Your sign-in has expired: sign in again (or sign out to buy with a code).', signedOut: true }, 401, h);
     // the buyer goes back to the site he came from (an allowed origin: the site, or the Pro preview), else SITE
-    const allowed = String(env.ALLOWED_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean), origin = req.headers.get('Origin') || '';
-    const site = String(allowed.includes(origin) ? origin : env.SITE || 'https://nfl2mindrill.com').replace(/\/+$/, '');
+    const allowed = listOf(env.ALLOWED_ORIGINS), origin = req.headers.get('Origin') || '';
+    const site = siteFor(req, env);
     if (testKey(env) && (isSite(env, origin) || !allowed.includes(origin))) return json({ error: 'payments are not set up yet (test key)' }, 503, h);
     let r;
     try {

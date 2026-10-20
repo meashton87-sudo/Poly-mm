@@ -3,6 +3,8 @@ import assert from 'node:assert';
 import worker, { Board } from './worker.js';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { siteVars } from './site_vars.mjs';
 const sha256hex = async (x) => createHash('sha256').update(x).digest('hex');
 
 const store = new Map();
@@ -255,6 +257,34 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   for (const e of [env, board.env]) e.STRIPE_SECRET = 'rk_live_x';
   assert.strictEqual((await pro('POST', '/pay')).status, 200, 'a live key pays from the site');
   assert.strictEqual((await pro('POST', '/pay', undefined, { origin: 'https://nfl2mindrill-pro-preview.pages.dev' })).status, 200, 'and from the preview');
+  // the site moved (board/site_vars.mjs: SITE the new address, the old one in OLD_SITES and ALLOWED_ORIGINS while its
+  // visitors are handed over): the new address is answered and paid back to, the old one is still the site's own
+  {
+    const toml = readFileSync(new URL('./wrangler.toml', import.meta.url), 'utf8');
+    assert.strictEqual(siteVars(toml, '', ''), toml, 'no SITE_DOMAIN: wrangler.toml as it is');
+    assert.strictEqual(siteVars(toml, 'nfl2mindrill.com', ''), toml, 'today\'s address: wrangler.toml as it is');
+    const moved = siteVars(toml, '2mindrills.com', 'nfl2mindrill.com'), v = (k) => moved.match(new RegExp(`^${k} = "([^"]*)"`, 'm'))[1];
+    assert.strictEqual(v('SITE'), 'https://2mindrills.com');
+    assert.deepStrictEqual(v('ALLOWED_ORIGINS').split(','), ['https://2mindrills.com', 'https://www.2mindrills.com', 'https://nfl2mindrill.com', 'https://www.nfl2mindrill.com',
+      ...toml.match(/^ALLOWED_ORIGINS = "([^"]*)"/m)[1].split(',').filter((o) => o.endsWith('.pages.dev'))], 'the new address, the old one, the previews');
+    assert.strictEqual(v('OLD_SITES'), 'https://nfl2mindrill.com,https://www.nfl2mindrill.com');
+    assert.strictEqual(siteVars(moved, '2mindrills.com', 'nfl2mindrill.com'), moved, 'the same again');
+    assert.throws(() => siteVars(toml, 'not a host', ''), /SITE_DOMAIN/);
+    for (const e of [env, board.env]) { e.STRIPE_SECRET = 'rk_live_x'; e.SITE = v('SITE'); e.OLD_SITES = v('OLD_SITES'); e.ALLOWED_ORIGINS = v('ALLOWED_ORIGINS'); }
+    r = await pro('POST', '/pay', undefined, { origin: 'https://2mindrills.com' });
+    assert.strictEqual(r.headers.get('Access-Control-Allow-Origin'), 'https://2mindrills.com', 'the new address may call the worker');
+    assert.strictEqual(new URLSearchParams(stripeCalls[stripeCalls.length - 1][1].body).get('success_url'), 'https://2mindrills.com/?claim={CHECKOUT_SESSION_ID}', 'paid back to the new address');
+    await pro('POST', '/pay', undefined, { origin: 'https://evil.example' });
+    assert.strictEqual(new URLSearchParams(stripeCalls[stripeCalls.length - 1][1].body).get('success_url'), 'https://2mindrills.com/?claim={CHECKOUT_SESSION_ID}', 'an unknown origin: the new address');
+    r = await pro('GET', '/pro', undefined, { origin: 'https://nfl2mindrill.com' });
+    assert.strictEqual(r.headers.get('Access-Control-Allow-Origin'), 'https://nfl2mindrill.com', 'the old address still may (its visitors are handed over)');
+    for (const e of [env, board.env]) e.STRIPE_SECRET = 'rk_test_x';
+    for (const o of ['https://2mindrills.com', 'https://www.2mindrills.com', 'https://nfl2mindrill.com', 'https://www.nfl2mindrill.com']) {
+      assert.strictEqual((await pro('POST', '/pay', undefined, { origin: o })).status, 503, `a test key never pays from the site: ${o}`);
+    }
+    assert.strictEqual((await pro('POST', '/pay', undefined, { origin: 'https://nfl2mindrill-pro-preview.pages.dev' })).status, 200, 'the preview still pays in test mode');
+    for (const e of [env, board.env]) { e.SITE = 'https://nfl2mindrill.com/'; delete e.OLD_SITES; }
+  }
   for (const e of [env, board.env]) { e.STRIPE_SECRET = 'rk_live_x'; e.ALLOWED_ORIGINS = 'https://nfl2mindrill.com'; }
   // Stripe's refusal reaches the buyer's screen with its reason
   refuse = 'Your account cannot currently make live charges.';

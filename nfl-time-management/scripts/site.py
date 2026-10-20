@@ -2,9 +2,10 @@
 index.html, with the scripts and the generated data next to it. The data must be built first (see CLAUDE.md:
 cli build, webexport.export_engine, dailygame.build).
 
-    python scripts/site.py [out_dir, default _site] [--domain nfl2mindrill.com] [--board-api https://...]
+    python scripts/site.py [out_dir, default _site] [--domain example.com] [--old-domain old.example] [--board-api https://...]
 
---domain writes the CNAME file for a custom domain; --board-api points the survivor leaderboard at its backend
+--domain is the site's address (the CNAME file, canonical links, sitemap, shares; DEFAULT_DOMAIN without it), --old-domain
+the one(s) it is moving from (web/move.js hands their visitors over, saved progress and all); --board-api points the survivor leaderboard at its backend
 (board/worker.js); without it the site has no leaderboard. --ga adds Google Analytics (gtag.js) to the page. version.json says when the site was built and from which
 commit (an uptime check can alert when "built" gets old: a failing build leaves the last site up).
 """
@@ -372,34 +373,48 @@ GA_TAG = ("<script async src=\"https://www.googletagmanager.com/gtag/js?id={id}\
           "gtag('config','{id}',{{page_location:location.origin+location.pathname+(h&&/^[a-z]+$/.test(h)?(location.pathname.slice(-1)==='/'?'':'/')+h:'')}});</script>")
 
 
-# Moving to a new address (--old-domain): the same build answers on both. On the old one the first thing in every page
-# packs the player's saved progress (local storage, which belongs to one address) into the link's # (never sent to a
-# server) and goes to the same page on the new one, which unpacks it before the game starts, keeping what is already
-# there (a day already in the new address's stats stays). Essentials first (stats, Pro code, name, sign-in, device key,
-# settings), then today's drive in progress, then the rest while the link stays under 150 KB.
-MOVE_JS = """<script>(function(){var OLD=%(old)s,NEW=%(new)s,P='tmd:',H='#tmd-move=';
-function e(s){return btoa(unescape(encodeURIComponent(s))).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'')}
-function d(s){s=s.replace(/-/g,'+').replace(/_/g,'/');return decodeURIComponent(escape(atob(s)))}
-var host=location.hostname.replace(/^www\\./,'');
-try{if(OLD.indexOf(host)>=0&&NEW&&host!==NEW){window.__tmdMoving=1;
-var ks=[],day=-1,i,k,m,o={},n=0,keep=location.hash||'';
-for(i=0;i<localStorage.length;i++){k=localStorage.key(i);if(k&&k.indexOf(P)===0){ks.push(k);m=/:day:(\\d+)$/.exec(k);if(m&&+m[1]>day)day=+m[1]}}
-var big=/:(day|drive|run|surv|practice)(:|$)|:tend$/,rank=function(k){return !big.test(k)?0:k.slice(-(':day:'+day).length)===':day:'+day?1:2};
-ks.sort(function(a,b){return rank(a)-rank(b)});
-for(i=0;i<ks.length;i++){k=ks[i];var v=localStorage.getItem(k);if(rank(k)===2&&/:day:\\d+$/.test(k))continue;if(n+k.length+v.length>110000)continue;o[k]=v;n+=k.length+v.length}
-location.replace(location.protocol+'//'+NEW+location.pathname+location.search+(ks.length?H+e(JSON.stringify(o))+(keep?'&h='+encodeURIComponent(keep.slice(1)):''):keep));return}
-if(location.hash.indexOf(H)===0){var raw=location.hash.slice(H.length),at=raw.indexOf('&h='),h=at>=0?decodeURIComponent(raw.slice(at+3)):'',got=JSON.parse(d(at>=0?raw.slice(0,at):raw));
-for(var key in got){if(key.indexOf(P)!==0)continue;var cur=localStorage.getItem(key);
-if(cur===null)localStorage.setItem(key,got[key]);
-else if(/:stats$/.test(key)){var a=JSON.parse(cur),b=JSON.parse(got[key]);a.days=a.days||{};for(var dk in (b.days||{}))if(!a.days[dk])a.days[dk]=b.days[dk];localStorage.setItem(key,JSON.stringify(a))}}
-history.replaceState(null,'',location.pathname+location.search+(h?'#'+h:''))}}catch(x){}})();</script>"""
+# Moving to a new address (--old-domain): the same build answers on both. web/move.js goes first in every page's head:
+# on the old address it hands the player over (their saved progress, which a browser keeps one per address, packed into
+# the new address's # and the same page there); on the new one it unpacks it, once, into what is empty, before the
+# game starts. move.html (/move, on the old address) is the same handover back to a page named after #back=. Nothing at
+# all without --old-domain. (Tested by scripts/move_test.py: two local addresses in Chromium.)
+DEFAULT_DOMAIN = "nfl2mindrill.com"          # the site's address when --domain names none (SITE_DOMAIN unset)
+HOST_RE = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
+
+
+def bare_host(h: str) -> str:
+    return h.strip().lower().rstrip(".").removeprefix("https://").removeprefix("http://").rstrip("/").removeprefix("www.")
 
 
 def move_js(new: str | None, old: list[str]) -> str:
-    """The handoff from the old address(es) to the new one; nothing when there is no move."""
+    """The handover from the old address(es) to the new one (web/move.js, minified when esbuild is there); nothing when
+    there is no move."""
+    new = bare_host(new or "")
+    old = list(dict.fromkeys(o for o in (bare_host(x) for x in old) if o and o != new))
     if not new or not old:
         return ""
-    return MOVE_JS % {"old": json.dumps([o.strip().lower().removeprefix("www.") for o in old if o.strip()]), "new": json.dumps(new.strip().lower())}
+    for h in [new, *old]:
+        if not HOST_RE.fullmatch(h):
+            raise SystemExit(f"--domain / --old-domain want host names like example.com, not {h!r}")
+    js = (WEB / "move.js").read_text()
+    try:
+        r = subprocess.run(["npx", "--yes", ESBUILD, "--minify", "--loader=js", "--target=es5", "--log-level=warning"], input=js,
+                           capture_output=True, text=True, timeout=300)
+        js = r.stdout if r.returncode == 0 and r.stdout.strip() else js
+    except (OSError, subprocess.SubprocessError):
+        pass                                 # (offline: as written)
+    js, n = re.subn(r"\(\s*OLD_HOSTS\s*,\s*NEW_HOST\s*\)", lambda m: f"({json.dumps(old)},{json.dumps(new)})", js)
+    if n != 1:
+        raise SystemExit("site.py: web/move.js must end with (OLD_HOSTS, NEW_HOST)")
+    return f"<script>{js.strip()}</script>"
+
+
+def move_page(script: str, new: str) -> str:
+    """/move on the old address: only the handover (nothing to show); on any other address, the front page."""
+    return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">' + script + '<title>Two-Minute Drill</title></head>'
+            '<body><script>if(!window.__tmdMoving)location.replace("/")</script>'
+            f'<p><a href="https://{html.escape(new, quote=True)}/">Two-Minute Drill</a></p></body></html>\n')
 
 
 # Every page: the same footer (the site's pages, the contact, the disclaimer and the data credit), its style, and the
@@ -471,9 +486,12 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     if out.exists():
         shutil.rmtree(out)
     (out / "spots").mkdir(parents=True)
-    site_url = site_url or f"https://{(domain or 'nfl2mindrill.com').strip()}"
-    home = (domain or "").strip() or "nfl2mindrill.com"          # the site's own address, wherever the pages name it
-    moving = move_js(domain, (old_domain or "").split(","))      # first in every page: the old address hands over
+    site_url = site_url or f"https://{(domain or DEFAULT_DOMAIN).strip()}"
+    home = (domain or "").strip() or DEFAULT_DOMAIN          # the site's own address, wherever the pages name it
+    olds = [o for o in (old_domain or "").split(",") if o.strip()]
+    moving = handover = move_js(domain, olds)                # first in every page: the old address hands over
+    if ezoic == "site":                                      # (site.yml: the site's own address, whatever it is)
+        ezoic = home
     if ezoic_head and not no_ads:            # Ezoic (EzoicAds step 2): its privacy scripts, then its header script, at the top
         moving += EZOIC_HEAD                 # of every page's head, right after the old address's hand-over
     desc = "Call the plays in real NFL endings. One drive a day: beat the real coach and see how you rank."
@@ -495,6 +513,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
             extra += f"<meta name=\"pro-at\" content=\"{html.escape(pro_at, quote=True)}\">"
         if pro and scn_at:                   # Build a scenario (#custom) stays hidden until this time (ISO, UTC)
             extra += f"<meta name=\"scn-at\" content=\"{html.escape(scn_at, quote=True)}\">"
+    if handover:                             # the old address, for the home page's way to bring progress over (/move)
+        extra += f"<meta name=\"old-home\" content=\"{html.escape(next(o for o in map(bare_host, olds) if o != bare_host(domain)), quote=True)}\">"
     if google_client_id:                     # Sign in with Google on the Pro tab (the board checks the same client id)
         extra += f"<meta name=\"google-client-id\" content=\"{html.escape(google_client_id, quote=True)}\">"
     if fulldef:                              # the full defensive call in the daily and survivor: off until it is approved
@@ -507,6 +527,9 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         commit = ""
     for f in FILES:
         shutil.copy2(WEB / f, out / f)
+    card = WEB / f"og.{bare_host(home)}.png"      # the link preview card drawn for this address (og_card.html), if there is one
+    if card.exists():
+        shutil.copy2(card, out / "og.png")
     # game.json without the time it was built (version.json keeps it): the data is rebuilt on every deploy, and that
     # alone would give the file a new stamp each time
     game = json.loads((WEB / "game.json").read_text())
@@ -566,7 +589,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     stats_head = (GA_TAG.format(id=ga) if ga else "") + ads_head(tags_adsense, ad_slot) + share_tags(site_url, "Two-Minute Drill stats",
         "How everyone did on the daily drive: players per day, the score spread and the top ten.", "stats") + (
         f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else "")
-    fill = lambda name, head, path, ads=True: (out / name).write_text(own_fonts((WEB / name).read_text(), stamps).replace("nfl2mindrill.com", home).replace("<!--SITE-HEAD-->",
+    fill = lambda name, head, path, ads=True: (out / name).write_text(own_fonts((WEB / name).read_text(), stamps).replace(DEFAULT_DOMAIN, home).replace("<!--SITE-HEAD-->",
         moving + head + canonical(site_url, path) + FOOT_CSS + AD_CSS).replace("<!--AD-MID-->", ad_frame("banner") if ads else "")
         .replace("<!--SITE-FOOT-->", (foot_ads() if ads else "") + FOOT))
     fill("stats.html", stats_head, "stats")
@@ -625,13 +648,16 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     start = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y%m%d")
     for h in (8, 12, 19):
         (out / f"remind-{h}.ics").write_text("\r\n".join([
-            "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//nfl2mindrill//Two-Minute Drill//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
-            "BEGIN:VEVENT", f"UID:tmd-daily-{h}@nfl2mindrill.com", f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+            "BEGIN:VCALENDAR", "VERSION:2.0", f"PRODID:-//{home.split('.')[0]}//Two-Minute Drill//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+            # (the event's id never moves with the address: a calendar that has it updates it, not a second one)
+            "BEGIN:VEVENT", f"UID:tmd-daily-{h}@{DEFAULT_DOMAIN}", f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
             f"DTSTART:{start}T{h:02d}0000", "DURATION:PT10M", "RRULE:FREQ=DAILY", "SUMMARY:Two-Minute Drill: today's drive",
             f"DESCRIPTION:Keep your streak going: {base}", f"URL:{base}", "BEGIN:VALARM", "ACTION:DISPLAY",
             "DESCRIPTION:Two-Minute Drill: today's drive", "TRIGGER:PT0M", "END:VALARM", "END:VEVENT", "END:VCALENDAR"]) + "\r\n", newline="")
     if domain:
         (out / "CNAME").write_text(domain.strip() + "\n")
+    if handover:                             # /move on the old address: the handover on its own (a redirect rule leaves it be)
+        (out / "move.html").write_text(move_page(handover, bare_host(domain)))
     (out / ".nojekyll").write_text("")          # serve the files as they are
     (out / "version.json").write_text(json.dumps({
         "built": datetime.now(timezone.utc).isoformat(timespec="seconds"), "commit": commit or None, "data_built": built,
@@ -647,10 +673,10 @@ if __name__ == "__main__":
     ap.add_argument("--old-domain", help="the address(es) the site is moving from, comma-separated: their visitors are handed over, saved progress and all")
     ap.add_argument("--board-api")
     ap.add_argument("--ga", help="Google Analytics measurement id (G-...)")
-    ap.add_argument("--site-url", help="the site's address for link previews (default https://<domain>, else nfl2mindrill.com)")
+    ap.add_argument("--site-url", help=f"the site's address for link previews (default https://<domain>, else {DEFAULT_DOMAIN})")
     ap.add_argument("--adsense", help="Google AdSense publisher id (ca-pub-...); empty: no ads")
     ap.add_argument("--ad-slot", help="an AdSense display ad unit's slot id, shown between games; empty: AdSense's own placement only")
-    ap.add_argument("--ezoic", metavar="DOMAIN", help="/ads.txt redirects to Ezoic's ads.txt manager for this domain (Cloudflare Pages _redirects)")
+    ap.add_argument("--ezoic", metavar="DOMAIN", help="/ads.txt redirects to Ezoic's ads.txt manager for this domain (Cloudflare Pages _redirects); site: the site's own (--domain)")
     ap.add_argument("--ezoic-head", action="store_true", help="Ezoic's privacy and header scripts at the top of every page")
     ap.add_argument("--ezoic-ids", help="Ezoic placeholder ids for the game's cards: end of the day's drive, survivor's card after a game, survivor's run over (e.g. 101,102,103)")
     ap.add_argument("--no-ads", action="store_true", help="no ads anywhere on the site (overrides --adsense and web/ads)")

@@ -186,16 +186,25 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   marked fairweek:<D>); the end card's This week says so to its player (the week's old).
 
 ## Moving the site to a new address
-The site moves with two GitHub variables; nothing else in the code names the address.
-1. Add the new domain to the Cloudflare Pages project `nfl2mindrill` (Custom domains) and keep the old one on it too:
-   the same build answers on both.
-2. Set `SITE_DOMAIN` to the new domain and `OLD_DOMAIN` to the old one (comma-separated if several), then deploy.
-   On the old address every page hands the visitor over (scripts/site.py MOVE_JS): their saved progress (stats, Pro
-   code, name, device key, sign-in, settings, today's drive) goes along in the link's # and is unpacked on the new
-   address before the game starts. The worker's SITE (email links) and ALLOWED_ORIGINS follow the two variables.
-3. Outside the code: the Google OAuth client's authorized origins (add the new one), Resend's sending domain if the
-   emails should come from the new one (MAIL_FROM), Stripe's business website, Search Console (add the new property;
-   the change-of-address tool once the old address redirects with a 301), the X bio, and og.png (the link preview
-   image prints the address: redraw web/og_card.html).
-4. After a few weeks, when the regulars have been handed over, the old domain can switch to a plain 301 redirect
-   (a Cloudflare redirect rule): keep the domain registered for at least a year.
+The owner's steps, in order, are in DOMAIN_MOVE.md (nfl2mindrill.com to 2mindrills.com). In the code the address is
+one setting: the GitHub variable `SITE_DOMAIN` (site.py --domain; DEFAULT_DOMAIN when unset), and while the site moves,
+`OLD_DOMAIN` (site.py --old-domain). Nothing else names the address: the pages' canonical links, sitemap, robots.txt,
+link previews, shares (game.js SITE/HOME), the CNAME file, the Ezoic ads.txt redirect (site.yml EZOIC_ADSTXT "site"), and
+the worker's SITE, ALLOWED_ORIGINS and OLD_SITES (board/site_vars.mjs, run before every worker deploy). Without
+`OLD_DOMAIN` a build has no trace of a move (no script, no move.html).
+- The handover (web/move.js, first in every page's head, before any other script): on an old address it packs every
+  `tmd:` key into the new address's #fragment (never the query: no server sees it) and goes to the same path, query and
+  #hash there; the rest of the old page never runs (document.write plaintext). On the new address it takes the fragment
+  out of the address first, then imports only when the referrer is an old address (a made-up link imports nothing),
+  only into empty keys; stats days/badges/frozen, drives, runs and scen are merged entry by entry (an entry already
+  there is never replaced). The device key (`tmd:v3:boardkey`) comes along with Pro unless the new address has a Pro code
+  of its own: /restore counts devices by that key (3 a code). It leaves `tmd:v3:movedin`; game.js movedNote says once
+  that the game moved, and from an old home-screen icon (navigator.standalone / display-mode on the old page) how to add
+  the new one. /move on the old address (move.html) is the same handover back to `#back=<path>`: a redirect rule
+  leaves /move alone so a player can still bring their progress after the old address 301s (the home page's link,
+  game.js renderHome, for a browser with nothing saved: `<meta name="old-home">`). The link preview card for an
+  address is web/og.<address>.png when there is one (og_card.html drawn with that address), else og.png.
+- Tests: scripts/move_test.py (Chromium, both real host names mapped to one local server: everything carried, Pro
+  checked with the old key, nothing overwritten, a forged link refused, /move, a large record, the home-screen note),
+  tests/test_site_move.py, worker_test.mjs (site_vars, the old origin still the site's own). Change move.js and
+  move_test.py together.
