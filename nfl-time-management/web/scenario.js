@@ -13,6 +13,10 @@
  *   otp                 overtime: 0 its first possession, 1 the other team has had the ball, 2 both have
  *   r2h, end            a first-half scenario: who receives the second-half kickoff, and whether it ends at the half
  *   rules               two seasons: whose season's rules ('you' or 'opp')
+ *   lu                  optional, each team's lineup where it is not the real one: { you: { q1: pid, w2: pid, ... },
+ *                       opp: {...} }, a slot (slots(): q1 the quarterback, r1.. the backs, w1.. the receivers, t1.. the
+ *                       tight ends as the team lined up, k1 the kicker) and who plays it (pid(): his name, hashed);
+ *                       checkLineup() tests it against the season's roster, withLineup() puts it on the team
  * code() writes one as a short link-safe code (#custom-<code>), parse() reads it back; check() lists what is wrong
  * with one (an impossible state: a distance past the goal line, a clock past the quarter's length, an overtime lead
  * the rules of its time would have ended); title (optional, TITLE_MAX characters) is the scenario's name: it rides along
@@ -109,6 +113,7 @@
       if (!['you', 'opp'].includes(sc.r2h)) bad('r2h', 'Who gets the ball after halftime?');
       if (!['half', 'game'].includes(sc.end)) bad('end', 'Play to the half or to the end of the game?');
     }
+    if (sc.lu !== undefined && !luShape(sc.lu)) bad('lineup', 'That lineup is not one the builder makes');
     if (sc.qtr === 5 && !out.some(([f]) => f === 'score')) {
       // overtime: who has had the ball, and a score the rules of its time would still be playing on
       const R = overtime(rulesSeason(sc), sc.type).rules, lead = sc.score[sc.ball === 'you' ? 1 : 0] - sc.score[sc.ball === 'you' ? 0 : 1];
@@ -158,11 +163,15 @@
   // the code: VERSION and every field, '-' between (a team's code and the numbers never hold one)
   const LETTER = { site: { home: 'h', away: 'a', neutral: 'n' }, who: { you: 'y', opp: 'o' }, start: { snap: 's', kick: 'k' }, end: { half: 'h', game: 'g' } };
   const unletter = (m, c) => Object.keys(m).find((k) => m[k] === c);
+  // ... then the lineup's picks, if any (luCode): '-', y or o (whose team), the slot (q1, w2, ...) and the player's pid,
+  // yours first, each team's in slot order. A scenario without picks has the code it always had
   function code(sc) {
     return [VERSION, sc.you, sc.ys, sc.opp, sc.os, sc.type, LETTER.site[sc.site], sc.qtr, sc.clock, sc.score[0], sc.score[1], LETTER.who[sc.ball],
-      LETTER.start[sc.start], sc.yl, sc.down, sc.ytg, sc.to[0], sc.to[1], sc.otp, LETTER.who[sc.r2h], LETTER.who[sc.rules], LETTER.end[sc.end]].join('-');
+      LETTER.start[sc.start], sc.yl, sc.down, sc.ytg, sc.to[0], sc.to[1], sc.otp, LETTER.who[sc.r2h], LETTER.who[sc.rules], LETTER.end[sc.end]].join('-')
+      + luCode(sc.lu);
   }
-  const CODE_RE = /^1(?:-[0-9A-Za-z]{1,4}){21}$/;
+  // (board/worker.js SCEN_RE is the same: change both; board/worker_test.mjs checks)
+  const CODE_RE = /^1(?:-[0-9A-Za-z]{1,4}){21}(?:-[yo][qrwtk][1-9][0-9a-z]{4}){0,24}$/;
   function parse(s) {
     s = String(s || '').trim();
     if (!CODE_RE.test(s)) return null;
@@ -172,7 +181,148 @@
       qtr: n(f[7]), clock: n(f[8]), score: [n(f[9]), n(f[10])], ball: unletter(LETTER.who, f[11]), start: unletter(LETTER.start, f[12]),
       yl: n(f[13]), down: n(f[14]), ytg: n(f[15]), to: [n(f[16]), n(f[17])], otp: n(f[18]), r2h: unletter(LETTER.who, f[19]),
       rules: unletter(LETTER.who, f[20]), end: unletter(LETTER.end, f[21]) };
-    return Object.values(sc).some((v) => v === undefined || (typeof v === 'number' && Number.isNaN(v))) || sc.score.concat(sc.to).some(Number.isNaN) ? null : sc;
+    if (Object.values(sc).some((v) => v === undefined || (typeof v === 'number' && Number.isNaN(v))) || sc.score.concat(sc.to).some(Number.isNaN)) return null;
+    if (f.length > 22) {
+      // the picks, each slot once, in the order code() writes them (one scenario, one code)
+      const lu = { you: {}, opp: {} };
+      for (const x of f.slice(22)) {
+        const side = x[0] === 'y' ? 'you' : 'opp', slot = x.slice(1, 3);
+        if (lu[side][slot]) return null;
+        lu[side][slot] = x.slice(3);
+      }
+      if (luCode(lu) !== `-${f.slice(22).join('-')}`) return null;
+      sc.lu = luTidy(lu);
+    }
+    return sc;
+  }
+
+  // ------------------------------------------------------------ lineups ---
+  // A team's slots as it lined up (rosters/<season>.json, history.py teams: lineup.off, its bench, the other
+  // quarterbacks lineup.qbs, the other kickers): q1 the quarterback, r1.. the backs (RB, FB), w1.. the receivers, t1..
+  // the tight ends, k1 the kicker; each with the player in it (real) and who can play it (cands: the position's men,
+  // those lined up first, then the bench, the other quarterbacks or kickers). A tight end wearing a lineman's number (a
+  // jumbo snap's sixth lineman) is no one's pick.
+  const SLOTS = { q: ['QB'], r: ['RB', 'FB'], w: ['WR'], t: ['TE'], k: ['K'] };
+  const SLOT_ORDER = 'qrwtk';
+  const POS_SAY = { q: 'quarterback', r: 'running back', w: 'receiver', t: 'tight end', k: 'kicker' };
+  const lineman = (p) => p && p.pos === 'TE' && p.num >= 50 && p.num <= 79;
+  const nameKey = (n) => String(n || '').replace(/\s+/g, ' ').trim();
+  // a player's mark in a code: his name hashed (FNV-1a), 4 base-36 characters (a slot has a handful to tell apart)
+  function pid(name) {
+    let h = 0x811c9dc5;
+    const s = nameKey(name);
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return (h % 1679616).toString(36).padStart(4, '0');
+  }
+  function slots(team) {
+    const L = (team && team.lineup) || {}, off = L.off || [], bench = L.bench || [], out = [];
+    const uniq = (ps) => { const seen = new Set(); return ps.filter((p) => p && p.name && !seen.has(nameKey(p.name)) && seen.add(nameKey(p.name))); };
+    const qb = off.find((p) => p.pos === 'QB');
+    if (qb) out.push({ slot: 'q1', k: 'q', real: qb, cands: uniq([qb, ...(L.qbs || [])]) });
+    for (const k of 'rwt') {
+      const pool = uniq(off.concat(bench).filter((p) => SLOTS[k].includes(p.pos) && !lineman(p)));
+      off.filter((p) => SLOTS[k].includes(p.pos)).forEach((p, i) => out.push({ slot: `${k}${i + 1}`, k, real: p, cands: lineman(p) ? [p, ...pool] : pool }));
+    }
+    if (team && team.kicker && team.kicker.name) out.push({ slot: 'k1', k: 'k', real: { ...team.kicker, pos: 'K' }, cands: uniq([team.kicker, ...(team.kickers || [])].map((p) => ({ ...p, pos: 'K' }))) });
+    return out;
+  }
+  const slotSort = (a, b) => SLOT_ORDER.indexOf(a[0]) - SLOT_ORDER.indexOf(b[0]) || Number(a.slice(1)) - Number(b.slice(1));
+  function luCode(lu) {
+    if (!lu) return '';
+    return ['you', 'opp'].map((side) => Object.keys(lu[side] || {}).sort(slotSort).map((s) => `-${side === 'you' ? 'y' : 'o'}${s}${lu[side][s]}`).join('')).join('');
+  }
+  // picks kept as written, a team with none left out (none at all: no lu)
+  function luTidy(lu) {
+    const out = {};
+    ['you', 'opp'].forEach((side) => { const p = (lu && lu[side]) || {}; if (Object.keys(p).length) out[side] = { ...p }; });
+    return Object.keys(out).length ? out : undefined;
+  }
+  function luShape(lu) {
+    if (!lu || typeof lu !== 'object' || Array.isArray(lu)) return false;
+    return Object.entries(lu).every(([side, p]) => ['you', 'opp'].includes(side) && p && typeof p === 'object' && !Array.isArray(p)
+      && Object.entries(p).every(([s, h]) => /^[qrwtk][1-9]$/.test(s) && typeof h === 'string' && /^[0-9a-z]{4}$/.test(h)));
+  }
+  // who plays each slot with the picks on: { slot: player } (a pick that names no one of the slot's: null)
+  function lineupOf(team, picks) {
+    const out = {};
+    slots(team).forEach((s) => {
+      const h = picks && picks[s.slot];
+      out[s.slot] = !h ? s.real : s.cands.find((c) => pid(c.name) === h) || null;
+    });
+    return out;
+  }
+  // [field, message] for what is wrong with a scenario's lineups on the seasons' rosters (rosters/<season>.json)
+  function checkLineup(sc, rosY, rosO) {
+    const out = [];
+    if (!sc.lu) return out;
+    if (!luShape(sc.lu)) return [['lineup', 'That lineup is not one the builder makes']];
+    [['you', rosY, sc.you, sc.ys], ['opp', rosO, sc.opp, sc.os]].forEach(([side, ros, c, y]) => {
+      const picks = sc.lu[side];
+      if (!picks) return;
+      const team = ros && ros.teams && ros.teams[c], whose = side === 'you' ? 'Your' : 'Their';
+      if (!team) { out.push([`lu-${side}`, `There are no ${y} rosters for that team`]); return; }
+      const S = slots(team), on = lineupOf(team, picks), seen = new Map();
+      Object.keys(picks).sort(slotSort).forEach((s) => {
+        const sl = S.find((x) => x.slot === s);
+        if (!sl) out.push([`lu-${side}`, `${whose} ${y} lineup has no ${POS_SAY[s[0]]} ${s.slice(1)}`]);
+        else if (!on[s]) out.push([`lu-${side}`, `${whose} ${POS_SAY[s[0]]} pick is not on the ${y} roster`]);
+      });
+      Object.entries(on).forEach(([s, p]) => {
+        if (!p) return;
+        const k = `${s[0] === 'k' ? 'k' : 'p'}:${nameKey(p.name)}`;
+        if (seen.has(k)) out.push([`lu-${side}`, `${whose} lineup has ${p.name} in two places`]);
+        seen.set(k, s);
+      });
+    });
+    return out;
+  }
+  // the calls the quarterback throws (playbook.py CALLS of kind pass, all but the receiver's own pass): a different
+  // quarterback moves what they are worth by the difference in what the two bring (withQb)
+  const QB_CALLS = ['rpo_strong', 'rpo_weak', 'quick_strong', 'quick_weak', 'quick_middle', 'screen', 'deep_strong', 'deep_weak', 'deep_middle',
+    'pa_short', 'pa_deep', 'roll_strong', 'roll_weak', 'hail_mary', 'trick_flea'];
+  const r5 = (x) => Math.round(x * 1e5) / 1e5;
+  // the team with another of its quarterbacks playing (lineup.qbs: each with adj, what he brings: history.py qb_room,
+  // the starter's rule, live.py QB_SHARE_OF_PASSING of his EPA a dropback over the team's usual mix). The engine reads
+  // a quarterback where it always has: the team's pass rating takes his adjustment for the starter's (engine.js
+  // effective: qb.adjustment), and each call he throws (QB_CALLS) the difference between them (makeContext pbDelta:
+  // the team's call ratings), so a called pass is drawn from real plays tilted to his level. The one he replaces goes
+  // to qbs with his own adjustment, so a swap back is the team as it was.
+  function withQb(team, name) {
+    const L = team && team.lineup, off = (L && L.off) || [], i = off.findIndex((p) => p.pos === 'QB');
+    if (i < 0 || nameKey(off[i].name) === nameKey(name)) return team;
+    const q = (L.qbs || []).find((p) => nameKey(p.name) === nameKey(name));
+    if (!q || typeof q.adj !== 'number') throw new Error(`no ${name} among ${team.team}'s quarterbacks`);
+    const was = (team.qb && team.qb.adjustment) || 0, d = q.adj - was, calls = { ...(team.calls || {}) };
+    QB_CALLS.forEach((id) => { const c = calls[id] || { off: 0, def: 0 }; calls[id] = { ...c, off: r5((c.off || 0) + d) }; });
+    const { adj, ...me } = q;
+    return { ...team, qb: { ...team.qb, name: q.name, adjustment: q.adj }, calls,
+      lineup: { ...L, off: off.map((p, j) => (j === i ? { ...me, pos: 'QB' } : p)), qbs: [{ ...off[i], adj: was }, ...L.qbs.filter((p) => p !== q)] } };
+  }
+  // the team with its picks on (a scenario's lu[side]): the quarterback (withQb), the kicker (the engine's kick
+  // rating is his), and backs, receivers and tight ends into their slots (who is on the field and whom a pass can go
+  // to; the one a pick replaces goes to the bench, or, picked from another slot, the two swap places)
+  function withLineup(team, picks) {
+    if (!picks || !Object.keys(picks).length) return team;
+    const on = lineupOf(team, picks);
+    let t = team;
+    const q = on.q1;
+    if (q && picks.q1) t = withQb(t, q.name);
+    if (on.k1 && picks.k1 && nameKey(on.k1.name) !== nameKey(team.kicker.name)) {
+      const { pos, ...k } = on.k1;
+      t = { ...t, kicker: k, kickers: [team.kicker, ...(team.kickers || []).filter((x) => nameKey(x.name) !== nameKey(k.name))] };
+    }
+    const S = slots(team).filter((s) => 'rwt'.includes(s.k)), L = t.lineup, off = L.off.slice();
+    let bench = (L.bench || []).slice();
+    S.forEach((s) => {
+      const p = on[s.slot];
+      if (!p || !picks[s.slot] || nameKey(p.name) === nameKey(s.real.name)) return;
+      const i = off.indexOf(s.real);
+      if (i < 0) return;
+      off[i] = { ...p, pos: s.real.pos };
+      bench = bench.filter((x) => nameKey(x.name) !== nameKey(p.name));
+      if (!Object.values(on).some((x) => x && nameKey(x.name) === nameKey(s.real.name))) bench.push(s.real);
+    });
+    return { ...t, lineup: { ...L, off, bench } };
   }
   // the link's part after #custom-: the code, then ~ and the title (URI-encoded) when it has one
   const link = (sc) => { const t = cleanTitle(sc.title); return `${code(sc)}${t ? `~${encodeURIComponent(t)}` : ''}`; };
@@ -192,6 +342,8 @@
     if (out.ys === out.os) out.rules = 'you';
     const t = cleanTitle(out.title);
     if (t) out.title = t; else delete out.title;
+    const lu = luTidy(out.lu);
+    if (lu) out.lu = lu; else delete out.lu;
     return out;
   }
 
@@ -210,8 +362,11 @@
   // { spot, teams }: the scenario as a spot (dailygame.py spot_record's fields; real: the season whose rules it plays,
   // the kind of game, no real coach or drive) and its two teams (rosters/<season>.json); fit: the index's spread
   function spotOf(sc, rosYou, rosOpp, fit) {
-    const tY = rosYou.teams[sc.you], tO = rosOpp.teams[sc.opp];
-    if (!tY || !tO) throw new Error('the teams are not in the rosters');
+    if (!rosYou.teams[sc.you] || !rosOpp.teams[sc.opp]) throw new Error('the teams are not in the rosters');
+    const bad = checkLineup(sc, rosYou, rosOpp);
+    if (bad.length) throw new Error(bad.map(([, m]) => m).join('; '));
+    // (each team with its lineup's picks on: the spread below is the two teams' strengths with them)
+    const tY = withLineup(rosYou.teams[sc.you], sc.lu && sc.lu.you), tO = withLineup(rosOpp.teams[sc.opp], sc.lu && sc.lu.opp);
     const homeYou = sc.site !== 'away', neutral = sc.site === 'neutral';
     const H = homeYou ? sc.you : sc.opp, A = homeYou ? sc.opp : sc.you;
     const mine = (x) => (homeYou ? [x[1], x[0]] : [x[0], x[1]]);          // [yours, theirs] -> [away, home]
@@ -287,8 +442,23 @@
     return null;
   }
 
+  // the lineup's picks in words, a line a team that has any: "Minnesota: J.J. McCarthy at quarterback, ..." (name: a
+  // team code and season -> its name)
+  function lineupSay(sc, rosY, rosO, name) {
+    const out = [];
+    [['you', rosY, sc.you, sc.ys], ['opp', rosO, sc.opp, sc.os]].forEach(([side, ros, c, y]) => {
+      const picks = sc.lu && sc.lu[side], team = ros && ros.teams && ros.teams[c];
+      if (!picks || !team) return;
+      const on = lineupOf(team, picks), said = Object.keys(picks).sort(slotSort).filter((s) => on[s])
+        .map((s) => `${on[s].name} at ${POS_SAY[s[0]]}`);
+      if (said.length) out.push(`${name(c, y)}: ${said.join(', ')}`);
+    });
+    return out;
+  }
+
   const TMDScenario = { VERSION, TITLE_MAX, blocked, cleanTitle, titleBad, link, parseLink, TYPES, PRESETS, OT_SAY, overtime, defaults, applyPreset, check, ok, code, parse, tidy, category, strength, spreadOf,
-    spotOf, summary, random, rulesSeason, otLen, otTo, maxScore, clockText, ERA, eraName };
+    spotOf, summary, random, rulesSeason, otLen, otTo, maxScore, clockText, ERA, eraName,
+    CODE_RE, pid, slots, lineupOf, checkLineup, withQb, withLineup, lineupSay, QB_CALLS, POS_SAY };
   if (typeof module !== 'undefined' && module && module.exports) module.exports = TMDScenario;
   if (global) global.TMDScenario = TMDScenario;       // (always: a page with some other script's global `module` still gets it)
 })(typeof self !== 'undefined' ? self : this);

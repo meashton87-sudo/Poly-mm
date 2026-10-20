@@ -191,6 +191,68 @@ for (let k = 0; k < 100; k++) {
   const pe = r.log.find((e) => e.ev === 'play');
   assert.ok(pe && pe.row >= 0 && P.ngs.pers[pe.row] === 21, 'a 21-personnel run is a real 21-personnel run');
 }
+// Who plays, the quarterback (game.js teamOf, simScen; web/scenario.js withQb): every spot's teams carry that game's
+// other quarterbacks (history.py qb_room: lineup.qbs, each with adj, what he brings), never the one lined up; another one
+// put in is the lineup the engine sees: the team's pass rating with his adjustment for the starter's and each call he
+// throws (scenario.js QB_CALLS: the playbook's passes but the receiver's own) moved by the difference, nothing else. His
+// passes then go at his level (the plays drawn: EPA, completions, sacks, picks) and so does the drive (its win chance);
+// a swap back is the real lineup, value for value
+{
+  const SC = require('./scenario.js');
+  const passes = eng.pb.calls.filter((c) => c.kind === 'pass' && c.id !== 'trick_pass').map((c) => c.id);
+  assert.deepStrictEqual([...SC.QB_CALLS].sort(), passes.sort(), 'the calls a quarterback throws are the playbook’s passes');
+  let n = 0, worse = 0, big = null;
+  const gaps = [];
+  idx.spots.forEach((sp, i) => {
+    for (const side of ['home', 'away']) {
+      const t = TEAMS[i][side], qb = t.lineup.off.find((p) => p.pos === 'QB');
+      (t.lineup.qbs || []).forEach((q) => {
+        assert.ok(q.pos === 'QB' && typeof q.adj === 'number' && Math.abs(q.adj) < 0.3 && q.name && q.name !== qb.name && q.ovr >= 40 && q.ovr <= 99, `${sp.id} ${t.team} ${q.name}`);
+        const d = q.adj - t.qb.adjustment;
+        n++; if (d < 0) worse++; gaps.push(Math.abs(d));
+        if (side === (sp.player === sp.home ? 'home' : 'away') && (!big || d < big.d)) big = { sp, side, q, d };
+      });
+    }
+  });
+  gaps.sort((a, b) => a - b);
+  console.log(`quarterbacks: ${n} others on the spots' rosters, ${worse} of them throwing worse than the one who played; the gap a dropback: median ${gaps[gaps.length >> 1].toFixed(3)} EPA, 90th percentile ${gaps[Math.floor(gaps.length * 0.9)].toFixed(3)}`);
+  assert.ok(n > idx.spots.length, 'most teams have another quarterback');
+  const { sp, side, q, d } = big, base = scen(sp), mine = base.game[side];
+  const swapped = SC.withQb(mine, q.name), game = { ...base.game, [side]: swapped };
+  assert.ok(swapped !== mine && mine.lineup.off[0].name !== q.name && swapped.lineup.off.some((p) => p.pos === 'QB' && p.name === q.name), 'he lines up');
+  assert.ok(swapped.lineup.off.filter((p) => p.pos !== 'QB').every((p, k) => p === mine.lineup.off.filter((x) => x.pos !== 'QB')[k]), 'nobody else moves');
+  const me = side === 'home' ? 0 : 1, c0 = eng.makeContext(base.game, { receive2h: sp.start.receive2h }), c1 = eng.makeContext(game, { receive2h: sp.start.receive2h });
+  assert.ok(Math.abs(c1.delta[me][1] - c0.delta[me][1] - d) < 1e-9 && c1.delta[me][0] === c0.delta[me][0], 'his adjustment, on the pass rating only');
+  assert.deepStrictEqual(c1.delta[1 - me], c0.delta[1 - me], 'their offense as it was');
+  eng.pb.calls.forEach((c, k) => assert.ok(Math.abs(c1.pbDelta[me][k] - c0.pbDelta[me][k] - (SC.QB_CALLS.includes(c.id) ? d : 0)) < 2e-5, `call ${c.id}`));
+  const back = SC.withQb(swapped, mine.lineup.off.find((p) => p.pos === 'QB').name);
+  assert.ok(Math.abs(back.qb.adjustment - mine.qb.adjustment) < 1e-12 && SC.QB_CALLS.every((id) => Math.abs((back.calls[id] || { off: 0 }).off - ((mine.calls[id] || {}).off || 0)) < 2e-5), 'a swap back');
+  const s0 = eng.simulator(c0), s1 = eng.simulator(c1), P = eng.pb;
+  const draw = (S_, ids) => {
+    let t = 0, k = 0, comp = 0, att = 0, sack = 0, pick = 0;
+    for (const id of ids) for (let fk = 0; fk < P.nFine; fk += 3) for (let u = 0; u < 60; u++) {
+      const r = S_.samplePlaybook(me, P.callIndex[id], fk, (u + 0.5) / 60, 0, 0, 0);
+      const f = P.flags[r], ev = P.eventNames[P.event[r]] || '';
+      if (f & 1) continue;
+      t += P.epa[r]; k++;
+      if (/sack/.test(ev)) sack++; else if (!/scramble/.test(ev)) { att++; if (!(f & 4) && !(f & 64)) comp++; if ((f & 64) && /interception|pick_six/.test(ev)) pick++; }
+    }
+    return { epa: t / k, comp: comp / att, sack: sack / k, pick: pick / att };
+  };
+  const ids = ['quick_strong', 'quick_middle', 'deep_strong', 'pa_short', 'roll_weak'];
+  const a = draw(s0, ids), b = draw(s1, ids);
+  assert.ok(Math.sign(b.epa - a.epa) === Math.sign(d) && Math.abs(b.epa - a.epa - d) < 0.5 * Math.abs(d) + 0.01, `his passes at his level: ${a.epa.toFixed(3)} -> ${b.epa.toFixed(3)} (${d.toFixed(3)})`);
+  const run0 = draw(s0, ['rb_middle']), run1 = draw(s1, ['rb_middle']);
+  assert.ok(Math.abs(run1.epa - run0.epa) < 1e-9, 'a handoff as it was');
+  const st = sp.start, root = { t: st.qtr <= 4 ? (4 - st.qtr) * 900 + st.clock : st.clock, pos: me, score: [st.score[1], st.score[0]], down: st.down,
+    ytg: Math.min(st.ytg, st.yl), yl: st.yl, to: [st.to[1], st.to[0]], clock_running: st.running, phase: 0, credit: 0, free_kick: false };
+  const wp = (S_) => S_.run(root, { n: 3000, action: { to_off: false, play: 'pass', call: 'quick_strong' }, perspective: me, seed: 11 }).mean;
+  const w0 = wp(s0), w1 = wp(s1);
+  assert.ok(d < 0 ? w1 < w0 : w1 > w0, `the drive with him: ${w0.toFixed(3)} -> ${w1.toFixed(3)}`);
+  console.log(`  ${sp.id} ${mine.team}: ${mine.qb.name} (${mine.qb.adjustment.toFixed(3)}) -> ${q.name} (${q.adj.toFixed(3)}), ${d.toFixed(3)} EPA a dropback: ` +
+    `his passes ${a.epa.toFixed(3)} -> ${b.epa.toFixed(3)} EPA, caught ${(100 * a.comp).toFixed(1)}% -> ${(100 * b.comp).toFixed(1)}%, sacked ${(100 * a.sack).toFixed(1)}% -> ${(100 * b.sack).toFixed(1)}%, ` +
+    `picked ${(100 * a.pick).toFixed(1)}% -> ${(100 * b.pick).toFixed(1)}%; the drive's win chance ${(100 * w0).toFixed(1)}% -> ${(100 * w1).toFixed(1)}%`);
+}
 // Build a scenario (Pro, web/scenario.js, web/rosters: nflclock.scenario): every team-season the builder offers is a
 // full team; random valid scenarios of every era, regular season and playoffs, overtime and kickoffs included, play to
 // the end in the engine as game.js plays them (its startRoot, a second half from a first-half one, overtime started as
@@ -224,6 +286,23 @@ if (fs.existsSync(path.join(dir, 'rosters', 'index.json'))) {
     const sc = SC.random(R, rix, g % 10 === 0 ? { qtr: 2, end: 'game' } : g % 7 === 0 ? { qtr: 5 } : undefined);
     assert.ok(sc && SC.ok(sc, rix), `a random scenario ${g}`);
     assert.deepStrictEqual(SC.parse(SC.code(sc)), sc, 'its code reads back');
+    // every third one with a lineup of its own (the builder's Lineups: a backup quarterback, a receiver or kicker of the
+    // season's), its code read back, the picks on the field and the quarterback's adjustment the team's
+    let want = null;
+    if (g % 3 === 0) {
+      const lu = {};
+      for (const [side, c, y] of [['you', sc.you, sc.ys], ['opp', sc.opp, sc.os]]) {
+        const p = {};
+        SC.slots(roster(y).teams[c]).forEach((x) => { if ((x.k === 'q' || R() < 0.25) && x.cands.length > 1) { const pk = x.cands[1 + Math.floor(R() * (x.cands.length - 1))]; p[x.slot] = SC.pid(pk.name); } });
+        if (!SC.checkLineup({ ...sc, lu: { [side]: p } }, roster(sc.ys), roster(sc.os)).length && Object.keys(p).length) lu[side] = p;
+      }
+      if (Object.keys(lu).length) {
+        sc.lu = lu;
+        assert.deepStrictEqual(SC.parse(SC.code(sc)), sc, `a lineup's code reads back: ${SC.code(sc)}`);
+        want = SC.lineupOf(roster(sc.ys).teams[sc.you], lu.you);
+        tally.lineups = (tally.lineups || 0) + 1;
+      }
+    }
     if (g < 6) {
       // a title rides in the link, never in the code: the same scenario whatever it is called; an old link (no title) reads
       // the same; a broken or refused title is dropped, the scenario kept; a refused one fails check()
@@ -237,6 +316,11 @@ if (fs.existsSync(path.join(dir, 'rosters', 'index.json'))) {
       assert.strictEqual(SC.summary(SC.tidy(named), (c, y) => `${y} ${c}`).name, SC.cleanTitle(t) || null, 'the card names it');
     }
     const { spot, teams } = SC.spotOf(sc, roster(sc.ys), roster(sc.os), rix.spread);
+    if (want) {
+      const t = teams[spot.home === sc.you ? 'home' : 'away'], qb = t.lineup.off.find((p) => p.pos === 'QB');
+      assert.ok(qb.name === want.q1.name && t.qb.name === want.q1.name && Math.abs(t.qb.adjustment - (want.q1.adj ?? roster(sc.ys).teams[sc.you].qb.adjustment)) < 1e-12, `${SC.code(sc)}: the quarterback picked plays`);
+      Object.entries(want).forEach(([slot, p]) => assert.ok(slot === 'k1' ? t.kicker.name === p.name : t.lineup.off.some((x) => x.name === p.name), `${SC.code(sc)}: ${slot} ${p.name} plays`));
+    }
     const game = { home: teams.home, away: teams.away, home_spread: spot.spread, indoor: false, wind: 0, temp: null, league: spot.league,
       home_coach: teams.home.coach, away_coach: teams.away.coach, season: spot.real.season };
     const S = eng.simulator(eng.makeContext(game, { receive2h: spot.start.receive2h }));
@@ -279,6 +363,7 @@ if (fs.existsSync(path.join(dir, 'rosters', 'index.json'))) {
     if (r.ot && r.ot.r === 'sd' && r.score[0] !== r.score[1]) assert.ok(Math.abs(r.score[0] - r.score[1]) <= 8, `${tag}: sudden death`);
   }
   console.log(`scenarios: ${rix.seasons.length} seasons (${rix.seasons[0].season}-${rix.seasons[rix.seasons.length - 1].season}), ${rix.seasons.reduce((a, s) => a + s.teams.length, 0)} team-seasons; ` +
-    `${tally.games} random scenarios (eras ${[...tally.eras].sort().join(', ')}; ${tally.po} playoff, ${tally.kick} kickoffs, ${tally.half2} second halves, ${tally.ot} in overtime, ${tally.ties} ties), ${tally.snaps} steps`);
+    `${tally.games} random scenarios (eras ${[...tally.eras].sort().join(', ')}; ${tally.po} playoff, ${tally.kick} kickoffs, ${tally.half2} second halves, ${tally.ot} in overtime, ${tally.ties} ties, ${tally.lineups || 0} with lineups of their own), ${tally.snaps} steps`);
+  assert.ok(tally.lineups >= 10, 'scenarios with lineups of their own');
 } else console.log('scenarios: web/rosters not built (nflclock.scenario.build), skipped');
 console.log('smoke ok');

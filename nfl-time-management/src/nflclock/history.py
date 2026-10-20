@@ -59,6 +59,12 @@ SWAP_OFF = {"QB": ["QB"], "RB": ["RB", "FB", "TE", "WR"], "FB": ["FB", "RB", "TE
             "TE": ["TE", "FB", "WR", "RB"]}
 SWAP_DEF = {"EDGE": ["EDGE", "DL", "LB"], "DL": ["DL", "EDGE", "LB"], "LB": ["LB", "EDGE", "S", "DL", "CB"],
             "CB": ["CB", "S", "LB"], "S": ["S", "CB", "LB"]}
+# the other quarterbacks a player can put in (game.js Who plays, the scenario builder's lineup: lineup.qbs): the weekly
+# roster's statuses that keep a man on the team (active, inactive that day, a reserve list such as injured reserve:
+# a starter out hurt can be brought back), at most this many; and a team-season's other kickers (scenario builder)
+QB_STATUS = ("ACT", "INA", "RES")
+QB_ROOM_MAX = 4
+KICKERS_MAX = 3
 
 
 def _ol_slots(players: list) -> list:
@@ -647,7 +653,11 @@ class History:
         k, q = self.extra_kp[season]
         return pd.concat([k, kr], ignore_index=True), pd.concat([q, pr], ignore_index=True)
 
-    def _strength(self, team: str, season: int, week: int, game_id: str, qb_id, play_id: float | None = None) -> dict:
+    def _strength(self, team: str, season: int, week: int, game_id: str, qb_id, play_id: float | None = None,
+                  others: tuple = (), kickers: bool = False) -> dict:
+        """The simulator's view of the team that week. others: the team's other quarterbacks (_qb_room), each one's
+        adjustment had he been the one playing (qb_adj: the starter's rule, his rating against the team's mix);
+        kickers: every other kicker who kicked for it that season, rated as the game's kicker is (kickers)."""
         tr = self.team_ratings(season)
         rows = tr[(tr["team"] == team) & ((tr["season"] < season) | ((tr["season"] == season) & (tr["week"] < week)))]
         if not len(rows):          # the ratings start in 2023: a 2023 week 1 game takes the team's first rating
@@ -659,6 +669,19 @@ class History:
         mix_rating = float(sum(sh * qbr["rating"].get(pid, live.QB_PRIOR_MEAN) for pid, sh in mix.items()))
         qb_rating = float(qbr["rating"].get(qb_id, live.QB_PRIOR_MEAN)) if qb_id else mix_rating
         g = self.pbp[(self.pbp["game_id"] == game_id) & (self.pbp["posteam"] == team)]
+        # (one the play-by-play has never seen throw plays like a backup: live.QB_PRIOR_MEAN)
+        qb_adj = {i: round(live.QB_SHARE_OF_PASSING * (float(qbr["rating"].get(i, live.QB_PRIOR_MEAN)) - mix_rating), 5) for i in others}
+
+        def rate(pid, tab, key, kicker: bool):
+            """A kicker's or punter's rating as of the week (his latest before it; none: the league's average) and his
+            place among the league's then."""
+            t = tab[(tab[key] == pid) & ((tab["season"] < season) | ((tab["season"] == season) & (tab["week"] < week)))]
+            rating = float(t.sort_values(["season", "week"])["rating"].iloc[-1]) if len(t) else 0.0
+            wk = tab[(tab["season"] == season) & (tab["week"] == tab.loc[(tab["season"] == season) & (tab["week"] < week), "week"].max())]
+            if not len(t) and kicker and len(wk) and pid in set(g["punter_player_id"].dropna()):
+                rating = float(wk["rating"].min())      # the punter kicking (no kicker left): no better than the league's worst
+            pct = float((wk["rating"] < rating).mean()) if len(wk) else 0.5
+            return {"name": self.names.get(pid), "rating": round(rating, 4), "ovr": O.specialist_ovr(pct)}
 
         def specialist(col, tab, key):
             # the kicker of the team's field goals and extra points (on kickoffs the data credits the kick to the
@@ -680,27 +703,81 @@ class History:
                 before = own[own["week"] <= week]
                 ids = (before[before["week"] == before["week"].max()] if len(before) else own[own["week"] == own["week"].min()])[col]
             pid = Counter(ids).most_common(1)[0][0] if len(ids) else None
-            t = tab[(tab[key] == pid) & ((tab["season"] < season) | ((tab["season"] == season) & (tab["week"] < week)))]
-            rating = float(t.sort_values(["season", "week"])["rating"].iloc[-1]) if len(t) else 0.0
-            wk = tab[(tab["season"] == season) & (tab["week"] == tab.loc[(tab["season"] == season) & (tab["week"] < week), "week"].max())]
-            if not len(t) and col == "kicker_player_id" and len(wk) and pid in set(g["punter_player_id"].dropna()):
-                rating = float(wk["rating"].min())      # the punter kicking (no kicker left): no better than the league's worst
-            pct = float((wk["rating"] < rating).mean()) if len(wk) else 0.5
-            return {"name": self.names.get(pid), "rating": round(rating, 4), "ovr": O.specialist_ovr(pct)}
-        return {
+            return pid, rate(pid, tab, key, col == "kicker_player_id")
+        kr, pr = self.specialist_ratings(season)
+        k_id, kicker = specialist("kicker_player_id", kr, "kicker_player_id")
+        out = {
             "base": {k: round(float(r[k]), 5) for k in ("off_pass", "off_rush", "def_pass", "def_rush", "proe")},
             "qb": {"name": self.names.get(qb_id), "adjustment": round(live.QB_SHARE_OF_PASSING * (qb_rating - mix_rating), 5)},
+            "qb_adj": qb_adj,
             "injury_adjustment": {"off_pass": 0.0, "off_rush": 0.0, "def_pass": 0.0, "def_rush": 0.0},
-            "kicker": specialist("kicker_player_id", self.specialist_ratings(season)[0], "kicker_player_id"),
-            "punter": specialist("punter_player_id", self.specialist_ratings(season)[1], "punter_player_id"),
+            "kicker": kicker,
+            "punter": specialist("punter_player_id", pr, "punter_player_id")[1],
             "league": {k: round(float(r[k]), 5) for k in ("mu_pass", "mu_rush", "home_pass", "home_rush")},
         }
+        if kickers:                 # the season's other kickers for the team (field goals and extra points), most kicks first
+            own = self.pbp[(self.pbp["posteam"] == team) & (self.pbp["season"] == season) & self.pbp["play_type"].isin(["field_goal", "extra_point"])]
+            ids = [i for i, _ in Counter(own["kicker_player_id"].dropna()).most_common() if i != k_id and self.names.get(i)]
+            out["kickers"] = [rate(i, kr, "kicker_player_id", True) for i in ids[:KICKERS_MAX]]
+        return out
+
+    def _qb_room(self, R, season: int, week: int, team: str, game_id: str, on: set, whole_season: bool = False) -> list:
+        """The team's other quarterbacks (gsis ids), the ones a player can put in (game.js Who plays, the scenario
+        builder's lineup): on its roster that week (nflverse weekly rosters: active, inactive that day or on a reserve
+        list; before them, the season's roster) or throwing for it in the game; whole_season (a team-season: Pro's
+        scenarios), on its roster any week of the regular season or throwing for it in any of its games. Not the ones
+        on the field (on: their ids, gsis or pfr:); most dropbacks for it that season first, then most weeks on the
+        roster, at most QB_ROOM_MAX."""
+        try:
+            gw = int(str(game_id).split("_")[1])          # (the game's own week: the roster of that game)
+        except (IndexError, ValueError):
+            gw = week
+        w = self._weekly_qbs(season)
+        mine = w[w["team"].isin(rcodes(team)) & w["status"].isin(QB_STATUS)]
+        if whole_season:
+            mine = mine[mine["game_type"] == "REG"]
+        else:                                             # (that week's roster, else the latest before it)
+            wk = mine["week"]
+            pick = gw if (wk == gw).any() else wk[wk <= gw].max() if (wk <= gw).any() else None
+            mine = mine[wk == pick] if pick is not None else mine.iloc[:0]
+        weeks = Counter(mine["gsis_id"])
+        if not len(w):                                    # no weekly rosters (2001): the season's
+            ros = self._roster(season)
+            ros = ros[ros["team"].isin(rcodes(team)) & (ros["position"] == "QB")]
+            weeks = Counter({i: 1 for i in ros["gsis_id"]})
+        d = self.pbp[(self.pbp["posteam"] == team) & (self.pbp["season"] == season) & (self.pbp["qb_dropback"] == 1)]
+        throws = Counter(d["passer_player_id"].dropna())
+        game = Counter(d.loc[d["game_id"] == game_id, "passer_player_id"].dropna())
+        pos = self.pos_now
+        cand = set(weeks) | {i for i in (throws if whole_season else game) if pos.get(i) == "QB"}
+        pfr_on = {i[4:] for i in on if str(i).startswith("pfr:")}
+        cand = [i for i in cand if i not in on and R.gsis_to_pfr.get(i) not in pfr_on and self.names.get(i)]
+        return sorted(cand, key=lambda i: (-throws[i], -weeks[i], self.names.get(i, "")))[:QB_ROOM_MAX]
+
+    def _weekly_qbs(self, season: int) -> pd.DataFrame:
+        """The quarterbacks of the season's weekly rosters (nflverse, 2002 on): week, team, status, game_type, gsis_id;
+        empty when not published."""
+        if ("weekly_qb", season) not in self.jerseys:
+            cols = ["week", "team", "position", "status", "game_type", "gsis_id"]
+            p = PL._get("weekly_rosters", f"roster_weekly_{season}.parquet", optional=True)
+            f = pd.DataFrame(columns=cols)
+            if p is not None:
+                have = set(pq.read_schema(p).names)
+                f = pd.read_parquet(p, columns=[c for c in cols if c in have])
+                for c in cols:
+                    if c not in f:
+                        f[c] = "REG" if c == "game_type" else None
+                f = f[(f["position"] == "QB") & f["gsis_id"].notna()]
+            self.jerseys[("weekly_qb", season)] = f
+        return self.jerseys[("weekly_qb", season)]
 
     def teams(self, game_id: str, season: int, week: int, play_id: float, home: str, away: str, coaches: dict,
-              drive: bool = False, only: str | None = None) -> dict:
+              drive: bool = False, only: str | None = None, whole_season: bool = False) -> dict:
         """{'home': team, 'away': team} in the daily game's team format, as of that game. drive (a historic drive: Pro):
         the lineups of the drive that starts at the snap, everyone who touched the ball on it on the field (the
-        offense's and the defense's), the line in its depth chart's slots. only ('home' or 'away'): that team alone."""
+        offense's and the defense's), the line in its depth chart's slots. only ('home' or 'away'): that team alone.
+        Each lineup has its other quarterbacks (qbs: _qb_room, each rated as the one playing is, with the adjustment
+        he would bring: adj); whole_season (a team-season: Pro's scenarios), the season's, and its other kickers."""
         R = self.ratings(season)
         rt = R.week(season, week)
         card = self.card(season, week)
@@ -760,13 +837,21 @@ class History:
                 d = self.pbp[(self.pbp["game_id"] == game_id) & (self.pbp["posteam"] == team) & (self.pbp["qb_dropback"] == 1)]
                 ids = d["passer_player_id"].dropna()
                 qb_id = Counter(ids).most_common(1)[0][0] if len(ids) else None
-            st = self._strength(team, season, week, game_id, qb_id, play_id)
+            on = {i for i, p in off if OFF_POS.get(p) == "QB"} | ({qb_id} if qb_id else set())
+            others = self._qb_room(R, season, week, team, game_id, on, whole_season)
+            st = self._strength(team, season, week, game_id, qb_id, play_id, others=tuple(others), kickers=whole_season)
+            qbs = self._players(R, rt, season, team, "off", [(i, "QB") for i in others], week)
+            for rec, i in zip(qbs, others):
+                rec["adj"] = st["qb_adj"][i]
+            qbs.sort(key=lambda x: (-x["ovr"], x["name"]))
             out[side] = {
                 "team": team, "coach": CO.coach_name(coaches.get(side), team, season), "base": st["base"], "qb": st["qb"],
                 "injury_adjustment": st["injury_adjustment"], "kicker": st["kicker"], "punter": st["punter"],
+                **({"kickers": st["kickers"]} if "kickers" in st else {}),
                 "lineup": {"off": self._players(R, rt, season, team, "off", off, week),
                            "def": self._players(R, rt, season, team, "def", dfn, week),
-                           "bench": self._bench_players(R, rt, season, team, bench, week)},
+                           "bench": self._bench_players(R, rt, season, team, bench, week),
+                           "qbs": qbs},
                 "calls": {c: {"off": v["off"], "def": v["def"]} for c, v in P.team_card(card, team).items()},
             }
             league = st["league"]

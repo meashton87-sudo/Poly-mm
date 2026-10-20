@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from nflclock import dailygame as DG
+from nflclock import history as HI
 from nflclock import pro
 from nflclock import scenario as S
 
@@ -64,6 +65,30 @@ def test_an_ordinary_snap():
     assert S.ordinary(t, "Patrick Mahomes") and not S.ordinary(t, "Taysom Hill")          # the game's starter
 
 
+def test_qb_room_the_other_quarterbacks():
+    """history.py _qb_room: a game's other quarterbacks are the ones on its roster that week (active, inactive or on a
+    reserve list, never the practice squad or one cut) or throwing in it, not the one on the field; a team-season's, the
+    season's (any regular-season week, any throw); most dropbacks first."""
+    h = object.__new__(HI.History)
+    weekly = pd.DataFrame({
+        "week": [4, 4, 4, 4, 4, 3, 9, 19], "team": ["MIN"] * 7 + ["MIN"], "position": ["QB"] * 8,
+        "status": ["ACT", "INA", "RES", "DEV", "CUT", "ACT", "ACT", "ACT"], "game_type": ["REG"] * 7 + ["WC"],
+        "gsis_id": ["wentz", "mccarthy", "ir", "ps", "cut", "early", "late", "playoff"]})
+    h.jerseys = {("weekly_qb", 2025): weekly}
+    names = {i: i.title() for i in ["wentz", "mccarthy", "ir", "ps", "cut", "early", "late", "playoff", "trick"]}
+    h.names, h.pos_now = names, {**{i: "QB" for i in names}, "trick": "WR"}
+    h.pbp = pd.DataFrame({"game_id": ["2025_04_MIN_PIT"] * 3 + ["2025_09_MIN_DET"] * 2, "season": [2025] * 5, "posteam": ["MIN"] * 5,
+                          "qb_dropback": [1] * 5, "passer_player_id": ["wentz", "wentz", "trick", "late", "mccarthy"]})
+    R = type("R", (), {"gsis_to_pfr": {"mccarthy": "McCaJJ00"}})()
+    # the game's (week 4): its active, inactive and injured-reserve quarterbacks, the one throwing first; a receiver's
+    # throw makes no quarterback
+    assert h._qb_room(R, 2025, 4, "MIN", "2025_04_MIN_PIT", {"wentz"}) == ["mccarthy", "ir"]
+    assert h._qb_room(R, 2025, 4, "MIN", "2025_04_MIN_PIT", {"pfr:McCaJJ00", "wentz"}) == ["ir"]     # (on the field by his pfr id)
+    assert h._qb_room(R, 2025, 6, "MIN", "2025_06_MIN_X", {"wentz"}) == ["mccarthy", "ir"]          # no week 6 roster: week 4's
+    # the team-season's: any regular-season week (not the playoffs'), most dropbacks first
+    assert h._qb_room(R, 2025, 19, "MIN", "2025_04_MIN_PIT", {"wentz"}, whole_season=True) == ["late", "mccarthy", "early", "ir"]
+
+
 def test_strength_and_spread_fit():
     t = lambda op, qb, dp, orr, dr: {"base": {"off_pass": op, "def_pass": dp, "off_rush": orr, "def_rush": dr, "proe": 0}, "qb": {"adjustment": qb}}  # noqa: E731
     assert S.strength(t(0.1, 0.02, -0.05, 0.03, 0.01)) == pytest.approx(0.6 * 0.17 + 0.4 * 0.02)
@@ -101,6 +126,12 @@ def test_built_rosters():
             assert sum(p["pos"] == "QB" for p in L["off"]) == 1 and [p["pos"] for p in L["off"][1:6]] == ["LT", "LG", "C", "RG", "RT"]
             assert all(40 <= p["ovr"] <= 99 for p in L["off"] + L["def"]), (s["season"], code)
             assert t["kicker"]["name"] and t["punter"]["name"] and t["qb"]["name"], (s["season"], code)
+            # the lineup's other choices (the builder's Lineup): the season's other quarterbacks, each with what he would
+            # bring (adj), never the one lined up; its other kickers
+            qbs = L["qbs"]
+            assert all(q["pos"] == "QB" and isinstance(q["adj"], float) and -0.3 < q["adj"] < 0.3 and 40 <= q["ovr"] <= 99 for q in qbs), (s["season"], code)
+            assert L["off"][0]["name"] not in {q["name"] for q in qbs} and len({q["name"] for q in qbs}) == len(qbs), (s["season"], code)
+            assert all(k["name"] and k["name"] != t["kicker"]["name"] and 40 <= k["ovr"] <= 99 for k in t["kickers"]), (s["season"], code)
             m = next(x for x in s["teams"] if x["team"] == code)
             assert m["net"] == S.strength(t) and m["qb"] == t["qb"]["name"]
     nets = {(s["season"], t["team"]): t["net"] for s in idx["seasons"] for t in s["teams"]}
@@ -183,3 +214,72 @@ def test_spot_of_a_scenario():
     assert sb["start"]["phase"] == "kick" and sb["start"]["pos"] == "KC" and sb["start"]["otc"] == [0, 1]     # KC scored first and kicks off
     assert sb["real"]["season"] == 2023 and sb["overtime"] == pro.overtime_rules(2023, "SB")
     assert sb["spread"] == pytest.approx(40 * 0.1 * 0.6, abs=0.5)
+
+
+def test_lineup_codes_round_trip_and_old_codes_still_read():
+    """A scenario's lineup picks ride in its code after the 22 parts (web/scenario.js luCode): they read back, in one
+    order only (one scenario, one code); a code from before lineups reads as it always did, with no lineup; a broken
+    pick (a slot twice, out of order, a bad mark) makes no scenario."""
+    out = js("""
+      const old = '1-NE-2007-NYG-2011-SB-n-5-900-17-20-y-k-75-1-10-2-3-1-o-o-g';
+      const a = { ...SC.parse(old), lu: { you: { q1: SC.pid('Matt Cassel'), w2: SC.pid('Wes Welker') }, opp: { k1: SC.pid('Lawrence Tynes') } } };
+      const c = SC.code(a), back = SC.parse(c);
+      const bad = [`${old}-yq1abcd-yq1abce`, `${old}-yw2abcd-yq1abce`, `${old}-oq1abcd-yq1abce`, `${old}-yq1ABCD`, `${old}-yq0abcd`, `${old}-yz1abcd`, `${old}-yq1abc`]
+        .map((x) => SC.parse(x));
+      return { old: SC.parse(old), oldBack: SC.code(SC.parse(old)), c, back, a, bad, pid: [SC.pid('J.J. McCarthy'), SC.pid(' J.J.  McCarthy '), SC.pid('Carson Wentz')],
+        re: SC.CODE_RE.source, tidyNone: 'lu' in SC.tidy({ ...SC.parse(old), lu: { you: {} } }), ok: SC.check(a).length, shape: SC.check({ ...a, lu: { you: { q1: 'nope!' } } }).map(([f]) => f) };""")
+    assert out["oldBack"] == "1-NE-2007-NYG-2011-SB-n-5-900-17-20-y-k-75-1-10-2-3-1-o-o-g" and "lu" not in out["old"]
+    assert out["c"] == out["oldBack"] + f"-yq1{out['a']['lu']['you']['q1']}-yw2{out['a']['lu']['you']['w2']}-ok1{out['a']['lu']['opp']['k1']}"
+    assert out["back"] == out["a"]
+    assert out["bad"] == [None] * 7
+    assert out["pid"][0] == out["pid"][1] != out["pid"][2] and all(len(x) == 4 for x in out["pid"])
+    assert out["tidyNone"] is False and out["ok"] == 0 and out["shape"] == ["lineup"]
+    # the board reads codes with the same pattern (board/worker.js SCEN_RE)
+    src = (WEB.parent / "board" / "worker.js").read_text()
+    assert f"SCEN_RE = /{out['re']}/;" in src
+
+
+def test_a_lineup_on_a_team():
+    """withQb: another of the team's quarterbacks plays, the team's pass rating taking his adjustment for the starter's
+    and every call he throws moving by the difference (a swap back is the team as it was); withLineup: the picks on
+    (a receiver picked from another slot swaps places, a kicker's rating is his); checkLineup refuses a pick not on the
+    roster or a player in two places; spotOf plays the picks, the spread with them."""
+    out = js("""
+      const P = (pos, name, ovr, x) => ({ pos, name, ovr, stat: 's', ...(x || {}) });
+      const team = (c) => ({ team: c, base: { off_pass: 0.05, def_pass: 0, off_rush: 0, def_rush: 0, proe: 0 }, qb: { name: 'Carson Wentz', adjustment: 0.01 },
+        kicker: { name: 'Will Reichard', rating: 0.1, ovr: 80 }, kickers: [{ name: 'Backup Kicker', rating: -0.3, ovr: 55 }],
+        calls: { quick_strong: { off: 0.02, def: -0.01 }, rb_middle: { off: 0.03, def: 0.01 } },
+        lineup: { off: [P('QB', 'Carson Wentz', 70), P('LT', 'L1', 70), P('LG', 'L2', 70), P('C', 'L3', 70), P('RG', 'L4', 70), P('RT', 'L5', 70),
+          P('RB', 'Aaron Jones', 80), P('WR', 'Justin Jefferson', 97), P('WR', 'Jordan Addison', 84), P('WR', 'Jalen Nailor', 70), P('TE', 'T.J. Hockenson', 85)],
+          def: [], bench: [P('WR', 'Tim Bench', 60), P('TE', 'Josh Oliver', 72), P('TE', 'Big Lineman', 60, { num: 72 })],
+          qbs: [P('QB', 'J.J. McCarthy', 80, { adj: -0.09 }), P('QB', 'Max Brosmer', 63, { adj: -0.03 })] } });
+      const T = team('MIN'), q = SC.withQb(T, 'J.J. McCarthy'), back = SC.withQb(q, 'Carson Wentz');
+      const slots = SC.slots(T).map((s) => [s.slot, s.real.name, s.cands.map((c) => c.name)]);
+      const lu = { q1: SC.pid('J.J. McCarthy'), w1: SC.pid('Jordan Addison'), w2: SC.pid('Justin Jefferson'), w3: SC.pid('Tim Bench'), k1: SC.pid('Backup Kicker') };
+      const L = SC.withLineup(T, lu);
+      const ros = { league: { mu_pass: 0, mu_rush: 0, home_pass: 0, home_rush: 0 }, teams: { MIN: T, GB: { ...team('GB'), team: 'GB' } } };
+      const sc = { ...SC.defaults(2025, 'MIN', 'GB'), lu: { you: { q1: lu.q1 } } };
+      const bad = [{ you: { q1: 'zzzz' } }, { you: { w2: SC.pid('Justin Jefferson') } }, { you: { w9: SC.pid('Tim Bench') } }, { opp: { k1: SC.pid('Will Reichard') } }]
+        .map((x) => SC.checkLineup({ ...sc, lu: x }, ros, ros).map(([f, m]) => [f, m]));
+      const plain = SC.spotOf({ ...sc, lu: undefined }, ros, ros, { hfa: 2, k: 40 }), with_ = SC.spotOf(sc, ros, ros, { hfa: 2, k: 40 });
+      return { q, back, T, slots, L, bad, say: SC.lineupSay(sc, ros, ros, (c, y) => `${y} ${c}`),
+        spreads: [plain.spot.spread, with_.spot.spread], id: with_.spot.id, code: SC.code(sc), home: with_.teams.home.qb, calls: SC.QB_CALLS };""")
+    T, q, back = out["T"], out["q"], out["back"]
+    d = -0.09 - 0.01
+    assert q["qb"] == {"name": "J.J. McCarthy", "adjustment": -0.09} and q["lineup"]["off"][0]["name"] == "J.J. McCarthy" and "adj" not in q["lineup"]["off"][0]
+    assert q["calls"]["quick_strong"] == {"off": round(0.02 + d, 5), "def": -0.01} and q["calls"]["rb_middle"] == T["calls"]["rb_middle"]
+    assert all(q["calls"][c]["off"] == pytest.approx(T["calls"].get(c, {"off": 0})["off"] + d) and q["calls"][c]["def"] == T["calls"].get(c, {"def": 0})["def"] for c in out["calls"])
+    assert [x["name"] for x in q["lineup"]["qbs"]] == ["Carson Wentz", "Max Brosmer"] and q["lineup"]["qbs"][0]["adj"] == 0.01
+    assert back["qb"] == T["qb"] and all(back["calls"][c]["off"] == pytest.approx(T["calls"].get(c, {"off": 0})["off"]) for c in out["calls"])
+    assert out["slots"][0] == ["q1", "Carson Wentz", ["Carson Wentz", "J.J. McCarthy", "Max Brosmer"]]
+    assert ["t1", "T.J. Hockenson", ["T.J. Hockenson", "Josh Oliver"]] in out["slots"] and out["slots"][-1][0] == "k1"     # (no lineman at tight end)
+    L = out["L"]
+    assert [p["name"] for p in L["lineup"]["off"][6:]] == ["Aaron Jones", "Jordan Addison", "Justin Jefferson", "Tim Bench", "T.J. Hockenson"]
+    assert "Jalen Nailor" in [p["name"] for p in L["lineup"]["bench"]] and "Tim Bench" not in [p["name"] for p in L["lineup"]["bench"]]
+    assert L["kicker"] == {"name": "Backup Kicker", "rating": -0.3, "ovr": 55} and L["qb"]["name"] == "J.J. McCarthy"
+    assert [f for x in out["bad"] for f, _ in x] == ["lu-you", "lu-you", "lu-you"] and out["bad"][3] == []
+    assert "not on the 2025 roster" in out["bad"][0][0][1] and "in two places" in out["bad"][1][0][1]
+    assert out["say"] == ["2025 MIN: J.J. McCarthy at quarterback"]
+    # the spread: McCarthy brings 0.10 EPA a dropback less, 60% of a team's strength is its passing, 40 points a point of it
+    assert out["spreads"][1] == pytest.approx(out["spreads"][0] + 40 * 0.6 * d, abs=0.5) and out["home"]["name"] == "J.J. McCarthy"
+    assert out["id"] == f"custom:{out['code']}" and "-yq1" in out["code"]          # (its own state, its own simulator)

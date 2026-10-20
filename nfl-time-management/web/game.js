@@ -272,7 +272,8 @@
   const SCN = typeof TMDScenario !== 'undefined' && Date.now() >= SCN_AT ? TMDScenario : null;
   const CUSTOM_BUILD = PRO_ON && !!SCN && location.hash === '#custom';
   // (a title rides after the code: #custom-<code>~<title>, scenario.js link; the scenario is its code, whatever its title)
-  const CUSTOM = PRO_ON && SCN ? ((location.hash.match(/^#custom-(1(?:-[0-9A-Za-z]{1,4}){21})(?:~.*)?$/) || [])[1] || '') : '';
+  // (its code: web/scenario.js CODE_RE, the 22 parts and any lineup picks after them)
+  const CUSTOM = PRO_ON && SCN ? ((m) => (m && SCN.CODE_RE.test(m[1]) ? m[1] : ''))(/^#custom-([^~]*)(?:~.*)?$/.exec(location.hash)) : '';
   const CUSTOM_TITLE = CUSTOM ? SCN.parseLink(location.hash.slice('#custom-'.length)).title : '';
   // the scenarios players have posted (Pro screen; board/worker.js /scen/*): #community lists them, a tap plays one by its link
   const COMMUNITY = PRO_ON && !!SCN && location.hash === '#community';
@@ -369,7 +370,25 @@
   const eraTeams = (sc) => [sc.home, sc.away].forEach((c) => { const n = eraOf(c, sc.real && sc.real.season); if (n && TEAMS[c]) TEAMS[c] = [n, TEAMS[c][1]]; });
   const color = (c) => (TEAMS[c] ? TEAMS[c][1] : '#556');
   const code = (i) => (i === 0 ? G.scen.home : G.scen.away);
-  const teamOf = (i) => (i === 0 ? G.scen.game.home : G.scen.game.away);
+  // a team as the spot has it, and as it plays: yours with the quarterback you put in (Who plays: G.qb, a name from its
+  // lineup.qbs; web/scenario.js withQb: his adjustment for the starter's and his level on the passes he throws), kept
+  // one object a pick so its lineup is cached once (lineup) and the simulator once (simScen). Never in Versus: the
+  // room has the teams
+  const teamBase = (i) => (i === 0 ? G.scen.game.home : G.scen.game.away);
+  const QB_TEAM = new WeakMap();
+  function teamOf(i, qb = G.qb) {
+    const t = teamBase(i);
+    if (!qb || i !== G.me || VS || typeof TMDScenario === 'undefined') return t;
+    const m = QB_TEAM.get(t) || new Map();
+    QB_TEAM.set(t, m);
+    if (!m.has(qb)) {
+      let s = t;
+      try { s = TMDScenario.withQb(t, qb); } catch (e) { s = t; }        // (one no longer on the roster: the team as it is)
+      m.set(qb, s);
+    }
+    return m.get(qb);
+  }
+  const qbOn = (qb = G.qb) => !!(qb && teamOf(G.me, qb) !== teamBase(G.me));      // a quarterback of yours put in, playing
   const markOf = (cost) => (cost < 0.005 ? 'g' : cost < 0.02 ? 'y' : cost < 0.05 ? 'o' : 'r');
   function rate(o, dl = 0) {          // an overall rating as a color: red (below a starter) -> yellow (typical, 77) -> green (elite)
     const v = clip(o, 55, 95);
@@ -664,7 +683,11 @@
       pump();
     });
   }
-  const simScen = () => ({ id: G.scen.id, game: G.scen.game, start: { receive2h: G.scen.start.receive2h } });
+  // (with a quarterback of yours put in, the teams as they play and a simulator of their own: the same id would be the
+  // worker's simulator of the real lineup; spot_info.js has the spot's own, the real lineup's, the first call's facts)
+  // (qb: the one a snap was graded with, its grading redone after a reload: gradeSpecs)
+  const simScen = (qb = G.qb) => (qbOn(qb) ? { id: `${G.scen.id}|qb:${qb}`, game: { ...G.scen.game, [G.me === 0 ? 'home' : 'away']: teamOf(G.me, qb) }, start: { receive2h: G.scen.start.receive2h } }
+    : { id: G.scen.id, game: G.scen.game, start: { receive2h: G.scen.start.receive2h } });
   // The facts for a call (the worker's 'info'): on the website a spot's file carries them for its opening snap, worked
   // out when the site was built by the same worker on the same data (web/spot_info.js), so the first call shows without
   // waiting on the simulator's data (only the snap does: simWait). Used only for the very question they answer (infoKey:
@@ -699,8 +722,8 @@
     await simReady;
   }
   // (se, when given, gets each option's standard error: the simulation's own noise in that win chance)
-  async function evaluate(root, options, seed, n = N_EVAL, se = null) {
-    const W = Math.max(1, readyCount), sc = simScen(), out = {};
+  async function evaluate(root, options, seed, n = N_EVAL, se = null, sc = simScen()) {
+    const W = Math.max(1, readyCount), out = {};
     const opts = options.map((o) => ({ key: o.key, action: o.action }));
     if (options.length < 2 * W && W > 1) {
       // few options: every worker plays all of them, each on its own share of the games (its own seed)
@@ -727,10 +750,10 @@
   // depends on your call: yours is valued exactly as it would be if a simulated NFL play-caller had made it (your call
   // valued finely and the rest roughly scored random calls 99 on a day when nothing mattered: the rough values the
   // simulated callers paid for were noise that never landed on you). Each value keeps its standard error and games.
-  async function evaluateGraded(root, options, seed) {
-    const se1 = {}, v = await evaluate(root, options, seed, N_EVAL, se1);
+  async function evaluateGraded(root, options, seed, sc = simScen()) {
+    const se1 = {}, v = await evaluate(root, options, seed, N_EVAL, se1, sc);
     const keys = new Set(options.slice().sort((a, b) => v[b.key] - v[a.key]).slice(0, REFINE_TOP).map((o) => o.key));
-    const se2 = {}, v2 = await evaluate(root, options.filter((o) => keys.has(o.key)), (seed ^ 0x5bd1e995) >>> 0, N_REFINE, se2);
+    const se2 = {}, v2 = await evaluate(root, options.filter((o) => keys.has(o.key)), (seed ^ 0x5bd1e995) >>> 0, N_REFINE, se2, sc);
     const top = Math.max(...Object.values(v2)), out = {};
     options.forEach((o) => { out[o.key] = keys.has(o.key) ? { wp: v2[o.key], se: se2[o.key], n: N_REFINE } : { wp: Math.min(v[o.key], top), se: se1[o.key], n: N_EVAL }; });
     return out;
@@ -5030,7 +5053,7 @@
   function persist() {
     state.spots[G.si] = { id: G.scen.id, root: G.root, decisions: G.decisions, log: G.log, seq: G.seq, snapN: G.snapN, over: G.over,
       result: G.result, started: G.started, pending: G.pending || null, regrade: G.regrade && G.regrade.length ? G.regrade : null,
-      pers: G.pers || null, persWho: G.persWho || null, vsN: G.vsN || 0, cot: G.cot || null };
+      pers: G.pers || null, persWho: G.persWho || null, qb: G.qb || null, vsN: G.vsN || 0, cot: G.cot || null };
     saveState();
   }
   function resumeSpot(i) {
@@ -5038,7 +5061,7 @@
     let s = state.spots[i];
     if (s && s.id && s.id !== G.scen.id) s = state.spots[i] = null;   // saved on another game (a changed schedule): start fresh
     if (s) Object.assign(G, { root: s.root, decisions: s.decisions || [], log: s.log || [], seq: s.seq || 0, snapN: s.snapN || 0,
-      over: s.over, result: s.result, started: !!s.started, pers: s.pers || null, persWho: s.persWho || null, vsN: s.vsN || 0, cot: s.cot || G.cot || null,
+      over: s.over, result: s.result, started: !!s.started, pers: s.pers || null, persWho: s.persWho || null, qb: (!VS && s.qb) || null, vsN: s.vsN || 0, cot: s.cot || G.cot || null,
       // a snap left mid-play by a reload: its grading is redone in the background (regradeBg), with any still waiting
       regrade: (s.regrade || []).concat(s.pending ? [s.pending] : []), pending: null });
     G.side = sideFor(G.seq);
@@ -5936,11 +5959,15 @@
   }
   function openPers() {
     if (busy || !G || G.root.pos !== G.me) return;
-    const real = persOf(lineup(G.me).off), L = lineup(G.me);
+    const real = persOf(lineup(G.me).off);
     const nodes = [];
+    // the quarterback: the one who lined up (the spot's own, or the one a scenario put in) and that game's others on the
+    // roster (lineup.qbs: history.py qb_room, each with what he brings, adj). Not in Versus: the room plays its own teams
+    const base = teamBase(G.me), bq = ((base.lineup || {}).off || []).find((p) => p.pos === 'QB');
+    const qbs = bq && !VS ? [bq, ...((base.lineup || {}).qbs || []).filter((q) => q.name !== bq.name && typeof q.adj === 'number')] : [];
     const render = () => {
-      const cur = G.pers || real;
-      const hint = el('p', 'phint', 'Optional. The play is drawn from real NFL plays run with the grouping you pick; the players you pick are the ones on the field and the ones you can throw to.');
+      const cur = G.pers || real, L = lineup(G.me);
+      const hint = el('p', 'phint', `Optional. The play is drawn from real NFL plays run with the grouping you pick; the players you pick are the ones on the field and the ones you can throw to${qbs.length > 1 ? ', and the quarterback’s passes go as his had before this game' : ''}.`);
       const groups = el('div', 'pgroups');
       PERS.forEach(([k]) => {
         const [t, sub] = PERS_INFO[k], b = el('button', `pgroup${cur === k ? ' on' : ''}`);
@@ -5953,6 +5980,25 @@
         groups.append(b);
       });
       const slots = el('div', 'pslots');
+      if (qbs.length) {
+        // first, the quarterback: J.J. McCarthy · 71 (backup); under it how his passing compares with the starter's
+        const row = el('label', 'pslot'), sel = el('select'), now = qbOn() ? G.qb : bq.name;
+        sel.setAttribute('aria-label', 'QB');
+        qbs.forEach((c) => {
+          const o = el('option', '', `${c.name}${c.ovr ? ` · ${c.ovr}` : ''}${c === bq ? '' : ' (backup)'}`);
+          o.value = c.name;
+          if (c.name === now) o.selected = true;
+          sel.append(o);
+        });
+        sel.disabled = qbs.length < 2;
+        sel.addEventListener('change', () => { G.qb = sel.value === bq.name ? null : sel.value; qbChanged(); changed(); });
+        row.append(el('span', '', 'QB'), sel);
+        slots.append(row);
+        const who = qbs.find((c) => c.name === now), d = who && who !== bq ? who.adj - ((base.qb && base.qb.adjustment) || 0) : 0;
+        const vs = who === bq ? '' : Math.abs(d) < 0.005 ? ` Throws about as well as ${shortName(bq.name)}.`
+          : ` Throws ${Math.abs(d).toFixed(2)} EPA a dropback ${d < 0 ? 'worse' : 'better'} than ${shortName(bq.name)}.`;
+        if (who) slots.append(el('p', 'pqb', `${who.stat || 'Little NFL playing time yet'}.${vs}`));
+      }
       const on = offLineup(G.me), skill = on.filter((p) => ['RB', 'FB', 'TE', 'WR'].includes(p.pos));
       const cand = (pos) => {
         const g = pos === 'FB' || pos === 'RB' ? ['RB', 'FB'] : [pos];
@@ -5987,20 +6033,28 @@
       done.addEventListener('click', closeModal);
       const reset = el('button', 'ghost', 'Back to the real lineup');
       reset.type = 'button';
-      reset.addEventListener('click', () => { G.pers = null; G.persWho = null; changed(); });
+      reset.addEventListener('click', () => { const q = G.qb; G.pers = null; G.persWho = null; G.qb = null; if (q) qbChanged(); changed(); });
       nodes.length = 0;
       nodes.push(hint, groups, el('h3', '', 'Who plays'), slots, reset, done);
       const b = $('mBody'); b.textContent = ''; nodes.forEach((n) => b.append(n));
     };
+    // another quarterback: the call's facts and each receiver's odds asked again of his simulator (simScen); the snap's
+    // grading always is (every call valued with him: the same lineup for all)
+    const qbChanged = () => {
+      G.odds = {};
+      const r = G.root;
+      send({ type: 'info', scen: simScen(), root: r }, true).then((m) => { if (G && G.root === r) G.info = m.info; }).catch(() => { /* asked again at the next snap */ });
+    };
     const changed = () => {
-      track('personnel', { pers: G.pers || real, custom: !!G.persWho });
+      track('personnel', { pers: G.pers || real, custom: !!G.persWho, qb: !!G.qb });
       persist();
       dirty = true;          // the field redraws, players moving, when the sheet closes (it covers the field on phones)
       persButton(); render();
     };
     let dirty = false;
     const before = persSnap();
-    onModalClose = () => { if (dirty) { drawField(); persMove(before); } };
+    // (a pass being drawn: its receivers' cards and odds too)
+    onModalClose = () => { if (dirty) { drawField(); persMove(before); if (passing()) drawDock(); } };
     openModal('Personnel', []);
     render();
   }
@@ -6064,7 +6118,7 @@
   async function gradeSpecs(pend) {
     const out = [];
     for (const sp of pend.specs) {
-      const vals = await evaluateGraded(sp.r, sp.opts, sp.seed);
+      const vals = await evaluateGraded(sp.r, sp.opts, sp.seed, simScen('qb' in pend ? pend.qb : G.qb));      // (with the quarterback of its snap)
       // (ctx: the score and the clock it was made at, for its tip: whyLine)
       const ctx = { lead: sp.r.score[G.me] - sp.r.score[1 - G.me], left: Math.round(halfLeft(sp.r.t)), h2: sp.r.t <= 1800 };
       out.push({ ...decisionFrom(sp.kind, sp.family, sp.opts, vals, sp.chosen, sp.q, sp.situation, pend.snap), ctx, ...(sp.extra || {}) });
@@ -6080,7 +6134,7 @@
       return;
     }
     await simWait();
-    const pend = { snap: G.snapN, specs };
+    const pend = { snap: G.snapN, specs, qb: G.qb || null };
     G.snapN += 1;
     G.pending = pend;
     const graded = gradeSpecs(pend);
@@ -8987,7 +9041,7 @@
     openModal(POS_NAME[label] || label, nodes);
   }
   function spotInfo() {
-    const sc = G.scen, H = sc.game.home, A = sc.game.away;
+    const sc = G.scen, H = teamOf(0), A = teamOf(1);        // (your quarterback as put in: Who plays)
     const dl = el('dl', 'facts');
     const add = (k, v) => dl.append(el('dt', '', k), el('dd', '', v));
     const line = sc.game.home_spread;
@@ -10382,14 +10436,15 @@
   // synced with the account like the drives: statsSync) keeps each one's best grade and tries.
   const SCN_DRAFT = `${STORE}:custom:draft`, SCN_LIST = `${STORE}:scen`, SCN_KEEP = 200;
   let SCN_IDX = null;
-  const SCN_ROS = {};
+  const SCN_ROS = {}, SCN_ROSV = {};          // (a season's rosters: its fetch, and once in, the rosters themselves)
   async function scnIndex() {
     if (!SCN_IDX) SCN_IDX = fetch(asset('rosters/index.json')).then((r) => { if (!r.ok) throw new Error(`rosters ${r.status}`); return r.json(); });
     try { return await SCN_IDX; } catch (e) { SCN_IDX = null; throw e; }
   }
   // a season's teams, fetched when one of its teams is picked (and kept: the builder asks again as you change it)
   function scnRoster(y) {
-    if (!SCN_ROS[y]) SCN_ROS[y] = fetch(asset(`rosters/${y}.json`)).then((r) => { if (!r.ok) throw new Error(`rosters ${y}: ${r.status}`); return r.json(); });
+    if (!SCN_ROS[y]) SCN_ROS[y] = fetch(asset(`rosters/${y}.json`)).then((r) => { if (!r.ok) throw new Error(`rosters ${y}: ${r.status}`); return r.json(); })
+      .then((d) => { SCN_ROSV[y] = d; return d; });
     SCN_ROS[y].catch(() => { delete SCN_ROS[y]; });
     return SCN_ROS[y];
   }
@@ -10440,13 +10495,22 @@
     if (S.name) box.append(el('div', 'stl', S.name));         // (its title, above the two teams)
     box.append(head);
     const fit = ix.spread || { hfa: 2.4, k: 46 };
-    if (tY && tO) {
-      const homeYou = sc.site !== 'away', h = homeYou ? tY : tO, a = homeYou ? tO : tY;
+    // (a team with lineup picks, its rosters in: its quarterback and strength with them, as the game plays it)
+    const picked = (side, c, y, m) => {
+      const t = SCN_ROSV[y] && SCN_ROSV[y].teams[c], p = sc.lu && sc.lu[side];
+      if (!m || !t || !p) return m;
+      try { const w = SCN.withLineup(t, p); return { ...m, qb: w.qb.name, net: SCN.strength(w) }; } catch (e) { return m; }
+    };
+    const pY = picked('you', sc.you, sc.ys, tY), pO = picked('opp', sc.opp, sc.os, tO);
+    if (pY && pO) {
+      const homeYou = sc.site !== 'away', h = homeYou ? pY : pO, a = homeYou ? pO : pY;
       const sp = Math.round(((sc.site === 'neutral' ? 0 : fit.hfa) + fit.k * (h.net - a.net)) * 2) / 2, fav = sp >= 0 ? h : a;
-      box.append(el('p', 'rec', `${scnNick(ix, sc.you, sc.ys)} ${tY.record}${tY.qb ? `, ${tY.qb}` : ''} · ${scnNick(ix, sc.opp, sc.os)} ${tO.record}${tO.qb ? `, ${tO.qb}` : ''} · ${Math.abs(sp) < 0.5 ? 'a pick’em' : `${scnNick(ix, fav.team, fav === tY ? sc.ys : sc.os)} by ${Math.abs(sp).toFixed(1)}`}`));
+      box.append(el('p', 'rec', `${scnNick(ix, sc.you, sc.ys)} ${pY.record}${pY.qb ? `, ${pY.qb}` : ''} · ${scnNick(ix, sc.opp, sc.os)} ${pO.record}${pO.qb ? `, ${pO.qb}` : ''} · ${Math.abs(sp) < 0.5 ? 'a pick’em' : `${scnNick(ix, fav.team, fav === pY ? sc.ys : sc.os)} by ${Math.abs(sp).toFixed(1)}`}`));
     }
     const ul = el('ul');
-    [S.game, `${S.when} · ${S.score}`, S.ball, S.to, S.half, S.ot].filter(Boolean).forEach((t) => ul.append(el('li', '', t)));
+    const lu = sc.lu ? SCN.lineupSay(sc, SCN_ROSV[sc.ys], SCN_ROSV[sc.os], (c, y) => scnNick(ix, c, y)) : [];
+    if (sc.lu && !lu.length) lu.push('Lineups of the builder’s picking');      // (the rosters not in: a shared link's pitch)
+    [S.game, `${S.when} · ${S.score}`, S.ball, S.to, S.half, ...lu, S.ot].filter(Boolean).forEach((t) => ul.append(el('li', '', t)));
     box.append(ul);
     return box;
   }
@@ -10578,6 +10642,64 @@
     const you = teamSel('you'), opp = teamSel('opp');
     const gT = fieldset('Teams');
     gT.append(row('You coach', you.el), you.info, row('Against', opp.el), opp.info);
+    // each team's lineup (optional): its quarterback, backs, receivers, tight ends and kicker from the season's roster
+    // (rosters/<season>.json, loaded when the team is picked: SCN.slots), as it lined up unless you pick another. The
+    // picks are part of the scenario (its code: SCN.code); another team or season starts from its own lineup again
+    const gL = fieldset('Lineups');
+    const luKey = (side) => (side === 'you' ? `${sc.you}|${sc.ys}` : `${sc.opp}|${sc.os}`);
+    const luWas = { you: luKey('you'), opp: luKey('opp') };
+    const SLOT_LAB = { q: 'QB', w: 'WR', t: 'TE', k: 'K' };
+    const lineupBox = (side) => {
+      const d = el('details', 'slu'), head = el('summary'), body = el('div', 'slrows');
+      d.dataset.f = `lu-${side}`;
+      d.append(head, body);
+      d.sync = () => {
+        const [c, y] = side === 'you' ? [sc.you, sc.ys] : [sc.opp, sc.os], ros = SCN_ROSV[y], team = ros && ros.teams && ros.teams[c];
+        const picks = (sc.lu && sc.lu[side]) || {}, n = Object.keys(picks).length;
+        const focused = document.activeElement && body.contains(document.activeElement) ? document.activeElement.id : null;
+        head.textContent = '';
+        head.append(el('b', '', `${side === 'you' ? 'Your' : 'Their'} lineup`), el('small', '', n ? `${n} change${n === 1 ? '' : 's'}` : 'as it lined up'));
+        body.textContent = '';
+        if (!team) {
+          body.append(el('p', 'lnote', 'Getting the roster…'));
+          if (Number.isFinite(y)) scnRoster(y).then(() => { if (luKey(side) === `${c}|${y}`) d.sync(); }, () => { body.textContent = ''; body.append(el('p', 'lnote', 'The roster did not load.')); });
+          return;
+        }
+        const S = SCN.slots(team), on = SCN.lineupOf(team, picks), start = new Set(team.lineup.off.map((p) => p.name).concat(team.kicker ? [team.kicker.name] : []));
+        S.forEach((s) => {
+          const sel = el('select');
+          sel.id = uid(`lu-${side}-${s.slot}`);
+          const lab = SLOT_LAB[s.k] || s.real.pos;
+          sel.setAttribute('aria-label', `${side === 'you' ? 'Your' : 'Their'} ${lab}${S.filter((x) => x.k === s.k).length > 1 ? ` ${s.slot.slice(1)}` : ''}`);
+          s.cands.forEach((p) => { const o = new Option(`${p.name}${p.ovr ? ` · ${p.ovr}` : ''}${start.has(p.name) ? '' : ' (backup)'}`, p.name); sel.append(o); });
+          sel.value = (on[s.slot] || s.real).name;
+          sel.addEventListener('change', () => {
+            const P = { ...((sc.lu && sc.lu[side]) || {}) }, now = SCN.lineupOf(team, P), prev = now[s.slot] || s.real;
+            const put = (slot, p) => { const x = S.find((q) => q.slot === slot); if (p.name === x.real.name) delete P[slot]; else P[slot] = SCN.pid(p.name); };
+            const p = s.cands.find((q) => q.name === sel.value);
+            // already in another slot of his: the two swap places
+            const other = s.k === 'q' || s.k === 'k' ? null : Object.keys(now).find((k) => k !== s.slot && k[0] !== 'q' && k[0] !== 'k' && now[k] && now[k].name === p.name);
+            put(s.slot, p);
+            if (other) put(other, prev);
+            sc.lu = { ...(sc.lu || {}), [side]: P };
+            track('scenario_lineup', { slot: s.slot, side });
+            changed();
+          });
+          body.append(row(lab, sel));
+        });
+        body.append(el('p', 'lnote', 'Anyone of that season’s team: the quarterback’s passes go as his had, the kicker kicks as he did; the others are who is on the field and whom you can throw to.'));
+        if (focused) { const x = document.getElementById(focused); if (x) x.focus(); }      // (the pick just made keeps the focus)
+      };
+      return d;
+    };
+    const luY = lineupBox('you'), luO = lineupBox('opp');
+    gL.append(luY, luO);
+    // the picks of a team no longer in the scenario go (they are its players)
+    const luKeep = () => ['you', 'opp'].forEach((side) => {
+      if (luWas[side] === luKey(side)) return;
+      luWas[side] = luKey(side);
+      if (sc.lu && sc.lu[side]) { const { [side]: gone, ...rest } = sc.lu; sc.lu = Object.keys(rest).length ? rest : undefined; }
+    });
     const typeSel = el('select');
     typeSel.id = uid('type'); typeSel.dataset.f = 'type';
     Object.entries(SCN.TYPES).forEach(([k, t]) => typeSel.append(new Option(t, k)));
@@ -10654,9 +10776,10 @@
     const acts = el('div', 'row sacts');
     acts.append(go, link, post);
     const syncs = [ttl.sync, you.sync, opp.sync, typeSel.sync, site.sync, rules.sync, qtr.sync, clk.sync, sY.sync, sO.sync, start.sync, ball.sync, side.sync, ylIn.sync,
-      down.sync, ytg.sync, toY.sync, toO.sync, otp.sync, end.sync, r2h.sync];
+      down.sync, ytg.sync, toY.sync, toO.sync, otp.sync, end.sync, r2h.sync, luY.sync, luO.sync];
     function changed(full = true) {
       if (full && Number.isFinite(sc.yl) && sc.yl !== 50) own = sc.yl > 50;
+      if (full) { you.sync(); opp.sync(); luKeep(); }          // (a team the season has not got moves to one it has: its picks go)
       if (full) syncs.forEach((f) => f());
       rulesRow.hidden = sc.ys === sc.os;
       const bs = rules.querySelectorAll('button');
@@ -10667,7 +10790,9 @@
       otRow.hidden = sc.qtr !== 5;
       endRow.hidden = sc.qtr > 2; r2hRow.hidden = sc.qtr > 2 || sc.end === 'half';
       [toY, toO].forEach((g) => g.querySelectorAll('button').forEach((b) => { b.hidden = sc.qtr === 5 && Number(b.dataset.v) > SCN.otTo(sc); }));
-      const bad = SCN.check(sc, ix);
+      // (the lineups on the seasons' rosters once both are in; a pick waits for its roster to be checked)
+      const rY = SCN_ROSV[sc.ys], rO = SCN_ROSV[sc.os];
+      const bad = SCN.check(sc, ix).concat(rY && rO ? SCN.checkLineup(sc, rY, rO) : sc.lu ? [['lu', 'Getting the rosters…']] : []);
       errs.textContent = '';
       bad.forEach(([, m]) => errs.append(el('li', '', m)));
       form.querySelectorAll('[data-f]').forEach((x) => x.classList.toggle('bad', bad.some(([f]) => f === x.dataset.f || (f === 'score' && /^score/.test(x.dataset.f)) || (f === 'to' && /^to/.test(x.dataset.f)))));
@@ -10675,8 +10800,9 @@
       sum.textContent = '';
       if (!bad.length) sum.append(scenSummaryEl(SCN.tidy(sc), ix));
       save(SCN_DRAFT, sc);
+      if (sc.lu && !(rY && rO)) Promise.all([scnRoster(sc.ys), scnRoster(sc.os)]).then(() => changed(false), () => {});
     }
-    form.append(gN, gT, gG, gS);
+    form.append(gN, gT, gL, gG, gS);
     box.append(el('h3', '', 'Start from'), pre, form, errs, sum, acts, posted, reset);
     box.append(el('p', 'note', `Seasons ${first}–${last}: each team as it lined up in a game late in its regular season (the latest for this season, ${last}, through week ${ix.seasons[ix.seasons.length - 1].thru}), with every player rated as of then, its quarterback, kicker and punter, and its strength. Before ${first} nothing names who started on the line, so those seasons are left out. The overtime is the one of its time; the playoffs never end tied. Scenarios post to no leaderboard: they aren’t the same for everyone. Posted to Community, a scenario shows how many have played it and how many won.`));
     // My scenarios
@@ -11703,6 +11829,9 @@
         $('dayLabel').textContent = `Run · ${run.title}`;
       } else if (CUSTOM) {
         const [ry, ro] = await Promise.all([scnRoster(scnSc.ys), scnRoster(scnSc.os)]);
+        // (its lineup picks on the seasons' rosters: a player no longer on one, the link says so)
+        const lb = SCN.checkLineup(scnSc, ry, ro);
+        if (lb.length) { scenBad(lb.map(([, m]) => m)); return; }
         const { spot, teams } = SCN.spotOf(scnSc, ry, ro, scnIx.spread);
         // (the franchise's city of the time: St. Louis before Los Angeles)
         for (const [c, y] of [[scnSc.you, scnSc.ys], [scnSc.opp, scnSc.os]]) { const t = scnTeam(scnIx, c, y); if (t && t.era && TEAMS[c]) TEAMS[c] = [t.era.name, TEAMS[c][1]]; }
@@ -11710,6 +11839,8 @@
         today[0].scn = scnSc;
         const S = scenLines(scnSc, scnIx).S;
         today[0].story = `${S.game[0].toUpperCase()}${S.game.slice(1)}. ${scnName(scnIx, scnSc.you, scnSc.ys)} (${scnTeam(scnIx, scnSc.you, scnSc.ys).record}) against ${scnName(scnIx, scnSc.opp, scnSc.os)} (${scnTeam(scnIx, scnSc.opp, scnSc.os).record}). ${S.ot}.`;
+        const luSay = SCN.lineupSay(scnSc, ry, ro, (c, y) => scnNick(scnIx, c, y));
+        if (luSay.length) today[0].story += ` ${luSay.join('. ')}.`;
         if (S.name) today[0].story = `“${S.name}”. ${today[0].story}`;
         $('dayLabel').textContent = `Scenario · ${S.name || S.title}`;
         scenTouch(CUSTOM, CUSTOM_TITLE);

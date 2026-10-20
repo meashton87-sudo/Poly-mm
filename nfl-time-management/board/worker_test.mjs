@@ -197,6 +197,14 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.deepStrictEqual(names.map(SC.blocked), board_, 'the page and the board agree');
   assert.ok(names.some(SC.blocked) && !names.every(SC.blocked));
 }
+// a scenario's code is read the same way here as on the page (web/scenario.js CODE_RE, worker.js SCEN_RE: its 22 parts,
+// then any lineup picks, a code from before lineups as it always was)
+{
+  const SC = createRequire(import.meta.url)('../web/scenario.js');
+  const src = createRequire(import.meta.url)('node:fs').readFileSync(new URL('./worker.js', import.meta.url), 'utf8');
+  const m = /SCEN_RE = \/(.+?)\/;/.exec(src);
+  assert.ok(m && m[1] === SC.CODE_RE.source, `the board's SCEN_RE is the page's CODE_RE: ${m && m[1]}`);
+}
 // the rare-coach find is retired: a result never carries a claim code, and its public list is gone
 {
   const r = await (await day({ date: today, key: 'plain-device-key-000001', p: 0.5, spots: [0, 0, 0] })).json();
@@ -1109,11 +1117,16 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   // My scenarios (web/scenario.js codes): checked; the newest touch of each stands, with the best score, the most tries
   // and won if either; a removal (gone) follows to the other phone until the scenario is played again
   const S1 = '1-NE-2007-KC-2023-SB-n-4-120-17-21-y-s-75-1-10-2-3-0-o-y-g', S2 = '1-LA-2026-SEA-2026-REG-h-4-57-11-14-y-s-54-1-10-1-3-0-o-y-g';
+  const S3 = `${S2}-yq1k3d9-yw20b2z-ok1aa00`;        // (lineup picks: your quarterback and second receiver, their kicker)
   assert.strictEqual((await au('/auth/stats', { session: sc, stats: { scen: [S1] } })).status, 400, 'scen an array');
   assert.strictEqual((await au('/auth/stats', { session: sc, stats: { scen: Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`${S1.slice(0, -1)}${i}`, { at: 1 }])) } })).status, 400, 'too many scenarios');
   d = await ok(await au('/auth/stats', { session: sc, stats: { scen: { [S1]: { at: 1790000000000, p: 0.42, tries: 2, won: false, title: 'x' }, [S2]: { at: 1790000001000, tries: 0 },
-    'not-a-code': { at: 1 }, [S1.replace('NE', 'N!')]: { at: 1 }, [`${S2}-x`]: { at: 1 }, '1-NE-2007': { at: 1 } } } }), 'scenarios');
-  assert.deepStrictEqual(d.stats.scen, { [S2]: { at: 1790000001000, tries: 0, won: false }, [S1]: { at: 1790000000000, p: 0.42, tries: 2, won: false, title: 'x' } }, 'scen cleaned (its title kept), newest first');
+    'not-a-code': { at: 1 }, [S1.replace('NE', 'N!')]: { at: 1 }, [`${S2}-x`]: { at: 1 }, '1-NE-2007': { at: 1 }, [`${S2}-yq1k3d`]: { at: 1 }, [`${S2}-zq1k3d9`]: { at: 1 },
+    [S3]: { at: 1789999999000, tries: 1 } } } }), 'scenarios');
+  assert.deepStrictEqual(d.stats.scen, { [S2]: { at: 1790000001000, tries: 0, won: false }, [S1]: { at: 1790000000000, p: 0.42, tries: 2, won: false, title: 'x' },
+    [S3]: { at: 1789999999000, tries: 1, won: false } }, 'scen cleaned (its title kept, a lineup\'s code kept, a broken one not), newest first');
+  d.stats.scen = Object.fromEntries(Object.entries(d.stats.scen).filter(([k]) => k !== S3));
+  store.set('stats:s:g:700003', d.stats.scen);
   d = await ok(await au('/auth/stats', { session: sc, stats: { scen: { [S1]: { at: 1790000005000, p: 0.3, tries: 3, won: true }, [S2]: { at: 1790000002000, tries: 0, gone: true } } } }), 'the other phone\'s scenarios');
   assert.deepStrictEqual(d.stats.scen, { [S1]: { at: 1790000005000, p: 0.42, tries: 3, won: true }, [S2]: { at: 1790000002000, tries: 0, won: false, gone: true } }, 'the best, the most tries, won if either; a removal follows');
   d = await ok(await au('/auth/stats', { session: sc, stats: { scen: { [S2]: { at: 1790000009000, p: 0.9, tries: 1, won: true } } } }), 'played again');
@@ -1251,6 +1264,11 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
     assert.deepStrictEqual([r.status, d.existing, d.row.id, d.row.title, d.row.mine], [200, true, p1.id, 'Spygate revenge', undefined], 'the same code: the post there is');
     const p2 = (await ok(await cs('post', { session: sb, code: C2, title: 'Rams rally' }), 'ben posts')).row;
     assert.strictEqual(p2.name, 'Ben Bolt');
+    // the same situation with a lineup of its own (web/scenario.js: picks after the 22 parts) is a scenario of its own
+    const C4 = `${C2}-yq1k3d9`, p4 = (await ok(await cs('post', { session: sa, code: C4, title: 'Rams rally, the backup' }), 'a lineup')).row;
+    assert.deepStrictEqual([p4.code, p4.title, p4.id !== p2.id], [C4, 'Rams rally, the backup', true], 'posted under its own code');
+    assert.strictEqual((await cs('post', { session: sa, code: `${C2}-yq1k3d`, title: 'Broken pick' })).status, 400, 'a broken pick');
+    await ok(await cs('delete', { session: sa, id: p4.id }), 'taken down again');
     let L = await list();
     assert.deepStrictEqual([L.total, L.rows.map((x) => x.title)], [2, ['Rams rally', 'Spygate revenge']], 'no plays yet: the newest first');
     assert.ok(L.rows.every((x) => !('acct' in x) && !('mine' in x)), 'never the account');

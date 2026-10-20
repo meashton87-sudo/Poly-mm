@@ -745,7 +745,8 @@ async function readBody(req) {
 // spent }) are a union, the earliest time of each kept: earned on either phone is earned (the page knows which ids
 // are real; the worker only checks their shape, so a new badge needs no deploy here).
 const STATS_CAP = { days: [99999, 2000], drives: [999, 500], runs: [999, 500] };      // [highest key, most entries]
-const SCEN_MAX = 200, SCEN_RE = /^1(?:-[0-9A-Za-z]{1,4}){21}$/;     // My scenarios (game.js scenRec), a scenario's code (web/scenario.js CODE_RE)
+// My scenarios (game.js scenRec), a scenario's code (web/scenario.js CODE_RE, the same: its 22 parts, then any lineup picks)
+const SCEN_MAX = 200, SCEN_RE = /^1(?:-[0-9A-Za-z]{1,4}){21}(?:-[yo][qrwtk][1-9][0-9a-z]{4}){0,24}$/;
 const GONE_BADGE = 'madden';        // (a retired badge: never kept)
 const BADGES_MAX = 64, FROZEN_MAX = 500, BADGE_RE = /^[a-z][a-z0-9]{0,15}$/;      // (about 20 badges today; a freeze a week at most)
 const num = (x, lo, hi) => (typeof x === 'number' && Number.isFinite(x) && x >= lo && x <= hi ? x : null);
