@@ -389,6 +389,9 @@
     return m.get(qb);
   }
   const qbOn = (qb = G.qb) => !!(qb && teamOf(G.me, qb) !== teamBase(G.me));      // a quarterback of yours put in, playing
+  // the punter kicking the field goals (the kicker hurt: Los Angeles' Ethan Evans, Oct 18, 2026): said with the kick
+  const punterKicks = (i) => { const t = teamOf(i); return !!(t.kicker && t.punter && t.kicker.name && t.kicker.name === t.punter.name); };
+  const PUNT_EZ_YL = 70;      // their punt from their own 30 or nearer midfield can reach the end zone (2-23% of real ones do)
   const markOf = (cost) => (cost < 0.005 ? 'g' : cost < 0.02 ? 'y' : cost < 0.05 ? 'o' : 'r');
   function rate(o, dl = 0) {          // an overall rating as a color: red (below a starter) -> yellow (typical, 77) -> green (elite)
     const v = clip(o, 55, 95);
@@ -2199,7 +2202,7 @@
   // (browser tests only, window.__sepLog: the drawing and the play, for bots that draw thousands of lines and plays)
   if (window.__sepLog) {
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
-      DRAWN_RANGE, CALL, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, get: () => ({ G, ui, scene }),
+      DRAWN_RANGE, CALL, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, get: () => ({ G, ui, scene, busy }),
       readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
       promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k),
       drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock() };
@@ -4375,8 +4378,13 @@
       gunners.forEach((a, i) => go(a, 0, i ? SX1 - 20 : SX0 + 20, fwd(L0, -0.4), 0.8));
       go(punter, 0, bx, pL, 0.8);
       if (upback) go(upback, 0, bx + 6, fwd(L0, -5));
-      const land = e.touchback ? (dir > 0 ? 104 : -4) : e.retTd ? fwd(pL, 52) : clip(Lnew + dir * 6, -8, 108);
-      const lx = clampX(bx + jit(40));
+      // where it comes down, as the real punt did (engine.js _punt: e.how, e.land): a return from where he fielded it, a
+      // fair catch, a punt downed or out of bounds at the spot (one that ends at the 3 was downed there: players saw it
+      // caught in the end zone and run back to the 3, and asked to take a knee)
+      const how = e.touchback ? 4 : e.how || 0, goalR = dir > 0 ? 100 : 0;
+      const land = e.touchback ? (dir > 0 ? 104 : -4) : e.retTd ? fwd(pL, 52) : how === 1 || how === 2 || how === 3 ? Lnew
+        : clip(e.land != null && how === 0 ? goalR - dir * e.land : Lnew + dir * 6, -8, 108);
+      const lx = how === 3 ? (R() < 0.5 ? SX0 - 0.6 * XYD : SX1 + 0.6 * XYD) : clampX(bx + jit(40));
       const ret = K.def.find((a) => a.label === 'S') || K.def.find((a) => a.label === 'CB') || K.def[0];
       const jam = K.def.filter((a) => a.label === 'CB' && a !== ret).slice(0, 2);
       const box = K.def.filter((a) => a !== ret && !jam.includes(a));
@@ -4439,9 +4447,23 @@
       });
       leg(punter, tK + 0.3, 'go', { x: yx(bx), y: fwd(pL, 6), eff: 0.4 });
       const retSpot = [LX, land];
-      runFrom(ret, tL - 1.6, [retSpot], { T: 1.5, v1: 0, eff: 0.6 });
+      // (a punt he lets go: he backs off it, the coverage gets to it where it stops; out of bounds, it goes out)
+      const letGo = how === 2 || how === 3;
+      runFrom(ret, tL - 1.6, [letGo ? [inX(LX + jit(4)), land + dir * 4] : retSpot], { T: 1.5, v1: 0, eff: 0.6 });
       let t = tL;
-      if (!e.touchback) {
+      if (letGo) {
+        rest(tL, lx, land);
+        const g = nearest(gunners, retSpot);
+        if (how === 2 && g) { busy.add(g); runFrom(g, tL - 0.3, [[inX(LX + 0.6), fwd(land, -0.6)]], { T: 0.9, v1: 0 }); }
+        whistle(tL + 0.5, retSpot);
+        t = tL + 0.5;
+      } else if (how === 1) {           // a fair catch: he waves, catches it, and that is the spot
+        hold(tL, ret);
+        ring(tL, ret);
+        leg(ret, tL + 0.05, 'stand');
+        whistle(tL + 0.2, retSpot);
+        t = tL + 0.3;
+      } else if (!e.touchback) {
         hold(tL, ret);
         ring(tL, ret);
         const Lr = e.retTd ? (dir > 0 ? -3 : 103) : Lnew, xr = inX(LX + jit(5));
@@ -4453,7 +4475,7 @@
         rest(tL, lx, land);
         whistle(tL + 0.2, retSpot);
       }
-      say(t, e.retTd ? 'Punt return touchdown!' : e.touchback ? 'Touchback' : `Punt · net ${Math.round(e.net || 0)}`, e.retTd ? 'hit' : 'info',
+      say(t, e.retTd ? 'Punt return touchdown!' : e.touchback ? 'Touchback' : `${['Punt', 'Fair catch', 'Downed', 'Out of bounds'][how] || 'Punt'} · net ${Math.round(e.net || 0)}`, e.retTd ? 'hit' : 'info',
         { x: 180, L: e.retTd ? (dir > 0 ? 4 : 96) : Lnew });
       P.T = Math.max(P.T, t + 1.0);
       bakeSpecial(P.T + 0.2);
@@ -4640,6 +4662,16 @@
     if (window.__sepLog && P) {
       const bad = offField(sc, P, (e.ev === 'fg' || (e.ev === 'pat' && !two)) && !e.blocked);
       if (bad.length) (window.__offLog = window.__offLog || []).push({ ev: e.ev, call: e.call, yl: before.yl, mine: e.team === G.me, bad: bad.slice(0, 5) });
+      // (and the man with the ball goes past the sideline with it on the field just when the engine has the play out of
+      // bounds, for its clock: a player saw the other team run out and the clock run on. After the whistle he may walk
+      // back on)
+      const hold = !two && e.ev === 'play' && !e.incomplete && !e.td && !e.tdDef && !e.turnover && !e.penalty && !e.safety
+        ? P.segs.filter((s) => s.kind === 'hold').sort((a, b) => a.t0 - b.t0).pop() : null;
+      if (hold) {
+        let x = SX0 + 1;
+        for (let t = hold.t0; t <= P.T + 1e-9; t += 0.05) { const q = at(hold.a, t).x; if (Math.abs(q - (SX0 + SX1) / 2) > Math.abs(x - (SX0 + SX1) / 2)) x = q; }
+        (window.__oobLog = window.__oobLog || []).push({ oob: !!e.oob, shown: x < SX0 || x > SX1, mine: e.team === G.me, call: e.call, evt: e.evt || '', yards: e.yards, x: +x.toFixed(1), running: !!res.root.clock_running });
+      }
     }
     scene = sc;
     if (!P) return false;
@@ -4986,11 +5018,18 @@
     // out of bounds" read as if the pass had been)
     if (e.oob && !e.incomplete && !e.td && !e.tdDef) extra.push(e.turnover ? 'returned out of bounds' : 'out of bounds');
     else if (act && act.oob && mine && !e.incomplete && !e.penalty && !e.turnover && !e.onDowns && !e.td && !e.safety) extra.push('could not get out of bounds');
-    if (e.fd && !e.td) extra.push(e.penalty ? 'automatic first down' : 'first down');
+    // (a foul's first down is automatic only when its yards fall short of the line to gain: a 5-yard offside on 3rd
+    // and 2 is a first down by the yardage, as any gain is)
+    if (e.fd && !e.td) extra.push(e.penalty && e.yards < e.ytg ? 'automatic first down' : 'first down');
     if (e.onDowns) extra.push('turnover on downs');
     if (e.safety) extra.push('safety');
     if (e.untimed) extra.push('no time left, but a half cannot end on a defensive foul: an untimed down');
-    else if (!e.td && !e.turnover && !e.onDowns && !e.safety) extra.push(e.running ? 'clock running' : 'clock stopped');
+    // out of bounds early in a half: the clock starts again once the ball is spotted (a player saw the clock run on
+    // after a man went out, and read it as the game ignoring the sideline)
+    else if (!e.td && !e.turnover && !e.onDowns && !e.safety) {
+      extra.push(!e.running ? 'clock stopped' : e.oob && !e.incomplete && !e.penalty
+        ? 'the clock restarts once the ball is spotted (out of bounds stops it until the snap only late in a half)' : 'clock running');
+    }
     return `${what}: ${res}${extra.length ? ', ' + extra.join(', ') : ''}`;
   }
   function narrate(log, act) {
@@ -5294,11 +5333,17 @@
     return sw;
   }
   function kickChoice(r) { return r.t <= 300 && r.score[G.me] < r.score[1 - G.me]; }
+  // late in a half: the last 5:00 of the second, the last 2:00 of the first
+  const lateHalf = (r) => halfLeft(r.t) <= (r.t <= 1800 ? 300 : 120);
+  // where a timeout on their snap is the question (asked when the coordinator has the drive, and graded): behind or
+  // level, or a field goal from losing the lead
   function defChoice(r) {
-    const th = halfLeft(r.t), lead = r.score[G.me] - r.score[1 - G.me];
-    const late = r.t <= 1800 ? th <= 300 : th <= 120;
-    return late && (lead <= 0 || (lead <= 3 && r.yl <= 45));
+    const lead = r.score[G.me] - r.score[1 - G.me];
+    return lateHalf(r) && (lead <= 0 || (lead <= 3 && r.yl <= 45));
   }
+  // no timeout left just where one would be offered: said, not just missing (a player looked for the option on a day
+  // that starts his side with none)
+  const noTimeouts = (d) => { const n = el('p', 'hint noto', '⏱ No timeouts left'); d.append(n); return n; };
   async function stepWith(action) {
     if ($('toBtn')) $('toBtn').hidden = true;          // (no timeout button while a snap plays)
     await cutReplay();                // a replay's last redraw must not show this play's result before it animates
@@ -5494,7 +5539,7 @@
       // a miss reads as the 1-in-5 it was, not a rigged game
       const rush = r.clock_running && halfLeft(r.t) <= 25;          // engine.js FIRE_WINDOW: the unit runs on, a rushed kick
       const pFg = G.info.pFg == null ? null : rush ? 1 / (1 + Math.exp(-(Math.log(G.info.pFg / Math.max(1e-9, 1 - G.info.pFg)) - 0.3))) : G.info.pFg;
-      specials.forEach((k) => extra.push([k, specialLabel(k), k === 'fg' ? `${Math.round(G.info.fgDist)} yards${pFg != null ? ` · ${Math.round(pFg * 100)}% to make` : ''}${rush ? (r.to[me] > 0 ? ' · rushed (a timeout first sets it up)' : ' · rushed') : ''}` : null]));
+      specials.forEach((k) => extra.push([k, specialLabel(k), k === 'fg' ? `${Math.round(G.info.fgDist)} yards${pFg != null ? ` · ${Math.round(pFg * 100)}% to make` : ''}${punterKicks(me) ? ` · punter ${shortName(teamOf(me).kicker.name) || teamOf(me).kicker.name} kicking` : ''}${rush ? (r.to[me] > 0 ? ' · rushed (a timeout first sets it up)' : ' · rushed') : ''}` : null]));
       if (extra.length) {
         const row = el('div', 'keys');
         row.style.setProperty('--cols', Math.min(extra.length, 4));
@@ -5515,6 +5560,8 @@
         if (r.clock_running && allRunOut(r)) d.insertBefore(row, fam);
         else { d.insertBefore(row, fam.nextSibling); fitTo = row; }
       }
+      // (the clock running and time wanted, the timeout's place: none left)
+      if (r.clock_running && !(r.to[me] > 0) && (r.t > 1800 || r.score[me] <= r.score[1 - me])) noTimeouts(d);
       fitDock(fitTo);
       return;
     }
@@ -6280,7 +6327,11 @@
   }
 
   // their ball: you call the defense (a timeout first, when it matters); the coordinator can take the drive
-  const defTimeoutOk = (r) => r.clock_running && r.to[G.me] > 0 && defChoice(r);
+  // a timeout on their snap: whenever the clock runs late in a half and you have one, whatever the score (a player
+  // leading by one looked for it, to save time for after their field goal); graded where it is the question
+  // (defChoice) or when you take it
+  const defTimeoutOk = (r) => r.clock_running && r.to[G.me] > 0 && lateHalf(r);
+  const defTimeoutNone = (r) => !VS && r.clock_running && !(r.to[G.me] > 0) && lateHalf(r);
   async function promptDefense() {
     const r = G.root;
     huddle('Their huddle…');
@@ -6383,7 +6434,7 @@
       sw.addEventListener('click', () => { ui.to = !ui.to; sw.setAttribute('aria-checked', String(ui.to)); toButton(); });
       tg.append(lab, sw);
       d.append(tg);
-    }
+    } else if (defTimeoutNone(r)) noTimeouts(d);
     persButton();         // (the offense's personnel chip off the field: it stayed up on defense)
     const keys = el('div', `keys${$('drawGo') ? '' : ' snapbar'}`);      // (the snap at the sheet's foot, or the drawing's)
     keys.style.setProperty('--cols', 1);
@@ -6450,7 +6501,7 @@
       sw.addEventListener('click', () => { ui.to = !ui.to; sw.setAttribute('aria-checked', String(ui.to)); toButton(); });
       tg.append(lab, sw);
       d.append(tg);
-    }
+    } else if (defTimeoutNone(r)) noTimeouts(d);
     persButton();
     if (VS) return;
     if (FULLDEF) d.append(defModeChip(false));
@@ -6468,7 +6519,7 @@
     if (draw && window.__sepLog) (window.__drawSnaps = window.__drawSnaps || []).push({ kind: 'def', call: k });
     const r = G.root, me = G.me;
     try {
-      const useTo = !!(ui.to && defTimeoutOk(r)), askTo = defTimeoutOk(r), seq = G.seq;
+      const useTo = !!(ui.to && defTimeoutOk(r)), askTo = defTimeoutOk(r) && (useTo || defChoice(r)), seq = G.seq;
       const opts = DEFS.map((x) => ({ key: x, label: DEF[x].label, action: { to_def: useTo, def: x } }));
       const L = (G.dinfo && G.dinfo.looks) || [0.25, 0.25, 0.25, 0.25];
       const specs = [];
@@ -6493,7 +6544,7 @@
     liveDrive.calls++;
     const r = G.root, me = G.me;
     try {
-      const useTo = !!(ui.to && defTimeoutOk(r)), askTo = defTimeoutOk(r), seq = G.seq;
+      const useTo = !!(ui.to && defTimeoutOk(r)), askTo = defTimeoutOk(r) && (useTo || defChoice(r)), seq = G.seq;
       const act = (x) => ({ to_def: useTo, dc: { ...x }, read: cpuHard() ? CPU_HARD.read : true });
       const keys = presetsFor(r), mine = keys.find((k) => sameDc(PRESET[k].dc, dc)) || 'yours';
       const opts = keys.map((k) => ({ key: k, label: PRESET[k].label, action: act(PRESET[k].dc) }));
@@ -6540,15 +6591,23 @@
         } },
       // their field goal or punt: your special teams (engine.js ST_*); icing the kicker is a timeout first (it changes
       // nothing about the kick but the clock)
-      fgdef: { ask: 'They’re kicking a field goal', sub: `${teamName(code(r.pos))}: about a ${Math.round(r.yl + 17)}-yarder`, family: 'fg_def',
+      fgdef: { ask: 'They’re kicking a field goal', sub: `${teamName(code(r.pos))}: about a ${Math.round(r.yl + 17)}-yarder${punterKicks(r.pos) ? ` · their punter ${teamOf(r.pos).kicker.name} is kicking` : ''}`, family: 'fg_def',
         opts: [{ key: 'block', label: 'Go for the block', sub: 'All-out rush. A roughing flag gives them a first down', action: { to_def: false, st: 'block' } },
           { key: 'safe', label: 'Stay home', sub: 'Normal rush, no risk', action: { to_def: false, st: 'safe' } },
           ...(r.clock_running && r.to[me] > 0 ? [{ key: 'ice', label: 'Ice the kicker', sub: `Timeout first (${r.to[me]} left)`, action: { to_def: true, st: 'safe' } }] : [])],
         q: () => ({ block: 0.2, safe: 0.7, ...(r.clock_running && r.to[me] > 0 ? { ice: 0.1 } : {}) }) },
+      // a punt that reaches the end zone (from their own 30 or nearer midfield: 2-23% of real punts do, 2020-25): set up
+      // the return and he takes a knee there for the touchback (939 of the 945 that got there were), or he runs it out
+      // (engine.js _punt 'ezret'); a timeout first stops the clock before it, as icing a kicker does
       puntdef: { ask: 'They’re punting', sub: `${teamName(code(r.pos))} from ${spotText(r)}`, family: 'punt_def',
-        opts: [{ key: 'return', label: 'Set up the return', sub: 'Your returner gets a shot at it', action: { to_def: false, st: 'return' } },
-          { key: 'rush', label: 'Rush the punt', sub: 'More blocks, a roughing risk, no return', action: { to_def: false, st: 'rush' } }],
-        q: () => ({ return: 0.85, rush: 0.15 }) },
+        opts: [{ key: 'return', label: 'Set up the return', sub: r.yl <= PUNT_EZ_YL ? 'In the end zone he takes a knee: touchback' : 'Your returner gets a shot at it', action: { to_def: false, st: 'return' } },
+          ...(r.yl <= PUNT_EZ_YL ? [{ key: 'ezret', label: 'Run it out', sub: 'Field it in the end zone and bring it out', action: { to_def: false, st: 'ezret' } }] : []),
+          { key: 'rush', label: 'Rush the punt', sub: 'More blocks, a roughing risk, no return', action: { to_def: false, st: 'rush' } },
+          ...(r.clock_running && r.to[me] > 0 ? [{ key: 'timeout', label: 'Timeout first', sub: `Stop the clock, then the return (${r.to[me]} left)`, action: { to_def: true, st: 'return' } }] : [])],
+        q: () => {
+          const to = r.clock_running && r.to[me] > 0 ? 0.1 : 0, ez = r.yl <= PUNT_EZ_YL ? 0.006 : 0;
+          return { return: (1 - to) * (0.85 - ez), rush: (1 - to) * 0.15, ...(ez ? { ezret: (1 - to) * ez } : {}), ...(to ? { timeout: to } : {}) };
+        } },
       freekick: { ask: 'Free kick', sub: 'After the safety: deep or onside?', family: 'onside',
         opts: [{ key: 'deep', label: 'Kick deep', action: { kick: 'deep' } }, { key: 'onside', label: 'Onside', action: { kick: 'onside' } }],
         q: () => coachProbs('onside', r, me) || { deep: 0.85, onside: 0.15 } },
@@ -6564,7 +6623,7 @@
     if (drawn) sketchChips(head, 'st');
     d.append(head);
     const keys = el('div', 'keys');
-    keys.style.setProperty('--cols', spec.opts.length);
+    keys.style.setProperty('--cols', spec.opts.length === 4 ? 2 : spec.opts.length);      // (four: two by two, room for the words)
     // a drawing reads as one of the same choices (an option the spot does not have is no choice: Onside only behind)
     const choose = async (o, draw) => {
       if (busy) return;
@@ -6608,6 +6667,7 @@
       keys.append(b);
     });
     d.append(keys);
+    if ((kind === 'fgdef' || kind === 'puntdef') && defTimeoutNone(r)) noTimeouts(d);
   }
 
   // ------------------------------------------------------- after the snap ---

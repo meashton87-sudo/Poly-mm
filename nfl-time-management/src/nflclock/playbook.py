@@ -37,8 +37,8 @@ import numpy as np
 import pandas as pd
 
 from . import config, data
-from .library import (N_DOWN, N_FINE, N_MODE, N_YTG, N_ZONE, _duration, decode_fine, down_bucket, fine_key,
-                      game_mode, zone_of)
+from .library import (N_DOWN, N_FINE, N_MODE, N_YTG, N_ZONE, _duration, auto_first_down, decode_fine, down_bucket,
+                      fine_key, game_mode, zone_of)
 
 SEASONS = (2022, 2023, 2024, 2025, 2026)
 CALLS = [   # id, call-sheet label, engine kind, what the play-by-play says
@@ -413,7 +413,7 @@ def labeled_plays(seasons=SEASONS, seed: int = 11) -> pd.DataFrame:
         "game_id": s["game_id"].to_numpy(), "play_id": s["play_id"].to_numpy(),
         "call": call,
         "yards": yards.astype(float),
-        "auto_fd": s["first_down_penalty"].fillna(0).to_numpy().astype(bool) & pen,
+        "auto_fd": auto_first_down(s, pen),     # the foul's own first down, not the yardage's (library.auto_first_down)
         "penalty": pen,
         "incomplete": (s["incomplete_pass"].fillna(0).to_numpy() == 1) & ~pen,
         "oob": (s["out_of_bounds"].fillna(0).to_numpy() == 1) & ~pen,

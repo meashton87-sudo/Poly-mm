@@ -192,6 +192,8 @@
   // the usual kick (the engine's plain model). NFL rates: about 1.5% of field goals and 1% of punts are blocked;
   // an all-out rush roughly triples that; blocked kicks are run back for touchdowns about one time in ten.
   const ST_BLOCK = { fg: 0.045, punt: 0.035 }, ST_FOUL = 0.02, ST_BLOCK_TD = 0.1, ST_FAIR_GAIN = 4;
+  // how a real punt ended (models.py PUNT_HOW), and how deep a fielded punt is for a return out of the end zone
+  const PUNT_RETURNED = 0, PUNT_FAIR = 1, PUNT_TB = 4, PUNT_DEEP = 5;
   const WHO_CODE = { RB: 2, WR: 3, TE: 4 };            // the target's position in the playbook's carry codes
   // the route an action asks for: the receiver's route, at the depth it was drawn to when it was drawn (act.depth)
   const oobMode = (oob) => (oob === -1 ? -1 : oob ? 1 : 0);    // _cdfOf's: 1 get out of bounds, -1 stay in, 0 neither
@@ -386,11 +388,21 @@
       const order = Array.from(yl.keys()).sort((a, b) => (yl[a] - yl[b]) || (a - b));
       const n = order.length;
       this.punt = { yl: new Float64Array(n), net: new Float64Array(n), retTd: new Uint8Array(n), blocked: new Uint8Array(n),
-        touchback: new Uint8Array(n), dur: new Float64Array(n) };
+        touchback: new Uint8Array(n), dur: new Float64Array(n), how: new Uint8Array(n), ret: new Float64Array(n) };
+      // how the real punt ended (flags bits 3-5, models.py PUNT_HOW: 0 returned, 1 fair catch, 2 downed, 3 out of bounds,
+      // 4 touchback, 5 muffed) and where it came down or was fielded (land: the receiving team's yards from its goal
+      // line, 0 or less in the end zone): a return's own yards, for the field and the end zone (_punt)
+      const land = P.land ? decode(P.land) : null;
       order.forEach((j, i) => {
         this.punt.yl[i] = yl[j]; this.punt.net[i] = net[j]; this.punt.retTd[i] = fl[j] & 1;
         this.punt.blocked[i] = (fl[j] >> 1) & 1; this.punt.touchback[i] = (fl[j] >> 2) & 1; this.punt.dur[i] = d10[j] / 10;
+        this.punt.how[i] = land ? (fl[j] >> 3) & 7 : PUNT_RETURNED;
+        this.punt.ret[i] = land && this.punt.how[i] === PUNT_RETURNED ? Math.max(0, yl[j] - net[j] - land[j]) : 0;
       });
+      // the real returns of punts fielded at the 5 or deeper (173 in 2020-25, ending at the 15 on average, one a
+      // touchdown): a returner who runs one out of the end zone (_punt 'ezret')
+      this.puntDeep = Int32Array.from(land ? [...Array(n).keys()].filter((i) => !this.punt.blocked[i] && !this.punt.touchback[i]
+        && this.punt.how[i] === PUNT_RETURNED && this.punt.yl[i] - this.punt.net[i] - this.punt.ret[i] <= PUNT_DEEP) : []);
       this.puntLo = new Int32Array(101); this.puntHi = new Int32Array(101);
       const ss = (v, right) => { // searchsorted on punt.yl
         let lo = 0, hi = n;
@@ -2010,13 +2022,32 @@
       if (normal) net += this.ctx.punterShift[o];
       if (normal && st === 'rush') net += ST_FAIR_GAIN;                 // a fair catch: no return yards
       const spot = yl0 - net;
-      const recvYl = (P.touchback[j] || spot <= 0) ? 80 : clip(100 - spot, 1, 99);
-      const rc = this._rc(S, g) && !P.retTd[j];
-      this._clockAfterPlay(S, g, P.dur[j], !rc, 0);
+      let recvYl = (P.touchback[j] || spot <= 0) ? 80 : clip(100 - spot, 1, 99);
+      // the daily game's return team (st): where the ball came down or was fielded, and how the punt ended
+      let retTd = !!P.retTd[j], tb = !!P.touchback[j] || spot <= 0, dur = P.dur[j];
+      let how = tb ? PUNT_TB : st === 'rush' && P.how[j] === PUNT_RETURNED ? PUNT_FAIR : P.how[j], land = spot - P.ret[j];
+      if ((st === 'return' || st === 'ezret') && !P.blocked[j]) {
+        const ez = tb || (P.how[j] === PUNT_RETURNED && land <= 0);       // the ball reached the end zone
+        if (ez && st === 'return' && !tb) {
+          // fielded in the end zone, the return set up: he takes a knee, a touchback (939 of the 945 real punts that got
+          // there were touchbacks, 2020-25; 4 others were run out, 2 muffed)
+          tb = true; retTd = false; recvYl = 80; how = PUNT_TB;
+        } else if (ez && st === 'ezret' && this.e.puntDeep.length) {
+          // run it out: he fields it in the end zone and brings it out, as far as a real return of a punt fielded at
+          // the 5 or deeper went (nflverse charts no difference between a ball he could have caught in the end zone
+          // and one that bounced in: he catches them all); downed in the end zone, still a touchback
+          const k = this.e.puntDeep[Math.min(Math.floor(u[6] * this.e.puntDeep.length), this.e.puntDeep.length - 1)];
+          const at = Math.min(0, land), end = at + P.ret[k];
+          retTd = !!P.retTd[k]; tb = !retTd && end <= 0; how = tb ? PUNT_TB : PUNT_RETURNED; land = at; dur = P.dur[k];
+          recvYl = tb ? 80 : clip(100 - end, 1, 99);
+        }
+      }
+      const rc = this._rc(S, g) && !retTd;
+      this._clockAfterPlay(S, g, dur, !rc, 0);
       const run1 = S.running;
-      if (S.log) S.log.push({ ev: 'punt', team: o, net: P.retTd[j] ? null : yl0 + recvYl - 100, retTd: !!P.retTd[j],
-        blocked: !!P.blocked[j], touchback: !!P.touchback[j] || spot <= 0, recvYl });
-      if (!P.retTd[j]) { this._flip(S, recvYl); if (rc) S.running = run1; }
+      if (S.log) S.log.push({ ev: 'punt', team: o, net: retTd ? null : yl0 + recvYl - 100, retTd,
+        blocked: !!P.blocked[j], touchback: tb, recvYl, how, land: Math.round(land) });
+      if (!retTd) { this._flip(S, recvYl); if (rc) S.running = run1; }
       else { S.s[d] += 6; S.pos = d; S.phase = PAT; }
       this._endHalfCheck(S, g);
     }

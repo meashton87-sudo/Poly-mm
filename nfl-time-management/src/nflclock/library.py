@@ -76,6 +76,32 @@ def _duration(play_type, yards, incomplete, sack, penalty_presnap, turnover):
     return np.clip(d, 0.0, 14.0)
 
 
+AUTO_FD_SHARE = 0.5   # a kind of foul is an automatic first down when more than half of its fouls short of the line to
+                      # gain still gave one (holding 99.9%, pass interference and illegal contact 100%; offside 0%)
+
+
+def auto_first_down(s: pd.DataFrame, pen: np.ndarray) -> np.ndarray:
+    """True where the foul itself gives the offense a first down, wherever the row is drawn (the flag the engines read).
+
+    nflverse's first_down_penalty marks every snap whose first down came from a foul, so a 5-yard offside on 3rd and 2
+    carries it as well as a defensive holding on 3rd and 9. A row is drawn in other situations than its own, and the
+    offside's mark gave a first down on 1st and 10 (players saw it). In the rulebook only some defensive fouls are an
+    automatic first down (holding, pass interference, illegal contact, illegal use of hands, roughing the passer, the
+    personal fouls); offside, encroachment, a neutral zone infraction, delay, too many men or an illegal formation are 5
+    yards, a first down only when the yardage reaches the line to gain. The data says which is which (2016-26, the
+    defense's accepted fouls short of the line to gain): offside got the first down on 0 of 1,220, a neutral zone
+    infraction 0 of 925, encroachment 0 of 296; holding on 1,311 of 1,312, illegal contact on 460 of 460. A kind never
+    seen short of the line to gain (a 15-yard foul on 3rd and 3) keeps its own mark."""
+    pen = np.asarray(pen, bool)
+    fdp = s["first_down_penalty"].fillna(0).to_numpy() == 1
+    kind = s["penalty_type"].fillna("").to_numpy().astype(object)
+    short = (pen & (s["penalty_team"].to_numpy() == s["defteam"].to_numpy())
+             & (s["penalty_yards"].fillna(0).to_numpy() < s["ydstogo"].to_numpy()))
+    share = pd.Series(fdp[short]).groupby(kind[short]).mean()
+    auto = np.isin(kind, list(share.index[share > AUTO_FD_SHARE])) | ~np.isin(kind, list(share.index))
+    return pen & fdp & auto
+
+
 def build_library(pbp: pd.DataFrame, seasons=None, seed: int = 7) -> pd.DataFrame:
     seasons = seasons or config.LIBRARY_SEASONS
     s = pbp[pbp["is_snap"] & pbp["season"].isin(seasons) & pbp["down"].notna()
@@ -107,7 +133,7 @@ def build_library(pbp: pd.DataFrame, seasons=None, seed: int = 7) -> pd.DataFram
     lib = pd.DataFrame({
         "kind": np.where(is_pass, KIND_PASS, KIND_RUN),
         "yards": yards.astype(float),
-        "auto_fd": s["first_down_penalty"].fillna(0).to_numpy().astype(bool) & pen,
+        "auto_fd": auto_first_down(s, pen),
         "penalty": pen,
         "incomplete": (s["incomplete_pass"].fillna(0).to_numpy() == 1) & ~pen,
         "oob": (s["out_of_bounds"].fillna(0).to_numpy() == 1) & ~pen,

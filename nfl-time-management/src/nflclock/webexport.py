@@ -82,9 +82,13 @@ def export_engine(bundle: Bundle | None = None, path=None) -> dict:
         "tempo": {k: _b64(np.round(np.asarray(v) * 10).astype(np.uint16)) for k, v in b.tempo.items()},
         "punts": {
             "yl": _b64(b.punts["yl"].astype(np.uint8)), "net": _b64(b.punts["net"].astype(np.int8)),
+            # bits 0-2 return touchdown, blocked, touchback; 3-5 how it ended (models.PUNT_HOW)
             "flags": _b64((b.punts["ret_td"].astype(np.uint8) | (b.punts["blocked"].astype(np.uint8) << 1)
-                           | (b.punts["touchback"].astype(np.uint8) << 2))),
+                           | (b.punts["touchback"].astype(np.uint8) << 2)
+                           | (np.asarray(b.punts.get("how", np.zeros(len(b.punts["yl"]))), np.uint8) << 3))),
             "dur10": _b64(np.round(b.punts["duration"] * 10).astype(np.uint8)),
+            # where it came down or was fielded (the receiving team's yards from its goal line; engine.js _punt)
+            **({"land": _b64(np.round(b.punts["land"]).astype(np.int8))} if "land" in b.punts else {}),
         },
         "kickoffs": {
             "start_yl": _b64(b.kickoffs["start_yl"].astype(np.uint8)),

@@ -16,7 +16,7 @@ class Bundle:
     wp: WPModel
     fg_model: object
     lib: library.PlayLibrary
-    punts: dict            # arrays: yl, net, ret_td, blocked, duration
+    punts: dict            # arrays: yl, net, ret_td, blocked, touchback, duration, how, land
     kickoffs: dict         # arrays: start_yl, duration, ret_td
     tempo: dict            # mode -> array of between-snap runoff seconds
     team_ratings: pd.DataFrame
@@ -76,9 +76,33 @@ def _tempo_samples(pbp: pd.DataFrame) -> dict:
             "spike": clip(spike)}
 
 
+# how a punt ended (the daily game's field and its return team's end-zone choice, engine.js _punt; the simulators
+# draw the outcome alone). 2020-25, the 11,767 punts not blocked, touchbacks or return touchdowns: returned 43%, fair
+# catch 31%, downed 13%, out of bounds 11%, muffed 1.5%. Of the 661 ending inside the 5 the coverage downed 67% there,
+# 16% went out of bounds, 8% were fair caught and 8% returned: a punt that ends at the 3 was mostly downed there, not
+# caught in the end zone and run back
+PUNT_HOW = ["returned", "fair_catch", "downed", "out_of_bounds", "touchback", "muffed"]
+
+
+def punt_how(pu: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """How each punt ended (PUNT_HOW index, from the play's description) and where the ball came down or was fielded:
+    the receiving team's yards from its own goal line, 0 or less in the end zone (nflverse's kick distance: to where
+    it was fielded, downed or went out; a touchback to the goal line). Of the 945 real punts that reached the end zone
+    (2020-25), 939 were touchbacks; 4 were run out (ending at the 9.6 on average) and 2 muffed."""
+    d = pu["desc"].fillna("")
+    ret = pu["return_yards"].fillna(0).to_numpy() != 0
+    how = np.select([pu["touchback"].fillna(0).eq(1).to_numpy(), d.str.contains("MUFFS").to_numpy(),
+                     d.str.contains("fair catch", case=False).to_numpy(), d.str.contains("downed", case=False).to_numpy(),
+                     d.str.contains("out of bounds", case=False).to_numpy() & ~ret], [4, 5, 1, 2, 3], 0)
+    end = pu["yardline_100"].to_numpy(float) - pu["net"].to_numpy(float)
+    land = np.where(pu["kick_distance"].notna(), pu["yardline_100"] - pu["kick_distance"], end)
+    return how.astype(np.uint8), np.clip(land, -10, 99)
+
+
 def _punt_samples(pbp: pd.DataFrame) -> dict:
     pu = ratings.punt_table(pbp[pbp["season"].isin(config.LIBRARY_SEASONS)])
     dur = pu["delta_t"].where(pu["delta_t"].between(3, 20), 9.0)
+    how, land = punt_how(pu)
     return {
         "yl": pu["yardline_100"].to_numpy(float),
         "net": pu["net"].to_numpy(float),
@@ -86,6 +110,7 @@ def _punt_samples(pbp: pd.DataFrame) -> dict:
         "blocked": (pu["punt_blocked"].fillna(0) == 1).to_numpy(),
         "touchback": (pu["touchback"].fillna(0) == 1).to_numpy(),
         "duration": dur.to_numpy(float),
+        "how": how, "land": land,
     }
 
 
