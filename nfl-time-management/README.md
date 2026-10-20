@@ -486,12 +486,46 @@ season). From 2003 to 2008 the play-by-play names no receiver on an incompletion
 receivers' ratings, and before snap counts the busiest players in the league stand in for the starters a rating is
 scaled against (`overall.py`).
 
+**Live drills** (`#live`, the banner on Home; `game.js` the live drills section, `board/live.js`,
+`board/live_espn.js`): when a real NFL game reaches a two-minute drill (one score apart, under 2:00 of a half, under
+5:00 of the fourth quarter, or overtime), the site lights up: "LIVE · Pittsburgh at Cincinnati · 2:46 left · Call it".
+The player calls each next play with the normal call keys, on the real situation, with the teams as they line up now
+(`teams.json`), before seeing the real one. When the real play comes in, both calls are graded the same way from the
+same pre-snap state, side by side: yours (and what the simulator made of it) beside the real coach's, what really
+happened, and a running tally against him. Then the end card (snaps you called better than him, the key moment, the
+real drive's end) and a share card (text and a picture: "I out-called Andy Reid on Monday night: 4 of 6 snaps").
+A drill opens before its first snap, as soon as the scoreboard has the ball in a two-minute spot. A player joining
+mid-drive starts from where the drive is now; a reload keeps the drill where it was (`tmd:v3:live:<id>`); a drill that
+is over replays snap by snap at your own pace (Pro). The worker watches the feed: ESPN's public scoreboard once a minute
+while a game is on (once an hour between games) and, for a game in or near a two-minute spot, its plays once a minute.
+Each drive becomes a drill: every call with the real situation before the snap (timeouts worked out from the
+scoreboard's, the clock stopped by whatever stops it), the call the real play maps to in the playbook (the feed says
+left or right, taken as the weak or strong side; a sack or a scramble has no call, and that snap is not counted), what
+happened, how the drive ended. The defense's timeouts are notes before a snap; the offense's own timeout is a call of
+its own. The feed's shape is known to `live_espn.js` only: a payload that is not as expected is rejected, counted and
+logged, and no drill is opened or changed on it (swap the source by writing another module with the same exports).
+Latency: the feed runs 20 to 60 s behind TV, the worker reads it each minute, the page asks every 12 s while a drill is
+open; a real play reached the worker 37 to 88 s after it happened (57 s on average) in the replay of a recorded game,
+so it shows on the page about a minute after TV. A drill not read for 3 minutes is never shown as live (the page waits
+on the next play, the field dimmed), and the page stops asking after 10 minutes without one.
+
+*Turning it on.* Once: set `LIVE_ON: "on"` in `.github/workflows/site.yml` and merge (the page then may ask the worker;
+the Pro preview always has it). Each game night, in the Cloudflare dashboard: Workers & Pages, two-minute-drill-board,
+Settings, Variables and Secrets, Add variable `LIVE_ON` = `on`, Deploy (instant, no site build; the dashboard keeps it
+through deploys). Off (`off`, or deleted), the worker's minute does nothing and the pages stop asking. To pause or
+resume without the dashboard: `curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -d '{"on":false}' $BOARD_API/live/admin`
+(`{"on":true}` resumes; `GET` the same address shows the switch, the games on the scoreboard and every payload the feed
+check rejected). The post to X when a drill opens ("Live now: Cincinnati ball at its own 30, down 1, 2:15 left. Call it
+before Taylor does → https://2mindrills.com/#live") needs four worker secrets, from `board/`: `npx wrangler secret put
+X_API_KEY`, `X_API_SECRET` (the X app's consumer key and secret), `X_ACCESS_TOKEN` and `X_ACCESS_SECRET` (the posting
+account's, read and write); without all four nothing is posted; at most 8 a day, one a drill.
+
 **Analytics events** (the website's Google tag only; `track()` in `game.js`), for deciding what to improve:
 `drive_start` (mode, kind of spot, day), `play_call` (mode, family, call, routes changed, out of bounds),
 `defense_call` (call), `draw_run`, `draw_rpo`, `draw_pass`, `draw_def` and `draw_st` (a drawn call snapped: mode, the call
 it read as; a run's shape, the kick's kind), `draw_qb` (rollout side or drop), `draw_refused` (kind, why), `draw_mode`
 (on), `daily_finish` (day, kind, score, better/worse/same than the real coach, snaps),
-`survivor_game` (win/loss/tie, overtime, streak), `overtime`, `share` (daily or survivor; share sheet, copy or
+`survivor_game` (win/loss/tie, overtime, streak), `overtime`, `share` (daily, survivor or live; share sheet, copy or
 select), `help_open` (a tap on ?; auto: the three-line help a first visit to a Pro drive still gets),
 `onboard_step` (the first drive's tour: step, its number as shown), `onboard_done` (steps seen) or `onboard_skip`
 (step), `install_prompt_shown` (the Add to Home Screen card: prompt or ios, which offer of three),
@@ -501,7 +535,9 @@ sat waiting on it), `info_mismatch` (a spot's first-call facts, shipped with it,
 loading), `scenario_builder` (pro), `scenario_preset` (preset), `scenario_start` (type, quarter, kickoff, the two seasons, pro, titled),
 `scenario_pitch`, `scenario_retry`, `scen_post` (a post to Community: existing, type, quarter), `scen_comm_open` (pro),
 `scen_comm_sort` (sort), `scen_comm_tap` (sort, plays, pro), `scen_comm_play` and `scen_comm_finish` (won: a try of a
-posted scenario counted), `scen_comm_delete`, `stats_open`, `stats_page_link`, `replay`, `name_set`, `leaderboard_tab` (day or week), `practice_start` (from the
+posted scenario counted), `scen_comm_delete`, `live_banner` (the live banner tapped: drills open), `live_open` (a live drill
+first opened on this device: replay, snaps in), `live_call` (call, snap, replay), `live_snap` (snap; better, worse, even
+or none against the real call), `live_finish` (snaps, better, worse, even, replay), `live_idle` (#live with nothing open), `stats_open`, `stats_page_link`, `replay`, `name_set`, `leaderboard_tab` (day or week), `practice_start` (from the
 daily card or a practice card), `practice_finish` (practice drive number, kind, score, snaps), `restart_ask` (mode: Start over
 tapped) and `restart` (mode, calls made, restarts so far, the drive, run or day: confirmed). Share opens the phone's share sheet
 where there is one. In Google Analytics: Reports, Engagement, Events (custom fields need registering as custom
