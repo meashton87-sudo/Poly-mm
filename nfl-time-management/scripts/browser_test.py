@@ -1355,11 +1355,12 @@ async def scenario_community(browser, base: str, shots: str = "") -> list[str]:
 
 
 # every question the page asks its simulator, by the scenario it names (game.js simScen: a quarterback put in has a
-# simulator of his own, its id ending |qb:<his name>)
+# simulator of his own, its id ending |qb:<his name>), and every call snapped with the grouping it carries (withTempo)
 WORKER_SPY = """(() => {
   const pm = Worker.prototype.postMessage;
   Worker.prototype.postMessage = function (m, t) {
     try { if (m && m.scen && m.type !== 'init') (window.__scenIds = window.__scenIds || []).push(`${m.type}|${m.scen.id}`); } catch (e) { /* not the game's */ }
+    try { if (m && m.type === 'step' && m.action && m.action.call != null) (window.__stepActs = window.__stepActs || []).push({ call: m.action.call, pers: m.action.pers ?? null }); } catch (e) { /* not the game's */ }
     return pm.call(this, m, t);
   };
 })();"""
@@ -1480,6 +1481,86 @@ async def qb_swap(browser, base: str, shots: str = "") -> list[str]:
         finally:
             await ctx.close()
     return out
+
+
+# your grouping as the page has it, the men swapped in, and the calls snapped so far (WORKER_SPY)
+PERS_NOW = """() => { const { G } = window.__draw.get(); return { pers: G.pers || null, who: G.persWho || null, acts: window.__stepActs || [] }; }"""
+
+
+async def pers_group(browser, base: str) -> list[str]:
+    """Who plays, the grouping (game.js openPers, withTempo; engine.js samplePlaybook), on a phone: one receiver swapped
+    for another keeps the grouping the team lined up in, and the pass snapped goes without one (its plays drawn as for
+    everyone, not from just the few run with that grouping there: every snap the same loss of 2 or 3); another grouping
+    picked goes with the next snap of yours."""
+    out: list[str] = []
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    await ctx.add_init_script("window.__sepLog = []; try { localStorage.setItem('tmd:v3:seen', 'true'); } catch (e) {}")
+    await ctx.add_init_script(WORKER_SPY)
+    page = await ctx.new_page()
+    errs: list[str] = []
+    page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+
+    async def snap_pass():           # (a pass snapped: the call that went to the simulator)
+        n0 = len((await page.evaluate(PERS_NOW))["acts"])
+        await page.locator("#dock .key.big:visible", has_text="Pass").first.click(timeout=3000)
+        await page.wait_for_selector("#snapGo", timeout=10000)
+        await page.click("#snapGo", timeout=5000)
+        for _ in range(100):
+            await page.wait_for_timeout(100)
+            acts = (await page.evaluate(PERS_NOW))["acts"]
+            if len(acts) > n0:
+                return acts[n0]
+        return None
+    try:
+        if not await to_offense(page, base):
+            return ["Who plays, the grouping: the first snap never came up"]
+        await page.click("#persBtn", timeout=3000)
+        await page.wait_for_selector("#mBody .pslot select", timeout=5000)
+        rows = await page.evaluate(PERS_ROWS)
+        i = next((k for k, r in enumerate(rows) if r["lab"] == "WR" and len(r["opts"]) > 1), None)
+        if i is None:
+            return ["Who plays, the grouping: no receiver to swap"]
+        sel = page.locator("#mBody .pslot select").nth(i)
+        other = next(v for v in await sel.evaluate("(s) => [...s.options].map((o) => o.value)") if v != rows[i]["val"])
+        await sel.select_option(value=other)
+        await page.wait_for_timeout(200)
+        await page.click("#mBody .pdone", timeout=3000)
+        await page.wait_for_timeout(400)
+        now = await page.evaluate(PERS_NOW)
+        if not now["who"] or not now["pers"]:
+            out.append(f"Who plays, the grouping: a receiver swapped, but the page has {now['pers']!r}, {now['who']!r}")
+        a = await snap_pass()
+        if a is None:
+            out.append("Who plays, the grouping: the pass with the receiver swapped was never snapped")
+        elif a["pers"] is not None:
+            out.append(f"Who plays, the grouping: one receiver swapped for another, and the snap went with grouping {a['pers']}, the one "
+                       "lined up in (its plays drawn from just those run with it there)")
+        # the play run, back to your next snap (the drive gone to their ball: the grouping picked is checked another time)
+        for _ in range(300):
+            await page.wait_for_timeout(100)
+            if await page.locator("#field.playing").count():
+                await page.click("#field", timeout=2000)
+            elif await page.locator("#dock .result .btn:visible").count():
+                await page.locator("#dock .result .btn").first.click(timeout=2000)
+            elif await page.locator("#persBtn:visible").count() and await page.locator("#dock .key.big:visible", has_text="Pass").count():
+                break
+        else:
+            return out + errs
+        await page.click("#persBtn", timeout=3000)
+        await page.wait_for_selector("#mBody .pgroup", timeout=5000)
+        g = page.locator("#mBody .pgroup:not(.on)").first
+        want = int((await g.locator("b").text_content()).strip())
+        await g.click(timeout=3000)
+        await page.click("#mBody .pdone", timeout=3000)
+        await page.wait_for_timeout(400)
+        a = await snap_pass()
+        if a is None or a["pers"] != want:
+            out.append(f"Who plays, the grouping: {want} picked, but the snap went with {a and a['pers']!r}")
+    except Exception as e:
+        out.append(f"Who plays, the grouping: {e}")
+    finally:
+        await ctx.close()
+    return out + errs
 
 
 async def scenario_lineup(browser, base: str, shots: str = "") -> list[str]:
@@ -1885,6 +1966,10 @@ async def main(a) -> int:
         print("Who plays, the quarterback (the sheet's first row, a backup put in plays and is graded on his simulator, back to the real lineup): "
               + ("ok" if not qb else "FAIL") + "".join(f"\n      {x}" for x in qb), flush=True)
         reach += qb
+        pg = await pers_group(browser, base)
+        print("Who plays, the grouping (a receiver swapped: the snap goes without one, the grouping lined up in; another picked goes with it): "
+              + ("ok" if not pg else "FAIL") + "".join(f"\n      {x}" for x in pg), flush=True)
+        reach += pg
         sb = await survivor_best(browser, base)
         print("survivor's best run follows the account (another phone's best on a phone with nothing saved, a run played here kept on the account, a fresh phone signed in): "
               + ("ok" if not sb else "FAIL") + "".join(f"\n      {x}" for x in sb), flush=True)

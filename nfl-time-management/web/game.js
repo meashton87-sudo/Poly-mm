@@ -6281,8 +6281,12 @@
     } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
     busy = false;
   }
+  // (the grouping goes with the call only when it is not the one the team lined up in: a man swapped for another of
+  // his position in Who plays keeps the real grouping, and the plays are drawn as for everyone, not from just those
+  // run with it there: a player who swapped one receiver had every snap drawn from a handful of real plays, the same
+  // loss of 2 or 3 on run after run)
   const withTempo = (a) => {
-    const b = G.pers && G.root.pos === G.me ? { ...a, pers: G.pers } : a;
+    const b = G.pers && G.root.pos === G.me && G.pers !== persOf(lineup(G.me).off) ? { ...a, pers: G.pers } : a;
     return G.root.clock_running && ui && ui.tempo ? { ...b, tempo: engineTempo(ui.tempo, G.root) } : b;
   };
   function callAction(id, oob) {
