@@ -841,9 +841,20 @@
     }
     // pers (daily game): the offense's personnel (11, 12, 21, 13): only real plays run with it, against the look,
     // from the situation's pool then the call's coarser pools; without the look; else as if none was picked
-    samplePlaybook(team, callIdx, fk, u, oob, looks, s, route, who, pers) {
+    samplePlaybook(team, callIdx, fk, u, oob, looks, s, route, who, pers, preDone) {
       const P = this.e.pb, cdf = this._cdfOf(team, oob);
       const pool = P.poolOf[callIdx * P.nFine + fk];
+      // a foul before the snap (a false start, a delay of game, a neutral zone infraction) has no look, route or
+      // target charted: the play never ran. The filters below would leave every one of them out (players' offenses
+      // never false-started: 0.6% of snaps against the real 1.6%, Oct 20), so they come first, as often as in the
+      // situation's own pool, whatever was picked
+      // (preDone: sampleVsDefense has drawn them; either way the plays drawn below leave them out)
+      let pre = !!preDone;
+      if ((looks || route || pers) && P.lookB && !preDone) {
+        const B = this._preSnap(cdf, pool);
+        if (B && u < B.share) return this._pickT(B, u / B.share);
+        if (B) { u = (u - B.share) / (1 - B.share); pre = true; }
+      }
       if (route && P.ngs) {
         const r = this._pickT(this.routeSet(team, callIdx, fk, oob, looks, s, route, who), u);
         if (r >= 0) return r;
@@ -867,7 +878,7 @@
         }
         if (r >= 0) return r;
       }
-      if (s) return this._sampleLook(cdf, pool, u, 0, s);
+      if (s || pre) return this._sampleLook(cdf, pool, u, 0, s, 0, 0, false, 0, pre);
       let lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
       const target = pool + u;
       while (lo < hi) { const mid = (lo + hi) >> 1; if (cdf[mid] < target) lo = mid + 1; else hi = mid; }
@@ -989,8 +1000,28 @@
     // position who when given (0: any), by the pool's weights tilted by the matchup s; -1 when fewer than PB_LOOK_MIN
     // of its plays pass the filters (any filter set: looks or, with need, a route). The filtered, tilted weights are
     // built once per pool and filter (a simulation draws the root play once, the same way thousands of times)
-    _sampleLook(cdf, pool, u, looks, s, ri, who, need, pers) {
-      return this._pickT(this._lookT(cdf, pool, looks, s, ri, who, need, pers), u);
+    _sampleLook(cdf, pool, u, looks, s, ri, who, need, pers, noPre) {
+      return this._pickT(this._lookT(cdf, pool, looks, s, ri, who, need, pers, noPre), u);
+    }
+    // a foul before the snap, or another flag nothing was charted for (no look: what a pick filters on says nothing
+    // about it); and a pool's such plays, by its weights, with their share of the pool (null: none)
+    _isPreSnap(r) { const P = this.e.pb; return (P.flags[r] & 1) !== 0 && P.lookB[r] === 255; }
+    _preSnap(cdf, pool) {
+      this._pre = this._pre || new WeakMap();
+      let byPool = this._pre.get(cdf);
+      if (!byPool) { byPool = new Map(); this._pre.set(cdf, byPool); }
+      let T = byPool.get(pool);
+      if (T !== undefined) return T;
+      const P = this.e.pb, lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1, items = [], cum = [];
+      let tot = 0;
+      for (let i = lo; i <= hi; i++) {
+        const r = P.items[i];
+        if (!this._isPreSnap(r)) continue;
+        tot += cdf[i] - (i > lo ? cdf[i - 1] : pool); items.push(r); cum.push(tot);
+      }
+      T = tot > 0 && tot < 0.5 ? { items, cum, tot, share: tot } : null;
+      byPool.set(pool, T);
+      return T;
     }
     _pickT(T, u) {
       if (!T) return -1;
@@ -999,8 +1030,9 @@
       while (a < b) { const m = (a + b) >> 1; if (c[m] < target) a = m + 1; else b = m; }
       return T.items[a];
     }
-    _lookT(cdf, pool, looks, s, ri, who, need, pers) {
-      const key = `${pool}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${pers || 0}|${need ? 1 : 0}`;
+    // (noPre: without the fouls before the snap, drawn on their own: samplePlaybook)
+    _lookT(cdf, pool, looks, s, ri, who, need, pers, noPre) {
+      const key = `${pool}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${pers || 0}|${need ? 1 : 0}${noPre ? '|x' : ''}`;
       this._pick = this._pick || new WeakMap();
       let byKey = this._pick.get(cdf);
       if (!byKey) { byKey = new Map(); this._pick.set(cdf, byKey); }
@@ -1011,6 +1043,7 @@
         let tot = 0, sq = 0;
         for (let i = lo; i <= hi; i++) {
           const r = P.items[i];
+          if ((looks || ri || who || pers || noPre) && P.lookB && this._isPreSnap(r)) continue;     // (samplePlaybook draws them first)
           if (looks) { const b = P.lookB[r]; if (!(b < 8 && (looks >> b) & 1)) continue; }
           if (ri && !this._rOk(r, ri)) continue;
           if (who && (P.carry[r] & 7) !== who) continue;
@@ -1038,8 +1071,17 @@
     // the offense's own here plus the defense's effect s (dcEffect). No pool at all: samplePlaybook
     sampleVsDefense(team, callIdx, fk, u, oob, dc, s, route, who, pers) {
       const P = this.e.pb;
+      let preDone = false;
       if (P.ngs && P.ngs.dpers && dcValid(dc)) {
         const cdf = this._cdfOf(team, oob), pool = P.poolOf[callIdx * P.nFine + fk], pools = [pool];
+        // a foul before the snap, with a route or personnel picked (samplePlaybook's): as often as in the situation's
+        // pool (without a pick the situation's own plays the call is not about bring them: _dcRef)
+        if ((route || pers) && P.lookB) {
+          const B = this._preSnap(cdf, pool);
+          if (B && u < B.share) return this._pickT(B, u / B.share);
+          if (B) u = (u - B.share) / (1 - B.share);
+          preDone = true;
+        }
         if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (!pools.includes(lp)) pools.push(lp); }
         const ri0 = route ? this._ri(route) : 0;
         if (!(route && !(ri0 > 0))) for (const ri of ri0 >= 16 ? [ri0, ri0 & 15] : [ri0]) {
@@ -1068,7 +1110,7 @@
           }
         }
       }
-      return this.samplePlaybook(team, callIdx, fk, u, oob, 0, 0, route, who, pers);
+      return this.samplePlaybook(team, callIdx, fk, u, oob, 0, 0, route, who, pers, preDone);
     }
     // each real play's EPA (capped) over the mean of its own situation's pool (the smallest pool a situation draws
     // from that holds it: its call in its situation, or the coarser one its situation was pooled into), as
@@ -1118,6 +1160,7 @@
       const items = [], cum = [];
       for (let i = lo; i <= hi; i++) {
         const r = P.items[i];
+        if ((ri || who || pers) && P.lookB && this._isPreSnap(r)) continue;     // (sampleVsDefense draws them first)
         if (ri && !this._rOk(r, ri)) continue;
         if (who && (P.carry[r] & 7) !== who) continue;
         if (pers && N.pers[r] && N.pers[r] !== pers) continue;
