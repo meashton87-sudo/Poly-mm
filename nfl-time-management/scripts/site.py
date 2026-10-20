@@ -464,7 +464,7 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
           site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, pro_at: str | None = None, scn_at: str | None = None, no_ads: bool = False, ezoic: str | None = None, ezoic_head: bool = False, ezoic_ids: str | None = None,
-          fulldef: bool = False, google_client_id: str | None = None, old_domain: str | None = None, minify: bool = True) -> Path:
+          fulldef: bool = False, google_client_id: str | None = None, old_domain: str | None = None, minify: bool = True, live: bool = False) -> Path:
     global NO_ADS, EZOIC
     NO_ADS = no_ads
     EZOIC = ezoic_head and not no_ads
@@ -521,6 +521,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         extra += "<meta name=\"fulldef\" content=\"on\">"
     if vs:                                   # Versus (two players live, board/match.js): off until it is turned on
         extra += "<meta name=\"vs\" content=\"on\">"
+    if live:                                 # Live Drills: the page may ask the worker (board/live.js) whether one is open;
+        extra += "<meta name=\"live\" content=\"on\">"     # the worker's LIVE_ON says when (game nights: no rebuild)
     try:
         commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=WEB, capture_output=True, text=True, timeout=10).stdout.strip()
     except (OSError, subprocess.SubprocessError):
@@ -685,11 +687,12 @@ if __name__ == "__main__":
     ap.add_argument("--pro-at", help="with --pro: the Pro tab stays hidden until this time (ISO 8601, e.g. 2026-10-16T18:00:00Z)")
     ap.add_argument("--vs", action="store_true", help="turn on Versus (two players live); off until approved")
     ap.add_argument("--fulldef", action="store_true", help="the full defensive call (personnel, front, coverage, rush) in every mode; off until approved")
+    ap.add_argument("--live", action="store_true", help="Live Drills: the page asks the worker whether a real game is in a two-minute drill (the worker's LIVE_ON var turns them on); off until approved")
     ap.add_argument("--google-client-id", help="a Google OAuth web client id (....apps.googleusercontent.com): Sign in with Google on the Pro tab; empty: off")
     ap.add_argument("--pro", action="store_true", help="turn on the Pro tab (the archive, the historic drives, the purchase); off until approved")
     a = ap.parse_args()
     o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, scn_at=a.scn_at, vs=a.vs, fulldef=a.fulldef, no_ads=a.no_ads, ezoic=a.ezoic, ezoic_head=a.ezoic_head, ezoic_ids=(a.ezoic_ids or '').strip() or None, minify=not a.no_minify,
-              google_client_id=a.google_client_id, old_domain=a.old_domain)
+              google_client_id=a.google_client_id, old_domain=a.old_domain, live=a.live)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6
     print(f"site in {o}: {n} files, {size:.1f} MB")

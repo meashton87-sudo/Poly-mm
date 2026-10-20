@@ -45,6 +45,7 @@ jobs:
       EZOIC_ON: "on"            # "on": Ezoic's privacy + header scripts on every page (EzoicAds step 2); "off" leaves them out
       EZOIC_GAME_IDS: ""        # Ezoic placeholder ids (its dashboard) for the game's cards: day's end, survivor card, run over
       FULLDEF_ON: "on"       # "on" turns on the full defensive call (personnel, front, coverage, rush) in the daily and survivor; the Pro preview always has it
+      LIVE_ON: "off"         # "on" ships Live Drills (#live, the banner): the page may then ask the worker, whose own LIVE_ON variable (the Cloudflare dashboard, instant) says when one is open; the Pro preview always has it
     defaults:
       run:
         working-directory: nfl-time-management
@@ -155,7 +156,7 @@ jobs:
           npx --yes wrangler@4.144.0 deploy
 
       - name: Assemble the site
-        run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --old-domain "${{ vars.OLD_DOMAIN || (vars.SITE_DOMAIN != '' && vars.SITE_DOMAIN != 'nfl2mindrill.com' && 'nfl2mindrill.com' || '') }}" --board-api "${{ vars.BOARD_API }}" --ga "${{ vars.GA_ID || 'G-4QQ8N62SMB' }}" --adsense "${{ vars.ADSENSE_ID || 'ca-pub-7590842699855700' }}" --ad-slot "${{ vars.ADSENSE_SLOT }}" $([ "$PRO_ON" = on ] && echo --pro || true) $([ "$PRO_ON" = on ] && [ -n "$PRO_AT" ] && echo --pro-at "$PRO_AT" || true) $([ "$PRO_ON" = on ] && [ -n "$SCN_AT" ] && echo --scn-at "$SCN_AT" || true) $([ "$VS_ON" = on ] && echo --vs || true) $([ "$FULLDEF_ON" = on ] && echo --fulldef || true) $([ "$ADS_ON" = on ] || echo --no-ads) $([ "$ADS_ON" = on ] && [ -n "$EZOIC_ADSTXT" ] && echo --ezoic "$EZOIC_ADSTXT" || true) $([ "$ADS_ON" = on ] && [ "$EZOIC_ON" = on ] && echo --ezoic-head || true) $([ "$ADS_ON" = on ] && [ "$EZOIC_ON" = on ] && [ -n "$EZOIC_GAME_IDS" ] && echo --ezoic-ids "$EZOIC_GAME_IDS" || true) --google-client-id "${{ vars.GOOGLE_CLIENT_ID || '1079340119845-i8p0d0c57dmoa1hluqkm15ofi33oe9ms.apps.googleusercontent.com' }}"
+        run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --old-domain "${{ vars.OLD_DOMAIN || (vars.SITE_DOMAIN != '' && vars.SITE_DOMAIN != 'nfl2mindrill.com' && 'nfl2mindrill.com' || '') }}" --board-api "${{ vars.BOARD_API }}" --ga "${{ vars.GA_ID || 'G-4QQ8N62SMB' }}" --adsense "${{ vars.ADSENSE_ID || 'ca-pub-7590842699855700' }}" --ad-slot "${{ vars.ADSENSE_SLOT }}" $([ "$PRO_ON" = on ] && echo --pro || true) $([ "$PRO_ON" = on ] && [ -n "$PRO_AT" ] && echo --pro-at "$PRO_AT" || true) $([ "$PRO_ON" = on ] && [ -n "$SCN_AT" ] && echo --scn-at "$SCN_AT" || true) $([ "$VS_ON" = on ] && echo --vs || true) $([ "$FULLDEF_ON" = on ] && echo --fulldef || true) $([ "$LIVE_ON" = on ] && echo --live || true) $([ "$ADS_ON" = on ] || echo --no-ads) $([ "$ADS_ON" = on ] && [ -n "$EZOIC_ADSTXT" ] && echo --ezoic "$EZOIC_ADSTXT" || true) $([ "$ADS_ON" = on ] && [ "$EZOIC_ON" = on ] && echo --ezoic-head || true) $([ "$ADS_ON" = on ] && [ "$EZOIC_ON" = on ] && [ -n "$EZOIC_GAME_IDS" ] && echo --ezoic-ids "$EZOIC_GAME_IDS" || true) --google-client-id "${{ vars.GOOGLE_CLIENT_ID || '1079340119845-i8p0d0c57dmoa1hluqkm15ofi33oe9ms.apps.googleusercontent.com' }}"
 
       # While the site moves (OLD_DOMAIN set): the new address's pages call the worker, so nothing ships naming it until
       # the worker answers it (the step above can be skipped: no Pro data, no deploy, the worker keeps the addresses it had)
@@ -195,7 +196,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "no Cloudflare token: skipped"; exit 0; fi
-          python scripts/site.py _site_pro --board-api "${{ vars.BOARD_API }}" --site-url https://nfl2mindrill-pro-preview.pages.dev --pro --vs --fulldef --google-client-id "${{ vars.GOOGLE_CLIENT_ID || '1079340119845-i8p0d0c57dmoa1hluqkm15ofi33oe9ms.apps.googleusercontent.com' }}"
+          python scripts/site.py _site_pro --board-api "${{ vars.BOARD_API }}" --site-url https://nfl2mindrill-pro-preview.pages.dev --pro --vs --fulldef --live --google-client-id "${{ vars.GOOGLE_CLIENT_ID || '1079340119845-i8p0d0c57dmoa1hluqkm15ofi33oe9ms.apps.googleusercontent.com' }}"
           printf 'User-agent: *\nDisallow: /\n' > _site_pro/robots.txt
           npx --yes wrangler@4.144.0 pages project create nfl2mindrill-pro-preview --production-branch main 2>/dev/null || true
           npx --yes wrangler@4.144.0 pages deploy _site_pro --project-name nfl2mindrill-pro-preview --branch main --commit-dirty=true

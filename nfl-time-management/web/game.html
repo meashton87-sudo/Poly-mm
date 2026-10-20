@@ -1254,7 +1254,47 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
 .siteinfo h3 { font: 800 17px/1.2 var(--display); text-transform: uppercase; letter-spacing: .03em; margin: 18px 0 4px; }
 .siteinfo p { margin: 0 0 8px; max-width: 65ch; color: var(--ink); }
 .siteinfo a { color: var(--ink); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
-@media (prefers-reduced-motion: reduce) { .flip, .spin, .pop, .dock > .snapbar .pop, .result, .movefade, .modal .box, #field .call .in { animation: none; } .ballmove { transition: none; } .sw2::after { transition: none; }
+/* Live drills (game.js #live): the banner under the modes while a real game is in a two-minute spot, the card while
+   the real play is on its way, the two calls side by side, the end card's two rows of calls */
+.livebar { display: flex; align-items: center; gap: 10px; margin: 8px 0 0; padding: 10px 12px; border-radius: 12px; background: #b3261e; color: #fff;
+  text-decoration: none; font: 700 14px/1.25 var(--body); box-shadow: 0 2px 10px rgba(179, 38, 30, .25); }
+.livebar[hidden] { display: none; }
+.livebar .tag { flex: none; padding: 4px 8px; border-radius: 6px; background: #fff; color: #b3261e; font: 900 14px/1 var(--display); letter-spacing: .12em;
+  text-transform: uppercase; animation: livepulse 1.6s ease-in-out infinite; }
+.livebar .what { flex: 1 1 auto; min-width: 0; }
+.livebar .go { flex: none; font: 900 16px/1 var(--display); letter-spacing: .08em; text-transform: uppercase; }
+.livebar .more { flex: none; font-size: 12px; opacity: .85; }
+@keyframes livepulse { 50% { opacity: .55; } }
+body.bcast .livebar { display: none !important; }
+.livewait, .livecmp { display: grid; gap: 8px; }
+.lw-k, .lc-k { font: 800 12px var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.lw-call { font: 900 26px/1.05 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.lw-st { margin: 0; font-size: 14px; line-height: 1.4; }
+.lw-st.stale { color: var(--sq-o-ink); font-weight: 600; }
+.livewait .chip { justify-self: start; }
+.lc-pre { font-size: 13px; color: var(--muted); }
+.livecmp .lc-row { display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 10px; align-items: start; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--card); }
+.livecmp .lc-row.win { border: 2px solid var(--sq-g); padding: 7px 9px; }
+.livecmp .lc-row .t { display: grid; gap: 1px; min-width: 0; }
+.livecmp .lc-row .who { font: 800 11px var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.livecmp .lc-row .call { font: 900 19px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.livecmp .lc-row .how { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.livecmp .lc-row .gr { font-size: 13px; font-weight: 700; margin-top: 2px; }
+.livecmp .lc-v { font: 900 22px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; text-align: center; text-wrap: balance; }
+.livecmp .lc-v.beat { color: var(--sq-g-ink); } .livecmp .lc-v.lost { color: var(--sq-r-ink); }
+.livetally { font: 700 13px var(--body); text-align: center; color: var(--muted); }
+.liveother { margin: 0; font-size: 13px; } .liveother a { color: var(--ink); font-weight: 700; }
+.sq.n { background: var(--line); color: var(--muted); }
+.livesq { display: grid; gap: 6px; justify-content: center; }
+.livesq .r { display: grid; grid-template-columns: 104px auto; align-items: center; gap: 8px; }
+.livesq .a { font: 800 12px var(--body); text-align: right; text-transform: uppercase; letter-spacing: .06em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.livekey { border: 2px solid var(--gold); border-radius: 12px; padding: 10px 12px; text-align: left; font-size: 14px; display: grid; gap: 4px; }
+.livekey .k { font: 800 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--gold-ink); }
+.scnentry.live { border-top-color: #b3261e; } .scnentry.live .k { color: #b3261e; }
+.arch .livest { font-size: 14px; color: var(--ink); }
+#field.livestale { opacity: .45; filter: grayscale(.7); transition: opacity .3s; }
+@media (prefers-reduced-motion: reduce) { .livebar .tag, .flip, .spin, .pop, .dock > .snapbar .pop, .result, .movefade, .modal .box, #field .call .in { animation: none; } .ballmove { transition: none; } .sw2::after { transition: none; }
   body.bcast .sheet { transition: none; } }
 /* very narrow: a phone's page zoomed (text zoom on a phone zooms the page: a 390 phone at 200% is 195 wide), the
    smallest phones zoomed a little. Two keys a row, a play's name over its keys, the tempos stacked, the scoreboard on
