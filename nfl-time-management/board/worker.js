@@ -1922,17 +1922,23 @@ export class Board {
 
 export { Match } from './match.js';
 import { ROOM_RE } from './match.js';
+// Live Drills (board/live.js: the feed's watcher, the drills, GET /live*), in a Durable Object of its own
+export { Live } from './live.js';
+import { live, liveScheduled, LIVE_CRON } from './live.js';
 
 export default {
   fetch(req, env) {
     const url = new URL(req.url);
+    if (url.pathname === '/live' || url.pathname.startsWith('/live/')) return live(req, env, url, cors(req, env));
     if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me'].includes(url.pathname)) return versus(req, env, url);
     if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, ...COMM_PATHS, '/board', '/daily', '/week', '/days'].includes(url.pathname) && !isSocial(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },
-  // the cron trigger (wrangler.toml): the day's reminder emails, sent by the Board (its storage); the day is the run's
-  // UTC date (each account gets one a day, however many runs)
+  // the cron triggers (wrangler.toml): every minute, the live drills' watcher (live.js; nothing while LIVE_ON is off);
+  // the others, the day's reminder emails, sent by the Board (its storage); the day is the run's UTC date (each account
+  // gets one a day, however many runs)
   scheduled(ev, env, ctx) {
+    if (ev && ev.cron === LIVE_CRON) return liveScheduled(ev, env, ctx);
     const date = new Date(ev && ev.scheduledTime ? ev.scheduledTime : Date.now()).toISOString().slice(0, 10);
     const run = env.BOARD.get(env.BOARD.idFromName('board')).fetch(new Request(`https://board${CRON_PATH}`, { method: 'POST', body: JSON.stringify({ date }) }))
       .then((r) => r.json()).then((d) => console.log('daily reminders', date, JSON.stringify(d))).catch((e) => console.error('daily reminders failed', e && e.message));
