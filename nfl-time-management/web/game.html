@@ -209,6 +209,18 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .arch .scn .bad, .arch .scn .seg.bad button[aria-pressed="true"] { border-color: var(--sq-r); box-shadow: 0 0 0 1px var(--sq-r); }
 .arch .tpick { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 6px; }
 .arch .tinfo { margin: -2px 0 2px 94px; font-size: 12.5px; color: var(--muted); min-height: 1em; }
+.arch .slu { border-top: 1px solid var(--line); padding-top: 2px; }
+.arch .slu:first-of-type { border-top: 0; padding-top: 0; }
+.arch .slu summary { display: flex; align-items: baseline; gap: 8px; min-height: 40px; padding: 8px 0; cursor: pointer; font: 700 14px var(--body); list-style: none; }
+.arch .slu summary::-webkit-details-marker { display: none; }
+.arch .slu summary small { margin-left: auto; font: 600 12.5px var(--body); color: var(--muted); }
+.arch .slu summary::after { content: '▾'; color: var(--muted); }
+.arch .slu[open] summary::after { content: '▴'; }
+.arch .slu .slrows { display: grid; gap: 6px; padding-bottom: 6px; }
+.arch .slu .srow { grid-template-columns: 44px minmax(0, 1fr); }
+.arch .slu select { font: 600 14px var(--body); min-height: 40px; }
+.arch .slu .lnote { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
+.arch .slu.bad summary { color: var(--sq-r); }
 .arch .seg { display: flex; flex-wrap: wrap; gap: 4px; }
 .arch .seg button { flex: 1 1 0; min-width: 44px; min-height: 40px; padding: 6px 8px; border-radius: 9px; border: 1px solid var(--line); background: var(--paper); color: var(--ink);
   font: 700 13.5px/1.15 var(--body); cursor: pointer; }
@@ -692,6 +704,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .pslot span { font: 800 12px var(--body); letter-spacing: .08em; color: var(--muted); }
 .pslot select { width: 100%; min-width: 0; font: 600 14px var(--body); padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
 .phint { font-size: 12.5px; color: var(--muted); margin: 2px 0 8px; }
+.pqb { font-size: 12px; color: var(--muted); margin: -2px 0 4px 54px; line-height: 1.35; }
 .pdone { margin-top: 10px; width: 100%; }
 .ghost svg { width: 16px; height: 16px; }
 

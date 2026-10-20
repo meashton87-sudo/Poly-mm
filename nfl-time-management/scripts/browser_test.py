@@ -1288,6 +1288,198 @@ async def scenario_community(browser, base: str, shots: str = "") -> list[str]:
     return out
 
 
+# every question the page asks its simulator, by the scenario it names (game.js simScen: a quarterback put in has a
+# simulator of his own, its id ending |qb:<his name>)
+WORKER_SPY = """(() => {
+  const pm = Worker.prototype.postMessage;
+  Worker.prototype.postMessage = function (m, t) {
+    try { if (m && m.scen && m.type !== 'init') (window.__scenIds = window.__scenIds || []).push(`${m.type}|${m.scen.id}`); } catch (e) { /* not the game's */ }
+    return pm.call(this, m, t);
+  };
+})();"""
+# the sheet's rows (Who plays): each row's label and its choices, the one picked
+PERS_ROWS = """() => [...document.querySelectorAll('#mBody .pslot')].map((r) => { const s = r.querySelector('select');
+  return { lab: r.querySelector('span').textContent, opts: [...s.options].map((o) => o.textContent), val: s.value, dis: s.disabled }; })"""
+# your quarterback on the field (his dot), and what the simulator is asked with
+QB_NOW = """() => { const D = window.__draw, { G } = D.get(), sc = D.simScen(), t = sc.game[G.me === 0 ? 'home' : 'away'];
+  const dot = [...document.querySelectorAll('#field g.dot.me')].map((g) => g.getAttribute('aria-label') || '').find((x) => /Quarterback/.test(x)) || '';
+  return { qb: G.qb || null, id: sc.id, name: t.qb.name, adj: t.qb.adjustment, dot, decisions: G.decisions.length, ids: window.__scenIds || [] }; }"""
+
+
+async def to_offense(page, base: str) -> bool:
+    """A survivor run's first snap, your ball (snap_reach's way in)."""
+    await page.goto(f"{base}/{PAGE}#survivor")
+    for _ in range(300):
+        await page.wait_for_timeout(100)
+        if await page.locator("#intro .btn:visible").count():
+            await page.click("#intro .btn", timeout=3000)
+        elif await page.locator("#modal:not([hidden]) #mClose").count():
+            await page.click("#mClose", timeout=3000)
+        elif await page.locator(".tipskip:visible").count():
+            await page.click(".tipskip", timeout=3000)
+        elif await page.locator("#dock .key.big:visible", has_text="Pass").count() and await page.locator("#persBtn:visible").count():
+            return True
+    return False
+
+
+async def qb_swap(browser, base: str, shots: str = "") -> list[str]:
+    """Who plays, the quarterback (game.js openPers, teamOf, simScen; web/scenario.js withQb), on a phone: the sheet's
+    first row is QB, the one who lined up and that game's others ("Name · 71", the others "(backup)"), with a line on
+    the one picked; a backup picked is the one on the field and the one the simulator plays (his adjustment the team's,
+    every question asked of his simulator), a pass snapped with him is graded and played there, and Back to the real
+    lineup brings the starter back. shots: a folder for the sheet's 390x844 screenshot."""
+    out: list[str] = []
+    for attempt in range(5):                 # (a run's first spot is drawn at random: one whose team has another quarterback)
+        ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+        await ctx.add_init_script("window.__sepLog = []; try { localStorage.setItem('tmd:v3:seen', 'true'); } catch (e) {}")
+        await ctx.add_init_script(WORKER_SPY)
+        page = await ctx.new_page()
+        errs: list[str] = []
+        page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+        try:
+            if not await to_offense(page, base):
+                out.append("Who plays: the first snap never came up")
+                return out
+            before = await page.evaluate(QB_NOW)
+            await page.click("#persBtn", timeout=3000)
+            await page.wait_for_selector("#mBody .pslot select", timeout=5000)
+            rows = await page.evaluate(PERS_ROWS)
+            if not rows or rows[0]["lab"] != "QB":
+                out.append(f"Who plays: the first row is not the quarterback's: {rows[:1]!r}")
+                return out
+            q = rows[0]
+            if len(q["opts"]) < 2:
+                if attempt < 4:
+                    continue
+                out.append("Who plays: no spot with another quarterback in five tries")
+                return out
+            want = q["opts"][1].split(" · ")[0]
+            if not re.match(r"^.+ · \d{2}$", q["opts"][0]) or not q["opts"][1].endswith("(backup)") or q["opts"][0].split(" · ")[0] != before["name"]:
+                out.append(f"Who plays: the quarterbacks' labels {q['opts']!r} (lined up: {before['name']!r})")
+            await page.locator("#mBody .pslot select").first.select_option(label=q["opts"][1])
+            await page.wait_for_timeout(300)
+            note = await page.evaluate("() => (document.querySelector('#mBody .pqb') || {}).textContent || ''")
+            if "dropback" not in note and "playing time" not in note:
+                out.append(f"Who plays: no line on the quarterback picked: {note!r}")
+            if shots:
+                await page.screenshot(path=f"{shots}/who-plays-qb.png")
+            await page.click("#mBody .pdone", timeout=3000)
+            await page.wait_for_timeout(600)
+            now = await page.evaluate(QB_NOW)
+            if now["qb"] != want or now["name"] != want or not now["id"].endswith(f"|qb:{want}") or want not in now["dot"]:
+                out.append(f"Who plays: {want} picked, but {now!r}")
+            if abs(now["adj"] - before["adj"]) < 1e-9 and want != before["name"]:
+                out.append(f"Who plays: {want} plays with the starter's adjustment ({now['adj']})")
+            # a pass snapped with him: graded and played on his simulator (every question from his pick on)
+            n0 = len(now["ids"])
+            await page.locator("#dock .key.big:visible", has_text="Pass").first.click(timeout=3000)
+            await page.wait_for_selector("#snapGo", timeout=10000)
+            await page.click("#snapGo", timeout=5000)
+            for _ in range(300):
+                await page.wait_for_timeout(100)
+                st = await page.evaluate(QB_NOW)
+                if st["decisions"] >= 1:
+                    break
+            else:
+                out.append("Who plays: the pass with the backup was never graded")
+            asked = [x for x in st["ids"][n0:] if x.startswith(("eval|", "step|"))]
+            if not any(x.startswith("eval|") for x in asked) or not any(x.startswith("step|") for x in asked) or not all(x.endswith(f"|qb:{want}") for x in asked):
+                out.append(f"Who plays: the snap was not asked of his simulator: {asked[-6:]!r}")
+            # and back to the real lineup
+            for _ in range(200):
+                await page.wait_for_timeout(100)
+                if await page.locator("#field.playing").count():
+                    await page.click("#field", timeout=2000)
+                elif await page.locator("#dock .result .btn:visible").count():
+                    await page.locator("#dock .result .btn").first.click(timeout=2000)
+                elif await page.locator("#persBtn:visible").count() and await page.locator("#dock .key.big:visible", has_text="Pass").count():
+                    break
+            else:
+                return out + errs        # (the drive moved on to their ball: the swap back is checked elsewhere)
+            await page.click("#persBtn", timeout=3000)
+            await page.wait_for_selector("#mBody .pslot select", timeout=5000)
+            rows = await page.evaluate(PERS_ROWS)
+            if rows[0]["val"] != want:
+                out.append(f"Who plays: the sheet forgot the backup: {rows[0]!r}")
+            await page.locator("#mBody button.ghost", has_text="Back to the real lineup").click(timeout=3000)
+            await page.click("#mBody .pdone", timeout=3000)
+            await page.wait_for_timeout(400)
+            back = await page.evaluate(QB_NOW)
+            if back["qb"] or back["name"] != before["name"] or back["id"] != before["id"]:
+                out.append(f"Who plays: back to the real lineup, but {back!r}")
+            return out + errs
+        except Exception as e:
+            out.append(f"Who plays: {e}")
+            return out + errs
+        finally:
+            await ctx.close()
+    return out
+
+
+async def scenario_lineup(browser, base: str, shots: str = "") -> list[str]:
+    """The builder's lineups (game.js renderBuilder, web/scenario.js slots, code): your lineup opened, another of the
+    season's quarterbacks picked; the summary card names him and the link's code carries the pick (an old code's 22
+    parts, then it); kicked off, he is the one who plays (on the field, in the simulator) and the story says so."""
+    out: list[str] = []
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    await pro_context(ctx, base)
+    await ctx.add_init_script("window.__sepLog = []; try { localStorage.setItem('tmd:v3:seen', 'true'); } catch (e) {}")
+    await ctx.add_init_script(WORKER_SPY)
+    page = await ctx.new_page()
+    errs: list[str] = []
+    page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+    try:
+        await page.goto(f"{base}/{PAGE}#custom")
+        await page.wait_for_selector("#arch .sacts .btn", timeout=30000)
+        await page.locator("#arch .spre .key").first.click()          # (the two-minute drill: your ball)
+        await page.locator("#arch details.slu").first.locator("summary").click()
+        await page.wait_for_selector("#scn-lu-you-q1", timeout=15000)
+        opts = await page.evaluate("() => [...document.querySelectorAll('#scn-lu-you-q1 option')].map((o) => o.textContent)")
+        labs = await page.evaluate("() => [...document.querySelectorAll('#arch details.slu')[0].querySelectorAll('.srow .sl')].map((x) => x.textContent)")
+        if not labs or labs[0] != "QB" or "K" not in labs or "WR" not in labs:
+            out.append(f"the lineup's rows: {labs!r}")
+        if len(opts) < 2:
+            return out + [f"the lineup offers one quarterback: {opts!r}"]
+        want = opts[1].split(" · ")[0]
+        await page.select_option("#scn-lu-you-q1", label=opts[1])
+        await page.wait_for_timeout(300)
+        got = await page.evaluate("""() => ({ sum: (document.querySelector('#arch .ssum') || {}).innerText || '', head: document.querySelector('#arch details.slu summary').innerText,
+          errs: [...document.querySelectorAll('#arch .serr li')].map((x) => x.textContent), go: document.querySelector('#arch .sacts .btn').disabled })""")
+        if f"{want} at quarterback" not in got["sum"] or "1 change" not in got["head"] or got["errs"] or got["go"]:
+            out.append(f"the builder with {want} at quarterback: {got!r}")
+        if shots:
+            await page.locator("#arch details.slu").first.scroll_into_view_if_needed()
+            await page.evaluate("() => scrollBy(0, -60)")
+            await page.screenshot(path=f"{shots}/builder-lineup.png")
+            await page.locator("#arch .ssum").scroll_into_view_if_needed()
+            await page.screenshot(path=f"{shots}/builder-lineup-card.png")
+        async with page.expect_event("load"):
+            await page.locator("#arch .sacts .btn", has_text="Kick off").click()
+        code = urllib.parse.unquote(page.url.split("#custom-", 1)[1]).split("~")[0]
+        if not re.match(r"^1(?:-[0-9A-Za-z]{1,4}){21}-yq1[0-9a-z]{4}$", code):
+            out.append(f"the scenario's code does not carry the pick: {code!r}")
+        await page.wait_for_selector("#intro .btn", timeout=30000)
+        story = await page.evaluate("() => document.getElementById('intro').innerText")
+        if f"{want} at quarterback" not in story:
+            out.append(f"the scenario's story does not name him: {story[:300]!r}")
+        await page.click("#intro .btn", timeout=5000)
+        for _ in range(300):
+            await page.wait_for_timeout(100)
+            if await page.locator(".tipskip:visible").count():
+                await page.click(".tipskip", timeout=3000)
+            if await page.locator("#dock .key.big:visible", has_text="Pass").count():
+                break
+        now = await page.evaluate(QB_NOW)
+        if now["name"] != want or want not in now["dot"] or now["qb"] or not now["id"].endswith(code):
+            out.append(f"kicked off with {want} at quarterback, but {now!r}")
+    except Exception as e:
+        out.append(f"scenario lineup: {e}")
+    finally:
+        out.extend(errs)
+        await ctx.close()
+    return out
+
+
 SIZES = ((390, 844, True), (375, 667, True), (1280, 900, False))
 
 
@@ -1469,6 +1661,10 @@ async def main(a) -> int:
         reach = await snap_reach(browser, base)
         print("snap in reach (pass, run, defense, kicks at 390x844, 375x667, 1280x900): " + ("ok" if not reach else "FAIL")
               + "".join(f"\n      {x}" for x in reach), flush=True)
+        qb = await qb_swap(browser, base, a.shots)
+        print("Who plays, the quarterback (the sheet's first row, a backup put in plays and is graded on his simulator, back to the real lineup): "
+              + ("ok" if not qb else "FAIL") + "".join(f"\n      {x}" for x in qb), flush=True)
+        reach += qb
         if a.scenario:
             pitch = await scenario_pitch(browser, base)
             print("a scenario's link without Pro (the pitch, the scenario's summary), a bad link: " + ("ok" if not pitch else "FAIL")
@@ -1478,6 +1674,10 @@ async def main(a) -> int:
             print("community scenarios (a title, Post to Community, the list, a tap: the pitch or the game, the play counted): " + ("ok" if not comm else "FAIL")
                   + "".join(f"\n      {x}" for x in comm), flush=True)
             reach += comm
+            lu = await scenario_lineup(browser, base, a.shots)
+            print("a scenario's lineup (the builder's Lineups, the pick in the code, the quarterback picked plays): " + ("ok" if not lu else "FAIL")
+                  + "".join(f"\n      {x}" for x in lu), flush=True)
+            reach += lu
             half = await scenario_half(browser, base)
             print("a first half played to the final gun (the halftime card, the third quarter's kickoff): " + ("ok" if not half else "FAIL")
                   + "".join(f"\n      {x}" for x in half), flush=True)

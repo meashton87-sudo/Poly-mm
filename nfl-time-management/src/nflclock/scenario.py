@@ -6,7 +6,9 @@ that season is picked. Generated, never committed: the site workflow builds it a
 
 A team-season is the team in one real game (its lineup on a snap from the middle of it: the participation, snap
 counts, depth chart or box score of that game, as for a historic drive) with everyone rated as of the end of its
-regular season (only games before the week after its last one count): the game is the latest of the regular season,
+regular season (only games before the week after its last one count), its other quarterbacks and kickers those of the
+whole season (history.History.teams whole_season: the builder's Lineup picks from them, web/scenario.js lineup): the
+game is the latest of the regular season,
 before its last week (when starters rest), whose starting quarterback was the season's (the one who started most);
 for the season being played, its latest game. The point spread of a scenario comes from the two teams' strengths
 (SPREAD_FIT, fitted on the real lines of every season built)."""
@@ -118,7 +120,7 @@ def season_teams(hist, games: pd.DataFrame, pbp: pd.DataFrame, season: int, curr
         n, rec, qb = len(snaps), None, r.get(f"{side}_qb_name")
         for at in (0.5, 0.42, 0.58, 0.34, 0.66, 0.25):
             t = hist.teams(gid, season, week, float(snaps["play_id"].iloc[int(n * at)]), r["home_code"], r["away_code"],
-                           {"home": r["home_coach"], "away": r["away_coach"]}, only=side)
+                           {"home": r["home_coach"], "away": r["away_coach"]}, only=side, whole_season=True)
             if rec is None or (ordinary(t["teams"][side]) and not ordinary(rec)):
                 rec = t["teams"][side]
             if ordinary(t["teams"][side], qb if isinstance(qb, str) else None):

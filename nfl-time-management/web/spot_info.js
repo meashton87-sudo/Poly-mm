@@ -47,7 +47,8 @@ function child(dir, packed) {
   });
 }
 
-// game.js startRoot, buildScen and simScen: the spot's opening snap and its matchup, as the page builds them
+// game.js startRoot, buildScen and simScen: the spot's opening snap and its matchup, as the page builds them (simScen
+// with the real lineup, as every spot opens: a quarterback put in (Who plays) asks the simulator itself)
 function startRoot(sc) {
   const st = sc.start, kick = st.phase === 'kick';        // (a scenario can open on a kickoff: pos is the kicking team)
   return { t: st.qtr <= 4 ? (4 - st.qtr) * 900 + st.clock : st.clock, pos: st.pos === sc.home ? 0 : 1,

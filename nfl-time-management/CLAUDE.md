@@ -108,6 +108,11 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   (pro.py overtime_rules: sudden death, the 2010-2024 touchdown-wins rule, or both teams get the ball; engine.js
   _otAfter S.ot.r). A run's game spot always has something at stake (RUN_WP); a run ends at the first loss (game.js
   runOut), as a real one does, and can be played again.
+- Who plays (every mode but Versus; game.js openPers): the personnel, the skill players, and the quarterback, from the
+  game's roster (history.py _qb_room: lineup.qbs, each with adj, his adjustment had he played: live.py's starter rule).
+  Another quarterback (G.qb; scenario.js withQb) is the team the engine sees: his adjustment for the starter's on the
+  pass rating and the difference on every call he throws (QB_CALLS), its own simulator (simScen id |qb:<name>); every
+  call of the snap is graded with him (the snap's qb rides with its grading job).
 - Build a scenario (Pro, game.js #custom renderBuilder, #custom-<code>; web/scenario.js: the format, its code, the
   presets, check() and spotOf(), shared by the page, web/game_smoke.js and tests/test_scenario.py). Its overtime table
   is pro.py overtime_rules (change both; the test compares them). The rosters (web/rosters/index.json and
@@ -118,7 +123,10 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   (secondHalf); startRoot/otOf read a kickoff start and who has had the ball in overtime (start.otc): spot_info.js
   copies them. My scenarios (tmd:v3:scen) syncs with the account (worker.js stats:s:<acct>, scenMerge). A title (scenario.js TITLE_MAX)
   rides in the link only (#custom-<code>~<title>: link/parseLink), never in the code (state, stats and the community key
-  on the code). scenario.js blocked() is a copy of worker.js blocked() (the builder's hint, a link's title): change both
+  on the code). Each team's lineup can be picked (the builder's Lineups: scenario.js slots, lu; the quarterback, backs,
+  receivers, tight ends and kicker of the team-season, rosters' lineup.qbs and kickers): the picks ride in the code after
+  its 22 parts (an old code reads as it always did), checkLineup() tests them on the rosters, withLineup() puts them on
+  the team; scenario.js CODE_RE is worker.js SCEN_RE (change both; worker_test.mjs checks). scenario.js blocked() is a copy of worker.js blocked() (the builder's hint, a link's title): change both
   (worker_test.mjs checks they agree).
 - Community scenarios (game.js renderCommunity #community, commPost, commPlay; worker.js /scen/*): comm:list (the posts:
   code, title, username, time, the account never sent out; written by a post or a removal only), comm:n (the counts: the
