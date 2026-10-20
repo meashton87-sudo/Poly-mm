@@ -16,6 +16,8 @@ the ground (inside the end lines, at most a step past a sideline), and the first
 thousands of drawn runs, RPOs, defenses, kicks and kick rushes (DRAW_FUZZ). The bots also draw plays as they go (a run,
 an RPO, the defense, a kick), mostly calling what the drawing reads as.
 Needs Playwright with Chromium (pip install playwright; python -m playwright install chromium).
+scripts/daily_check.py plays the same episodes against the live site (its --live mode: ads, analytics and the real
+board cut off), in Chromium and in WebKit as an iPhone.
 """
 from __future__ import annotations
 
@@ -38,6 +40,7 @@ from playwright.async_api import TimeoutError as PWTimeout, async_playwright
 
 STATE = """() => {
   const vis = (id) => { const e = document.getElementById(id); return e && !e.hidden; };
+  if (document.getElementById('errBar')) return 'errbar';      // (game.js pageError: the red bar, Something broke)
   if (vis('modal')) return 'modal';
   if (vis('deep')) return 'deep';
   if (vis('done') && document.querySelector('#done .big-pct, #done .gradecard')) return 'summary';
@@ -73,39 +76,61 @@ STUB_ASKED: set = set()
 COMM: dict = {"rows": [], "plays": [], "posts": []}
 SESSION = "ab" * 32
 TRACE_HALF = False          # what else the pages asked the stub (printed at the end)
+# the game's page under the base address (daily_check.py --live: "", the site's front door, as players open it)
+PAGE = "index.html"
+# what the test itself cut off (daily_check.py --live: ads, analytics, the real board): not the page's own failures
+CUT = lambda url: False
+
+
+def page_route(base: str) -> re.Pattern:
+    """The game's page itself (any #mode or ?query), for a route that rewrites it."""
+    return re.compile("^" + re.escape(f"{base}/") + r"(?:index\.html)?(?:[?#].*)?$")
+
+
+async def board_stub(route, path: str, comm: bool = False, headers: dict | None = None) -> None:
+    """The board's answers (board/worker.js), from the test: /restore says the stored code is good; with comm the
+    community endpoints (an account signed in as "Tester"); anything else is answered empty. daily_check.py answers the
+    live pages' board requests with it too (headers: its CORS, the stub being another host than the page's)."""
+    body = json.loads(route.request.post_data or "{}") if route.request.method == "POST" else {}
+    ok = lambda d: route.fulfill(status=200, content_type="application/json", body=json.dumps(d), headers=headers)
+    if path == "/restore":
+        await ok({"ok": True, "code": PRO_CODE})
+    elif comm and path == "/auth":
+        await ok({"google": False, "email": True})
+    elif comm and path == "/auth/me":
+        await ok({"email": "tester@example.com", "name": "Tester", "pro": False})
+    elif comm and path == "/scen/list":
+        await ok({"sort": body.get("sort", "top"), "page": 0, "rows": COMM["rows"], "total": len(COMM["rows"]), "next": None})
+    elif comm and path == "/scen/post":
+        COMM["posts"].append(body)
+        row = {"id": f"TEST{len(COMM['rows']):04d}", "code": body.get("code"), "title": body.get("title"), "name": "Tester", "at": "2026-10-19T17:00:00Z",
+               "n": 12, "f": 10, "w": 4, "best": 0.93, "mine": True}
+        COMM["rows"].append(row)
+        await ok({"row": row})
+    elif comm and path == "/scen/play":
+        COMM["plays"].append(body)
+        await ok({"counted": True})
+    else:                     # (accounts off: no way to sign in; nothing else is asked of it on these pages)
+        STUB_ASKED.add(path)
+        await ok({})
+
+
+def rewritten(r) -> dict:
+    """A fetched response's headers for a body rewritten from it (what was fetched comes decoded: no content-encoding,
+    its own length)."""
+    return {k: v for k, v in r.headers.items() if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")}
 
 
 async def pro_context(ctx, base: str, pro: bool = True, comm: bool = False) -> None:
     async def page_(route):
         r = await route.fetch()
-        body = re.sub(r'<meta name="scn-at"[^>]*>', '', await r.text()).replace("<head>", f'<head><meta name="pro" content="on"><meta name="board-api" content="{base}/__board">', 1)
-        await route.fulfill(response=r, body=body)
+        # (the page's own board address, if it has one, goes: only the stub's is left)
+        body = re.sub(r'<meta name="(?:scn-at|board-api)"[^>]*>', '', await r.text()).replace("<head>", f'<head><meta name="pro" content="on"><meta name="board-api" content="{base}/__board">', 1)
+        await route.fulfill(status=r.status, headers=rewritten(r), body=body)
 
     async def board(route):
-        path = urllib.parse.urlsplit(route.request.url).path.removeprefix("/__board")
-        body = json.loads(route.request.post_data or "{}") if route.request.method == "POST" else {}
-        ok = lambda d: route.fulfill(status=200, content_type="application/json", body=json.dumps(d))
-        if path == "/restore":
-            await route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "code": PRO_CODE}))
-        elif comm and path == "/auth":
-            await ok({"google": False, "email": True})
-        elif comm and path == "/auth/me":
-            await ok({"email": "tester@example.com", "name": "Tester", "pro": False})
-        elif comm and path == "/scen/list":
-            await ok({"sort": body.get("sort", "top"), "page": 0, "rows": COMM["rows"], "total": len(COMM["rows"]), "next": None})
-        elif comm and path == "/scen/post":
-            COMM["posts"].append(body)
-            row = {"id": f"TEST{len(COMM['rows']):04d}", "code": body.get("code"), "title": body.get("title"), "name": "Tester", "at": "2026-10-19T17:00:00Z",
-                   "n": 12, "f": 10, "w": 4, "best": 0.93, "mine": True}
-            COMM["rows"].append(row)
-            await ok({"row": row})
-        elif comm and path == "/scen/play":
-            COMM["plays"].append(body)
-            await ok({"counted": True})
-        else:                     # (accounts off: no way to sign in; nothing else is asked of it on these pages)
-            STUB_ASKED.add(path)
-            await route.fulfill(status=200, content_type="application/json", body="{}")
-    await ctx.route(f"{base}/index.html*", page_)
+        await board_stub(route, urllib.parse.urlsplit(route.request.url).path.removeprefix("/__board"), comm)
+    await ctx.route(page_route(base), page_)
     await ctx.route(f"{base}/__board/**", board)
     if pro:
         await ctx.add_init_script(f"try {{ localStorage.setItem('tmd:v3:pro', JSON.stringify({{ code: '{PRO_CODE}', at: Date.now() }})); }} catch (e) {{}}")
@@ -408,6 +433,23 @@ HOME = """() => {
 }"""
 
 
+async def look(page, js: str, default=None):
+    """page.evaluate, or default while the page is reloading itself (for the timings: never worth failing on)."""
+    try:
+        return await page.evaluate(js)
+    except Exception:
+        return default
+
+
+async def home_now(page) -> dict | None:
+    """The home screen as it is (HOME), or None while the page is still reloading itself into it (a tap on Home is a
+    hash change: the page reloads, and a look in the middle of that finds no page to look at)."""
+    try:
+        return await page.evaluate(HOME)
+    except Exception:
+        return None
+
+
 async def visit_home(page, base: str, stored: bool) -> list[str]:
     """After a finished daily: Home from the end card, then the bare address (Home, today's drive done). Without
     storage (the nostore quirk) nothing says the day is done: Home only, as a new day."""
@@ -423,7 +465,7 @@ async def visit_home(page, base: str, stored: bool) -> list[str]:
         h = None
         for _ in range(100):
             await page.wait_for_timeout(100)
-            h = await page.evaluate(HOME)
+            h = await home_now(page)
             if h:
                 break
         if not h:
@@ -433,16 +475,43 @@ async def visit_home(page, base: str, stored: bool) -> list[str]:
         elif BAD_TEXT.search(h["text"]):
             out.append(f"broken text on the home screen: {BAD_TEXT.search(h['text']).group(0)!r}")
         if where == "the end card's Home" and stored:
-            await page.goto(f"{base}/index.html")
+            await page.goto(f"{base}/{PAGE}")
     return out
 
 
+# how the page loaded (ms from its navigation): first byte, first paint, DOM ready, loaded, and what came over the wire
+LOADED = """() => { const n = performance.getEntriesByType('navigation')[0] || {}, p = performance.getEntriesByName('first-contentful-paint')[0];
+  const r = (x) => (x > 0 ? Math.round(x) : null);
+  return { ttfb: r(n.responseStart), fcp: p ? r(p.startTime) : null, dcl: r(n.domContentLoadedEventEnd), load: r(n.loadEventEnd),
+    kb: n.transferSize ? Math.round(n.transferSize / 1024) : null }; }"""
+# frames the page took too long to draw (a gap between two animation frames over 200 ms while in view) and, where the
+# browser reports them (not Safari), tasks that held the main thread over 50 ms; added up over the tab's pages (its
+# sessionStorage: the drive reloads into itself)
+JANK = """(() => { if (window.top !== window) return;
+  let J = null; try { J = JSON.parse(sessionStorage.getItem('__jank') || 'null'); } catch (e) { /* no storage */ }
+  J = window.__jank = J || { frames: 0, slow: 0, worst: 0, long: 0, longWorst: 0 };
+  const keep = () => { try { sessionStorage.setItem('__jank', JSON.stringify(J)); } catch (e) { /* no storage */ } };
+  addEventListener('pagehide', keep); setInterval(keep, 2000);
+  let last = 0;
+  const tick = (t) => { if (last && document.visibilityState === 'visible') { const g = t - last; J.frames++; if (g > 200) J.slow++; if (g > J.worst) J.worst = Math.round(g); }
+    last = t; requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+  try { new PerformanceObserver((l) => l.getEntries().forEach((e) => { J.long++; J.longWorst = Math.max(J.longWorst, Math.round(e.duration)); })).observe({ type: 'longtask', buffered: true }); } catch (e) { /* no long tasks here */ }
+})();"""
+
+
+# daily_check.py's live episodes pin the day (days from today) and the side taken, go on into a practice drive after
+# the day's (practice), tap like a player in a hurry (rapid: no pauses, double taps, taps on the field, the phone turned
+# sideways and back) and reload more (reloads_max). Every episode measures what a player waits on and works around
+# (timing, friction: daily_check.py's report)
 async def episode(browser, base: str, name: str, mode: str, seed: int, target: int, out: Path, mobile: bool, quirk: str = "",
-                  stamped: tuple = ([], {}), first: bool = False, sweep: bool = False) -> dict:
+                  stamped: tuple = ([], {}), first: bool = False, sweep: bool = False, day: int | None = None, side: int | None = None,
+                  practice: bool = False, rapid: bool = False, reloads_max: int = 2) -> dict:
     rnd = random.Random(seed)
     vp = {"width": 390, "height": 844} if mobile else {"width": 1280, "height": 900}
     ctx = await browser.new_context(viewport=vp, is_mobile=mobile, has_touch=mobile)
-    day = seed % 9 if mode == "daily" else 0
+    if day is None:
+        day = seed % 9 if mode == "daily" else 0
     # a shifted date (each day's drive), and a seeded Math.random so a failing survivor run can be replayed
     await ctx.add_init_script(f"""(() => {{ const off = {day} * 864e5, _D = Date;
       class D extends _D {{ constructor(...a) {{ super(...(a.length ? a : [_D.now() + off])); }} static now() {{ return _D.now() + off; }} }}
@@ -451,21 +520,25 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
         t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }}; }})();""")
     if quirk:
         await ctx.add_init_script(QUIRK[quirk])
+    await ctx.add_init_script(JANK)
     if mode == "scenario":
         await pro_context(ctx, base)
     page = await ctx.new_page()
     problems: list[str] = []
     page.on("pageerror", lambda e: problems.append(f"script error: {e}"))
     page.on("console", lambda m: m.type == "error" and "googletagmanager" not in m.text and "ERR_" not in m.text
+            and not any(CUT(u) for u in [(m.location or {}).get("url") or "", *re.findall(r"https?://[^\s'\"]+", m.text)])
             and problems.append(f"console error: {m.text[:300]}"))
-    # (a reload cuts short what is still downloading: the first call shows before the simulator's data is in)
-    page.on("requestfailed", lambda r: base in r.url and "ERR_ABORTED" not in (r.failure or "") and problems.append(f"request failed: {r.url} {r.failure}"))
+    # (a reload cuts short what is still downloading: the first call shows before the simulator's data is in; Safari
+    # calls that cancelled)
+    page.on("requestfailed", lambda r: base in r.url and not CUT(r.url) and not re.search(r"ERR_ABORTED|cancell?ed", r.failure or "", re.I)
+            and problems.append(f"request failed: {r.url} {r.failure}"))
     page.on("request", lambda r: unstamped(r.url, base, *stamped) and problems.append(f"an address cached for good, without its stamp: {r.url}"))
-    url = f"{base}/index.html" + ("#survivor" if mode == "survivor" else "#daily")
+    url = f"{base}/{PAGE}" + ("#survivor" if mode == "survivor" else "#daily")
     scen, b = None, {"years": [0, 0]}
     if mode == "scenario":
         # the builder first (its checks), then a random scenario of the episode's kind, kicked off by its link
-        await page.goto(f"{base}/index.html#custom")
+        await page.goto(f"{base}/{PAGE}#custom")
         try:
             await page.wait_for_selector("#arch .sacts .btn", timeout=30000)
             b = await page.evaluate(BUILDER)
@@ -479,19 +552,24 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             print(f"{name}: {scen['code']} (seasons {scen['first']}-{scen['last']}; builder offers {b['years'][0]}-{b['years'][1]})", flush=True)
             if b["years"] != [scen["first"], scen["last"]]:
                 problems.append(f"the builder offers {b['years']}, the rosters {scen['first']}-{scen['last']}")
-        url = f"{base}/index.html#custom-{scen['code'] if scen else 'x'}"
+        url = f"{base}/{PAGE}#custom-{scen['code'] if scen else 'x'}"
         first = False                     # (a scenario's file carries no first-call facts: the simulator answers)
+    timing: dict = {}                # ms: the front door, the drive's page, its intro and first call, a reload's way back
+    friction = {"taps_to_first_call": 0, "modals": [], "snap": 0, "snap_out": 0, "snap_why": [], "covered": 0, "covered_by": [],
+                "races": 0, "wait_s": 0.0, "wait_max_s": 0.0, "loading_s": 0.0, "loading_max_s": 0.0, "turned": 0}
     if mode not in ("survivor", "scenario"):
         # the bare address is the front door: Home, with today's drive on it
-        await page.goto(f"{base}/index.html")
+        await page.goto(f"{base}/{PAGE}")
         h = None
         for _ in range(100):
             await page.wait_for_timeout(100)
-            h = await page.evaluate(HOME)
+            h = await home_now(page)
             if h:
                 break
         if not h or not h["hero"]:
             problems.append("the bare address did not open the home screen")
+        timing["home"] = await look(page, LOADED)
+    t_drive = time.time()
     if mode != "survivor":
         async with page.expect_event("load"):  # (a hash-only move: the page reloads itself into the drive)
             await page.goto(url)
@@ -505,8 +583,16 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     rstate = SCENSTATE if mode == "scenario" else DAYSTATE
     restarted = False
     picked = None                    # a day of two sides: the one taken (asked once: a reload or a restart keeps it)
+    pick_gone = False                # ... and the pick screen gone since (it takes the side's own file first: a moment)
     first_call = first               # the first call shows on the spot's own facts (game.js firstInfo), not the simulator's
-    act = lambda what: trail.append(f"  > {what}")
+    asked = False                    # the bot opened the modal on screen itself (else it came up in the way)
+    t_reload = None                  # when the bot reloaded mid-drive (to time the way back to a call)
+    turned = False                   # (rapid, on a phone: held sideways)
+
+    def act(what):
+        trail.append(f"  > {what}")
+        if "first_call" not in timing:
+            friction["taps_to_first_call"] += 1
     t_start = time.time()
     status = "ok"
     try:
@@ -515,9 +601,16 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             if problems:
                 status = "error"
                 break
-            st = await page.evaluate(STATE)
-            key = (st, await page.evaluate(SNAP) if st not in ("loading", "modal", "deep") else "")
+            try:
+                st = await page.evaluate(STATE)
+                key = (st, await page.evaluate(SNAP) if st not in ("loading", "modal", "deep", "errbar") else "")
+            except Exception:            # (the page reloading itself just then: no page to look at; one that never comes back is frozen)
+                st, key = "loading", ("loading", "")
             if key != last_key:
+                if last_key and last_key[0] in ("wait", "loading"):       # (the simulator thinking; a page loading)
+                    w = time.time() - since
+                    friction[f"{last_key[0]}_s"] += w
+                    friction[f"{last_key[0]}_max_s"] = max(friction[f"{last_key[0]}_max_s"], w)
                 last_key, since = key, time.time()
                 txt = key[1]
                 trail.append(f"[{st}] {txt[:160]!r}")
@@ -534,17 +627,36 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             elif time.time() - since > LIMIT.get(st, STILL):
                 problems.append(f"frozen: the '{st}' screen did not change for {int(time.time() - since)} s; dock: {key[1][:200]!r}")
                 continue
+            if picked is not None and st not in ("pick", "loading"):
+                pick_gone = True
+            if st in ("intro", "pick") and "intro" not in timing:
+                timing["intro"] = round(await look(page, "() => performance.now()", 0))
+            if st == "choose" and "first_call" not in timing:
+                timing.update(first_call=round(await look(page, "() => performance.now()", 0)), first_call_wall=round((time.time() - t_drive) * 1000),
+                              drive=await look(page, LOADED))
+            if st == "choose" and t_reload:
+                timing.setdefault("reload", []).append(round((time.time() - t_reload) * 1000))
+                t_reload = None
             try:
-                if st == "error":
+                if st == "errbar":
+                    problems.append("the page's error bar: " + await page.evaluate("() => document.getElementById('errBar').innerText.slice(0, 300)"))
+                elif st == "error":
                     problems.append(f"error shown to the player: {key[1][:300]!r}")
                 elif st in ("modal", "deep"):
+                    if not asked:                # (something came up over the game that the bot never asked for)
+                        friction["modals"].append(await page.evaluate("() => document.getElementById('modal').innerText.replace(/\\s+/g, ' ').slice(0, 80)")
+                                                  if st == "modal" else "deep")
+                    asked = False
                     await page.wait_for_timeout(rnd.choice([100, 400]))
                     act("close " + st); await page.click("#mClose" if st == "modal" else "#deepClose", timeout=3000)
                 elif st == "pick":
-                    if picked is not None:
+                    if picked is not None and pick_gone:
                         problems.append(f"asked to pick a side again, after taking side {picked} (a reload or a restart must keep it)")
                         continue
-                    picked = (seed // 2) % 2           # (both sides over a few episodes, each with and without a restart)
+                    if picked is not None:   # (the tap is still on its way: a pick screen that never goes is frozen)
+                        await page.wait_for_timeout(100)
+                        continue
+                    picked = (seed // 2) % 2 if side is None else side      # (both sides over a few episodes, each with and without a restart)
                     act(f"pick side {picked}"); await page.click(f"#intro .sidepick[data-side='{picked}']", timeout=3000)
                 elif st == "intro":
                     if picked is not None:
@@ -560,7 +672,11 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         await page.evaluate("() => document.getElementById('restartBtn').click()")
                         if await page.evaluate("() => !document.getElementById('modal').hidden"):
                             problems.append("Start over asked in the middle of a play"); continue
-                    if rnd.random() < 0.6:
+                    if rapid:                    # (impatient: taps all over the field while it plays)
+                        box = await page.locator("#field").bounding_box()
+                        for _ in range(rnd.randint(1, 3)):
+                            await page.mouse.click(box["x"] + rnd.random() * box["width"], box["y"] + rnd.random() * box["height"])
+                    elif rnd.random() < 0.6:
                         await page.click("#field", timeout=1500)
                 elif st == "result":
                     if rnd.random() < 0.08 and await page.locator("#dock .replay").count():
@@ -570,12 +686,20 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 elif st == "end":
                     finished += 1
                     if mode == "daily" or finished >= target:
-                        if mode in ("daily", "scenario"):
+                        if mode in ("daily", "practice", "scenario"):
                             await page.click("#dock .endcard .btn", timeout=3000)
                             continue
                         break
                     await page.click("#dock .endcard .btn", timeout=3000)
                 elif st == "summary":
+                    if mode == "practice":
+                        # practice's own card: graded, and saying it counts for nothing
+                        t = await page.evaluate("() => document.getElementById('done').innerText")
+                        if not await page.locator("#done .big-pct").count() or "Practice" not in t:
+                            problems.append(f"the practice drive's end card: {t[:200]!r}")
+                        else:
+                            print(f"{name}: practice drive done")
+                        break
                     # a site built with an ad unit shows one labeled ad on the between-games screens, below the rest
                     if await page.locator('meta[name="ad-slot"]').count() and not await page.locator("#done .adbox ins.adsbygoogle").count():
                         problems.append("ads are on but the results screen has no ad spot")
@@ -618,7 +742,17 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         if restart_ep and not restarted:
                             print(f"{name}: the drive ended before a second call, no Start over exercise")
                         # home: the end card's Home, the ☰ menu's first item, and the bare address (the day done)
-                        problems.extend(await visit_home(page, base, quirk != "nostore"))
+                        try:
+                            problems.extend(await visit_home(page, base, quirk != "nostore"))
+                        except Exception as e:       # (said as itself, not as the home screen left to freeze)
+                            problems.append(f"going home from the end card: {str(e).splitlines()[0][:200]}")
+                        if practice and quirk != "nostore" and not problems:
+                            # on into practice (the end card's Keep playing): one more real drive that counts for nothing
+                            mode, first_call, restart_ep, picked, pick_gone = "practice", False, False, None, False
+                            act("practice drive")
+                            async with page.expect_event("load"):
+                                await page.goto(f"{base}/{PAGE}#practice")
+                            continue
                         break
                     if "home" not in chaos_done:
                         chaos_done.add("home")
@@ -694,15 +828,29 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         if not await page.evaluate("() => performance.getEntriesByName('tmd:first-info').length"):
                             problems.append("the first call waited on the simulator: the spot's file has its facts (site.py spot_info), unused")
                             continue
+                    if not turned and await page.locator("#snapGo:visible").count():
+                        # the Snap key in reach as it comes up, nobody having scrolled (snap_reach's test, on every pass)
+                        friction["snap"] += 1
+                        far = await page.evaluate(REACH, "#snapGo")
+                        if far:
+                            friction["snap_out"] += 1
+                            if len(friction["snap_why"]) < 3:
+                                friction["snap_why"].append(far[0][:160])
+                    asked = False
                     r = rnd.random()
-                    if r < 0.03 and "help" not in chaos_done:
-                        chaos_done.add("help"); act("help"); await page.click("#helpBtn", timeout=3000)
+                    if rapid and mobile and rnd.random() < 0.04 and friction["turned"] < 4:
+                        # the phone turned sideways (and back, the next time)
+                        v = page.viewport_size
+                        act("turn the phone"); turned = not turned; friction["turned"] += 1
+                        await page.set_viewport_size({"width": v["height"], "height": v["width"]})
+                    elif r < 0.03 and "help" not in chaos_done:
+                        chaos_done.add("help"); act("help"); asked = True; await page.click("#helpBtn", timeout=3000)
                     elif r < 0.06 and "stats" not in chaos_done:
-                        chaos_done.add("stats"); act("stats"); await page.click("#statsBtn", timeout=3000)
+                        chaos_done.add("stats"); act("stats"); asked = True; await page.click("#statsBtn", timeout=3000)
                     elif r < 0.09 and "deep" not in chaos_done and await page.locator("#deepBtn").is_visible():
-                        chaos_done.add("deep"); act("player ratings"); await page.click("#deepBtn", timeout=3000)
+                        chaos_done.add("deep"); act("player ratings"); asked = True; await page.click("#deepBtn", timeout=3000)
                     elif r < 0.12 and "bar" not in chaos_done:
-                        chaos_done.add("bar"); act("game details"); await page.click("#bar", timeout=3000)
+                        chaos_done.add("bar"); act("game details"); asked = True; await page.click("#bar", timeout=3000)
                     elif await page.locator("#dock .key:visible", has_text="Run it down").count() and rnd.random() < 0.7:
                         # burn the clock to 0:03, timeout, then the kick: the clock must read 0:03 after
                         act("RUN IT DOWN"); rundowns += 1
@@ -769,9 +917,12 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                                 x, y = nx, ny
                             await page.mouse.up()
                             drawn += 1
-                    elif r < 0.14 and reloads < 2:
+                    elif r < (0.14 if reloads_max <= 2 else 0.3) and reloads < reloads_max:
                         reloads += 1
                         act("RELOAD")
+                        t_reload = time.time()
+                        if quirk == "nostore":       # (nothing kept: the side is asked again, as a new try)
+                            picked, pick_gone = None, False
                         await page.reload()
                         await page.wait_for_timeout(800)
                     else:
@@ -790,13 +941,23 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                                 b = big.nth(rnd.randrange(nb)); act("tap " + (await b.inner_text())[:40]); await b.click(timeout=3000)
                             else:
                                 b = btns.nth(rnd.randrange(n)); act("tap " + (await b.inner_text())[:40].replace(chr(10), ' ')); await b.click(timeout=3000)
+                            for _ in range(rnd.randint(0, 2) if rapid else 0):      # (a double or triple tap: the key may be gone)
+                                await b.click(timeout=600, no_wait_after=True)
                         else:
                             rcv = page.locator("#field .rcv, #field [data-rcv]")
                             if await rcv.count():
                                 await rcv.nth(rnd.randrange(await rcv.count())).click(timeout=3000)
-            except Exception:
-                pass                     # a button that moved or vanished between looking and clicking: look again
-            await page.wait_for_timeout(rnd.choice([30, 60, 120]))
+            except Exception as e:
+                # a button that moved or vanished between looking and clicking: look again (counted: a tap that something
+                # else on the page took is friction, what took it said; a rapid episode's extra taps miss by design)
+                over = re.search(r"(<[^>]{1,100}>)(?: from <[^>]+> subtree)? intercepts pointer events", str(e))
+                if over and not rapid:
+                    friction["covered"] += 1
+                    if len(friction["covered_by"]) < 3:
+                        friction["covered_by"].append(over.group(1))
+                else:
+                    friction["races"] += 1
+            await page.wait_for_timeout(rnd.choice([0, 10, 20] if rapid else [30, 60, 120]))
         else:
             problems.append(f"never finished: {finished} of {target} games after {steps} steps")
         if not problems and finished < (1 if mode == "daily" else target):
@@ -809,18 +970,21 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             offs = await page.evaluate("() => window.__offLog || []")
             kept = await page.evaluate("() => (window.__drawLog || []).length")
             snaps = await page.evaluate("() => window.__drawSnaps || []")
+            jank = await page.evaluate("() => window.__jank || null")
         except Exception:
-            seps, tackles, fps, offs, kept, snaps = [], [], [], [], 0, []
+            seps, tackles, fps, offs, kept, snaps, jank = [], [], [], [], 0, [], None
+        shot = None
         if problems:
             status = "fail"
             shot = out / f"{name}.png"
             try:
                 await page.screenshot(path=str(shot), full_page=True)
             except Exception:
-                pass
+                shot = None
         await ctx.close()
     return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
-            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "trail": trail if problems else []}
+            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "trail": trail if problems else [],
+            "day": day, "side": picked, "timing": timing, "friction": friction, "jank": jank, "shot": shot.name if shot else None}
 
 
 # the dock's words and its first key that can be pressed (marked for the click), at one moment
@@ -844,11 +1008,11 @@ async def scenario_half(browser, base: str) -> list[str]:
     errs: list[str] = []
     page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
     try:
-        await page.goto(f"{base}/index.html#custom")
+        await page.goto(f"{base}/{PAGE}#custom")
         await page.wait_for_selector("#arch .sacts .btn", timeout=30000)
         sc = await page.evaluate(SCEN_PICK, [11, 4])
         async with page.expect_event("load"):
-            await page.goto(f"{base}/index.html#custom-{sc['code']}")
+            await page.goto(f"{base}/{PAGE}#custom-{sc['code']}")
         await page.click("#intro .btn", timeout=30000)
         for _ in range(600):           # their snap with 0:02 left in the half (your defense: any call; anything after), then halftime
             await page.wait_for_timeout(150)
@@ -900,17 +1064,17 @@ async def scenario_pitch(browser, base: str) -> list[str]:
     errs: list[str] = []
     page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
     try:
-        await page.goto(f"{base}/index.html#custom")
+        await page.goto(f"{base}/{PAGE}#custom")
         await page.wait_for_selector("#arch .sacts .btn", timeout=30000)
         sc = await page.evaluate(SCEN_PICK, [7, 1])
         async with page.expect_event("load"):
-            await page.goto(f"{base}/index.html#custom-{sc['code']}")
+            await page.goto(f"{base}/{PAGE}#custom-{sc['code']}")
         await page.wait_for_selector("#arch .scnsum", timeout=30000)
         got = await page.evaluate("() => ({ pro: !!document.querySelector('#arch .pro .btn'), play: !document.getElementById('play').hidden || !document.getElementById('intro').hidden, text: document.getElementById('arch').innerText })")
         if not got["pro"] or got["play"] or "Pro" not in got["text"]:
             out.append(f"without Pro a scenario's link is not the pitch: {got['text'][:200]!r}")
         async with page.expect_event("load"):
-            await page.goto(f"{base}/index.html#custom-1-KC-2026")
+            await page.goto(f"{base}/{PAGE}#custom-1-KC-2026")
         await page.wait_for_timeout(1500)
         t = await page.evaluate("() => document.getElementById('arch').innerText")
         if "doesn’t work" not in t:
@@ -937,10 +1101,10 @@ async def scenario_community(browser, base: str, shots: str = "") -> list[str]:
     page = await ctx.new_page()
     page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
     try:
-        await page.goto(f"{base}/index.html#archive")
+        await page.goto(f"{base}/{PAGE}#archive")
         await page.wait_for_selector("#arch a.scnentry.comm[href='#community']", timeout=30000)
         async with page.expect_event("load"):
-            await page.goto(f"{base}/index.html#custom")
+            await page.goto(f"{base}/{PAGE}#custom")
         await page.wait_for_selector("#scn-title", timeout=30000)
         await page.locator("#arch .spre .key").first.click()
         await page.fill("#scn-title", title)
@@ -961,7 +1125,7 @@ async def scenario_community(browser, base: str, shots: str = "") -> list[str]:
         sc = await page.evaluate(SCEN_PICK, [5, 1])
         COMM["rows"].append({"id": "OTHER001", "code": sc["code"], "title": "Fourth and forever", "name": "Someone", "at": "2026-10-19T16:00:00Z", "n": 0, "f": 0, "w": 0, "best": None})
         async with page.expect_event("load"):
-            await page.goto(f"{base}/index.html#community")
+            await page.goto(f"{base}/{PAGE}#community")
         await page.wait_for_selector("#arch .clist a.day.comm", timeout=30000)
         rows = await page.evaluate("() => [...document.querySelectorAll('#arch .clist a.day.comm')].map((a) => ({ text: a.innerText, href: a.getAttribute('href'), del: a.parentElement.classList.contains('scnrow') && !!a.parentElement.querySelector('.scnx') }))")
         if len(rows) != 2:
@@ -998,7 +1162,7 @@ async def scenario_community(browser, base: str, shots: str = "") -> list[str]:
     page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
     try:
         href = COMM["rows"][0]["code"] + "~" + urllib.parse.quote(title) if COMM["rows"] else "x"
-        await page.goto(f"{base}/index.html#custom-{href}")
+        await page.goto(f"{base}/{PAGE}#custom-{href}")
         await page.wait_for_selector("#intro .btn", timeout=30000)
         lab = await page.evaluate("() => document.getElementById('dayLabel').textContent")
         if title not in lab:
@@ -1017,12 +1181,15 @@ async def scenario_community(browser, base: str, shots: str = "") -> list[str]:
     return out
 
 
-async def snap_reach(browser, base: str) -> list[str]:
+SIZES = ((390, 844, True), (375, 667, True), (1280, 900, False))
+
+
+async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
     """The snap needs no scrolling: on a phone (390x844, 375x667) and a desktop, a pass's Snap key, the run keys and a
     drawn run's Run it, the defense's Call it (the full call and the three keys) and the kicks' keys are all on the screen
-    as each comes up."""
+    as each comes up. (daily_check.py: the phone it plays as, and a desktop)"""
     out: list[str] = []
-    for w, h, mob in ((390, 844, True), (375, 667, True), (1280, 900, False)):
+    for w, h, mob in sizes:
         ctx = await browser.new_context(viewport={"width": w, "height": h}, is_mobile=mob, has_touch=mob)
         await ctx.add_init_script("window.__sepLog = [];")
         page = await ctx.new_page()
@@ -1045,7 +1212,7 @@ async def snap_reach(browser, base: str) -> list[str]:
                     return True
             return False
         try:
-            await page.goto(f"{base}/index.html#survivor")
+            await page.goto(f"{base}/{PAGE}#survivor")
             for _ in range(300):
                 await page.wait_for_timeout(100)
                 if await page.locator("#intro .btn:visible").count():
@@ -1092,6 +1259,76 @@ async def snap_reach(browser, base: str) -> list[str]:
             out.extend(f"{at}: {x}" for x in errs)
             await ctx.close()
     return out
+
+
+def binom_tail(n: int, k: int, p: float) -> float:
+    """The chance of k or more of n at rate p (in logs: a day of live episodes logs thousands of plays, too many for
+    math.comb times a float)."""
+    if k <= 0:
+        return 1.0
+    lp, lq = math.log(p), math.log1p(-p)
+    return min(1.0, sum(math.exp(math.lgamma(n + 1) - math.lgamma(j + 1) - math.lgamma(n - j + 1) + j * lp + (n - j) * lq) for j in range(k, n + 1)))
+
+
+def field_checks(results: list[dict]) -> tuple[list[str], dict]:
+    """What the plays on the field showed over every episode's logs (seps, tackles, fps, offs): the lines to print, in
+    order, and the checks that failed, each with its line (daily_check.py reports them from the live site)."""
+    lines: list[str] = []
+    failed: dict = {}
+    say = lambda x: lines.append(x)
+
+    def fail(name, x):
+        failed[name] = x
+        lines.append(x)
+    inc = [x for r in results for x in r.get("seps", []) if not x.get("caught") and not x.get("intc") and x.get("kind") != "hail" and x.get("evt") != "throwaway"]
+    open_inc = sum(1 for x in inc if x.get("actual", 0) >= 4)
+    say(f"passes logged: {sum(len(r.get('seps', [])) for r in results)}, incomplete: {len(inc)}")
+    # "Broken up" needs a defender at the ball (players saw it with nobody near)
+    say(f"run it down, timeout at 0:03: tapped {sum(r.get('rundowns', 0) for r in results)} times")
+    # a tackled carrier goes down with a defender on him, never alone in the open
+    tk = [x for r in results for x in r.get("tackles", [])]
+    alone = [x for x in tk if x.get("nd", 0) > 3]
+    say(f"tackles: {len(tk)}, nobody within 3 yards: {len(alone)}")
+    # (a rare one is tolerated: fail only when this many would be unlikely, p < 0.01, at a 2% rate (7 of 113, as before the fixes, fails); it was 6%
+    # before the tackler fixes. A fixed cut on a short CI run fails by chance)
+    n_tk = len(tk)
+    tail_tk = binom_tail(n_tk, len(alone), 0.02)
+    if alone and tail_tk < 0.01:
+        fail("tackles", f"FAIL: tackled with nobody near {alone[:5]}")
+    # forward progress: a carrier never has the ball past where it is spotted (beyond where he got it), so he is
+    # never shown driven back from it
+    fp = [x for r in results for x in r.get("fps", [])]
+    past = [x for x in fp if x.get("over", 0) > 0.5]
+    say(f"carries: {len(fp)}, ball carried 0.5+ yards past the spot: {len(past)}" + (f" (worst {max(x['over'] for x in past):.1f})" if past else ""))
+    if past:
+        fail("forward-progress", f"FAIL: forward progress {past[:5]}")
+    # every play shown on the field keeps everyone on the ground (game.js offField): inside the end lines, at most a
+    # step past a sideline
+    offs = [x for r in results for x in r.get("offs", [])]
+    say(f"plays with a man or the ball off the field: {len(offs)}")
+    if offs:
+        fail("off-field", f"FAIL: off the field {offs[:5]}")
+    # a short throw with a man running free deep reads as a QB who missed him (players saw it): report how often
+    sh = [x for r in results for x in r.get("seps", []) if x.get("caught") and x.get("air", 99) <= 6]
+    say(f"short completions: {len(sh)}, with a deep man 5+ yards clear: {sum(1 for x in sh if x.get('openDeep', 0) > 0)}")
+    say(f"routes drawn: {sum(r.get('drawn', 0) for r in results)} drags, {sum(r.get('kept', 0) for r in results)} kept as routes (since the last reload)")
+    by = {}
+    for r in results:
+        for x in r.get("snaps", []):
+            by[x["kind"]] = by.get(x["kind"], 0) + 1
+    say(f"plays drawn: {sum(r.get('sketched', 0) for r in results)} drags (runs, RPOs, defense, kicks), snapped as drawn: {by} (since the last reload)")
+    late = sum(1 for r in results for x in r.get("seps", []) if x.get("late"))
+    say(f"cover man too far to break it up (shown as a bad ball instead): {late} of {len(inc)} incompletions")
+    lonely = [x for r in results for x in r.get("seps", []) if x.get("label") == "Broken up" and x.get("ballD", 0) > 3]
+    if lonely:
+        fail("broken-up", f"FAIL: {len(lonely)} passes called 'Broken up' with no defender within 3 yards of the ball")
+    if len(inc) >= 8:
+        n = len(inc)
+        tail = binom_tail(n, open_inc, 0.10)
+        say(f"incomplete passes with nobody within 4 yards: {open_inc} of {n} (chance of this many at 10%: {tail:.4f})")
+        if tail < 0.001:
+            fail("separation", "FAIL: too many incompletions look wide open")
+    return lines, failed
 
 
 async def main(a) -> int:
@@ -1152,59 +1389,9 @@ async def main(a) -> int:
         (out / "fps.json").write_text(_json.dumps([x for r in results for x in r.get("fps", [])]))
     except Exception:
         pass
-    inc = [x for r in results for x in r.get("seps", []) if not x.get("caught") and not x.get("intc") and x.get("kind") != "hail" and x.get("evt") != "throwaway"]
-    open_inc = sum(1 for x in inc if x.get("actual", 0) >= 4)
-    print(f"passes logged: {sum(len(r.get('seps', [])) for r in results)}, incomplete: {len(inc)}")
-    # "Broken up" needs a defender at the ball (players saw it with nobody near)
-    print(f"run it down, timeout at 0:03: tapped {sum(r.get('rundowns', 0) for r in results)} times")
-    # a tackled carrier goes down with a defender on him, never alone in the open
-    tk = [x for r in results for x in r.get("tackles", [])]
-    alone = [x for x in tk if x.get("nd", 0) > 3]
-    print(f"tackles: {len(tk)}, nobody within 3 yards: {len(alone)}")
-    # (a rare one is tolerated: fail only when this many would be unlikely, p < 0.01, at a 2% rate (7 of 113, as before the fixes, fails); it was 6%
-    # before the tackler fixes. A fixed cut on a short CI run fails by chance)
-    n_tk = len(tk)
-    tail_tk = sum(math.comb(n_tk, k) * 0.02 ** k * 0.98 ** (n_tk - k) for k in range(len(alone), n_tk + 1)) if alone else 1.0
-    if alone and tail_tk < 0.01:
-        print("FAIL: tackled with nobody near", alone[:5])
-        bad.append({"name": "tackles"})
-    # forward progress: a carrier never has the ball past where it is spotted (beyond where he got it), so he is
-    # never shown driven back from it
-    fp = [x for r in results for x in r.get("fps", [])]
-    past = [x for x in fp if x.get("over", 0) > 0.5]
-    print(f"carries: {len(fp)}, ball carried 0.5+ yards past the spot: {len(past)}" + (f" (worst {max(x['over'] for x in past):.1f})" if past else ""))
-    if past:
-        print("FAIL: forward progress", past[:5])
-        bad.append({"name": "forward-progress"})
-    # every play shown on the field keeps everyone on the ground (game.js offField): inside the end lines, at most a
-    # step past a sideline
-    offs = [x for r in results for x in r.get("offs", [])]
-    print(f"plays with a man or the ball off the field: {len(offs)}")
-    if offs:
-        print("FAIL: off the field", offs[:5])
-        bad.append({"name": "off-field"})
-    # a short throw with a man running free deep reads as a QB who missed him (players saw it): report how often
-    sh = [x for r in results for x in r.get("seps", []) if x.get("caught") and x.get("air", 99) <= 6]
-    print(f"short completions: {len(sh)}, with a deep man 5+ yards clear: {sum(1 for x in sh if x.get('openDeep', 0) > 0)}")
-    print(f"routes drawn: {sum(r.get('drawn', 0) for r in results)} drags, {sum(r.get('kept', 0) for r in results)} kept as routes (since the last reload)")
-    by = {}
-    for r in results:
-        for x in r.get("snaps", []):
-            by[x["kind"]] = by.get(x["kind"], 0) + 1
-    print(f"plays drawn: {sum(r.get('sketched', 0) for r in results)} drags (runs, RPOs, defense, kicks), snapped as drawn: {by} (since the last reload)")
-    late = sum(1 for r in results for x in r.get("seps", []) if x.get("late"))
-    print(f"cover man too far to break it up (shown as a bad ball instead): {late} of {len(inc)} incompletions")
-    lonely = [x for r in results for x in r.get("seps", []) if x.get("label") == "Broken up" and x.get("ballD", 0) > 3]
-    if lonely:
-        print(f"FAIL: {len(lonely)} passes called 'Broken up' with no defender within 3 yards of the ball")
-        bad.append({"name": "broken-up"})
-    if len(inc) >= 8:
-        n = len(inc)
-        tail = sum(math.comb(n, k) * 0.10 ** k * 0.90 ** (n - k) for k in range(open_inc, n + 1))
-        print(f"incomplete passes with nobody within 4 yards: {open_inc} of {n} (chance of this many at 10%: {tail:.4f})")
-        if tail < 0.001:
-            print("FAIL: too many incompletions look wide open")
-            bad.append({"name": "separation"})
+    lines, failed = field_checks(results)
+    print("\n".join(lines))
+    bad += [{"name": k} for k in failed]
     if STUB_ASKED:
         print(f"the Pro stub was also asked: {sorted(STUB_ASKED)}")
     print(f"{len(results) - len(bad)} of {len(results)} episodes clean" + (f"; screenshots in {out}" if bad else ""))

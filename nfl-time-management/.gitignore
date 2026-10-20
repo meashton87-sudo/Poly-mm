@@ -22,6 +22,7 @@ board/.wrangler/
 _site_test/
 _site_*/
 browser_test_out/
+daily_check_out/
 board/assets/pro/*.json
 board/assets/vs/
 web/rosters/

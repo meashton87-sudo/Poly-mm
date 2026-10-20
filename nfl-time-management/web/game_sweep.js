@@ -2,7 +2,9 @@
 // checking the football on every step (clock, scores, downs, distances, yard lines, touchdowns, safeties), that every
 // point goes to the team that scored it (the log against the scoreboard), and that the play called is the play run
 // (a spike is a spike, a kneel a kneel, a call that call) even when the clock stops before the snap.
-//   node web/game_sweep.js [seeds per call, default 4] [games per spot, default 2]     (about 3 minutes)
+//   node web/game_sweep.js [seeds per call, default 4] [games per spot, default 2] [salt, default 0]     (about 3 minutes)
+// (a salt other than 0 moves every seed: the same checks on other draws; scripts/daily_check.py runs a few at once on the
+// live site's data, a new salt each day)
 const fs = require('fs');
 const path = require('path');
 const W = __dirname + path.sep;
@@ -11,7 +13,7 @@ const eng = new E(JSON.parse(fs.readFileSync(W + 'engine_data.json', 'utf8')));
 eng.loadPlaybook(JSON.parse(fs.readFileSync(W + 'playbook.json', 'utf8')));
 const idx = JSON.parse(fs.readFileSync(W + 'game.json', 'utf8'));
 const P = eng.pb, calls = P.calls.map((c) => c.id);
-const SEEDS = +(process.argv[2] || 4), GAMES = +(process.argv[3] || 2);
+const SEEDS = +(process.argv[2] || 4), GAMES = +(process.argv[3] || 2), SALT = (+(process.argv[4] || 0) * 1000003) >>> 0;
 const bad = {}, seen = {};
 const flag = (k, msg) => { bad[k] = bad[k] || []; if (bad[k].length < 6) bad[k].push(msg); bad[k].n = (bad[k].n || 0) + 1; };
 const count = (k) => { seen[k] = (seen[k] || 0) + 1; };
@@ -179,7 +181,7 @@ idx.spots.forEach((sp, si) => {
         const before = JSON.parse(JSON.stringify(rt));
         const tempo = ['urgent', 'hurry', 'normal', 'milk'][s % 4];
         const looks = s % 2 ? 1 << ((s >> 1) % 4) : 0;     // half the snaps against one defensive look
-        const r = sim.step(rt, { action: { to_off: false, play: P.calls[ci].kind, call: id, oob: s % 3 === 0, tempo: rt.clock_running ? tempo : undefined, looks, pers: [undefined, 11, 12, 21, 13][(s + vi) % 5] }, seed: si * 1000 + ci * 37 + s * 7919 + vi });
+        const r = sim.step(rt, { action: { to_off: false, play: P.calls[ci].kind, call: id, oob: s % 3 === 0, tempo: rt.clock_running ? tempo : undefined, looks, pers: [undefined, 11, 12, 21, 13][(s + vi) % 5] }, seed: si * 1000 + ci * 37 + s * 7919 + vi + SALT });
         steps++;
         check(before, r, `spot ${si} v${vi} ${id} s${s}`);
         attrib(before, r, `spot ${si} v${vi} ${id} s${s}`);
@@ -200,7 +202,7 @@ idx.spots.forEach((sp, si) => {
           const action = p === 'timeout' ? { to_off: true } : { to_off: false, play: p };
           if (s === 1 && running && p !== 'timeout') action.to_def = true;        // their timeout first
           if (running && p === 'fg' && s !== 1) action.tempo = s ? 'milk' : 'normal';      // a kick called in the huddle
-          const r = sim.step(rt, { action, seed: si * 7 + k * 131 + j * 17 + s });
+          const r = sim.step(rt, { action, seed: si * 7 + k * 131 + j * 17 + s + SALT });
           steps++;
           check(before, r, tag); attrib(before, r, tag); honored(before, action, r, tag);
         }
@@ -232,7 +234,7 @@ idx.spots.forEach((sp, si) => {
       else if (cur.phase === 1 && cur.pos === me) action = { pat: n % 3 ? 'xp' : 'two' };
       else if (cur.phase === 2 && cur.pos === me) action = { kick: ['return', 'touchback', 'onside', 'deep'][(n + g) % 4] };
       const before = JSON.parse(JSON.stringify(cur));
-      const r = sim.step(cur, { action, seed: 77 + si * 31 + g * 101 + n });
+      const r = sim.step(cur, { action, seed: 77 + si * 31 + g * 101 + n + SALT });
       steps++;
       check(before, r, `game ${si}.${g} step ${n}`);
       if (sp.start.qtr <= 2 && r.root.t < 1800) flag('a first-half spot went on into the second half', `game ${si}.${g} step ${n} t ${r.root.t}`);
@@ -270,7 +272,7 @@ idx.spots.forEach((sp, si) => {
   if (sp.start.qtr > 2) return;
   const sim = eng.simulator(eng.makeContext(scen(sp), { receive2h: sp.start.receive2h }));
   for (const pos of [0, 1]) for (const pat of ['xp', 'two']) {
-    const r = sim.step({ ...rootOf(sp), t: 1800, phase: 1, pos, down: 1, ytg: 2, yl: 2, clock_running: false }, { action: { pat }, seed: si * 7 + pos });
+    const r = sim.step({ ...rootOf(sp), t: 1800, phase: 1, pos, down: 1, ytg: 2, yl: 2, clock_running: false }, { action: { pat }, seed: si * 7 + pos + SALT });
     steps++;
     count('try at the end of the first half');
     if (!r.done || r.root.t !== 1800 || r.log.some((e) => e.ev === 'kickoff')) flag('a try at the end of the first half did not end it', `spot ${si} ${pat} ${JSON.stringify(r.root)}`);
@@ -284,14 +286,14 @@ idx.spots.forEach((sp, si) => {
   for (let k = 0; k < 24; k++) {
     const rt = { ...rootOf(sp), t: 4, pos: k % 2, score: [24, 20 + (k % 5)], down: 1, ytg: 10, yl: 30, to: [0, 0], clock_running: false, phase: 0 };
     const before = JSON.parse(JSON.stringify(rt)), tag = `spot ${si} last play ${k}`;
-    const r = sim.step(rt, { action: { to_off: false, play: 'pass', call: ['deep_strong', 'deep_weak', 'hail_mary', 'quick_strong'][k % 4] }, seed: si * 131 + k });
+    const r = sim.step(rt, { action: { to_off: false, play: 'pass', call: ['deep_strong', 'deep_weak', 'hail_mary', 'quick_strong'][k % 4] }, seed: si * 131 + k + SALT });
     steps++;
     check(before, r, tag); attrib(before, r, tag);
   }
   for (const m of [-8, -3, -2, -1, 0, 1, 2, 3, 7]) {
     const rt = { ...rootOf(sp), t: 0, pos: si % 2, score: [0, 0], down: 1, ytg: 2, yl: 2, clock_running: false, phase: 1 };
     rt.score[rt.pos] = 20 + m; rt.score[1 - rt.pos] = 20;
-    const r = sim.step(rt, { action: { pat: 'xp' }, seed: si + m });
+    const r = sim.step(rt, { action: { pat: 'xp' }, seed: si + m + SALT });
     steps++;
     const tried = r.log.some((e) => e.ev === 'pat');
     if (tried !== (Math.abs(m) < 3) || !r.done) flag('the try after a touchdown at 0:00', `spot ${si} margin ${m} tried ${tried} done ${r.done}`);
@@ -325,7 +327,7 @@ idx.spots.forEach((sp, si) => {
     const before = JSON.parse(JSON.stringify(cur)), tag = `ot ${si} step ${n}`;
     const tiedSD = before.phase === 0 && had[0] && had[1] && before.score[0] === before.score[1];
     if (before.phase === 0) had[before.pos] = true;
-    const r = sim.step(cur, { action, seed: 991 + si * 53 + n });
+    const r = sim.step(cur, { action, seed: 991 + si * 53 + n + SALT });
     steps++;
     check(before, r, tag); attrib(before, r, tag);
     if (before.pos === me) honored(before, action, r, tag);
@@ -379,7 +381,7 @@ idx.spots.forEach((sp, si) => {
       'trick_reverse', 'rpo_strong', 'rpo_weak', 'roll_strong', 'roll_weak', 'quick_strong'];
     ids.forEach((id, k) => {
       const base = { to_off: false, play: P.calls[P.callIndex[id]].kind, call: id, oob: k % 3 === 0, looks: k % 2 ? 1 << (k % 4) : 0 };
-      const seed = si * 977 + vi * 131 + k * 17, tag = `drawn ${si} v${vi} ${id}`;
+      const seed = si * 977 + vi * 131 + k * 17 + SALT, tag = `drawn ${si} v${vi} ${id}`;
       const r0 = sim.step(JSON.parse(JSON.stringify(rt)), { action: { ...base }, seed });
       const r1 = sim.step(JSON.parse(JSON.stringify(rt)), { action: { ...base, ...DRAW_X(k + si) }, seed });
       steps += 2; drawnN++;
@@ -389,7 +391,7 @@ idx.spots.forEach((sp, si) => {
     // your defense drawn: the look or the full call it reads as, the defenders' lines with it
     if (rt.yl > 2) for (let k = 0; k < 6; k++) {
       const them = { ...rt, pos: 1 - rt.pos }, d = k % 2 ? { to_def: false, def: ['blitz', 'load', 'soft'][k % 3] } : { to_def: false, dc: fullDef(k + si + vi), read: true };
-      const seed = si * 331 + vi * 37 + k;
+      const seed = si * 331 + vi * 37 + k + SALT;
       const r0 = sim.step(JSON.parse(JSON.stringify(them)), { action: { ...d }, seed }), r1 = sim.step(JSON.parse(JSON.stringify(them)), { action: { ...d, ddraw: DRAW_X(k).ddraw }, seed });
       steps += 2; drawnN++;
       if (JSON.stringify(r0.log) !== JSON.stringify(r1.log)) flag('a drawn defense played differently from the tapped one', `drawn def ${si} v${vi} ${k}`);

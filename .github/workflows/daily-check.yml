@@ -1,0 +1,135 @@
+name: Daily bot check
+
+# Every morning, bots play the live site (nfl-time-management/scripts/daily_check.py): in a real browser, Chromium as
+# a desktop and an Android phone and WebKit as an iPhone (Oct 19's outage was on iPhones only), and the engine plays
+# thousands of whole drives on the very files the site serves (each checked against its stamp). The report
+# (daily_check_report.json and .md, with the failures' screenshots) is the artifact daily-check-report and this run's
+# summary, for the daily review.
+#
+# Bots finding problems is what the report is for: the run stays green. It goes red only when the check itself breaks
+# (its self-test of the request blocking fails, the script throws, a part never reports).
+#
+# Never on the live site: an ad or analytics request (every request to another host is cut off in the browser: bot
+# ad impressions would get the ad accounts banned), a request to the real board (the page is given a stub's address;
+# the board's own, from the page and BOARD_API, is cut off and reported), a purchase, a sign-in or an email.
+on:
+  schedule:
+    - cron: "0 10 * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Minutes of browser episodes (each browser)"
+        default: "40"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-check
+  cancel-in-progress: false
+
+env:
+  LIVE: ${{ vars.SITE_DOMAIN && format('https://{0}', vars.SITE_DOMAIN) || 'https://nfl2mindrill.com' }}
+
+jobs:
+  browsers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    defaults:
+      run:
+        working-directory: nfl-time-management
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # (Playwright as site.yml has it; the browser and the libraries it needs)
+      - name: Install Playwright
+        run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps ${{ matrix.browser }}
+
+      - name: Bots on the live site
+        env:
+          BOARD_API: ${{ vars.BOARD_API }}
+          MINUTES: ${{ inputs.minutes || '40' }}
+        run: python scripts/daily_check.py browsers --live "$LIVE" --browser ${{ matrix.browser }} --minutes "$MINUTES" --jobs 3 $([ -n "$BOARD_API" ] && echo --block "$BOARD_API" || true)
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-check-part-${{ matrix.browser }}
+          path: nfl-time-management/daily_check_out
+          if-no-files-found: ignore
+          retention-days: 3
+
+  engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        working-directory: nfl-time-management
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # the live site's files by their stamps (no rebuild: the data is stamped and never changes under its address),
+      # then web/game_smoke.js and three web/game_sweep.js runs on new seeds each day
+      - name: Engine bots on the live data
+        run: python scripts/daily_check.py engine --live "$LIVE" --procs 3 --seeds 2 --games 4 --minutes 55
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-check-part-engine
+          path: nfl-time-management/daily_check_out
+          if-no-files-found: ignore
+          retention-days: 3
+
+  report:
+    needs: [browsers, engine]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: nfl-time-management
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true           # (no part at all: the report says which are missing)
+        with:
+          pattern: daily-check-part-*
+          merge-multiple: true
+          path: nfl-time-management/daily_check_out
+
+      - name: The report
+        run: python scripts/daily_check.py report --expect chromium webkit engine
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daily-check-report
+          path: |
+            nfl-time-management/daily_check_out/daily_check_report.json
+            nfl-time-management/daily_check_out/daily_check_report.md
+            nfl-time-management/daily_check_out/shots
+          if-no-files-found: error
+          retention-days: 30
