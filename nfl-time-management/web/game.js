@@ -43,23 +43,30 @@
     errSeen.add(msg);
     const where = `${String(file || '').split('/').pop().split('?')[0]}:${line || 0}:${col || 0}`;
     track('js_error', { msg, where, stack: String(stack || '').slice(0, 300), build: (document.querySelector('meta[name="build"]') || {}).content || '' });
-    if ((file && !String(file).startsWith(location.origin)) || /^(Load failed|Failed to fetch|NetworkError)/.test(msg)) return;     // (offline: the page says so itself)
+    // shown only for the game's own scripts (a browser's own add-ons throw on every page too: Brave's wallet,
+    // window.ethereum, Oct 20, its bar over the Snap key); offline the page says so itself. Every one is counted above
+    const own = /^[^?#]+\.js$/.test(String(file || '').split(/[?#]/)[0]) && String(file).startsWith(location.origin + '/');
+    if (!own || /^(Load failed|Failed to fetch|NetworkError)/.test(msg)) return;
     if (document.getElementById('errBar')) return;
-    const bar = document.createElement('div'), p = document.createElement('p'), b = document.createElement('button');
+    // (at the top, with a close: never over the Snap key at the bottom)
+    const bar = document.createElement('div'), p = document.createElement('p'), b = document.createElement('button'), x = document.createElement('button');
     bar.id = 'errBar'; bar.setAttribute('role', 'alert');
-    bar.style.cssText = 'position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));z-index:9999;background:#7a1f1f;color:#fff;border-radius:12px;padding:12px 14px;font:14px/1.35 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35);display:flex;gap:12px;align-items:center';
+    bar.style.cssText = 'position:fixed;left:12px;right:12px;top:calc(12px + env(safe-area-inset-top,0px));z-index:9999;background:#7a1f1f;color:#fff;border-radius:12px;padding:12px 14px;font:14px/1.35 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35);display:flex;gap:12px;align-items:center';
     p.style.cssText = 'margin:0;flex:1;min-width:0;overflow-wrap:anywhere';
     p.textContent = `Something broke on this page (${msg} · ${where}). Reload to try again; a screenshot of this helps us fix it.`;
     b.type = 'button'; b.textContent = 'Reload';
     b.style.cssText = 'flex:none;background:#fff;color:#7a1f1f;border:0;border-radius:8px;padding:8px 12px;font:600 14px system-ui,sans-serif';
     b.addEventListener('click', () => location.reload());
-    bar.append(p, b);
+    x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', 'Close');
+    x.style.cssText = 'flex:none;background:none;color:#fff;border:0;padding:4px 6px;font:700 20px/1 system-ui,sans-serif';
+    x.addEventListener('click', () => bar.remove());
+    bar.append(p, b, x);
     (document.body || document.documentElement).append(bar);
   }
   window.addEventListener('error', (e) => { if (e && e.message) pageError(e.message, e.filename, e.lineno, e.colno, e.error && e.error.stack); });
   window.addEventListener('unhandledrejection', (e) => {
     const r = e && e.reason;
-    if (r instanceof Error) pageError(r.message, ((r.stack || '').match(/(https?:[^\s)]+?):(\d+):(\d+)/) || [])[1] || location.href, 0, 0, r.stack);
+    if (r instanceof Error) pageError(r.message, ((r.stack || '').match(/(https?:[^\s)]+?):(\d+):(\d+)/) || [])[1] || '', 0, 0, r.stack);
   });
   const modeName = () => (VS ? 'versus' : SURV ? 'survivor' : PRACTICE ? 'practice' : DRIVE ? 'drive' : RUN_N ? 'run' : CUSTOM ? 'custom' : ARCH_DAY ? 'archive' : 'daily');
   // a drive left half-played: when the page goes to the background mid-drive (closed, or switched away from), once
