@@ -695,7 +695,9 @@
   // out when the site was built by the same worker on the same data (web/spot_info.js), so the first call shows without
   // waiting on the simulator's data (only the snap does: simWait). Used only for the very question they answer (infoKey:
   // a fingerprint of it, cyrb53, the same as spot_info.js), else null: asked. The simulator is asked anyway once it is
-  // in and must answer the same (a difference is reported: the console and analytics)
+  // in and must answer the same (a difference is reported: the console and analytics). The same to within float
+  // rounding: Safari's JavaScript engine works some of the odds out a hair apart from the one that built them
+  // (Math.exp and the like: 1e-13 apart, in 23 of the first 30 spots), which no screen shows
   function infoKey(s) {
     let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
     for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677); }
@@ -703,13 +705,20 @@
     h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
     return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
   }
+  const sameInfo = (a, b) => {
+    if (typeof a === 'number' && typeof b === 'number') return a === b || Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return a === b;
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+    const ka = Object.keys(a), kb = Object.keys(b);
+    return ka.length === kb.length && ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && sameInfo(a[k], b[k]));
+  };
   function firstInfo(r) {
     const q = { scen: simScen(), root: r }, f = G.scen.first;
     if (!f || f.key !== infoKey(JSON.stringify(q))) return null;
-    const txt = JSON.stringify(f.info);
+    const txt = JSON.stringify(f.info), ref = JSON.parse(txt);
     try { performance.mark('tmd:first-info'); } catch (e) { /* no marks */ }
     send({ type: 'info', ...q }).then((m) => {
-      if (JSON.stringify(m.info) === txt) return;
+      if (sameInfo(m.info, ref)) return;
       console.error(`the first call's facts for ${q.scen.id} differ from the simulator's`);
       track('info_mismatch', { spot: q.scen.id });
     }, () => {});

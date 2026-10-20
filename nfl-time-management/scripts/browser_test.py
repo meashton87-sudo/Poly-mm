@@ -640,8 +640,10 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             and not any(CUT(u) for u in [(m.location or {}).get("url") or "", *re.findall(r"https?://[^\s'\"]+", m.text)])
             and problems.append(f"console error: {m.text[:300]}"))
     # (a reload cuts short what is still downloading: the first call shows before the simulator's data is in; Safari
-    # calls that cancelled)
+    # calls that cancelled. WebKit under Playwright fails the page's own blob: addresses "Blocked by Web Inspector",
+    # the automation's doing: Safari itself loads them)
     page.on("requestfailed", lambda r: base in r.url and not CUT(r.url) and not re.search(r"ERR_ABORTED|cancell?ed", r.failure or "", re.I)
+            and not (r.url.startswith("blob:") and "Web Inspector" in (r.failure or ""))
             and problems.append(f"request failed: {r.url} {r.failure}"))
     page.on("request", lambda r: unstamped(r.url, base, *stamped) and problems.append(f"an address cached for good, without its stamp: {r.url}"))
     url = f"{base}/{PAGE}" + ("#survivor" if mode == "survivor" else "#daily")
