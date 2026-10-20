@@ -666,7 +666,7 @@ class History:
             kick = g[g["play_type"].isin(["field_goal", "extra_point"])] if col == "kicker_player_id" else g
             ids = kick[col].dropna()
             # (the one who kicked from the spot's snap on, else the last one before it: a kicker hurt earlier in the game
-            # is not the one the team had then, the Rams' Grupe on Oct 18, 2026, whose punter kicked from the first quarter on)
+            # is not the one the team had then, Los Angeles' Grupe on Oct 18, 2026, whose punter kicked from the first quarter on)
             if play_id is not None and col == "kicker_player_id" and len(ids):
                 k = kick[kick[col].notna()]
                 later, before = k[k["play_id"] >= play_id][col], k[k["play_id"] < play_id][col]

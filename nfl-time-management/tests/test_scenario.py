@@ -29,9 +29,15 @@ def js(expr: str):
 
 # ---- the export
 def test_era_names_and_records():
-    assert S.era_name("LA", 2015) == {"city": "St. Louis", "name": "Rams"} and S.era_name("LA", 2016) is None
-    assert S.era_name("WAS", 2021)["name"] == "Washington" and S.era_name("WAS", 2022) is None
-    assert S.era_name("LV", 2019)["city"] == "Oakland" and S.era_name("KC", 2001) is None
+    # every team by its city, never a nickname: the city of the time where the franchise played somewhere else
+    assert S.era_name("LA", 2015) == {"name": "St. Louis"} and S.era_name("LA", 2016) is None
+    assert S.era_name("LAC", 2016) == {"name": "San Diego"} and S.era_name("LAC", 2017) is None
+    assert S.era_name("LV", 2019) == {"name": "Oakland"} and S.era_name("LV", 2020) is None and S.era_name("KC", 2001) is None
+    assert S.era_name("WAS", 2001) is None and S.era_name("WAS", 2021) is None          # Washington, every season
+    # the page's copy (web/scenario.js ERA: the historic drives' and the playoff runs' cities) is the same table
+    assert js("return SC.ERA") == {k: [list(x) for x in v] for k, v in S.ERA_NAME.items()}
+    assert js("return [[1999, 2001, 2015, 2016].map((y) => SC.eraName('LA', y)), SC.eraName('LAC', 2016), SC.eraName('LV', 2020)]") == \
+        [["St. Louis", "St. Louis", "St. Louis", None], "San Diego", None]
     g = pd.DataFrame({"home_code": ["NE", "MIA", "NE"], "away_code": ["MIA", "NE", "NYJ"], "home_score": [20, 10, 17], "away_score": [10, 10, 24]})
     assert S.record(g, "NE") == "1-1-1" and S.record(g, "NYJ") == "1-0"
 
@@ -87,7 +93,7 @@ def test_built_rosters():
     for s in idx["seasons"]:
         d = json.loads((WEB / "rosters" / f"{s['season']}.json").read_text())
         assert sorted(d["teams"]) == sorted(t["team"] for t in s["teams"])
-        assert len(d["teams"]) == (31 if s["season"] < 2002 else 32)            # the Texans from 2002
+        assert len(d["teams"]) == (31 if s["season"] < 2002 else 32)            # Houston from 2002
         assert {"mu_pass", "mu_rush", "home_pass", "home_rush"} <= set(d["league"])
         for code, t in d["teams"].items():
             L = t["lineup"]
@@ -98,7 +104,7 @@ def test_built_rosters():
             m = next(x for x in s["teams"] if x["team"] == code)
             assert m["net"] == S.strength(t) and m["qb"] == t["qb"]["name"]
     nets = {(s["season"], t["team"]): t["net"] for s in idx["seasons"] for t in s["teams"]}
-    assert nets[(2007, "NE")] == max(v for (y, _), v in nets.items() if y == 2007)       # the 16-0 Patriots
+    assert nets[(2007, "NE")] == max(v for (y, _), v in nets.items() if y == 2007)       # 2007 New England, 16-0
 
 
 # ---- the format and its checks (web/scenario.js)

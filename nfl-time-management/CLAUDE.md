@@ -10,7 +10,7 @@ version lives in `web/` (`engine.js` is a line-for-line port of `sim.py`, run in
 cd nfl-time-management
 pip install -e ".[dev]"
 python -m nflclock.cli build          # downloads nflverse play-by-play to data/raw, fits artifacts/bundle.pkl (~3-5 min)
-python -m nflclock.cli sync --no-refresh --games 2026_05_BUF_LA        # live game file (Bills at Rams)
+python -m nflclock.cli sync --no-refresh --games 2026_05_BUF_LA        # live game file (Buffalo at Los Angeles)
 python -c "from nflclock import webexport as w; w.export_engine(); w.export_game('2026_05_BUF_LA')"
 python -c "from nflclock import dailygame as G; print(G.build())"   # daily game data (web/playbook.json, web/game.json)
 python -c "from nflclock import scenario; print(scenario.build())"  # Pro's scenario rosters (web/rosters, ~12 min)
@@ -60,6 +60,11 @@ node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real
   it is the day's drive, and the /daily post says which (side: the team's code; worker.js keeps each side's count,
   histogram and average beside the day's, stats.html shows them).
 - Decisions are graded "as of" the week of the game: no ratings may use later games.
+- Teams go by their city or region, never a nickname, anywhere a player sees them (game.js TEAMS, stats.html SIDE_NAME,
+  the notes and titles in daily_schedule.json, pro_drives.json, pro_runs.json, custom_spots.json): Los Angeles (NFC)
+  and (AFC), New York (NFC) and (AFC) for the shared markets (game.js teamShort "LA (NFC)" where room is tight), a moved
+  franchise by its city of the time (web/scenario.js ERA = scenario.py ERA_NAME: St. Louis, San Diego, Oakland). A city
+  takes a singular verb and no article ("Dallas has the ball", "Take over as Dallas"). tests/test_names.py checks.
 - Versus (board/match.js): the room plays the football (web/vs_core.js holds the college-overtime rules, shared with the
   page); phones only send calls. Each snap's seed is drawn fresh by the room and never sent to a phone (a phone that
   knew it could see what a call does before making it). lazy_sim_test.mjs and vs_stress.mjs need board/assets/vs (the
