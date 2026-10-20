@@ -166,8 +166,11 @@ for (let k = 0; k < 100; k++) {
     console.log(`matchup ${id.padEnd(17)} losing ${lo.toFixed(2)}  real ${mid.toFixed(2)}  winning ${hi.toFixed(2)} EPA`);
   });
 }
-// personnel: a call with 12 (or 21, 13) personnel draws only real plays run with it, where there are enough; the heavy
-// sets run more often against the loaded boxes they draw (the look bucket of the plays drawn)
+// personnel: a call with 12 (or 21, 13) personnel draws only real plays run with it, where there are enough (PB_LOOK_MIN
+// of them, by their weights: fewer, and the situation's own plays are drawn, whatever their grouping, rather than the
+// same few real plays snap after snap); the heavy sets run more often against the loaded boxes they draw (the look
+// bucket of the plays drawn). Across every situation 11 personnel is drawn as picked nearly always, 12 three times in
+// four, 21 and 13 (rarer in real late-game football) in a third to a half
 {
   const S = eng.simulator(eng.makeContext(scen(idx.spots[0]).game, { receive2h: idx.spots[0].start.receive2h }));
   const P = eng.pb;
@@ -182,7 +185,7 @@ for (let k = 0; k < 100; k++) {
       }
     }
     share[pers] = hit / n;
-    assert.ok(hit / n > (pers === 13 ? 0.6 : 0.85), `personnel ${pers}: ${(100 * hit / n).toFixed(1)}% of plays drawn ran it`);
+    assert.ok(hit / n > ({ 11: 0.85, 12: 0.6, 21: 0.3, 13: 0.25 })[pers], `personnel ${pers}: ${(100 * hit / n).toFixed(1)}% of plays drawn ran it`);
   });
   console.log('personnel: plays drawn with the grouping picked', Object.entries(share).map(([k, v]) => `${k} ${(100 * v).toFixed(0)}%`).join('  '));
   // and through a whole snap
@@ -452,4 +455,44 @@ if (fs.existsSync(path.join(dir, 'rosters', 'index.json'))) {
     `${tally.games} random scenarios (eras ${[...tally.eras].sort().join(', ')}; ${tally.po} playoff, ${tally.kick} kickoffs, ${tally.half2} second halves, ${tally.ot} in overtime, ${tally.ties} ties, ${tally.lineups || 0} with lineups of their own), ${tally.snaps} steps`);
   assert.ok(tally.lineups >= 10, 'scenarios with lineups of their own');
 } else console.log('scenarios: web/rosters not built (nflclock.scenario.build), skipped');
+// a personnel group (Who plays: any swap plays the lined-up group, game.js) never narrows a call to a few real plays:
+// the same result snap after snap (Oct 20: the day's 12 personnel drew a 3-yard loss on 4 of 10 runs at the Dallas
+// 16, and 21 personnel the same no-gain run on every snap)
+{
+  const picks = [...new Set([...Object.values(idx.featured || {}).flatMap((f) => (f.sides || []).map((x) => x.spot)), ...idx.spots.map((_, i) => i).filter((i) => i % 53 === 0)])].slice(0, 18);
+  const calls = eng.pb.calls.filter((c) => (c.kind === 'run' || c.kind === 'pass') && !/^trick|hail_mary|qb_sneak/.test(c.id));
+  const N = 100, worst = [];
+  let checked = 0;
+  for (const si of picks) {
+    const sp = idx.spots[si], S = scen(sp), st = sp.start;
+    if (st.phase === 'kick') continue;
+    const sim = eng.simulator(eng.makeContext(S.game, { receive2h: st.receive2h }));
+    const at = { t: st.qtr <= 4 ? (4 - st.qtr) * 900 + st.clock : st.clock, pos: st.pos === sp.home ? 0 : 1, score: [st.score[1], st.score[0]],
+      down: st.down, ytg: Math.min(st.ytg, st.yl), yl: st.yl, to: [st.to[1], st.to[0]], clock_running: st.running, phase: 0, credit: 0, free_kick: false };
+    // the real plays a hundred snaps draw (rows), and the most common result (a different group's plays end
+    // differently, which is the point; the same few plays every time is the bug)
+    const of = (c, pers) => {
+      const n = {}, rows = new Set();
+      for (let k = 0; k < N; k++) {
+        const e = sim.step(at, { action: { to_off: false, play: c.kind, call: c.id, ...(pers ? { pers } : {}) }, seed: 6100 + k }).log.find((x) => x.ev === 'play');
+        if (!e) continue;
+        if (e.row >= 0) rows.add(e.row);
+        if (e.incomplete) continue;
+        const key = `${e.yards}|${e.evt || ''}|${e.td ? 1 : 0}`;
+        n[key] = (n[key] || 0) + 1;
+      }
+      return { top: Math.max(0, ...Object.values(n)) / N, rows: rows.size };
+    };
+    for (const c of calls) {
+      const base = of(c, 0);
+      for (const pers of [11, 12, 21, 13]) {
+        const g = of(c, pers);
+        checked += 1;
+        if (g.rows < 8 || g.top > Math.max(0.35, base.top + 0.2)) worst.push(`${sp.id} ${c.id} ${pers}: ${g.rows} real plays in ${N} snaps (${base.rows}), the most common result ${g.top} (${base.top})`);
+      }
+    }
+  }
+  console.log(`personnel: ${checked} calls and groups on ${picks.length} spots, ${worst.length} narrowed to a few plays`);
+  assert.ok(!worst.length, `personnel narrows a call to a few real plays: ${worst.slice(0, 6).join('; ')}`);
+}
 console.log('smoke ok');
