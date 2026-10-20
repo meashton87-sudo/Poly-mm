@@ -851,13 +851,11 @@
       if (pers && P.ngs && P.ngs.pers) {
         const pools = [pool];
         if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (!pools.includes(lp)) pools.push(lp); }
-        // (enough plays with it first; then any at all, before the grouping is dropped)
-        for (const need of [true, false]) {
-          for (const lk of looks && P.lookB ? [looks, 0] : [0]) {
-            for (const pl of pools) {
-              const r = this._sampleLook(cdf, pl, u, lk, s, 0, 0, need, pers);
-              if (r >= 0) return r;
-            }
+        // (only with enough plays with it, PB_LOOK_MIN: fewer, and the grouping is dropped)
+        for (const lk of looks && P.lookB ? [looks, 0] : [0]) {
+          for (const pl of pools) {
+            const r = this._sampleLook(cdf, pl, u, lk, s, 0, 0, true, pers);
+            if (r >= 0) return r;
           }
         }
       }
@@ -1010,7 +1008,7 @@
       if (T === undefined) {
         const P = this.e.pb, lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1, k = s ? (MATCH_SD * s) / Math.sqrt(this._poolVar(cdf, pool)) : 0;
         const items = [], cum = [];
-        let tot = 0;
+        let tot = 0, sq = 0;
         for (let i = lo; i <= hi; i++) {
           const r = P.items[i];
           if (looks) { const b = P.lookB[r]; if (!(b < 8 && (looks >> b) & 1)) continue; }
@@ -1019,9 +1017,13 @@
           if (pers && P.ngs.pers[r] !== pers) continue;
           let w = cdf[i] - (i > lo ? cdf[i - 1] : pool);
           if (k) { const e = P.epa[r]; if (Number.isFinite(e)) w *= Math.exp(k * clip(e, -MATCH_EPA_CAP, MATCH_EPA_CAP)); }
-          tot += w; items.push(r); cum.push(tot);
+          tot += w; sq += w * w; items.push(r); cum.push(tot);
         }
-        T = ((looks || need) && items.length < PB_LOOK_MIN) || !(tot > 0) ? null : { items, cum, tot };
+        // a personnel group's plays count by their weights too (tot^2 / sum w^2, the plays they amount to): a few
+        // heavy ones among many light are a few plays, the same results snap after snap (Oct 20: the day's 12
+        // personnel at the Dallas 16 drew a 3-yard loss on 4 runs in 10)
+        const few = items.length < PB_LOOK_MIN || (pers && tot * tot < PB_LOOK_MIN * sq);
+        T = ((looks || need) && few) || !(tot > 0) ? null : { items, cum, tot };
         byKey.set(key, T);
       }
       return T;
