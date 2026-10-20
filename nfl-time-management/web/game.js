@@ -2433,8 +2433,10 @@
     // a route that runs out at a sideline or the end line: he pulls up there (a route's end at full speed carries him on)
     // (a route not thrown to ends at a jog: the receiver settles where it ends instead of gliding on at full speed)
     const edgeStop = (pts) => { const q = pts[pts.length - 1]; return q[0] < 3 || q[0] > FW - 3 || q[1] < -7 || q[1] > 107 ? { v1: 0 } : { v1: 2.5 }; };
-    // (the ground: inside the end lines, and no more than a step out of bounds, on the drawn sideline)
-    const Wd = new Motion.World({ field: [0, FW], ends: [FULL.lo + 0.5, FULL.hi - 0.5], sides: [-0.8, FW + 0.8] });
+    // (the ground: inside the end lines, and no more than a step out of bounds, on the drawn sideline; onTurf, a spot
+    // across the field kept on it)
+    const SIDES = [-0.8, FW + 0.8], onTurf = (x) => clip(x, SIDES[0], SIDES[1]);
+    const Wd = new Motion.World({ field: [0, FW], ends: [FULL.lo + 0.5, FULL.hi - 0.5], sides: SIDES });
     sc.actors.forEach((a) => { a.trk = null; a.endAt = null; a.b = Wd.add({ id: a.label + (a.p && a.p.num), g: GROUP[a.label] || 'LB', x: yx(a.x0), y: a.L0, spd: 1 + jit(0.035), team: a.off ? 1 : 0 }); });
     const BX = yx(bx);
     let snapAt = 0, frozen = false;            // frozen: the play never started (a flag before the snap)
@@ -2694,7 +2696,9 @@
       if (o.out) {
         const sp = vel(car), mx = start[0] + (sp > 1.2 ? (car.b.vx / sp) * Math.min(4, Math.max(1, sp * 0.45)) : 0);
         const far = o.out > 0 ? Math.max(start[0], mx) : Math.min(start[0], mx);
-        if (o.out * (far - endPt[0]) > 0) endPt[0] = o.oob ? far : inX(far);       // (out of bounds: where it takes him)
+        // (out of bounds: where it takes him, on the drawn turf. Past it, the official's toss to the spot after the
+        // whistle, finish, went there: the ball two yards past the sideline after a catch run out of bounds)
+        if (o.out * (far - endPt[0]) > 0) endPt[0] = o.oob ? onTurf(far) : inX(far);
       }
       const after0 = tackled ? (o.after ?? (car.label === 'RB' || car.label === 'QB' ? 1.5 + R() : 0.6 + R() * 0.8)) : 0;
       // a short run after the catch with nobody close: he works sideways toward the nearest man, who comes up to
@@ -3705,7 +3709,9 @@
             if (dist(p, p0) > 1e-6) out_.hard += 50;
             out_.segs.push(['fly', tThrow, t1, B0, p, h, d, true]); out_.f = flightOf(p, t1, h, d); out_.t1 = t1; out_.land = p;
           };
-          const hop = (t, p, v, len, h, T) => { const q = ground(add(p, v, len)); out_.segs.push(['fly', t, t + T, p, q, h, 0]); return q; };
+          // (a bounce on from where it really is: off the ground, from where its flight came down, never the spot it was
+          // aimed at past the sideline)
+          const hop = (t, p0, v, len, h, T) => { const p = ground(p0), q = ground(add(p, v, len)); out_.segs.push(['fly', t, t + T, p, q, h, 0]); return q; };
           const restAt = (t, p) => { out_.segs.push(['rest', t, p]); out_.rest = p; out_.tEnd = t; };
           // (him: out of his reach, and as it looks; everyone else, the defense and his teammates, who it must not look
           // thrown to either)
@@ -3793,7 +3799,7 @@
             out_.at = catchPt;
           } else {           // thrown away: out of bounds, past the sideline
             main(catchPt, tCatch, arcH, arcD);
-            restAt(tCatch, catchPt);
+            restAt(tCatch, out_.land);
             out_.at = catchPt;
           }
           // (and it lies on the ground clear of him to the end of the play: never ending up in his hands)
