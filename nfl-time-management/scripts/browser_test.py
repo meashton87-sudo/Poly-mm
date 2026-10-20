@@ -277,7 +277,9 @@ SHORT_FIELD = """(yl) => {
 # The pass looks like what happened (game.js missPlan, passCheck): pass plays of every kind of result, on spots from the
 # goal line to backed up, both teams, every pass call and charted route, drawn on the field and measured as drawn: a
 # catch (or a pick) is in the catcher's hands as the ball gets to him and just after; an incompletion never is, and
-# goes where its kind says (pass_look_problems)
+# goes where its kind says (pass_look_problems). Every third one is yours, to the man split out by the left sideline,
+# then the right, on a route along it or out to it, and some catches are run out of bounds: at both sidelines the
+# ball stays on the drawn turf (offField; edge counts the passes whose ball ends up within 2 yards of each)
 PASS_LOOK = """([n, seed]) => {
   const D = window.__draw, { G } = D.get(), calls = Object.values(D.CALL);
   let s = seed >>> 0;
@@ -286,8 +288,9 @@ PASS_LOOK = """([n, seed]) => {
   const logs = ['__sepLog', '__tackleLog', '__fpLog', '__offLog'], kept = logs.map((k) => (window[k] || []).length);
   const ids = ['quick_strong', 'quick_weak', 'quick_middle', 'screen', 'deep_strong', 'deep_weak', 'deep_middle', 'pa_short', 'pa_deep', 'roll_strong', 'roll_weak'];
   const routes = ['go', 'post', 'corner', 'out', 'deep_out', 'in', 'slant', 'cross', 'hitch', 'screen', 'flat', 'wheel', 'angle'];
-  const kinds = ['catch', 'catch', 'int', 'bad', 'bad', 'bad', 'break', 'break', 'tip', 'drop', 'pick', 'away', 'plain'];
-  const rows = [], off = [];
+  const kinds = ['catch', 'catch', 'int', 'bad', 'bad', 'bad', 'break', 'break', 'tip', 'drop', 'pick', 'away', 'plain', 'oob'];
+  const outside = ['out', 'deep_out', 'corner', 'go', 'hitch', 'flat', 'wheel'];
+  const rows = [], off = [], edge = [0, 0];
   for (let i = 0; i < n; i++) {
     const id = pick(ids), ci = calls.findIndex((c) => c.id === id), yl = pick([3, 8, 15, 25, 40, 55, 70, 85, 95, 99]);
     const deep = /deep/.test(id), air = Math.round(Math.max(-3, Math.min(yl + 8, deep ? 14 + R() * 32 : -3 + R() * 15)));
@@ -297,19 +300,29 @@ PASS_LOOK = """([n, seed]) => {
       bad: { air, yards: 0, incomplete: true, ...ch(false, R() < 0.25, false) }, break: { air, yards: 0, incomplete: true, ...ch(R() < 0.3, R() < 0.6, true) },
       tip: { air, yards: 0, incomplete: true, ...ch(true, false, false) }, drop: { air, yards: 0, incomplete: true, evt: 'drop', ...ch(true, R() < 0.2, false) },
       pick: { air, yards: 0, incomplete: true, evt: 'near_pick', ...ch(false, true, true) }, away: { yards: 0, incomplete: true, evt: 'throwaway' },
-      plain: { air, yards: 0, incomplete: true } }[k];
-    const r = { ...G.root, phase: 0, down: 1 + Math.floor(R() * 4), ytg: Math.min(yl, 10), yl, pos: R() < 0.5 ? G.me : 1 - G.me, try2: false, t: 1700 - i };
+      plain: { air, yards: 0, incomplete: true }, oob: { air, yards, oob: yards < yl, td: yards >= yl, ...ch(true, R() < 0.2, false) } }[k];
+    const wide = i % 3 === 0 && k !== 'away';
+    const r = { ...G.root, phase: 0, down: 1 + Math.floor(R() * 4), ytg: Math.min(yl, 10), yl, pos: wide || R() < 0.5 ? G.me : 1 - G.me, try2: false, t: 1700 - i };
     const e = { ev: 'play', team: r.pos, call: ci, row: -1, t: r.t, kind: 1, ...o };
     if (R() < 0.75 && k !== 'away') e.route = pick(routes);
     const n0 = window.__sepLog.length, side = R() < 0.5 ? 1 : -1;
-    const sc = D.makeScene(r, side), P = D.choreograph(sc, e, { action: null, log: [e], root: { ...r, yl: Math.max(1, yl - (e.yards || 0)) } }, false);
+    const sc = D.makeScene(r, side);
+    // (yours, to the receiver split out widest on the left, then on the right, on a route by the sideline)
+    let action = null;
+    if (wide) {
+      const el = D.eligibles(sc), wr = el.filter((a) => a.label === 'WR').sort((a, b) => a.x0 - b.x0), a = (i / 3) % 2 ? wr[wr.length - 1] : wr[0];
+      if (a) action = { target: el.indexOf(a), route: pick(outside) };
+    }
+    const P = D.choreograph(sc, e, { action, log: [e], root: { ...r, yl: Math.max(1, yl - (e.yards || 0)) } }, false);
     if (!P) continue;
-    D.offField(sc, P, false).slice(0, 2).forEach((b) => { if (off.length < 10) off.push({ id, k, yl, ...b }); });
+    D.offField(sc, P, false).slice(0, 2).forEach((b) => { if (off.length < 10) off.push({ id, k, yl, to: action ? action.route : '', ...b }); });
+    const xe = (D.ballAt(sc, P, P.T).x - D.SX0) / D.XYD;
+    if (xe < 2) edge[0]++; else if (xe > 160 / 3 - 2) edge[1]++;
     if (window.__sepLog.length > n0) rows.push({ ...window.__sepLog[window.__sepLog.length - 1], id, want: k, yl });
   }
   logs.forEach((k, i) => { if (window[k]) window[k].length = kept[i]; });
   D.drawField();
-  return { rows, off };
+  return { rows, off, edge };
 }"""
 
 
@@ -928,17 +941,20 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         problems.append(f"off the field on a short field: {off[:4]}")
                 elif st == "choose" and sweep and "pass_look" not in chaos_done:
                     chaos_done.add("pass_look"); act("pass-look sweep")
-                    rows, off, t_pl = [], [], time.time()
+                    rows, off, edge, t_pl = [], [], [0, 0], time.time()
                     for k in range(4):                    # (in batches: a page drawing them all at once ran out of memory)
                         pl = await page.evaluate(PASS_LOOK, [150, seed * 17 + k])
-                        rows += pl["rows"]; off += pl["off"]
+                        rows += pl["rows"]; off += pl["off"]; edge = [a + b for a, b in zip(edge, pl["edge"])]
                     since = time.time()
                     t_start += since - t_pl
                     mix = {}
                     for x in rows:
                         mix[x.get("label") or x.get("miss")] = mix.get(x.get("label") or x.get("miss"), 0) + 1
                     wrong = pass_look_problems(rows)
-                    print(f"{name}: pass looks, {len(rows)} passes drawn {dict(sorted(mix.items(), key=lambda kv: -kv[1]))}, {len(wrong)} not as they went, {len(off)} off the ground")
+                    print(f"{name}: pass looks, {len(rows)} passes drawn {dict(sorted(mix.items(), key=lambda kv: -kv[1]))}, {len(wrong)} not as they went, "
+                          f"{len(off)} off the ground, ending by the left and right sidelines {edge}")
+                    if not all(edge):
+                        problems.append(f"the pass sweep never ended a pass by both sidelines (left, right: {edge})")
                     if wrong:
                         problems.append(f"a pass not drawn as it went: {wrong[:4]}")
                     if off:
