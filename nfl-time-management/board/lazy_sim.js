@@ -107,17 +107,22 @@ export function lazySimulator(eng, ctx) {
           th = clip(th + (target - m1) / Math.max(m2 - m1 * m1, 1e-6), -1.5, 1.5);
         }
         let mx = -Infinity; for (let i = lo; i < hi; i++) mx = Math.max(mx, th * pe[i]);
-        let sw = 0, swo = 0, swi = 0;
-        const odds = P.oobOdds[c], stay = P.stayOdds ? P.stayOdds[c] : 1;
+        // the carrier's try: engine.js pbTilt
+        const K = P.oobCls;
+        let sw = 0, sE = 0, sEo = 0, sEi = 0;
         for (let i = lo; i < hi; i++) {
-          const w = Math.exp(th * pe[i] - mx), out = P.flags[P.items[i]] & 8;
-          sw += w; swo += out ? w * odds : w; swi += out ? w * stay : w;
+          const w = Math.exp(th * pe[i] - mx), r = P.items[i], k = K[r];
+          sw += w;
+          if (k) { sE += w; sEo += k === 2 ? w * eng.pbOobMul(c, 1, r) : w; sEi += k === 2 ? w * eng.pbOobMul(c, -1, r) : w; }
         }
+        const zo = sEo > 0 ? sE / sEo : 1, zi = sEi > 0 ? sE / sEi : 1, swo = sw - sE + zo * sEo, swi = sw - sE + zi * sEi;
         const cdf = new Float64Array(n), cdfOob = new Float64Array(n), cdfIn = new Float64Array(n);
         let cum = 0, cumo = 0, cumi = 0;
         for (let i = lo; i < hi; i++) {
-          const w = Math.exp(th * pe[i] - mx), out = P.flags[P.items[i]] & 8;
-          cum += w / sw; cumo += (out ? w * odds : w) / swo; cumi += (out ? w * stay : w) / swi;
+          const w = Math.exp(th * pe[i] - mx), r = P.items[i], k = K[r];
+          cum += w / sw;
+          cumo += (k ? (k === 2 ? w * eng.pbOobMul(c, 1, r) : w) * zo : w) / swo;
+          cumi += (k ? (k === 2 ? w * eng.pbOobMul(c, -1, r) : w) * zi : w) / swi;
           cdf[i - lo] = p + Math.min(cum, 1 - 1e-12); cdfOob[i - lo] = p + Math.min(cumo, 1 - 1e-12); cdfIn[i - lo] = p + Math.min(cumi, 1 - 1e-12);
         }
         x = { cdf, cdfOob, cdfIn };

@@ -34,7 +34,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from playwright.async_api import async_playwright
+from playwright.async_api import TimeoutError as PWTimeout, async_playwright
 
 STATE = """() => {
   const vis = (id) => { const e = document.getElementById(id); return e && !e.hidden; };
@@ -822,6 +822,16 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "trail": trail if problems else []}
 
 
+# the dock's words and its first key that can be pressed (marked for the click), at one moment
+HALF_LOOK = """() => {
+  const d = document.getElementById('dock');
+  d.querySelectorAll('[data-bt-pick]').forEach((b) => b.removeAttribute('data-bt-pick'));
+  const k = [...d.querySelectorAll('.key:not([disabled])')].find((b) => b.getClientRects().length && getComputedStyle(b).visibility !== 'hidden');
+  if (k) k.setAttribute('data-bt-pick', '');
+  return { txt: d.innerText, key: !!k };
+}"""
+
+
 async def scenario_half(browser, base: str) -> list[str]:
     """A first-half scenario played to the final gun: at halftime the card says who gets the ball, and the second half
     kicks off from 15:00 of the third quarter."""
@@ -841,15 +851,22 @@ async def scenario_half(browser, base: str) -> list[str]:
         await page.click("#intro .btn", timeout=30000)
         for _ in range(600):           # their snap with 0:02 left in the half (your defense: any call; anything after), then halftime
             await page.wait_for_timeout(150)
-            txt = await page.evaluate("() => document.getElementById('dock').innerText")
+            # (what the dock says and the key to press, read at one moment: the halftime card can come up between a read
+            # of the dock and a look for a key, and its one key, Receive the kickoff, pressed unseen took the test into
+            # the third quarter)
+            look = await page.evaluate(HALF_LOOK)
+            txt = look["txt"]
             if TRACE_HALF:
                 print(repr(txt[:120]), await page.evaluate("() => document.getElementById('bar').innerText.replace(/\\n/g, ' ')"))
             if "halftime" in txt.lower():
                 break
             if await page.locator("#field.playing").count():
                 await page.click("#field", timeout=2000)
-            elif await page.locator("#dock .key:visible:not([disabled])").count():
-                await page.locator("#dock .key:visible:not([disabled])").first.click(timeout=2000)
+            elif look["key"]:
+                try:                   # (that key, or none: gone, the dock has moved on, read it again)
+                    await page.locator("#dock [data-bt-pick]").click(timeout=2000)
+                except PWTimeout:
+                    pass
             elif await page.locator("#dock .result .btn:visible").count():
                 await page.locator("#dock .result .btn").first.click(timeout=2000)
         else:

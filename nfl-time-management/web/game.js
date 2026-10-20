@@ -3603,7 +3603,9 @@
       if (dk >= 0) {
         const q = dk ? dp[dk - 1] : [here(carrier)[0], -5], p = dp[dk], u = p[1] > q[1] ? -q[1] / (p[1] - q[1]) : 0;
         hole = [inX(q[0] + (p[0] - q[0]) * u), hole[1]];
-        dBehind = dp.slice(0, dk).filter((x) => x[1] < -0.3).map((x) => [x[0], fwd(L0, Math.max(x[1], -9))]);
+        // (behind the line no nearer it than where he is met: a loss drawn through a spot ahead of it would have him
+        // carry the ball past where it is spotted and be driven back to it)
+        dBehind = dp.slice(0, dk).filter((x) => x[1] < -0.3).map((x) => [x[0], fwd(L0, Math.min(Math.max(x[1], -9), cap))]);
         const reach = e.td ? Infinity : (e.yards || 0) - 0.8;
         dVia = dp.slice(dk).filter((x) => x[1] > 1 && x[1] < reach - 0.5).map((x) => [x[0], inL(fwd(L0, x[1]))]);
         for (let k = dk; k < dp.length; k++) {
