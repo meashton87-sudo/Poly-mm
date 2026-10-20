@@ -293,6 +293,10 @@ STORAGE_SHIM = ("<script>(function(){function M(){var d={};return{getItem:functi
 
 NO_ADS = False          # --no-ads: no ad anywhere (no unit, no AdSense, no ads.txt), whatever web/ads holds
 EZOIC = False           # --ezoic-head: Ezoic serves the page's ads (its slots in place of every other network's units)
+# --polymarket: Polymarket's partner banner (game.js pmBox) on the end cards and the home page; the images are the
+# partner's own, with the code TWOMIN and the required disclaimer printed on them, and this link credits the sign-ups
+POLYMARKET_LINK = "https://app.polymarket.us/S8ac/TWOMIN"
+POLYMARKET_FILES = ["pm-320x50.png", "pm-728x90.png", "pm-300x250.png"]
 # an Ezoic spot (EzoicAds step 3, as Ezoic gives it): the ad shows where the snippet is, Ezoic picks its size
 EZOIC_SLOT = ('<div class="adslot ezslot"><script>ezstandalone.cmd.push(function () { ezstandalone.showAds({}); });</script></div>')
 
@@ -463,7 +467,7 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
 
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
-          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, pro_at: str | None = None, scn_at: str | None = None, no_ads: bool = False, ezoic: str | None = None, ezoic_head: bool = False, ezoic_ids: str | None = None,
+          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, pro_at: str | None = None, scn_at: str | None = None, no_ads: bool = False, ezoic: str | None = None, ezoic_head: bool = False, ezoic_ids: str | None = None, polymarket: bool = False,
           fulldef: bool = False, google_client_id: str | None = None, old_domain: str | None = None, minify: bool = True) -> Path:
     global NO_ADS, EZOIC
     NO_ADS = no_ads
@@ -505,6 +509,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         if ezoic_ids and not re.fullmatch(r"\d+(,\d+){0,2}", ezoic_ids):
             raise SystemExit(f"--ezoic-ids wants up to three placeholder ids like 101,102,103, not {ezoic_ids!r}")
         extra += '<meta name="ezoic" content="on">' + (f'<meta name="ezoic-ids" content="{ezoic_ids}">' if ezoic_ids else "")
+    if polymarket and not no_ads:            # Polymarket's banner (game.js pmBox): the partner link; its images copied below
+        extra += f"<meta name=\"polymarket\" content=\"{POLYMARKET_LINK}\">"
     if board_api:
         extra += f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">"
     if pro:                                  # the Pro tab (archive, historic drives, the purchase): off until it is turned on
@@ -525,7 +531,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=WEB, capture_output=True, text=True, timeout=10).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         commit = ""
-    for f in FILES:
+    for f in FILES + (POLYMARKET_FILES if polymarket and not no_ads else []):
         shutil.copy2(WEB / f, out / f)
     card = WEB / f"og.{bare_host(home)}.png"      # the link preview card drawn for this address (og_card.html), if there is one
     if card.exists():
@@ -678,6 +684,7 @@ if __name__ == "__main__":
     ap.add_argument("--ad-slot", help="an AdSense display ad unit's slot id, shown between games; empty: AdSense's own placement only")
     ap.add_argument("--ezoic", metavar="DOMAIN", help="/ads.txt redirects to Ezoic's ads.txt manager for this domain (Cloudflare Pages _redirects); site: the site's own (--domain)")
     ap.add_argument("--ezoic-head", action="store_true", help="Ezoic's privacy and header scripts at the top of every page")
+    ap.add_argument("--polymarket", action="store_true", help="Polymarket's partner banner on the end cards and the home page")
     ap.add_argument("--ezoic-ids", help="Ezoic placeholder ids for the game's cards: end of the day's drive, survivor's card after a game, survivor's run over (e.g. 101,102,103)")
     ap.add_argument("--no-ads", action="store_true", help="no ads anywhere on the site (overrides --adsense and web/ads)")
     ap.add_argument("--no-minify", action="store_true", help="ship the scripts as written (no esbuild)")
@@ -688,7 +695,7 @@ if __name__ == "__main__":
     ap.add_argument("--google-client-id", help="a Google OAuth web client id (....apps.googleusercontent.com): Sign in with Google on the Pro tab; empty: off")
     ap.add_argument("--pro", action="store_true", help="turn on the Pro tab (the archive, the historic drives, the purchase); off until approved")
     a = ap.parse_args()
-    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, scn_at=a.scn_at, vs=a.vs, fulldef=a.fulldef, no_ads=a.no_ads, ezoic=a.ezoic, ezoic_head=a.ezoic_head, ezoic_ids=(a.ezoic_ids or '').strip() or None, minify=not a.no_minify,
+    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, scn_at=a.scn_at, vs=a.vs, fulldef=a.fulldef, no_ads=a.no_ads, ezoic=a.ezoic, ezoic_head=a.ezoic_head, ezoic_ids=(a.ezoic_ids or '').strip() or None, polymarket=a.polymarket, minify=not a.no_minify,
               google_client_id=a.google_client_id, old_domain=a.old_domain)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6

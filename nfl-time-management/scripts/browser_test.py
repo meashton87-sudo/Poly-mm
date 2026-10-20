@@ -646,6 +646,8 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             and not (r.url.startswith("blob:") and "Web Inspector" in (r.failure or ""))
             and problems.append(f"request failed: {r.url} {r.failure}"))
     page.on("request", lambda r: unstamped(r.url, base, *stamped) and problems.append(f"an address cached for good, without its stamp: {r.url}"))
+    # the Polymarket banner (game.js pmBox) is a plain image of ours: nothing goes to Polymarket until a player taps it
+    page.on("request", lambda r: "polymarket" in r.url and problems.append(f"a request to Polymarket from the page itself: {r.url}"))
     url = f"{base}/{PAGE}" + ("#survivor" if mode == "survivor" else "#daily")
     scen, b = None, {"years": [0, 0]}
     if mode == "scenario":
@@ -813,6 +815,10 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                             print(f"{name}: practice drive done")
                         break
                     # a site built with an ad unit shows one labeled ad on the between-games screens, below the rest
+                    if await page.locator('meta[name="polymarket"]').count():
+                        pm = await page.evaluate("() => { const a = document.querySelector('#done a.pmlink'); return a ? [a.href, a.rel, a.target] : null; }")
+                        if not pm or pm[0] != "https://app.polymarket.us/S8ac/TWOMIN" or "sponsored" not in pm[1] or pm[2] != "_blank":
+                            problems.append(f"the Polymarket banner on the day's end card: {pm}")
                     if await page.locator('meta[name="ad-slot"]').count() and not await page.locator("#done .adbox ins.adsbygoogle").count():
                         problems.append("ads are on but the results screen has no ad spot")
                         continue

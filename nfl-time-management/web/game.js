@@ -7697,6 +7697,8 @@
     again.type = 'button';
     again.addEventListener('click', () => { state = newRun(); saveState(); survOpen(); });
     box.append(...lifeOffer(), nameInput(), pre, share, again, homeBtn(), boardEl());
+    const pm = pmBox('survend');
+    if (pm) box.append(pm);
     const ad = adBox('survend');
     if (ad) box.append(ad);
     box.append(disclaimer());
@@ -8171,6 +8173,8 @@
     badgeShow(box, state.badges || [], firstFinish);
     box.append(countdown(streak >= 1 ? 'Keep the streak: next drive in ' : null));
     if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) box.append(a2hsSlotEl(), reminderNodes());     // the habit: an icon on the phone, a reminder
+    const pm = pmBox('done');
+    if (pm) box.append(pm);
     const ad = adBox('done');
     if (ad) box.append(ad);
     box.append(disclaimer());
@@ -8813,6 +8817,31 @@
     ezShown.add(id);
     // (after the caller puts the card on the page)
     setTimeout(() => ezq((z) => { if (!ph.isConnected) return; if (again) z.destroyPlaceholders(id); z.showAds(id); }), 0);
+    return box;
+  }
+  // Polymarket's banner (site.py --polymarket: <meta name="polymarket"> carries the partner link; the images are the
+  // partner's own, the code and the disclaimer printed on them): a plain image of ours linking out, no script and no
+  // request to anyone until it is tapped. The strip on the end cards (320x50 on a phone, 728x90 wider), the square on
+  // the home page below the day's card
+  const PM = document.querySelector('meta[name="polymarket"]');
+  function pmBox(kind) {
+    if (!PM || !PM.content) return null;
+    const box = el('div', 'adbox pmbox'), a = document.createElement('a');
+    a.id = `pmLink-${kind}`; a.className = 'pmlink'; a.href = PM.content; a.target = '_blank'; a.rel = 'sponsored noopener nofollow';
+    const alt = 'Polymarket: deposit $10, get a $25 bonus to trade football. Code TWOMIN';
+    if (kind === 'home') {
+      const img = new Image(300, 250);
+      Object.assign(img, { src: 'pm-300x250.png', alt, loading: 'lazy', decoding: 'async' });
+      a.append(img);
+    } else {
+      const pic = document.createElement('picture'), src = document.createElement('source'), img = new Image(320, 50);
+      src.media = '(min-width: 760px)'; src.srcset = 'pm-728x90.png';
+      Object.assign(img, { src: 'pm-320x50.png', alt, loading: 'lazy', decoding: 'async' });
+      pic.append(src, img);
+      a.append(pic);
+    }
+    a.addEventListener('click', () => track('ad_tap', { net: 'polymarket', at: kind }));
+    box.append(el('div', 'adlab', 'Advertisement'), a);
     return box;
   }
   function adBox(kind) {
@@ -10288,6 +10317,8 @@
       sec.append(list);
       box.append(sec);
     }
+    const pm = pmBox('home');
+    if (pm) box.append(pm);
     const links = el('nav', 'hlinks');
     links.setAttribute('aria-label', 'About the game');
     [['about', 'About'], ['how-it-works', 'How it works'], ['privacy', 'Privacy']].forEach(([href, t]) => { const a = el('a', '', t); a.href = href; links.append(a); });

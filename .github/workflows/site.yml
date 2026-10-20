@@ -43,6 +43,7 @@ jobs:
       EZOIC_ADSTXT: "site"   # /ads.txt redirects to Ezoic's ads.txt manager for the site's own domain (SITE_DOMAIN), or a domain named here ("" : our own ads.txt)
       EZOIC_ON: "off"           # "on": Ezoic's privacy + header scripts on every page (EzoicAds step 2); "off" leaves them out
       EZOIC_GAME_IDS: ""        # Ezoic placeholder ids (its dashboard) for the game's cards: day's end, survivor card, run over
+      POLYMARKET_ON: "off"      # "on": Polymarket's partner banner (code TWOMIN) on the end cards and the home page; "off" leaves it out
       FULLDEF_ON: "on"       # "on" turns on the full defensive call (personnel, front, coverage, rush) in the daily and survivor; the Pro preview always has it
     defaults:
       run:
@@ -154,7 +155,7 @@ jobs:
           npx --yes wrangler@4.144.0 deploy
 
       - name: Assemble the site
-        run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --old-domain "${{ vars.OLD_DOMAIN }}" --board-api "${{ vars.BOARD_API }}" --ga "${{ vars.GA_ID || 'G-4QQ8N62SMB' }}" --adsense "${{ vars.ADSENSE_ID || 'ca-pub-7590842699855700' }}" --ad-slot "${{ vars.ADSENSE_SLOT }}" $([ "$PRO_ON" = on ] && echo --pro || true) $([ "$PRO_ON" = on ] && [ -n "$PRO_AT" ] && echo --pro-at "$PRO_AT" || true) $([ "$PRO_ON" = on ] && [ -n "$SCN_AT" ] && echo --scn-at "$SCN_AT" || true) $([ "$VS_ON" = on ] && echo --vs || true) $([ "$FULLDEF_ON" = on ] && echo --fulldef || true) $([ "$ADS_ON" = on ] || echo --no-ads) $([ "$ADS_ON" = on ] && [ -n "$EZOIC_ADSTXT" ] && echo --ezoic "$EZOIC_ADSTXT" || true) $([ "$ADS_ON" = on ] && [ "$EZOIC_ON" = on ] && echo --ezoic-head || true) $([ "$ADS_ON" = on ] && [ "$EZOIC_ON" = on ] && [ -n "$EZOIC_GAME_IDS" ] && echo --ezoic-ids "$EZOIC_GAME_IDS" || true) --google-client-id "${{ vars.GOOGLE_CLIENT_ID || '1079340119845-i8p0d0c57dmoa1hluqkm15ofi33oe9ms.apps.googleusercontent.com' }}"
+        run: python scripts/site.py _site --domain "${{ vars.SITE_DOMAIN }}" --old-domain "${{ vars.OLD_DOMAIN }}" --board-api "${{ vars.BOARD_API }}" --ga "${{ vars.GA_ID || 'G-4QQ8N62SMB' }}" --adsense "${{ vars.ADSENSE_ID || 'ca-pub-7590842699855700' }}" --ad-slot "${{ vars.ADSENSE_SLOT }}" $([ "$PRO_ON" = on ] && echo --pro || true) $([ "$PRO_ON" = on ] && [ -n "$PRO_AT" ] && echo --pro-at "$PRO_AT" || true) $([ "$PRO_ON" = on ] && [ -n "$SCN_AT" ] && echo --scn-at "$SCN_AT" || true) $([ "$VS_ON" = on ] && echo --vs || true) $([ "$FULLDEF_ON" = on ] && echo --fulldef || true) $([ "$ADS_ON" = on ] || echo --no-ads) $([ "$ADS_ON" = on ] && [ -n "$EZOIC_ADSTXT" ] && echo --ezoic "$EZOIC_ADSTXT" || true) $([ "$ADS_ON" = on ] && [ "$EZOIC_ON" = on ] && echo --ezoic-head || true) $([ "$ADS_ON" = on ] && [ "$EZOIC_ON" = on ] && [ -n "$EZOIC_GAME_IDS" ] && echo --ezoic-ids "$EZOIC_GAME_IDS" || true) $([ "$ADS_ON" = on ] && [ "$POLYMARKET_ON" = on ] && echo --polymarket || true) --google-client-id "${{ vars.GOOGLE_CLIENT_ID || '1079340119845-i8p0d0c57dmoa1hluqkm15ofi33oe9ms.apps.googleusercontent.com' }}"
 
       # While the site moves (OLD_DOMAIN set): the new address's pages call the worker, so nothing ships naming it until
       # the worker answers it (the step above can be skipped: no Pro data, no deploy, the worker keeps the addresses it had)
