@@ -8007,6 +8007,27 @@
   // opened from the home screen: installed (on iOS the only sign there is; counted once)
   if (STANDALONE && BUILD) { const s = load(A2HS_KEY, {}); if (!s.done) { s.done = true; save(A2HS_KEY, s); track('install_accepted', { platform: IOS ? 'ios' : 'prompt', via: 'launch' }); } }
   function a2hsSlotEl() { a2hsSlot = el('div', 'a2hsslot'); a2hsFill(a2hsSlot); return a2hsSlot; }
+  // The site moved to a new address (web/move.js handed this player over, progress and all, and left tmd:v3:movedin):
+  // said once. Handed over from a home-screen icon of the old address (it hands over every time, and keeps working), the
+  // steps to put the new one there; that icon keeps its own storage, so signed out, the sign-in that carries the record.
+  function movedNote() {
+    const m = load(`${STORE}:movedin`, null), want = m && m.s ? 2 : 1;
+    if (!m || !BUILD || load(`${STORE}:movenote`, 0) >= want || (want === 2 && !$('modal').hidden)) return;
+    save(`${STORE}:movenote`, want);
+    track('moved_in', { from: String(m.from || ''), keys: m.n || 0, icon: want === 2 ? 1 : 0 });
+    if (want === 1) { toast(`Two-Minute Drill has a new address: ${SITE}. Your progress came along.`); return; }
+    const ol = el('ol', 'movesteps');
+    ol.append(el('li', '', IOS ? `Open ${SITE} in Safari` : `Open ${SITE} in your browser`),
+      el('li', '', IOS ? 'Tap Share, then Add to Home Screen' : 'Its menu (⋮): Add to Home screen, or Install app'),
+      el('li', '', 'Remove the old icon (press and hold it)'));
+    const go = el('button', 'btn', 'Got it');
+    go.type = 'button';
+    go.addEventListener('click', closeModal);
+    openModal('The game has a new address', [el('p', 'lead', `Two-Minute Drill is now at ${SITE}. Your streak, stats and Pro came along.`),
+      el('p', '', 'Your home-screen icon still opens the old address (and brings you here). To put the new one on your home screen:'), ol,
+      el('p', 'note', signedIn() || authSession() ? 'You are signed in, so your record follows you to the new icon.'
+        : 'Log in first (top of the page): your record then follows you to the new icon. Pro comes back there with your code.'), go]);
+  }
   function a2hsFill(slot) {
     const plat = a2hsEvt ? 'prompt' : IOS_SAFARI ? 'ios' : null;
     if (!BUILD || STANDALONE || !plat || DRIVE || RUN_N || CUSTOM || ARCH_DAY || SURV) return;
@@ -10429,7 +10450,7 @@
     }
     if (SCN.blocked(sc.title)) { say('That title is not allowed: pick another.', true); ttl.focus(); return; }
     await BOARD.ready;
-    if (!BOARD.api || !(await authCfg())) { say('Posting needs the website’s backend: try again on nfl2mindrill.com.', true); return; }
+    if (!BOARD.api || !(await authCfg())) { say(`Posting needs the website’s backend: try again on ${HOME}.`, true); return; }
     if (!signedIn()) {
       if (!authSession()) { signInSheet(el('p', 'lead', 'Your scenario goes on the list under your username: log in or sign up to post it.')); return; }
       await proVerify();
@@ -11270,6 +11291,7 @@
       challengeFromUrl();
       await proClaimFromUrl();
       await proVerify();
+      movedNote();
       const acct = acctInit();
       // home: asked for (#home), or a bare address (the front door); drawn again when the account is in (its button,
       // your leagues)
