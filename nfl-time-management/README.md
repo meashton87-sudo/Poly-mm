@@ -432,7 +432,7 @@ the day's score, the stats, the streak, tendencies or the lists. Its progress is
 a refresh mid-drive picks it up where it was. Before the day's drive is done, `#practice` opens the day's drive.
 
 **Build a scenario** (Pro, `#custom`; `web/scenario.js`, `game.js` renderBuilder): pick your team and the other, each with
-its own season (2001 to this one: the 2007 Patriots against the 2023 Chiefs is fine), the kind of game (regular season,
+its own season (2001 to this one: 2007 New England against 2023 Kansas City is fine), the kind of game (regular season,
 Wild Card, Divisional, Conference Championship, Super Bowl; home, away or a neutral site, the Super Bowl's), the
 quarter (or overtime), the clock, the score, who has the ball, where, the down and distance and each team's timeouts,
 or a kickoff to start; a first-half scenario ends at the half or plays on through the second. Presets set the classic
@@ -566,7 +566,9 @@ for a player is credited to his longest carries or catches of that game.
 
 Every spot is a real late-game snap from a real game, 2023-2026 with the playoffs included (21 of the 738
 spots: Wild Card, Divisional, Conference Championship and Super Bowl), and each one says which game: "2023 ·
-Week 14 · Titans at Dolphins" or "2023 · Wild Card Round · Rams at Lions".
+Week 14 · Tennessee at Miami" or "2023 · Wild Card Round · Los Angeles (NFC) at Detroit". Teams go by their city
+or region, never a nickname; the two markets with two teams say which (Los Angeles (NFC) and (AFC), New York (NFC) and
+(AFC)), and a franchise that has moved goes by its city of the time (St. Louis, San Diego, Oakland).
 
 Built for NFL fans: after each snap its result stays on top of your next call (no extra tap; a "Next
 play" button only before the other team's plays), and every spot ends **you vs the real coach**: the

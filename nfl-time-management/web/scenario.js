@@ -35,6 +35,11 @@
   const OT_SAY = { sd: 'sudden death: the first score wins', msd: 'a touchdown on the first possession wins; a field goal gives the other team the ball',
     both: 'both teams get the ball, then the next score wins' };
   const rulesSeason = (sc) => (sc.rules === 'opp' ? sc.os : sc.ys);
+  // a franchise's city in the seasons it played somewhere else (the page names every team by its city today, never a
+  // nickname): code -> [[last season there, city]]. nflclock/scenario.py ERA_NAME is the same table (the rosters' era):
+  // change both (tests/test_scenario.py compares them)
+  const ERA = { LA: [[2015, 'St. Louis']], LAC: [[2016, 'San Diego']], LV: [[2019, 'Oakland']] };
+  const eraName = (team, season) => { const e = (ERA[team] || []).find(([last]) => season <= last); return e ? e[1] : null; };
   const otLen = (sc) => overtime(rulesSeason(sc), sc.type).len;
   const otTo = (sc) => (sc.type === 'REG' ? 2 : 3);      // timeouts in an overtime period (engine.js, game.js overtime)
 
@@ -239,15 +244,15 @@
     const lead = sc.score[0] - sc.score[1];
     const when = sc.qtr === 5 ? `Overtime, ${clockText(sc.clock)} left` : `${clockText(sc.clock)} left in the ${['1st', '2nd', '3rd', '4th'][sc.qtr - 1]} quarter`;
     const mine = sc.ball === 'you';
-    const ball = sc.start === 'kick' ? (mine ? `${opp} kick off to you` : `You kick off to ${opp}`)
-      : `${mine ? 'Your' : `${opp}’`} ball, ${ordinal(sc.down)} & ${sc.ytg >= sc.yl ? 'goal' : sc.ytg} on ${mine ? spotSay(sc.yl, true).replace('your own', 'your') : spotSay(sc.yl, false).replace('their own', 'their')}`;
+    const ball = sc.start === 'kick' ? (mine ? `${opp} kicks off to you` : `You kick off to ${opp}`)
+      : `${mine ? 'Your' : opp} ball, ${ordinal(sc.down)} & ${sc.ytg >= sc.yl ? 'goal' : sc.ytg} on ${mine ? spotSay(sc.yl, true).replace('your own', 'your') : spotSay(sc.yl, false).replace('their own', 'their')}`;
     return {
       title: `${you} vs ${opp}`, name: cleanTitle(sc.title) || null,
       game: `${TYPES[sc.type]}${sc.site === 'neutral' ? ', neutral site' : sc.site === 'home' ? ', at home' : ', on the road'}`,
       when, score: lead > 0 ? `Up ${sc.score[0]}–${sc.score[1]}` : lead < 0 ? `Down ${sc.score[0]}–${sc.score[1]}` : `Tied ${sc.score[0]}–${sc.score[1]}`,
       ball, to: `Timeouts: you ${sc.to[0]}, ${opp} ${sc.to[1]}`,
       ot: sc.type !== 'REG' ? `${s} playoff rules: no ties; overtime is ${OT_SAY[ot.rules]}` : `${s} overtime: ${ot.len / 60} minutes, ${OT_SAY[ot.rules]}; it can end tied`,
-      half: sc.qtr <= 2 ? (sc.end === 'half' ? 'It ends at halftime' : `Played to the end of the game; ${sc.r2h === 'you' ? 'you get' : `${opp} get`} the ball after halftime`) : null,
+      half: sc.qtr <= 2 ? (sc.end === 'half' ? 'It ends at halftime' : `Played to the end of the game; ${sc.r2h === 'you' ? 'you get' : `${opp} gets`} the ball after halftime`) : null,
     };
   }
 
@@ -283,7 +288,7 @@
   }
 
   const TMDScenario = { VERSION, TITLE_MAX, blocked, cleanTitle, titleBad, link, parseLink, TYPES, PRESETS, OT_SAY, overtime, defaults, applyPreset, check, ok, code, parse, tidy, category, strength, spreadOf,
-    spotOf, summary, random, rulesSeason, otLen, otTo, maxScore, clockText };
+    spotOf, summary, random, rulesSeason, otLen, otTo, maxScore, clockText, ERA, eraName };
   if (typeof module !== 'undefined' && module && module.exports) module.exports = TMDScenario;
   if (global) global.TMDScenario = TMDScenario;       // (always: a page with some other script's global `module` still gets it)
 })(typeof self !== 'undefined' ? self : this);

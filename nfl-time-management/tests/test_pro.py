@@ -11,7 +11,7 @@ def test_overtime_rules_by_era():
     assert pro.overtime_rules(2011, "REG") == {"rules": "sd", "len": 900}
     assert pro.overtime_rules(2010, "WC")["rules"] == "msd"                        # the playoffs changed first
     assert pro.overtime_rules(2015, "DIV") == {"rules": "msd", "len": 900}        # Fitzgerald's
-    assert pro.overtime_rules(2021, "DIV")["rules"] == "msd"                       # 13 Seconds: the Bills never got the ball
+    assert pro.overtime_rules(2021, "DIV")["rules"] == "msd"                       # 13 Seconds: Buffalo never got the ball
     assert pro.overtime_rules(2022, "SB")["rules"] == "both"
     assert pro.overtime_rules(2024, "REG") == {"rules": "msd", "len": 600}
     assert pro.overtime_rules(2016, "REG")["len"] == 900

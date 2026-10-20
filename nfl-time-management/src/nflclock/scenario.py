@@ -30,17 +30,17 @@ from .models import Bundle
 FIRST = 2001
 OUT = DG.WEB / "rosters"
 PASS_W = 0.6                  # a team's strength: its pass ratings count this much, its run ratings the rest
-# a franchise's name of the time (game.js names every franchise by its code today): code -> [(last season, city, name)]
-ERA_NAME = {"LA": [(2015, "St. Louis", "Rams")], "LAC": [(2016, "San Diego", "Chargers")], "LV": [(2019, "Oakland", "Raiders")],
-            "WAS": [(2021, "Washington", "Washington")]}
+# a franchise's city in the seasons it played somewhere else (the page names every team by its city, never a
+# nickname; game.js TEAMS has today's): code -> [(last season there, city)]. web/scenario.js ERA is the same table
+# (the historic drives' and runs' cities): change both (tests/test_scenario.py compares them)
+ERA_NAME = {"LA": [(2015, "St. Louis")], "LAC": [(2016, "San Diego")], "LV": [(2019, "Oakland")]}
 
 
 def era_name(team: str, season: int) -> dict | None:
-    """The franchise's city and name that season, where it is not today's (the Rams in St. Louis, Washington before
-    the Commanders)."""
-    for last, city, name in ERA_NAME.get(team, []):
+    """The franchise's name that season, its city then, where it is not today's (St. Louis before Los Angeles)."""
+    for last, city in ERA_NAME.get(team, []):
         if season <= last:
-            return {"city": city, "name": name}
+            return {"name": city}
     return None
 
 

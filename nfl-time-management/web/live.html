@@ -1,4 +1,4 @@
-<title>Bills–Rams Live Decision Engine</title>
+<title>Buffalo–Los Angeles Live Decision Engine</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap">
 <style>
@@ -123,7 +123,7 @@ details summary { cursor: pointer; font-weight: 600; }
 
 <div class="wrap">
   <div class="top">
-    <h1 id="title">Bills at Rams: live decision engine</h1>
+    <h1 id="title">Buffalo at Los Angeles: live decision engine</h1>
     <span class="sub" id="gameinfo">Loading game data…</span>
   </div>
 
@@ -634,7 +634,7 @@ details summary { cursor: pointer; font-weight: 600; }
   function setupGame(g) {
     game = g;
     const [A, H] = teams();
-    $('title').textContent = `${A === 'BUF' ? 'Bills' : A} at ${H === 'LA' ? 'Rams' : H}: live decision engine`;
+    $('title').textContent = `${A === 'BUF' ? 'Buffalo' : A} at ${H === 'LA' ? 'Los Angeles' : H}: live decision engine`;
     const fav = g.home_spread > 0 ? `${H} −${g.home_spread}` : g.home_spread < 0 ? `${A} −${-g.home_spread}` : 'pick';
     const when = [g.gameday, g.gametime && `${g.gametime} ET`].filter(Boolean).join(' ');
     const where = g.stadium ? `${g.stadium}${g.roof ? ` (${g.roof})` : ''}` : '';   // blank in nflverse for some venues

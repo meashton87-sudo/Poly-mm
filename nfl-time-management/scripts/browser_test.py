@@ -609,7 +609,8 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         finished = max(finished, 1)
                         if picked is not None:        # a day of two sides: the end card and the share text name the side taken
                             side = await page.evaluate("() => { const b = document.querySelector('#done .sidetook b'), g = document.querySelector('#done .grid-share'); return [b ? b.textContent : '', g ? g.textContent : '']; }")
-                            if not side[0].startswith("You took the ") or "\nAs the " not in side[1]:
+                            took = side[0][len("You played as "):] if side[0].startswith("You played as ") else ""     # (its city)
+                            if not took or f"\nAs {took}: " not in side[1]:
                                 problems.append(f"a day of two sides: the end card or the share text does not name the side taken: {side!r}")
                                 continue
                         if restarted and not await page.locator("#done .rsnote").count():

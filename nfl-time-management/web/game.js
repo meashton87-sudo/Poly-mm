@@ -86,25 +86,26 @@
   }
   const SVGNS = 'http://www.w3.org/2000/svg';
 
+  // every team by its city or region, never its nickname; the two markets with two teams say which (LA, New York)
   const TEAMS = {
-    ARI: ['Cardinals', '#97233F'], ATL: ['Falcons', '#A71930'], BAL: ['Ravens', '#241773'], BUF: ['Bills', '#00338D'],
-    CAR: ['Panthers', '#0085CA'], CHI: ['Bears', '#0B162A'], CIN: ['Bengals', '#FB4F14'], CLE: ['Browns', '#FF3C00'],
-    DAL: ['Cowboys', '#003594'], DEN: ['Broncos', '#FB4F14'], DET: ['Lions', '#0076B6'], GB: ['Packers', '#203731'],
-    HOU: ['Texans', '#03202F'], IND: ['Colts', '#002C5F'], JAX: ['Jaguars', '#006778'], KC: ['Chiefs', '#E31837'],
-    LV: ['Raiders', '#A5ACAF'], LAC: ['Chargers', '#0080C6'], LA: ['Rams', '#003594'], MIA: ['Dolphins', '#008E97'],
-    MIN: ['Vikings', '#4F2683'], NE: ['Patriots', '#002244'], NO: ['Saints', '#D3BC8D'], NYG: ['Giants', '#0B2265'],
-    NYJ: ['Jets', '#125740'], PHI: ['Eagles', '#004C54'], PIT: ['Steelers', '#FFB612'], SF: ['49ers', '#AA0000'],
-    SEA: ['Seahawks', '#69BE28'], TB: ['Buccaneers', '#D50A0A'], TEN: ['Titans', '#4B92DB'], WAS: ['Commanders', '#5A1414'],
+    ARI: ['Arizona', '#97233F'], ATL: ['Atlanta', '#A71930'], BAL: ['Baltimore', '#241773'], BUF: ['Buffalo', '#00338D'],
+    CAR: ['Carolina', '#0085CA'], CHI: ['Chicago', '#0B162A'], CIN: ['Cincinnati', '#FB4F14'], CLE: ['Cleveland', '#FF3C00'],
+    DAL: ['Dallas', '#003594'], DEN: ['Denver', '#FB4F14'], DET: ['Detroit', '#0076B6'], GB: ['Green Bay', '#203731'],
+    HOU: ['Houston', '#03202F'], IND: ['Indianapolis', '#002C5F'], JAX: ['Jacksonville', '#006778'], KC: ['Kansas City', '#E31837'],
+    LV: ['Las Vegas', '#A5ACAF'], LAC: ['Los Angeles (AFC)', '#0080C6'], LA: ['Los Angeles (NFC)', '#003594'], MIA: ['Miami', '#008E97'],
+    MIN: ['Minnesota', '#4F2683'], NE: ['New England', '#002244'], NO: ['New Orleans', '#D3BC8D'], NYG: ['New York (NFC)', '#0B2265'],
+    NYJ: ['New York (AFC)', '#125740'], PHI: ['Philadelphia', '#004C54'], PIT: ['Pittsburgh', '#FFB612'], SF: ['San Francisco', '#AA0000'],
+    SEA: ['Seattle', '#69BE28'], TB: ['Tampa Bay', '#D50A0A'], TEN: ['Tennessee', '#4B92DB'], WAS: ['Washington', '#5A1414'],
     // college teams, for a featured college game (src/nflclock/custom_spots.json); never in Versus
-    OSU: ['Buckeyes', '#BB0000'], IU: ['Hoosiers', '#990000'], ALA: ['Crimson Tide', '#9E1B32'], TENN: ['Volunteers', '#FF8200'],
+    OSU: ['Ohio State', '#BB0000'], IU: ['Indiana', '#990000'], ALA: ['Alabama', '#9E1B32'], TENN: ['Tennessee', '#FF8200'],
   };
   const COLLEGE = new Set(['OSU', 'IU', 'ALA', 'TENN']);
   const FAM = { run: 'Run', pass: 'Pass', rpo: 'RPO', trick: 'Trick' };
   // the trick plays (playbook.py): what each one is, on its key
   const TRICK_SUB = { trick_flea: 'Hand off, pitch it back, go deep', trick_reverse: 'Fake one way, a receiver comes back the other',
     trick_pass: 'A back or receiver throws it', trick_direct: 'Snap it straight to the back' };
-  const TRICK_SAY = { trick_flea: 'run the flea-flicker', trick_reverse: 'run the end-around', trick_pass: 'let a receiver throw it',
-    trick_direct: 'snap it direct to the back' };
+  const TRICK_SAY = { trick_flea: 'runs the flea-flicker', trick_reverse: 'runs the end-around', trick_pass: 'lets a receiver throw it',
+    trick_direct: 'snaps it direct to the back' };
   const TEMPOS = ['nohuddle', 'huddle', 'milk'];
   // your defense on their snaps: the looks it shows (the engine draws their play from real plays against it)
   const DEFS = ['blitz', 'load', 'soft'];
@@ -350,6 +351,13 @@
     return b;
   }
   const teamName = (c) => (TEAMS[c] ? TEAMS[c][0] : c);
+  // where room is tight (the stands' wall): "LA (NFC)", "NY (AFC)"
+  const teamShort = (c) => teamName(c).replace(/^Los Angeles/, 'LA').replace(/^New York/, 'NY');
+  // a team in a season it played in another city (Los Angeles (NFC) in 1999 and 2001: St. Louis; web/scenario.js eraName), else today's
+  const eraOf = (c, y) => (y && typeof TMDScenario !== 'undefined' ? TMDScenario.eraName(c, y) : null);
+  const cityIn = (c, y) => eraOf(c, y) || teamName(c);
+  // a historic game's two teams by their cities of the time, for the page that plays it (the page is that one game)
+  const eraTeams = (sc) => [sc.home, sc.away].forEach((c) => { const n = eraOf(c, sc.real && sc.real.season); if (n && TEAMS[c]) TEAMS[c] = [n, TEAMS[c][1]]; });
   const color = (c) => (TEAMS[c] ? TEAMS[c][1] : '#556');
   const code = (i) => (i === 0 ? G.scen.home : G.scen.away);
   const teamOf = (i) => (i === 0 ? G.scen.game.home : G.scen.game.away);
@@ -361,7 +369,7 @@
     return `hsl(${h.toFixed(0)} ${v > 72 && v < 82 ? 88 : 80}% ${l.toFixed(0)}%)`;
   }
   // big text on a team's color (its badge on the intro, its end zone): white, or the ink where white reads under 3 to 1
-  // (the Steelers' gold, the Saints', the Raiders' silver)
+  // (Pittsburgh's gold, New Orleans', Las Vegas' silver)
   const darkOn = (c) => 1.05 / (lum(c) + 0.05) < 3;
   // a rating's chip, its number in it (the ratings list, a player's card): the ink on the yellows and greens, white on
   // the reds and oranges a shade darker (on the oranges neither read at 4.5 to 1)
@@ -1060,7 +1068,7 @@
     band(4.2, 5.6, { fill: color(c), class: 'wall' });
     const lip = put(S('line', { x1: 0, x2: 360, stroke: trim(c), 'stroke-width': 1.2 }), (Y) => { const y = Y(Lo(far ? 5.6 : 4.2)); lip.setAttribute('y1', y); lip.setAttribute('y2', y); });
     [60, 180, 300].forEach((x) => {
-      const t = put(S('text', { x, class: 'wallname', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, teamName(c).toUpperCase()),
+      const t = put(S('text', { x, class: 'wallname', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, teamShort(c).toUpperCase()),
         (Y) => { const a = Y(Lo(4.2)), b = Y(Lo(5.6)); t.setAttribute('y', ((a + b) / 2).toFixed(1)); t.style.fontSize = `${clip(Math.abs(a - b) * 0.62, 3.5, 7).toFixed(1)}px`; });
     });
     // the squad on the turf in front of the wall, the mascot between them behind the goalpost
@@ -4573,16 +4581,16 @@
   function playLine(e, act) {
     const mine = e.team === G.me, nm = names(e.team);
     const who = teamName(code(e.team));
-    if (e.kind === SPIKE) return `${who} spike it, clock stopped`;
-    if (e.kind === KNEEL) return `${who} kneel, clock ${e.running ? 'running' : 'stopped'}`;
+    if (e.kind === SPIKE) return `${who} spikes it, clock stopped`;
+    if (e.kind === KNEEL) return `${who} kneels, clock ${e.running ? 'running' : 'stopped'}`;
     let what;
     if (mine && act && act.targetName && act.route && e.call >= 0) {       // your pass: to the receiver you picked, on his route
       const to = shortName(act.targetName) || act.targetPos;
-      what = `${nm.qb || `The ${who}`} ${act.pa ? 'fakes the handoff, then looks for' : act.roll ? 'rolls out and looks for' : 'looks for'} ${to} on ${act.drawn && act.drawn[act.target] ? `the route you drew (${routeSay(act.targetPos, act.route)})` : routeSay(act.targetPos, act.route)}${e.row >= 0 ? lookText(e.look, e) : ''}`;
+      what = `${nm.qb || who} ${act.pa ? 'fakes the handoff, then looks for' : act.roll ? 'rolls out and looks for' : 'looks for'} ${to} on ${act.drawn && act.drawn[act.target] ? `the route you drew (${routeSay(act.targetPos, act.route)})` : routeSay(act.targetPos, act.route)}${e.row >= 0 ? lookText(e.look, e) : ''}`;
     } else if (e.call >= 0) {
       const c = idx.calls[e.call];
       const actor = c.id.startsWith('rb_') ? nm.rb : nm.qb;
-      what = `${TRICK_SAY[c.id] ? `The ${who} ${TRICK_SAY[c.id]}` : `${actor || `The ${who}`} ${c.say}`}${e.row >= 0 ? lookText(e.look, e) : ''}`;
+      what = `${TRICK_SAY[c.id] ? `${who} ${TRICK_SAY[c.id]}` : `${actor || who} ${c.say}`}${e.row >= 0 ? lookText(e.look, e) : ''}`;
     } else what = `${nm.qb || who} ${e.kind === RUN ? 'hands off' : 'drops back'}`;
     const y = Math.round(e.td && !e.turnover ? e.yl : e.yards);      // a touchdown gains the distance to the goal line
     const gain = y > 0 ? `${y} yard${y === 1 ? '' : 's'}` : y < 0 ? `loss of ${-y}` : 'no gain';
@@ -4632,16 +4640,16 @@
           else if (e.secs >= 3 && !e.kneel && !e.spike) text = `Clock runs ${Math.ceil(e.t + e.secs - 1e-6) - Math.ceil(e.t - 1e-6)} seconds`;   // as the scoreboard reads
           break;
         case 'play': text = playLine(e, act); break;
-        case 'fg': text = e.foul ? `Roughing the kicker on the ${teamName(code(1 - e.team))}: 15 yards and a first down`
+        case 'fg': text = e.foul ? `Roughing the kicker on ${teamName(code(1 - e.team))}: 15 yards and a first down`
           : `${shortName(teamOf(e.team).kicker.name) || teamName(code(e.team))} ${Math.round(e.dist)}-yard field goal: ${e.made ? 'good' : e.blocked ? `blocked${e.retTd ? ', returned for a touchdown' : ''}` : 'no good'}`; t = null; break;
-        case 'punt': text = e.foul ? `Roughing the punter on the ${teamName(code(1 - e.team))}: 15 yards and a first down` : e.blocked ? `${teamName(code(e.team))} punt blocked${e.retTd ? ', returned for a touchdown' : ''}` : e.retTd ? `${teamName(code(e.team))} punt returned for a touchdown` :
+        case 'punt': text = e.foul ? `Roughing the punter on ${teamName(code(1 - e.team))}: 15 yards and a first down` : e.blocked ? `${teamName(code(e.team))} punt blocked${e.retTd ? ', returned for a touchdown' : ''}` : e.retTd ? `${teamName(code(e.team))} punt returned for a touchdown` :
           `${teamName(code(e.team))} punt${e.touchback ? ', touchback' : `, net ${Math.round(e.net)} yards`}`; t = null; break;
         case 'pat': text = e.two ? `Two-point try${e.philly ? ' (Philly Special)' : e.call >= 0 && idx.calls[e.call] ? ` (${idx.calls[e.call].label})` : ''} ${e.good ? 'good' : 'fails'}`
           : `Extra point ${e.good ? 'good' : 'no good'}`; break;
         // a touchdown on the last play that decides it: no try (NFL since 2018)
         case 'notry': text = 'No try: time has run out and it cannot change the result'; break;
-        case 'kickoff': text = e.onside ? `Onside kick, recovered by the ${teamName(code(e.recovered ? e.team : 1 - e.team))}` :
-          e.retTd ? 'Kickoff returned for a touchdown' : `Kickoff${e.tb ? (Math.round(e.yl) === 60 ? ', short of the landing zone' : ', touchback') : ''}: the ${teamName(code(1 - e.team))} start at their own ${Math.round(100 - e.yl)}`; break;
+        case 'kickoff': text = e.onside ? `Onside kick, recovered by ${teamName(code(e.recovered ? e.team : 1 - e.team))}` :
+          e.retTd ? 'Kickoff returned for a touchdown' : `Kickoff${e.tb ? (Math.round(e.yl) === 60 ? ', short of the landing zone' : ', touchback') : ''}: ${teamName(code(1 - e.team))} starts at its own ${Math.round(100 - e.yl)}`; break;
         case 'end': text = (e.t ?? G.root.t) >= 1800 ? 'Halftime' : e.ot ? 'Ballgame' : G.root.ot ? 'End of overtime' : 'End of regulation'; break;
         case 'period': text = `End of the period, still tied: on to OT${e.n}`; break;
         default: break;
@@ -4714,7 +4722,7 @@
     const when = `${d.toLocaleDateString('en-US', { month: 'short' })} ${d.getFullYear()}`;
     return `${rl.type === 'SB' ? `Super Bowl ${roman(rl.season - 1965)}` : ROUND[rl.type]} · ${when}`;
   }
-  // (a scenario's two teams each have their season: "2007 Patriots at 2023 Chiefs")
+  // (a scenario's two teams each have their season: "2007 New England at 2023 Kansas City")
   const yrName = (sc, c) => (sc.seasons ? `${sc.seasons[c]} ${teamName(c)}` : teamName(c));
   const matchLine = (sc) => (sc.neutral ? `${yrName(sc, sc.away)} vs ${yrName(sc, sc.home)}${sc.site ? ` · ${sc.site}` : ''}` : `${yrName(sc, sc.away)} at ${yrName(sc, sc.home)}`);
   // the kind of spot, as this one is: "Tied, or end of the half" says which ("End of the half" above "Down by 4")
@@ -4753,7 +4761,7 @@
     box.append(mu);
     const facts = el('div', 'chips');
     const tos = (n) => (n ? `${n} timeout${n === 1 ? '' : 's'}` : 'no timeouts');
-    [r.phase === KICKOFF ? (r.pos === G.me ? `You kick off to the ${teamName(op)}` : `The ${teamName(op)} kick off to you`) : `${r.pos === G.me ? 'Your' : `${teamName(op)}`} ball, ${ddText(r)} ${onSpot(r)}`, `You: ${tos(r.to[G.me])}`,
+    [r.phase === KICKOFF ? (r.pos === G.me ? `You kick off to ${teamName(op)}` : `${teamName(op)} kicks off to you`) : `${r.pos === G.me ? 'Your' : `${teamName(op)}`} ball, ${ddText(r)} ${onSpot(r)}`, `You: ${tos(r.to[G.me])}`,
       `${teamName(op)}: ${tos(r.to[1 - G.me])}`].forEach((f) => facts.append(el('span', '', f)));
     // an overtime spot: its rules (a historic drive's are of its time)
     if (r.ot) facts.append(el('span', '', r.ot.r === 'sd' ? 'Sudden death: the first score wins' : r.ot.r === 'msd' ? `${sc.real.season} overtime rules: a touchdown wins it`
@@ -4774,7 +4782,7 @@
     // a day of two sides, before the first snap: the other side is still one tap away (nothing has been played)
     const ss = sideTaken() && !G.started && !state.done && !(state.spots || []).some((x) => x && x.decisions && x.decisions.length) ? sidesOf(dayN) : null;
     if (ss) {
-      const k = (sideOf(dayN) ?? 0) === 0 ? 1 : 0, osp = idx.spots[ss[k].spot], sw = el('button', 'btn ghostbtn sideswap', `Take over as the ${teamName(osp.player)} instead`);
+      const k = (sideOf(dayN) ?? 0) === 0 ? 1 : 0, osp = idx.spots[ss[k].spot], sw = el('button', 'btn ghostbtn sideswap', `Take over as ${teamName(osp.player)} instead`);
       sw.type = 'button';
       sw.addEventListener('click', () => {
         save(SIDE_KEY(dayN), k);
@@ -4798,8 +4806,8 @@
         box.append(more);
       }
     }
-    box.append(el('div', 'who', VS ? `You're the ${teamName(me)}. Your opponent has the ${teamName(op)}: they call their side, you call yours.`
-      : `You're calling it for the ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
+    box.append(el('div', 'who', VS ? `You're ${teamName(me)}. Your opponent has ${teamName(op)}: they call their side, you call yours.`
+      : `You're calling it for ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
     if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
     if (todayDaily() && state.restarts) box.append(el('div', 'who prac', 'Started over: this drive counts for your streak and stats, not on today’s leaderboard.'));
     if (PRACTICE) box.append(el('div', 'who prac', 'Practice: graded like the daily, but it doesn’t count toward your stats, streak or the leaderboard.'));
@@ -4864,8 +4872,8 @@
         return;
       }
       const action = r.phase === SNAP ? { to_def: false } : (r.phase === KICKOFF && r.pos === G.me ? { kick: 'deep' } : {});
-      const label = r.phase === KICKOFF ? (r.pos === G.me ? 'You kick off' : `The ${teamName(code(r.pos))} kick off`) :
-        r.phase === PAT ? `The ${teamName(code(r.pos))} try the extra point` : `The ${teamName(code(r.pos))} have the ball`;
+      const label = r.phase === KICKOFF ? (r.pos === G.me ? 'You kick off' : `${teamName(code(r.pos))} kicks off`) :
+        r.phase === PAT ? `${teamName(code(r.pos))} tries the extra point` : `${teamName(code(r.pos))} has the ball`;
       const last = G.log.length ? G.log[G.log.length - 1][0] : '';
       status(label, last, !G.fast);
       const res = await stepWith(action);
@@ -6618,13 +6626,13 @@
   function cotLog(notes) {
     const tn = (t) => teamName(code(t)), mine = (t) => t === G.me;
     for (const x of notes || []) {
-      if (x.k === 'pick') addLog(`The ${tn(x.team)} choose ${x.choice}${x.auto ? ' (out of time)' : ''}: ${tn(x.first)} ball first`, VSCore.COT_T, mine(x.team));
-      else if (x.k === 'end') addLog(`The ${tn(x.team)} take the end of the field: the ${tn(1 - x.team)} choose offense or defense`, VSCore.COT_T, mine(x.team));
+      if (x.k === 'pick') addLog(`${tn(x.team)} chooses ${x.choice}${x.auto ? ' (out of time)' : ''}: ${tn(x.first)} ball first`, VSCore.COT_T, mine(x.team));
+      else if (x.k === 'end') addLog(`${tn(x.team)} takes the end of the field: ${tn(1 - x.team)} chooses offense or defense`, VSCore.COT_T, mine(x.team));
       else if (x.k === 'timeout') addLog(`Timeout, ${tn(x.team)}`, VSCore.COT_T, mine(x.team));
       else if (x.k === 'two') addLog('Going for two', VSCore.COT_T, mine(x.team));
       else if (x.k === 'must2') addLog('Second overtime on: a touchdown has to go for two', VSCore.COT_T, mine(x.team));
       else if (x.k === 'poss') addLog(`${tn(x.team)} ball${x.round >= 3 ? ': a two-point play' : ' at the 25'}`, VSCore.COT_T, mine(x.team));
-      else if (x.k === 'round') addLog(`${ordinal(x.round)} overtime, tied ${x.score[G.me]}–${x.score[1 - G.me]}${x.round === 2 ? ': a touchdown has to go for two' : x.round >= 3 ? ': a two-point play each' : ''}. The ${tn(x.chooser)} choose`, VSCore.COT_T, mine(x.chooser));
+      else if (x.k === 'round') addLog(`${ordinal(x.round)} overtime, tied ${x.score[G.me]}–${x.score[1 - G.me]}${x.round === 2 ? ': a touchdown has to go for two' : x.round >= 3 ? ': a two-point play each' : ''}. ${tn(x.chooser)} chooses`, VSCore.COT_T, mine(x.chooser));
     }
   }
   // A college game tied at the end goes to college overtime (web/vs_core.js, the rules Versus plays by): a coin toss,
@@ -6640,7 +6648,7 @@
     G.cot = { ...ms.cot, score0: r.score.slice() };
     G.root = { ...ms.root, score: r.score.slice() };
     G.over = false; G.result = null;
-    addLog(`Tied ${r.score[G.me]}–${r.score[1 - G.me]}: college overtime. ${toss === G.me ? 'You won the coin toss' : `The ${them} won the coin toss`}`, VSCore.COT_T, true);
+    addLog(`Tied ${r.score[G.me]}–${r.score[1 - G.me]}: college overtime. ${toss === G.me ? 'You won the coin toss' : `${them} won the coin toss`}`, VSCore.COT_T, true);
     persist();
     advance();
   }
@@ -6696,7 +6704,7 @@
     if (r.phase === SNAP && r.pos === G.me) { promptOffense(); return 'stop'; }
     if (r.phase === SNAP) { promptDefense(); return 'stop'; }
     if (r.phase === PAT && r.pos === G.me) { promptChoice('pat'); return 'stop'; }
-    status(`The ${teamName(code(r.pos))} line up for the try`, G.log.length ? G.log[G.log.length - 1][0] : '', !G.fast);
+    status(`${teamName(code(r.pos))} lines up for the try`, G.log.length ? G.log[G.log.length - 1][0] : '', !G.fast);
     busy = true;
     let res;
     try { res = await cotPlay({}); } catch (e) { busy = false; fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); return 'stop'; }
@@ -6741,13 +6749,13 @@
       el('span', 'sub', `${len / 60} minutes, ${po ? 3 : 2} timeouts each. ${how}${
         po ? ' Playoffs: it goes on until someone wins.' : ' Still tied after that, it’s a tie: you stay alive, without a win.'}`));
     d.append(head);
-    d.append(el('p', 'note toss', won ? 'You won the coin toss.' : `The ${them} won the coin toss and will receive.`));
+    d.append(el('p', 'note toss', won ? 'You won the coin toss.' : `${them} won the coin toss and will receive.`));
     const start = (kicker) => {
       if (busy) return;
       G.root = { t: len, pos: kicker, score: [r.score[0], r.score[1]], down: 1, ytg: 10, yl: 65, to: po ? [3, 3] : [2, 2],
         clock_running: false, phase: KICKOFF, credit: 0, free_kick: false, ot: { c: [0, 0], po, n: 1, ...(rules ? { r: rules } : {}) } };
       G.over = false; G.result = null;
-      addLog(kicker === G.me ? `Overtime: you kick off to the ${them}` : `Overtime: the ${them} kick off to you`, G.root.t, true);
+      addLog(kicker === G.me ? `Overtime: you kick off to ${them}` : `Overtime: ${them} kicks off to you`, G.root.t, true);
       persist();
       advance();
     };
@@ -6773,7 +6781,7 @@
     takeBanner(d);
     const head = el('div', 'ask');
     head.append(el('h2', '', `Halftime: ${r.score[G.me]}\u2060–\u2060${r.score[1 - G.me]}`),
-      el('span', 'sub', `${recv === G.me ? 'You get' : `The ${teamName(code(recv))} get`} the ball to start the second half. Three timeouts each.`));
+      el('span', 'sub', `${recv === G.me ? 'You get' : `${teamName(code(recv))} gets`} the ball to start the second half. Three timeouts each.`));
     const b = key(recv === G.me ? 'Receive the kickoff' : 'Kick off', null, 'big', 0), keys = el('div', 'keys');
     keys.style.setProperty('--cols', 1);
     b.addEventListener('click', () => {
@@ -6781,7 +6789,7 @@
       // (a hair under 30:00 left: the engine plays the second half from it, and the clock reads 15:00 of the third)
       G.root = { t: 1800 - 1e-6, pos: 1 - recv, score: [r.score[0], r.score[1]], down: 1, ytg: 10, yl: 65, to: [3, 3], clock_running: false,
         phase: KICKOFF, credit: 0, free_kick: false };
-      addLog(recv === G.me ? `The second half: the ${teamName(code(1 - recv))} kick off to you` : `The second half: you kick off to the ${teamName(code(recv))}`, G.root.t, true);
+      addLog(recv === G.me ? `The second half: ${teamName(code(1 - recv))} kicks off to you` : `The second half: you kick off to ${teamName(code(recv))}`, G.root.t, true);
       persist();
       advance();
     });
@@ -6844,7 +6852,7 @@
     const runOut = !!RUN_N && res.half !== 1 && res.mine < res.theirs && G.si < today.length - 1;
     if (runOut) {
       const rg = PRO_RUNS.runs[RUN_N - 1].games[G.si];
-      card.append(el('p', 'alive out', `Season over: the ${teamName(sc.player)} are out in ${roundIn(rg.round)}.`));
+      card.append(el('p', 'alive out', `Season over: ${teamName(sc.player)} is out in ${roundIn(rg.round)}.`));
     }
     card.append(squaresOf(G.decisions));
     const bc = SURV && badgeCard(res.badges || []);
@@ -7593,8 +7601,8 @@
       if (sideTaken()) {            // a day of two sides: the one taken, and what that team really did from there
         const sp = today[0], sb = el('div', 'sidetook');
         sb.style.setProperty('--tc', color(sp.player));
-        sb.append(el('b', '', `You took the ${teamName(sp.player)}`), el('span', '', `${sideLine(sp)} · ${sideLead(sp)}`));
-        if (sp.real && sp.real.summary) sb.append(el('p', 'real', `What the ${teamName(sp.player)} really did: ${sp.real.summary}.`));
+        sb.append(el('b', '', `You played as ${teamName(sp.player)}`), el('span', '', `${sideLine(sp)} · ${sideLead(sp)}`));
+        if (sp.real && sp.real.summary) sb.append(el('p', 'real', `What ${teamName(sp.player)} really did: ${sp.real.summary}.`));
         box.append(sb);
       }
       if (!RUN_N && state.froze && state.froze.length) box.append(el('div', 'frz', `❄️ Streak saved by a freeze${state.froze.length > 1 ? ` (${state.froze.length} days)` : ''}: ${state.froze.length > 1 ? 'the days you missed count' : 'the day you missed counts'}`));
@@ -7607,7 +7615,7 @@
       const v = el('div', 'h2h-day');
       v.append(el('span', 'k', out ? 'Season over' : 'Your run'), el('b', '', `${w}-${l}${t ? `-${t}` : ''}`),
         el('span', 'sub', w === today.length ? 'Every game won. Champions.'
-          : `${out ? `Out in ${roundIn(out.round)}, against the ${teamName(out.opp)}. ` : ''}The real ${run.title} went ${rw}-${rl}${realOut ? `, out in ${roundIn(realOut.round)}` : ''}.`));
+          : `${out ? `Out in ${roundIn(out.round)}, against ${teamName(out.opp)}. ` : ''}The real ${run.title} team went ${rw}-${rl}${realOut ? `, out in ${roundIn(realOut.round)}` : ''}.`));
       box.append(v);
       const again = el('button', 'btn', out ? 'Play the run again' : 'Play it again');
       again.type = 'button';
@@ -7655,7 +7663,7 @@
         el('span', 'sub', `${rec[0]} better, ${rec[1]} worse${rec[2] ? `, ${rec[2]} the same` : ''}`));
       box.insertBefore(v, box.children[k3] || null);
     }
-    const took = sideTaken() ? `As the ${teamName(today[0].player)} (${sideLine(today[0])})` : '';
+    const took = sideTaken() ? `As ${teamName(today[0].player)}: ${sideLine(today[0])}` : '';
     const text = `${DRIVE ? `Two-Minute Drill · ${PRO.drives[DRIVE - 1].title}\nGrade ${gradeOf(Math.round(p * 100)).L}${p * 100 >= PASS_AT - 0.5 ? ' ✅ passed' : ''}`
       : CUSTOM ? `Two-Minute Drill · my scenario: ${matchLine(today[0])}\n${gameTag(today[0])}\nGrade ${gradeOf(Math.round(p * 100)).L}` : RUN_N ? `Two-Minute Drill · the ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Two-Minute Drill #${dayN}${dayTitle(dayN) ? ` · ${dayTitle(dayN)}` : ''}${took ? `\n${took}` : ''}`}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
       `${streak >= 2 && !CUSTOM ? `\n🔥 ${streak}-day streak` : ''}\n${rows.join('\n')}\nCan you beat me? ${CUSTOM ? scenLink(CUSTOM) : !DRIVE && !RUN_N && !ARCH_DAY ? chLink(p) : SITE}`;
@@ -8922,12 +8930,12 @@
     const k = sideOf(n) ?? 0;
     return { ...f, spot: ss[k].spot, note: ss[k].note || f.note, side: k };
   }
-  // a side's takeover in a line: "2:48, own 14, 2 timeouts each" / "0:47, own 35, no timeouts (Rams 2)"
+  // a side's takeover in a line: "2:48, own 14, 2 timeouts each" / "0:47, own 35, no timeouts (they have 2)"
   function sideLine(sp) {
-    const s0 = sp.start, me = sp.player === sp.home ? 1 : 0, opp = me ? sp.away : sp.home, c = Math.ceil(s0.clock);
+    const s0 = sp.start, me = sp.player === sp.home ? 1 : 0, c = Math.ceil(s0.clock);
     const yl = Math.round(s0.yl), at = yl === 50 ? 'midfield' : yl > 50 ? `own ${100 - yl}` : `opp ${yl}`;
     const a = s0.to[me], b = s0.to[1 - me], tos = (x) => (x ? `${x} timeout${x === 1 ? '' : 's'}` : 'no timeouts');
-    return `${Math.floor(c / 60)}:${String(c % 60).padStart(2, '0')}, ${at}, ${a === b ? `${a || 'no'} timeout${a === 1 ? '' : 's'} each` : `${tos(a)} (${teamName(opp)} ${b})`}`;
+    return `${Math.floor(c / 60)}:${String(c % 60).padStart(2, '0')}, ${at}, ${a === b ? `${a || 'no'} timeout${a === 1 ? '' : 's'} each` : `${tos(a)} (they have ${b})`}`;
   }
   const sideLead = (sp) => { const me = sp.player === sp.home ? 1 : 0, d = sp.start.score[me] - sp.start.score[1 - me]; return d > 0 ? `Up by ${d}` : d < 0 ? `Down by ${-d}` : 'Tied'; };
   // a side's button: the team's colors, the takeover, the score; tapped, the pick is kept and go(k) runs
@@ -8936,7 +8944,7 @@
     if (tag === 'button') b.type = 'button'; else b.href = '#daily';
     b.style.setProperty('--tc', color(sp.player));
     b.dataset.side = String(k);
-    b.append(el('b', '', `Take over as the ${teamName(sp.player)}`), el('span', '', sideLine(sp)), el('small', '', `${sideLead(sp)} · ${sp.start.qtr === 4 ? '4th quarter' : `Q${sp.start.qtr}`}`));
+    b.append(el('b', '', `Take over as ${teamName(sp.player)}`), el('span', '', sideLine(sp)), el('small', '', `${sideLead(sp)} · ${sp.start.qtr === 4 ? '4th quarter' : `Q${sp.start.qtr}`}`));
     b.addEventListener('click', (e) => { save(SIDE_KEY(n), k); track('side_pick', { day: n, side: sp.player }); go(k, e); });
     return b;
   }
@@ -9630,7 +9638,7 @@
     [`The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed, with its score and stats`,
       'The historic drives. Mahomes’ 13 seconds, the Minneapolis Miracle, the Helmet Catch, 28–3 and more, each from its real spot',
       'The playoff runs. A team’s whole postseason, every late-game spot in order. Win them all',
-      ...(SCN ? ['Build a scenario. Any two teams of any season from 2001 on, as they lined up then, in any situation: the 2007 Patriots against the 2023 Chiefs, down 4 with two minutes left'] : [])].forEach((t) => ul.append(el('li', '', t)));
+      ...(SCN ? ['Build a scenario. Any two teams of any season from 2001 on, as they lined up then, in any situation: 2007 New England against 2023 Kansas City, down 4 with two minutes left'] : [])].forEach((t) => ul.append(el('li', '', t)));
     box.append(ul);
     if (isPro()) {
       box.append(el('p', '', acctPro() ? `Pro is on your account (${ACCT.me.email}): sign in on any device to play it there.` : `Pro is on. Your code: ${proCode()}. Keep it: it unlocks Pro on up to 3 of your devices.`));
@@ -9832,7 +9840,7 @@
       const big = el('div', 'hbig', lead > 0 ? `Up by ${lead}` : lead < 0 ? `Down by ${-lead}` : 'Tied');
       big.append(el('span', 'left', left));
       const opp = sp.player === sp.home ? sp.away : sp.home, at = sp.neutral ? 'vs' : sp.player === sp.home ? 'hosting' : 'at';
-      card.append(big, el('div', 'hm', `You’re the ${teamName(sp.player)}, ${at} the ${teamName(opp)} · ${gameTag(sp)}`));
+      card.append(big, el('div', 'hm', `You’re ${teamName(sp.player)}, ${at} ${teamName(opp)} · ${gameTag(sp)}`));
     }
     const go = el('a', `btn${done ? ' ghostbtn' : ''}`, done ? 'See your result' : going ? 'Continue the drive' : 'Play today’s drive');
     go.href = '#daily';
@@ -9960,7 +9968,7 @@
         if (rec(k)) right.append(gradeBadge(scoreOf(k)), el('small', '', String(scoreOf(k))));
         // (the year it was played, as on its intro: Super Bowl LII is 2018, not the 2017 season)
         const yr = sp.real.date ? Number(sp.real.date.slice(0, 4)) : sp.real.season + (ROUND[sp.real.type] ? 1 : 0);
-        a.append(tb, el('span', 'd', String(yr)), el('span', 'm', `${teamName(sp.player)} vs ${teamName(opp)}`), right);
+        a.append(tb, el('span', 'd', String(yr)), el('span', 'm', `${cityIn(sp.player, sp.real.season)} vs ${cityIn(opp, sp.real.season)}`), right);
         dl.append(a);
       });
       box.append(dl);
@@ -10015,7 +10023,7 @@
   }
   const scnSeason = (ix, y) => (ix.seasons || []).find((s) => s.season === y);
   const scnTeam = (ix, c, y) => { const s = ix && scnSeason(ix, y); return s ? s.teams.find((t) => t.team === c) : null; };
-  // the franchise's name that season where it is not today's (Washington before the Commanders), else today's
+  // the franchise's city that season where it is not today's (St. Louis before Los Angeles), else today's
   const scnNick = (ix, c, y) => { const t = scnTeam(ix, c, y); return t && t.era ? t.era.name : teamName(c); };
   const scnName = (ix, c, y) => `${y} ${scnNick(ix, c, y)}`;
   const scenList = () => { const o = load(SCN_LIST, {}); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; };
@@ -10045,7 +10053,7 @@
   // the kind of game in a sentence: "a regular-season game", "the Divisional round", "the Super Bowl"
   const typeSay = (t) => (t === 'REG' ? 'a regular-season game' : t === 'WC' ? 'the Wild Card round' : `the ${SCN.TYPES[t]}`);
   const scenLink = (c) => `${location.origin}${location.pathname}${location.search}#custom-${c}`;
-  // a scenario as a line: "2007 Patriots vs 2023 Chiefs", and its situation in a few words
+  // a scenario as a line: "2007 New England vs 2023 Kansas City", and its situation in a few words
   function scenLines(sc, ix) {
     const S = SCN.summary(sc, (c, y) => scnName(ix, c, y));
     return { title: S.title, name: S.name, sub: `${SCN.TYPES[sc.type]} · ${sc.qtr === 5 ? 'OT' : `Q${sc.qtr}`} ${SCN.clockText(sc.clock)} · ${S.score.toLowerCase()}`, S };
@@ -10702,7 +10710,7 @@
     const oppName = vs.names[1 - vs.seat];
     box.append(el('div', 'cat', `${VS_MODES[vs.mode] || 'Versus'} · College overtime`),
       el('div', 'game', `Your ${teamName(me)} vs ${oppName ? `${oppName}’s` : 'their'} ${teamName(op)}`), el('div', 'big', 'Overtime'));
-    box.append(el('p', 'story', `Each team gets the ball at the other’s 25, no clock. From the second overtime, a touchdown has to go for two; from the third, it’s a two-point play each. Ahead after both teams have had it, you win. ${first === G.me ? 'You won the toss: you choose offense, defense or the end of the field.' : `The ${teamName(op)} won the toss and choose first.`} The choice alternates every overtime.`));
+    box.append(el('p', 'story', `Each team gets the ball at the other’s 25, no clock. From the second overtime, a touchdown has to go for two; from the third, it’s a two-point play each. Ahead after both teams have had it, you win. ${first === G.me ? 'You won the toss: you choose offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`} The choice alternates every overtime.`));
     box.append(el('div', 'who', 'You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap. You get 30 seconds a call; miss two in a row and you forfeit.'));
     const go = el('button', 'btn', 'Kick it off');
     go.type = 'button';
@@ -10733,7 +10741,7 @@
     box.textContent = '';
     box.append(el('h2', '', VS_MODES[vs.mode] || 'Versus'));
     if (vs.seat >= 0 && !vs.teams[vs.seat] && (!vsMyTeam() || vs.taken)) {
-      const lead = vs.taken ? `Your opponent already has the ${teamName(vs.taken)}. Pick another team.` : 'Pick your team for this match: its real lineup this week.';
+      const lead = vs.taken ? `Your opponent already has ${teamName(vs.taken)}. Pick another team.` : 'Pick your team for this match: its real lineup this week.';
       box.append(el('p', 'lead', lead), vsTeamPicker(() => { vs.taken = ''; vsSendTeam(); renderVsWaiting(); }, vs.taken));
       return;
     }
@@ -11051,7 +11059,7 @@
     if (!role) {
       vs.ui = 'idle';
       if (G.cot && G.cot.pick) vsWaitPick();
-      else status(r.phase === PAT ? `The ${teamName(code(r.pos))} line up for the try…` : 'Waiting for your opponent…');
+      else status(r.phase === PAT ? `${teamName(code(r.pos))} lines up for the try…` : 'Waiting for your opponent…');
       vsDrawBar();
       return 'stop';
     }
@@ -11090,8 +11098,8 @@
     d.textContent = '';
     takeBanner(d);
     const head = el('div', 'ask');
-    head.append(el('h2', '', c.pick.end ? 'You took the end of the field' : c.round === 1 ? `The ${nm} won the toss` : `${ordinal(c.round)} overtime`),
-      el('span', 'sub', `The ${nm} choose ${c.pick.end ? 'offense or defense' : 'offense, defense or the end of the field'}…`));
+    head.append(el('h2', '', c.pick.end ? 'You took the end of the field' : c.round === 1 ? `${nm} won the toss` : `${ordinal(c.round)} overtime`),
+      el('span', 'sub', `${nm} chooses ${c.pick.end ? 'offense or defense' : 'offense, defense or the end of the field'}…`));
     const st = el('div', 'status');
     st.append(el('span', 'spin'), el('span', '', 'Waiting for their choice'));
     d.append(head, st);
@@ -11315,19 +11323,20 @@
         const teams = await loadChunks('r', PRO_RUNS.spot_chunk, run.games.map((g) => g.spot));
         today = run.games.map((g) => {
           const sc = buildScen(PRO_RUNS.spots[g.spot], teams[g.spot]);
-          sc.story = `${g.round}, ${g.home || g.round === 'Super Bowl' ? 'vs' : 'at'} the ${teamName(g.opp)}. That day the ${teamName(run.team)} ${g.won ? 'won' : 'lost'} ${g.score}.`;
+          eraTeams(sc);
+          sc.story = `${g.round}, ${g.home || g.round === 'Super Bowl' ? 'vs' : 'at'} ${teamName(g.opp)}. That day ${teamName(run.team)} ${g.won ? 'won' : 'lost'} ${g.score}.`;
           return sc;
         });
         $('dayLabel').textContent = `Run · ${run.title}`;
       } else if (CUSTOM) {
         const [ry, ro] = await Promise.all([scnRoster(scnSc.ys), scnRoster(scnSc.os)]);
         const { spot, teams } = SCN.spotOf(scnSc, ry, ro, scnIx.spread);
-        // (the franchise's name of the time: Washington before the Commanders)
+        // (the franchise's city of the time: St. Louis before Los Angeles)
         for (const [c, y] of [[scnSc.you, scnSc.ys], [scnSc.opp, scnSc.os]]) { const t = scnTeam(scnIx, c, y); if (t && t.era && TEAMS[c]) TEAMS[c] = [t.era.name, TEAMS[c][1]]; }
         today = [buildScen(spot, teams)];
         today[0].scn = scnSc;
         const S = scenLines(scnSc, scnIx).S;
-        today[0].story = `${S.game[0].toUpperCase()}${S.game.slice(1)}. ${scnName(scnIx, scnSc.you, scnSc.ys)} (${scnTeam(scnIx, scnSc.you, scnSc.ys).record}) against the ${scnName(scnIx, scnSc.opp, scnSc.os)} (${scnTeam(scnIx, scnSc.opp, scnSc.os).record}). ${S.ot}.`;
+        today[0].story = `${S.game[0].toUpperCase()}${S.game.slice(1)}. ${scnName(scnIx, scnSc.you, scnSc.ys)} (${scnTeam(scnIx, scnSc.you, scnSc.ys).record}) against ${scnName(scnIx, scnSc.opp, scnSc.os)} (${scnTeam(scnIx, scnSc.opp, scnSc.os).record}). ${S.ot}.`;
         if (S.name) today[0].story = `“${S.name}”. ${today[0].story}`;
         $('dayLabel').textContent = `Scenario · ${S.name || S.title}`;
         scenTouch(CUSTOM, CUSTOM_TITLE);
@@ -11338,6 +11347,7 @@
         if (!d) { badProLink(); return; }
         const teams = await loadProTeams(d.spot);
         today = [buildScen(PRO.spots[d.spot], teams[d.spot])];
+        eraTeams(today[0]);
         today[0].story = d.note;
         $('dayLabel').textContent = `Drive · ${d.title}`;
       } else {
