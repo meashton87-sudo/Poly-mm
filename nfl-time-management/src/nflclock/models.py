@@ -100,13 +100,27 @@ def punt_how(pu: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _punt_samples(pbp: pd.DataFrame) -> dict:
-    pu = ratings.punt_table(pbp[pbp["season"].isin(config.LIBRARY_SEASONS)])
+    lib = pbp[pbp["season"].isin(config.LIBRARY_SEASONS)]
+    pu = ratings.punt_table(lib)
+    # the touchdowns: punt_table takes the spot from the next possession, and after a return touchdown the punting team
+    # has the ball next, so it dropped 58 of the 63 return touchdowns of 2020-25 (0.03% of punts left, the real rate is
+    # 0.49%). Every punt the receiving team scored on is put back, its net to the punting team's goal line (an
+    # engine draws a touchdown, never its spot); the 3 the punting team scored (a muff recovered in the end zone, a
+    # fumble on the return) are left out: neither engine scores a touchdown for the kicking team.
+    p = lib[(lib["play_type"] == "punt") & lib["punter_player_id"].notna()]
+    td = p["touchdown"].fillna(0).eq(1)
+    recv, kick = td & (p["td_team"] == p["defteam"]), td & (p["td_team"] == p["posteam"])
+    pu = pu[~pu.index.isin(p.index[kick])]
+    pu = pd.concat([pu, p[recv & ~p.index.isin(pu.index)]]).sort_index()
+    ret_td = pu.index.isin(p.index[recv])
+    pu["net"] = np.where(ret_td, pu["yardline_100"] - 100, pu["net"])
     dur = pu["delta_t"].where(pu["delta_t"].between(3, 20), 9.0)
     how, land = punt_how(pu)
+    how = np.where(ret_td, 0, how).astype(np.uint8)
     return {
         "yl": pu["yardline_100"].to_numpy(float),
         "net": pu["net"].to_numpy(float),
-        "ret_td": (pu["return_touchdown"].fillna(0) == 1).to_numpy(),
+        "ret_td": ret_td,
         "blocked": (pu["punt_blocked"].fillna(0) == 1).to_numpy(),
         "touchback": (pu["touchback"].fillna(0) == 1).to_numpy(),
         "duration": dur.to_numpy(float),
