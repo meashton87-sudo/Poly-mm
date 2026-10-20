@@ -277,6 +277,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
       ...toml.match(/^ALLOWED_ORIGINS = "([^"]*)"/m)[1].split(',').filter((o) => o.endsWith('.pages.dev'))], 'the new address, the old one, the previews');
     assert.strictEqual(v('OLD_SITES'), 'https://nfl2mindrill.com,https://www.nfl2mindrill.com');
     assert.strictEqual(siteVars(moved, '2mindrills.com', 'nfl2mindrill.com'), moved, 'the same again');
+    assert.strictEqual(siteVars(toml, '2mindrills.com', ''), moved, 'moved with OLD_DOMAIN unset: the first address still handed over and answered');
     assert.throws(() => siteVars(toml, 'not a host', ''), /SITE_DOMAIN/);
     for (const e of [env, board.env]) { e.STRIPE_SECRET = 'rk_live_x'; e.SITE = v('SITE'); e.OLD_SITES = v('OLD_SITES'); e.ALLOWED_ORIGINS = v('ALLOWED_ORIGINS'); }
     r = await pro('POST', '/pay', undefined, { origin: 'https://2mindrills.com' });

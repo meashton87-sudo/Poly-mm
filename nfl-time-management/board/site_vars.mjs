@@ -9,13 +9,17 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const bare = (h) => String(h || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/[/.]+$/, '').replace(/^www\./, '');
+// the site's first address: once the site has moved, it keeps handing its visitors over (and they keep calling the
+// worker until they are), so it stays allowed even when OLD_DOMAIN was never set (Oct 20: the switch went out with
+// SITE_DOMAIN alone, and every visitor still on the old address lost the board, sign-in and Pro for the hour it took)
+const ORIGINAL = 'nfl2mindrill.com';
 const both = (h) => [`https://${h}`, `https://www.${h}`];
 
 export function siteVars(toml, site, old) {
   site = bare(site);
   if (!site) return toml;
   if (!/^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/.test(site)) throw new Error(`SITE_DOMAIN: not a host name: ${site}`);
-  const olds = [...new Set(String(old || '').split(',').map(bare).filter((h) => h && h !== site))];
+  const olds = [...new Set([...String(old || '').split(','), ORIGINAL].map(bare).filter((h) => h && h !== site))];
   const line = (k) => { const m = toml.match(new RegExp(`^${k} = "([^"]*)"`, 'm')); return m ? m[1] : null; };
   const had = (line('ALLOWED_ORIGINS') || '').split(',').map((s) => s.trim()).filter(Boolean);
   const previews = had.filter((o) => /^https:\/\/[a-z0-9-]+\.pages\.dev$/.test(o));
