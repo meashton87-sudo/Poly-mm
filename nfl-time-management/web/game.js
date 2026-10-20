@@ -68,7 +68,7 @@
     const r = e && e.reason;
     if (r instanceof Error) pageError(r.message, ((r.stack || '').match(/(https?:[^\s)]+?):(\d+):(\d+)/) || [])[1] || '', 0, 0, r.stack);
   });
-  const modeName = () => (VS ? 'versus' : SURV ? 'survivor' : PRACTICE ? 'practice' : DRIVE ? 'drive' : RUN_N ? 'run' : CUSTOM ? 'custom' : ARCH_DAY ? 'archive' : 'daily');
+  const modeName = () => (VS ? 'versus' : LIVE ? 'live' : SURV ? 'survivor' : PRACTICE ? 'practice' : DRIVE ? 'drive' : RUN_N ? 'run' : CUSTOM ? 'custom' : ARCH_DAY ? 'archive' : 'daily');
   // a drive left half-played: when the page goes to the background mid-drive (closed, or switched away from), once
   // a page load, with how far in it was and whether it was still waiting on the simulator's data
   const liveDrive = { on: false, calls: 0, t0: 0, kind: null, left: false };
@@ -302,6 +302,10 @@
   const VS_LOBBY = VS_ON && location.hash === '#vs';
   const VS_ROOM = VS_ON ? ((location.hash.match(/^#vs-([A-HJ-KM-NP-Z2-9]{6})$/) || [])[1] || '') : '';
   const VS = !!VS_ROOM;
+  // live drills (the site build's --live: <meta name="live">, which only lets the page ask; the worker says when one is
+  // open, board/live.js): #live the drill open now, #live-<id> one drill (open: played live; over: replayed, Pro)
+  const LIVE_ON = !!document.querySelector('meta[name="live"]');
+  const LIVE = LIVE_ON && /^#live(?:-\d{4,14}-\d{1,24})?$/.test(location.hash);
   // the full defensive call (personnel, front, coverage, rush) everywhere: Versus always; elsewhere only when the site
   // build turns it on (scripts/site.py --fulldef: <meta name="fulldef">), off on the main site until it is approved;
   // off, the defense is the three looks (blitz, load the box, play it soft)
@@ -313,7 +317,7 @@
   // (the two overtime drives were played as a fourth quarter until their start carried the overtime: startRoot otOf)
   const SPOT_FIXED = { '2018_14_NE_MIA#4172': Date.parse('2026-10-16T22:50:00Z'), '2023_22_SF_KC#4561': Date.parse('2026-10-18T13:00:00Z'),
     '2015_19_GB_ARI#4454': Date.parse('2026-10-18T13:00:00Z') };
-  const stateKey = () => (VS ? `${STORE}:vs:${VS_ROOM}` : SURV ? `${STORE}:surv` : PRACTICE ? PRACTICE_KEY : DRIVE ? `${STORE}:drive:${DRIVE}` : RUN_N ? `${STORE}:run:${RUN_N}` : CUSTOM ? `${STORE}:custom:${CUSTOM}` : `${STORE}:day:${dayN}`);
+  const stateKey = () => (VS ? `${STORE}:vs:${VS_ROOM}` : LIVE ? liveKey(live.id) : SURV ? `${STORE}:surv` : PRACTICE ? PRACTICE_KEY : DRIVE ? `${STORE}:drive:${DRIVE}` : RUN_N ? `${STORE}:run:${RUN_N}` : CUSTOM ? `${STORE}:custom:${CUSTOM}` : `${STORE}:day:${dayN}`);
   // (not once a restart is under way: a grading still running for the old try must not save it back over the new one)
   let restarting = false;
   const saveState = () => { if (!restarting) save(stateKey(), state); };
@@ -321,7 +325,7 @@
   // state, a reload keeps it): each try a fresh challenge, where the same calls once played out the same way again.
   // The daily (and a past day's, from the archive) stays the day's: the same draws for everyone that day
   const tryOf = () => (state && state.tryAt ? `:${state.tryAt}` : '');
-  const seedKey = () => (VS ? `vs${vs.seed}` : SURV ? `s${state.run}:${state.games.length}` : PRACTICE ? `p${state.run}` : DRIVE ? `drive${DRIVE}${tryOf()}` : RUN_N ? `run${RUN_N}${tryOf()}` : CUSTOM ? `custom${CUSTOM}${tryOf()}` : dayN);
+  const seedKey = () => (VS ? `vs${vs.seed}` : LIVE ? `live${live.id}:${live.k}` : SURV ? `s${state.run}:${state.games.length}` : PRACTICE ? `p${state.run}` : DRIVE ? `drive${DRIVE}${tryOf()}` : RUN_N ? `run${RUN_N}${tryOf()}` : CUSTOM ? `custom${CUSTOM}${tryOf()}` : dayN);
   let G = null;                   // the spot being played
   let ui = { step: null, fam: null, oob: false };
   let busy = false, lastFocus = null, deepFocus = null, tick = null, lastBall = null;
@@ -5248,6 +5252,7 @@
   }
 
   async function advance() {
+    if (LIVE) return liveAdvance();          // (the real game moves the drive on: live drills)
     while (true) {
       const r = G.root;
       $('skipBtn').hidden = true;             // (their plays' status shows it again: status)
@@ -6183,6 +6188,7 @@
   }
   async function snapThenGrade(specs, action) {
     if (ui) ui.step = 'snapped';           // (the call is made: nothing more is drawn on this snap)
+    if (LIVE) return liveSnap(specs, action);        // (a live drill: the real play is the snap)
     if (cotDaily()) { const res = await cotPlay(action); cotShowResult(res); return; }
     if (VS) {
       const r = G.root;
@@ -6243,6 +6249,7 @@
   async function decideTimeout(rundown) {
     if (busy) return;
     if (VS) { vsSubmit({ timeout: true, rundown: !!rundown }); return; }
+    if (LIVE) { if (ui) ui.step = 'snapped'; liveSnap(null, { to_off: true }, 'timeout'); return; }
     busy = true;
     if (ui) ui.step = 'snapped';
     const r = G.root;
@@ -7927,7 +7934,7 @@
   //   week's lists, the histogram and the averages.
   // The new try is saved before the page reloads into it (a reload after it goes on with it); the reload takes the
   // workers and any grading still running for the old try with it, and nothing saves the old one after (restarting).
-  const RESTART_OK = !(SURV || PRACTICE || VS);
+  const RESTART_OK = !(SURV || PRACTICE || VS || LIVE);
   const todayDaily = () => !(SURV || PRACTICE || VS || DRIVE || RUN_N || CUSTOM || ARCH_DAY);
   const sideTaken = () => !(SURV || PRACTICE || VS || DRIVE || RUN_N || CUSTOM) && !!idx && !!sidesOf(dayN) && today.length === 1;    // the day's drive is a side of two
   const canRestart = () => RESTART_OK && !restarting && !!G && !!state && !state.done && !G.over && !$('play').hidden;
@@ -10437,7 +10444,8 @@
     let bad = null;
     try { bad = sessionStorage.getItem(`${STORE}:badlink`); sessionStorage.removeItem(`${STORE}:badlink`); } catch (e) { /* storage off */ }
     if (bad) box.append(el('p', 'note badlink', `There is no ${bad}${isPro() ? ': here are the ones there are.' : '.'}`));
-    if (SCN) box.append(scenEntry(), commEntry());        // Build a scenario first on the Pro screen, with Pro or without (building is free to try), then what others built
+    if (SCN) box.append(scenEntry(), commEntry());
+    if (LIVE_ON) box.append(liveEntry());        // Build a scenario first on the Pro screen, with Pro or without (building is free to try), then what others built
     if (!isPro()) {
       box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''}, the historic drives and the playoff runs: play any of them, graded like the day it ran.`));
       if (PRO_LIVE === null && (proCode() || authSession())) {     // a code (or a session) is kept here but the board could not confirm it
@@ -11771,6 +11779,583 @@
       }
     } catch (e) { /* storage off: nothing kept */ }
   }
+  // ------------------------------------------------------------ live drills ---
+  // Live Drills (#live; the site build's --live puts <meta name="live"> on the page, and that only lets the page ask the
+  // worker: board/live.js says when a drill is open, at once, no deploy). When a real NFL game reaches a two-minute spot
+  // the worker turns its drive into a drill: every snap's real situation before it, the call the real play maps to in
+  // the playbook, what happened. Here the player calls each next play before seeing the real one, with the normal call
+  // keys, on the real situation, the teams as they line up now (teams.json); when the real play comes in, both calls are
+  // graded the same way from the same pre-snap state (one decision with every call there, the real one and yours among
+  // them: decisionFrom, as the daily grades), side by side, with a running tally against the real coach; then the end
+  // card and the share card. Joining mid-drive starts from where the drive is now; a reload picks the drill up where it
+  // was (its own saved state, tmd:v3:live:<id>); a drill that is over replays at your own pace (Pro).
+  // Latency: the feed runs 20 to 60 s behind TV, the worker reads it once a minute and this page asks every LIVE_POLL
+  // while a drill is open: a real play shows here about a minute after it happens (the replay test in
+  // board/worker_test.mjs measures it). A drill the worker has not read for LIVE_STALE is never shown as live (the page
+  // says it is waiting on the next play), and after LIVE_GIVEUP without a new play the page stops asking.
+  const LIVE_POLL = 12000;             // board/live.js POLL_S
+  const LIVE_STALE = 3 * 60e3;         // board/live.js STALE_MS
+  const LIVE_GIVEUP = 10 * 60e3;
+  const LIVE_BEHIND = 2;               // more real snaps than this went by since your last call: on to where the drive is now
+  const live = { d: null, id: '', k: 0, skew: 0, timer: null, since: 0, replay: false, grading: false, others: [], othersAt: 0, gaveUp: false, view: '', coach: null, sit: null, pre: null };
+  const liveKey = (id) => `${STORE}:live:${id}`;
+  // the worker's answers ({} from a stub, null for a 404; anything else thrown)
+  async function liveApi(path) {
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null, t = ctl && setTimeout(() => ctl.abort(), 9000);
+    try {
+      const r = await fetch(`${BOARD.api}${path}`, { cache: 'no-store', ...(ctl ? { signal: ctl.signal } : {}) });
+      if (r.status === 404) return null;
+      if (!r.ok) throw new Error(`live ${r.status}`);
+      return await r.json();
+    } finally { if (t) clearTimeout(t); }
+  }
+  const liveNow = () => Date.now() - live.skew;            // the worker's clock, from this phone's
+  // shown as live only when the worker read the game within LIVE_STALE and knows where the ball is
+  const liveFresh = (d, now) => !!(d && d.now && Number.isFinite(d.polled) && Number.isFinite(now) && now - d.polled <= LIVE_STALE);
+  const liveClk = (s) => { const c = Math.ceil(s.clock - 1e-6); return `${Math.floor(c / 60)}:${String(c % 60).padStart(2, '0')}`; };
+  const liveLeft = (s) => `${liveClk(s)} left${s.qtr >= 5 ? ' in overtime' : s.qtr === 2 ? ' in the half' : ''}`;
+  // "Kansas City ball at the Buffalo 38, down 3"
+  function liveSpot(s, d) {
+    const me = s.pos === d.home ? 1 : 0, lead = s.score[me] - s.score[1 - me], opp = s.pos === d.home ? d.away : d.home;
+    const at = s.yl === 50 ? 'at midfield' : s.yl > 50 ? `at its own ${100 - s.yl}` : `at the ${teamName(opp)} ${s.yl}`;
+    return `${teamName(s.pos)} ball ${at}, ${lead > 0 ? `up ${lead}` : lead < 0 ? `down ${-lead}` : 'tied'}`;
+  }
+  const liveWho = () => (live.coach ? live.coach.split(' ').slice(-1)[0] : live.d ? teamName(live.d.player) : 'The coach');
+  const liveCallLabel = (k) => (CALL[k] ? CALL[k].label : CLOCK[k] && CLOCK[k].label ? CLOCK[k].label : specialLabel(k));
+  // a situation as the engine's state, on the drill's game
+  const liveRoot = (s) => startRoot({ ...G.scen, start: { ...s, phase: 'snap', receive2h: G.scen.start.receive2h } });
+  function liveTally() {
+    const rs = Object.values(state.res || {}), n = (f) => rs.filter((r) => r.v != null && f(r.v)).length, e = n((v) => v === 0);
+    return `You ${n((v) => v > 0)} · ${liveWho()} ${n((v) => v < 0)}${e ? ` · even ${e}` : ''}`;
+  }
+  const liveLabel = () => { $('dayLabel').textContent = `Live drill · ${live.d.away} at ${live.d.home}`; };
+
+  // ---- the banner (home and the game's pages): a drill open now, one tap from here; asked again while the worker says
+  // it is on (each minute with a drill open, else when it says to), never again this visit once it says off
+  async function liveBanner() {
+    if (!LIVE_ON || VS || VS_LOBBY || LIVE) return;
+    await BOARD.ready;
+    if (!BOARD.api) return;
+    const check = async () => {
+      if (document.hidden) { document.addEventListener('visibilitychange', check, { once: true }); return; }
+      let v;
+      try { v = await liveApi('/live'); } catch (e) { setTimeout(check, 300e3); return; }      // (the board did not answer: in five minutes)
+      if (!v || v.on !== true) { liveBarSet([]); return; }
+      const open = (Array.isArray(v.drills) ? v.drills : []).filter((d) => liveFresh(d, v.now));
+      liveBarSet(open);
+      setTimeout(check, (open.length ? 60 : Math.max(60, Math.min(900, Number(v.again) || 60))) * 1000);
+    };
+    check();
+  }
+  function liveBarSet(open) {
+    let a = $('liveBar');
+    if (!open.length) { if (a) a.hidden = true; return; }
+    if (!a) {
+      a = el('a', 'livebar');
+      a.id = 'liveBar';
+      const nav = document.querySelector('.modes');
+      if (nav) nav.after(a); else document.body.prepend(a);
+      a.addEventListener('click', () => track('live_banner', { open: $('liveBar').dataset.n }));
+    }
+    const d = open[0], s = d.now;
+    a.hidden = false;
+    a.href = `#live-${d.id}`;
+    a.dataset.n = String(open.length);
+    a.textContent = '';
+    a.append(el('span', 'tag', 'Live'), el('span', 'what', `${teamName(d.away)} at ${teamName(d.home)} · ${liveLeft(s)}`), el('span', 'go', 'Call it'));
+    if (open.length > 1) a.append(el('small', 'more', `+${open.length - 1} more`));
+    a.setAttribute('aria-label', `Live now: ${liveSpot(s, d)}, ${liveLeft(s)}. Call it`);
+  }
+  // the Pro screen's way in (the drills open now and the ones played)
+  function liveEntry() {
+    const a = el('a', 'scnentry live');
+    a.href = '#live';
+    a.append(el('span', 'k', 'Live drills'), el('b', '', 'Call it before the coach does'),
+      el('span', 'm', 'When a real game reaches a two-minute drill, call each next play before you see the real one, graded beside the real coach’s. Pro replays the drills already played.'),
+      el('span', 'cta', 'Open'));
+    return a;
+  }
+
+  // ---- #live: the drill open now (or #live-<id>, that one), else what live drills are and the ones played
+  function liveNote(text, retry) {
+    show('arch');
+    const box = $('arch');
+    box.textContent = '';
+    box.append(el('h2', '', 'Live drills'), el('p', 'lead', text));
+    if (retry) { const b = el('button', 'btn', 'Try again'); b.type = 'button'; b.addEventListener('click', () => location.reload()); box.append(b); }
+    box.append(homeBtn());
+  }
+  async function liveBoot() {
+    ['modeHome', 'modeDaily', 'modeSurv', 'modeArch', 'modeVs'].forEach((x) => { if ($(x)) $(x).removeAttribute('aria-current'); });
+    $('dayLabel').textContent = 'Live drills';
+    $('boot').textContent = 'Looking for a live game…';
+    await BOARD.ready;
+    if (!BOARD.api) { liveNote('Live drills need the website’s backend.'); return; }
+    let v, id = location.hash === '#live' ? '' : location.hash.slice('#live-'.length);
+    try { v = (await liveApi('/live')) || {}; } catch (e) { liveNote(`The live games could not be checked (${e.message}). Try again in a moment.`, true); return; }
+    if (Number.isFinite(v.now)) live.skew = Date.now() - v.now;
+    live.others = (Array.isArray(v.drills) ? v.drills : []).filter((d) => liveFresh(d, v.now));
+    live.othersAt = Date.now();
+    if (!id) {
+      if (!live.others.length) { await liveIdle(v); return; }
+      id = live.others[0].id;
+      history.replaceState(null, '', `${location.pathname}${location.search}#live-${id}`);
+    }
+    let got;
+    try { got = await liveApi(`/live/drill?id=${encodeURIComponent(id)}`); } catch (e) { liveNote(`That live drill did not load (${e.message}). Try again in a moment.`, true); return; }
+    if (!got || !got.drill || !Array.isArray(got.drill.snaps) || !got.drill.snaps.length && !got.drill.now) { liveNote('There is no such live drill (any more).'); return; }
+    if (Number.isFinite(got.now)) live.skew = Date.now() - got.now;
+    const d = got.drill, st = load(liveKey(d.id), null), over = d.status !== 'open' || v.on !== true;
+    const mine = !!(st && !st.replay && Object.keys(st.calls || {}).length);         // played live on this phone
+    if (over && !mine && !(st && st.done) && !isPro()) { liveOverPitch(d); return; }
+    await liveStart(d, st, over && !mine);
+  }
+  async function liveStart(d, st, replay) {
+    let T;
+    try { T = await fetch(asset('teams.json')).then((r) => { if (!r.ok) throw new Error(`teams ${r.status}`); return r.json(); }); }
+    catch (e) { liveNote(`The teams did not load (${e.message}). Check your connection and reload.`, true); return; }
+    const H = T.teams && T.teams[d.home], A = T.teams && T.teams[d.away];
+    if (!H || !A) { liveNote('This game’s teams are not in the site’s lineups yet, so it can’t be played here.'); return; }
+    live.d = d; live.id = d.id; live.since = Date.now();
+    live.coach = d.coach || (d.player === d.home ? H : A).coach || null;
+    // a new drill here: from where the drive is now (live), or from its first snap (a replay)
+    state = st && (st.done || !replay || st.replay) ? st : { spots: [], id: d.id, k: replay ? 0 : d.snaps.length, calls: {}, res: {}, done: false, replay: !!replay, at: Date.now() };
+    if (!st) track('live_open', { replay: !!replay, snaps: d.snaps.length });
+    live.replay = !!state.replay;
+    live.k = state.k;
+    const s0 = (d.snaps[live.k] && d.snaps[live.k].before) || d.now || (d.snaps.length && (d.snaps[d.snaps.length - 1].after || d.snaps[d.snaps.length - 1].before)) || d.start;
+    const sp = { id: `live:${d.id}`, category: 'drill', home: d.home, away: d.away, player: d.player, indoor: !!d.indoor, wind: 0, temp: null,
+      start: { ...s0, phase: 'snap', receive2h: d.r2h || d.away }, spread: d.spread || 0, league: T.league,
+      real: { season: d.season || T.season, week: d.week, type: d.type || 'REG', date: d.date ? d.date.slice(0, 10) : null, coach: live.coach, live: true } };
+    today = [buildScen(sp, { home: H, away: A })];
+    G = newSpot(0);
+    G.started = true;
+    saveState();
+    liveLabel();
+    startWorkers();
+    show('play');
+    restoreLog();
+    d.snaps.slice(0, live.k).forEach(liveLog);
+    drawAll();
+    if (state.done) { liveEnd(); return; }
+    liveTick();
+    liveAdvance();
+  }
+  // the real plays in the play-by-play, as they come in
+  function liveLog(s) {
+    (s.pre || []).forEach((p) => addLog(p, liveRoot(s.before).t, false));
+    addLog(`${s.raw || s.res} (${s.res})`, liveRoot(s.before).t, true);
+  }
+  // the next call: the real snap's own situation when it is in (a replay, or it came while you were away), else where
+  // the drive is now; nothing current: waiting on the next play
+  async function liveAdvance() {
+    const d = live.d, k = live.k;
+    if (state.done) return liveEnd();
+    if (state.calls[k]) return d.snaps[k] ? liveCompare(k) : liveWait();
+    const s = d.snaps[k] ? d.snaps[k].before : null;
+    if (!s && d.status !== 'open') return liveEnd();
+    if (!s && !liveFresh(d, liveNow())) return liveWait();
+    live.sit = s || d.now;
+    $('field').classList.remove('livestale');
+    G.root = liveRoot(live.sit);
+    G.over = false; G.result = null; G.banner = null;
+    live.view = 'call';
+    drawAll();
+    await promptOffense();               // the normal call keys (in live mode the call goes to liveSnap: snapThenGrade, decideTimeout)
+    if (s && !live.replay && live.view === 'call') toast('The real play is in: call yours to see it');
+  }
+  // your call, in (snapThenGrade and decideTimeout hand it over): kept, then graded beside the real one when that is in
+  async function liveSnap(specs, action, key) {
+    const k = live.k, sp = (specs || []).find((x) => x.kind === 'call'), o = sp && sp.opts.find((x) => x.key === sp.chosen);
+    const act = (o && o.action) || action || {};
+    // (a receiver's route and the out-of-bounds twin are graded as the call they are: their action names it)
+    const raw = key || (o ? act.call || act.play || sp.chosen : (specs && specs[0] && specs[0].chosen) || ''), id = String(raw).replace(/\+oob$/, '');
+    const mine = state.calls[k] = { key: id, label: o ? o.label : liveCallLabel(id), tempo: (ui && ui.tempo) || null, look: G.look ?? null, pers: G.pers || null, at: Date.now(),
+      sit: live.sit, ...(act.oob && CALL[id] ? { oob: true } : {}) };
+    state.k = k;
+    saveState();
+    track('live_call', { call: id, snap: k, replay: live.replay });
+    if (live.d.snaps[k]) return liveCompare(k);
+    // graded while the real play is on its way (every call there: the real one is almost always among them), so the
+    // two show side by side as soon as it is in
+    live.pre = { k, p: liveDecide(k, live.sit, mine, ['kneel']) };
+    live.pre.p.catch(() => { /* graded again when the real play is in */ });
+    liveWait();
+  }
+  function liveOthers(box) {
+    const o = live.others.filter((x) => x.id !== live.id && liveFresh(x, liveNow()));
+    if (!o.length) return;
+    const p = el('p', 'liveother');
+    p.append('Also live: ');
+    o.forEach((x, i) => { const a = el('a', '', `${teamName(x.away)} at ${teamName(x.home)}, ${liveLeft(x.now)}`); a.href = `#live-${x.id}`; if (i) p.append(' · '); p.append(a); });
+    box.append(p);
+  }
+  // waiting for the real play (your call in), or on the next play (the feed gone quiet, the real game between plays)
+  function liveWait() {
+    const d = live.d, k = live.k, mine = state.calls[k], dk = $('dock'), fresh = liveFresh(d, liveNow());
+    live.view = 'wait';
+    G.banner = null;
+    if ($('toBtn')) $('toBtn').hidden = true;
+    $('field').classList.toggle('livestale', !fresh);      // (the last spot known, dimmed: not shown as live)
+    dk.textContent = '';
+    const box = el('div', 'result livewait');
+    box.append(el('div', 'lw-k', mine ? 'Your call is in' : 'Waiting on the next play'));
+    if (mine) box.append(el('div', 'lw-call', mine.label));
+    const quiet = Math.round((liveNow() - d.polled) / 60e3);
+    const st = el('p', `lw-st${fresh ? '' : ' stale'}`, live.gaveUp ? 'No real play for 10 minutes: the live feed may have stalled.'
+      : !fresh ? `Waiting on the next play: the live feed has sent nothing for ${quiet > 1 ? `${quiet} minutes` : 'a while'}.`
+        : mine ? `Waiting for ${teamName(d.player)}’s real play. It shows here about a minute after it happens on TV.`
+          : `${teamName(d.player)} is between plays. The next call opens as soon as the real game moves on.`);
+    box.append(st);
+    if (Object.keys(state.res).length) box.append(el('div', 'livetally', liveTally()));
+    const b = el('button', 'chip', live.gaveUp ? 'Check again' : 'Check now');
+    b.type = 'button';
+    b.addEventListener('click', () => { b.disabled = true; live.gaveUp = false; live.since = Date.now(); livePoll(true); });
+    box.append(b);
+    liveOthers(box);
+    dk.append(box);
+    say(st.textContent, `livewait${k}${fresh}${live.gaveUp}`);
+  }
+  function liveTick() {
+    clearTimeout(live.timer);
+    if (live.replay || live.gaveUp || !live.d || live.d.status !== 'open') return;
+    live.timer = setTimeout(() => livePoll(false), LIVE_POLL);
+  }
+  async function livePoll(now) {
+    if (document.hidden && !now) { document.addEventListener('visibilitychange', () => livePoll(true), { once: true }); return; }
+    let got;
+    try { got = await liveApi(`/live/drill?id=${encodeURIComponent(live.id)}`); } catch (e) { got = undefined; }
+    if (got && got.drill && Array.isArray(got.drill.snaps)) {
+      if (Number.isFinite(got.now)) live.skew = Date.now() - got.now;
+      const was = live.d;
+      live.d = got.drill;
+      if (got.drill.snaps.length > was.snaps.length) { live.since = Date.now(); live.gaveUp = false; }
+      liveUpdate(was);
+    } else if (live.view === 'wait') liveWait();          // (the board did not answer: the line says how long it has been)
+    if (Date.now() - live.othersAt > 60e3) {
+      live.othersAt = Date.now();
+      liveApi('/live').then((v) => { if (v && Array.isArray(v.drills)) live.others = v.drills; }).catch(() => { /* next minute */ });
+    }
+    if (!live.gaveUp && Date.now() - live.since > LIVE_GIVEUP && live.d.status === 'open') { live.gaveUp = true; if (live.view === 'wait') liveWait(); return; }
+    liveTick();
+  }
+  function liveUpdate(was) {
+    const d = live.d, k = live.k;
+    if (state.done) return;
+    if (state.calls[k] && d.snaps[k]) { if (!live.grading && live.view !== 'cmp') liveCompare(k); return; }
+    if (live.view === 'wait') return !state.calls[k] && (d.snaps[k] || liveFresh(d, liveNow())) ? liveAdvance() : d.status !== 'open' && !d.snaps[k] ? liveEnd() : liveWait();
+    if (live.view === 'call' && !state.calls[k] && !busy) {
+      if (!d.snaps[k] && !liveFresh(d, liveNow())) return liveWait();     // (gone quiet: never a stale spot shown as live)
+      if (d.snaps[k] && !was.snaps[k]) toast('The real play is in: call yours to see it');
+      // the spot changed before your call (their timeout, a flag): the keys again on the new one, unless you are into a call
+      else if (!d.snaps[k] && d.now && JSON.stringify(was.now) !== JSON.stringify(d.now) && ui && ui.step === 'family') liveAdvance();
+      return;
+    }
+    if (live.view === 'cmp') liveNextBtn();
+  }
+  // both calls graded from the real snap's own situation, the way every call is graded (one decision: every call there,
+  // the real one and yours; NFL play-callers' shares), and your call played once by the simulator, to show what it might
+  // have done
+  // the decision graded from a situation: every call there, yours and any others asked for (keys) among them
+  async function liveDecide(k, sit, mine, more) {
+    await simWait();
+    const r = liveRoot(sit), me = G.me, was = { root: G.root, info: G.info, look: G.look, pers: G.pers, ui };
+    try {
+      G.root = r;
+      G.info = (await send({ type: 'info', scen: simScen(), root: r }, true)).info;
+      G.look = mine.look; G.pers = mine.pers;
+      ui = { step: 'snapped', tempo: TEMPOS.includes(mine.tempo) ? mine.tempo : tempoKeyOf(G.info.tempo), oob: false };
+      const keys = [mine.key, ...more].filter(Boolean), { calls: all, specials } = callOptions(r);
+      const calls = all.filter((id) => !id.startsWith('trick') || keys.includes(id));
+      keys.forEach((x) => { if (CALL[x] && !calls.includes(x)) calls.push(x); });
+      const opts = calls.map((id) => ({ key: id, label: CALL[id].label, action: callAction(id, false) }));
+      // (your call to get out of bounds: graded as that, beside the same call without it)
+      const mk = mine.oob ? `${mine.key}+oob` : mine.key;
+      if (mine.oob) opts.push({ key: mk, label: `${CALL[mine.key].label}, get out of bounds`, action: callAction(mine.key, true) });
+      const sp = specials.slice();
+      ['fg', 'punt', 'kneel'].forEach((x) => { if (keys.includes(x) && !sp.includes(x)) sp.push(x); });
+      sp.forEach((x) => opts.push({ key: x, label: specialLabel(x), action: withTempo({ to_off: false, play: x }) }));
+      const stops = r.clock_running ? clockOptions(r).filter((x) => x === 'spike' || x === 'timeout') : [];
+      ['spike', 'timeout'].forEach((x) => { if (keys.includes(x) && !stops.includes(x)) stops.push(x); });
+      stops.forEach((x) => opts.push({ key: x, label: CLOCK[x].label, action: x === 'timeout' ? { to_off: true } : { to_off: false, play: 'spike' } }));
+      // what NFL play-callers do here (decideCall's shares, and a timeout or spike as often as they stop the clock)
+      const q = {}, freq = {}, byLook = G.info.lookByCall;
+      G.info.calls.forEach((c, ci) => { freq[c.id] = c.freq * (G.look != null && byLook ? byLook[ci][G.look] : 1); });
+      let go = 1;
+      if (r.down === 4) {
+        const f4 = coachProbs('fourth_down', r, me) || { go: r.yl <= 40 ? 0.35 : 0.15, fg: r.yl <= 40 ? 0.55 : 0.05, punt: r.yl <= 40 ? 0.1 : 0.8 };
+        go = f4.go; if (sp.includes('fg')) q.fg = f4.fg; if (sp.includes('punt')) q.punt = f4.punt;
+      } else if (sp.includes('fg')) { const th = halfLeft(r.t), usual = th <= 20 || (r.down === 3 && th <= 40); q.fg = !usual ? 0.02 : th <= 10 ? 0.6 : 0.2; go = 1 - q.fg; }
+      if (sp.includes('kneel')) { const qk = r.score[me] > r.score[1 - me] ? 0.5 : 0.1; q.kneel = qk; go *= 1 - qk; }
+      if (stops.length) {
+        const cp = coachProbs('off_clock_stop', r, me), sh = { timeout: cp ? cp.timeout || 0 : 0.14, spike: cp ? cp.spike || 0 : 0.06 };
+        stops.forEach((x) => { q[x] = sh[x] * go; });
+        go *= 1 - stops.reduce((a, x) => a + sh[x], 0);
+      }
+      const fs = calls.reduce((a, id) => a + (freq[id] || 0), 0) || 1;
+      calls.forEach((id) => { q[id] = go * (freq[id] || 0) / fs; });
+      if (!opts.some((o) => o.key === mk)) throw new Error(`your call (${mk}) is not one the grading knows`);
+      const spec = { kind: 'call', family: r.down === 4 ? 'fourth_down' : 'play_select', r, opts, chosen: mk, q, situation: situation(r), seed: hash('live', live.id, k) };
+      const [x] = await gradeSpecs({ snap: k, specs: [spec], qb: null });
+      let sim = null;
+      try {
+        const res = (await send({ type: 'step', scen: simScen(), root: r, action: opts.find((o) => o.key === mk).action, seed: hash('livesim', live.id, k) })).res;
+        const e = res.log.find((z) => ['play', 'fg', 'punt'].includes(z.ev));
+        sim = e ? headline(e, res.log) : null;
+      } catch (e) { sim = null; }
+      return { x, sim, mk, keys: opts.map((o) => o.key) };
+    } finally { G.root = was.root; G.info = was.info; G.look = was.look; G.pers = was.pers; ui = was.ui; }
+  }
+  const liveSame = (a, b) => !!a && !!b && ['qtr', 'clock', 'pos', 'down', 'ytg', 'yl', 'running'].every((f) => a[f] === b[f]) && String(a.score) === String(b.score) && String(a.to) === String(b.to);
+  // your call and the real one, from the real snap's own situation: the grading made while it was on its way when that
+  // was the very situation and had the real call among its options, else graded now
+  async function liveGrade(k, s, mine) {
+    const pre = live.pre && live.pre.k === k ? await live.pre.p.catch(() => null) : null;
+    const dec = pre && liveSame(s.before, mine.sit) && (!s.call || pre.keys.includes(s.call)) ? pre : await liveDecide(k, s.before, mine, [s.call]);
+    const { x, sim, mk } = dec, you = x.wps.find((w) => w.key === mk), him = s.call ? x.wps.find((w) => w.key === s.call) : null;
+    const v = him ? (Math.abs(him.c - you.c) < 1e-9 ? 0 : him.c > you.c ? 1 : -1) : null;       // +1 yours better, -1 his
+    return { you: { key: mine.key, label: mine.label || you.label, c: you.c, wp: you.wp, sim }, him: him ? { key: him.key, label: him.label, c: him.c, wp: him.wp } : null,
+      best: x.best === mk ? mine.key : x.best, bestLabel: x.bestLabel, v, g: 2 };
+  }
+  async function liveCompare(k) {
+    if (live.grading) return;
+    live.grading = true;
+    live.view = 'cmp';
+    const d = live.d, s = d.snaps[k];
+    try {
+      let res = state.res[k];
+      if (!res) {
+        status('Grading both calls…', `${teamName(d.player)}’s real call is in`);
+        res = await liveGrade(k, s, state.calls[k]);
+        state.res[k] = res;
+        saveState();
+        track('live_snap', { snap: k, v: res.v == null ? 'none' : res.v > 0 ? 'better' : res.v < 0 ? 'worse' : 'even', replay: live.replay });
+      }
+      liveShowCmp(k, s, res);
+    } catch (e) { fatal('The simulation hit an error: ' + e.message + '. Reload the page to pick up where you left off.'); }
+    finally { live.grading = false; }
+  }
+  // the two calls side by side, graded; the field moves on to where the real play left the ball
+  function liveShowCmp(k, s, res) {
+    const d = live.d, dk = $('dock'), who = liveWho(), r0 = liveRoot(s.before);
+    live.view = 'cmp';
+    $('field').classList.remove('livestale');
+    const after = s.after || (k === d.snaps.length - 1 && d.status === 'open' ? d.now : null);
+    if (after) G.root = liveRoot(after);
+    else G.root = r0;
+    liveLog(s);
+    liveLabel();
+    drawAll();
+    if ($('toBtn')) $('toBtn').hidden = true;
+    dk.textContent = '';
+    const card = el('div', 'result livecmp');
+    card.append(el('div', 'lc-k', `Snap ${k + 1} · ${liveClk(s.before)} ${qLabel(r0)}, ${ddText(r0)} ${onSpot(r0)}`));
+    (s.pre || []).forEach((p) => card.append(el('div', 'lc-pre', `Before the snap: ${p}`)));
+    const grade = (w) => (w.key === res.best ? 'the best call here' : w.c < 0.0005 ? 'as good as any' : `${GRADE_WORD[markOf(w.c)]}: −${(w.c * 100).toFixed(1)} points of win chance`);
+    const row = (cls, w, name, call, how) => {
+      const m = w ? markOf(w.c) : null, x = el('div', `lc-row ${cls}${(cls === 'you' ? res.v > 0 : res.v < 0) ? ' win' : ''}`);
+      const sq = el('span', `sq ${m || 'n'}`, m ? GLYPH[m] : '·');
+      sq.setAttribute('aria-hidden', 'true');
+      const t = el('div', 't');
+      t.append(el('span', 'who', name), el('b', 'call', call), ...(how ? [el('span', 'how', how)] : []), el('span', 'gr', w ? grade(w) : 'Not counted: the feed doesn’t say what was called'));
+      x.append(sq, t);
+      return x;
+    };
+    card.append(row('you', res.you, 'You', res.you.label, res.you.sim ? `The simulator played it: ${res.you.sim}` : ''),
+      row('him', res.him, `${who} (the real call)`, res.him ? liveCallLabel(res.him.key) : s.what === 'sack' ? 'A pass play (sacked)' : 'A pass play', `${s.raw ? `${s.raw} ` : ''}→ ${s.res}`));
+    const vt = res.v == null ? 'Not counted' : res.v > 0 ? `You called it better than ${who}` : res.v < 0 ? `${who} called it better` : 'Even: as good as each other';
+    card.append(el('div', `lc-v${res.v > 0 ? ' beat' : res.v < 0 ? ' lost' : ''}`, vt));
+    if (res.best !== res.you.key && (!res.him || res.best !== res.him.key) && res.bestLabel) card.append(el('p', 'note', `Best here: ${res.bestLabel}.`));
+    card.append(el('div', 'livetally', liveTally()));
+    const nx = el('button', 'btn', 'Next snap');
+    nx.type = 'button';
+    nx.id = 'liveNext';
+    nx.addEventListener('click', () => {
+      const st = liveNextState();
+      live.k = st === 'jump' ? live.d.snaps.length : live.k + 1;
+      if (st === 'jump') toast(`${live.d.snaps.length - k - 1} snaps went by: on to where the drive is now`);
+      state.k = live.k;
+      saveState();
+      liveAdvance();
+    });
+    card.append(nx);
+    liveOthers(card);
+    dk.append(card);
+    liveNextBtn();
+    say(`${vt}. You: ${res.you.label}. ${who}: ${res.him ? liveCallLabel(res.him.key) : 'not known'}, ${s.res}.`, `livecmp${k}`);
+  }
+  // what comes after this snap: the next real one (in already), where the drive is now, waiting on it, or the end
+  function liveNextState() {
+    const d = live.d, n = live.k + 1;
+    if (live.replay) return d.snaps[n] ? 'snap' : 'end';
+    if (d.snaps.length - n > LIVE_BEHIND) return 'jump';
+    if (d.snaps[n]) return 'snap';
+    if (d.status !== 'open') return 'end';
+    return liveFresh(d, liveNow()) ? 'now' : 'wait';
+  }
+  function liveNextBtn() {
+    const b = $('liveNext');
+    if (!b) return;
+    const st = liveNextState();
+    b.textContent = st === 'end' ? 'See how you did' : st === 'wait' ? 'Next snap (waiting on the real game)' : 'Next snap';
+  }
+
+  // ---- the end: you against the real coach, the moment it turned on, the share
+  // the game's day where it was played (an 8:15 pm kickoff in the east is the next day in UTC)
+  const liveDay = (iso) => { try { return new Date(iso).toLocaleDateString(undefined, { timeZone: 'America/New_York', month: 'short', day: 'numeric' }); } catch (e) { return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); } };
+  function liveWhen(d) {
+    if (!d.date) return '';
+    const t = new Date(d.date);
+    let day, hr;
+    try { day = t.toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'long' }); hr = Number(t.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false })); }
+    catch (e) { day = t.toLocaleDateString('en-US', { weekday: 'long' }); hr = t.getHours(); }
+    return ` on ${day}${hr >= 18 || hr < 4 ? ' night' : ''}`;
+  }
+  function liveEnd() {
+    clearTimeout(live.timer);
+    live.view = 'end';
+    const d = live.d, rs = Object.entries(state.res || {}).map(([k, r]) => ({ k: +k, ...r })).sort((a, b) => a.k - b.k);
+    const counted = rs.filter((r) => r.v != null), better = counted.filter((r) => r.v > 0).length, worse = counted.filter((r) => r.v < 0).length, even = counted.length - better - worse;
+    const who = liveWho(), coach = live.coach || `${teamName(d.player)}’s coach`;
+    if (!state.done) {
+      state.done = true;
+      saveState();
+      track('live_finish', { snaps: rs.length, better, worse, even, replay: live.replay });
+    }
+    show('done');
+    liveLabel();
+    const box = $('done');
+    box.textContent = '';
+    box.append(el('div', 'note', `${live.replay ? 'Live drill, replayed' : 'Live drill'} · ${teamName(d.away)} at ${teamName(d.home)}${d.date ? ` · ${liveDay(d.date)}` : ''}`));
+    if (!rs.length) box.append(el('h2', '', 'The drive is over'), el('p', 'lead', 'It ended before a call of yours was in. The next live drill opens here.'));
+    else {
+      box.append(el('div', 'big-pct', String(better)), el('div', 'pct-lab', `of ${counted.length} snap${counted.length === 1 ? '' : 's'} you called better than ${coach}`),
+        el('p', 'pct-why', `${who} called ${worse} better; ${even} even${rs.length > counted.length ? `; ${rs.length - counted.length} not counted (the feed didn’t say the call)` : ''}.`));
+      const sq = el('div', 'livesq');
+      [['You', 'you'], [who, 'him']].forEach(([lab, k]) => {
+        const r = el('div', 'r'), w = el('div', 'squares');
+        rs.forEach((x) => { const m = x[k] ? markOf(x[k].c) : null; w.append(el('span', `sq ${m || 'n'}`, m ? GLYPH[m] : '·')); });
+        r.append(el('span', 'a', lab), w);
+        sq.append(r);
+      });
+      box.append(sq);
+      // the key moment: where the two calls were furthest apart
+      const km = counted.slice().sort((a, b) => Math.abs(b.him.c - b.you.c) - Math.abs(a.him.c - a.you.c))[0];
+      if (km && Math.abs(km.him.c - km.you.c) >= 0.005) {
+        const s = d.snaps[km.k], r0 = liveRoot(s.before), gap = (Math.abs(km.him.c - km.you.c) * 100).toFixed(1);
+        const kb = el('div', 'livekey');
+        kb.append(el('span', 'k', 'The key moment'), el('span', '', `${liveClk(s.before)} ${qLabel(r0)}, ${ddText(r0)} ${onSpot(r0)}. You: ${km.you.label}. ${who}: ${liveCallLabel(km.him.key)} (${s.res}). ${km.v > 0 ? `Your call was ${gap} points of win chance better` : `His call was ${gap} points of win chance better`}.`));
+        box.append(kb);
+      }
+    }
+    if (d.end) box.append(el('p', 'real', `The real drive: ${d.end.text || d.end.how}. ${teamName(d.away)} ${d.end.score[0]}, ${teamName(d.home)} ${d.end.score[1]}.`));
+    const line = !counted.length ? `I called a live NFL drive${liveWhen(d)}` : better > worse ? `I out-called ${coach}${liveWhen(d)}: ${better} of ${counted.length} snaps`
+      : worse > better ? `${coach} out-called me${liveWhen(d)}: ${worse} of ${counted.length} snaps his` : `I matched ${coach}${liveWhen(d)}, call for call`;
+    const marks = (k) => rs.map((x) => (x[k] ? SQ[markOf(x[k].c)] : '⬜')).join('');
+    const text = `Two-Minute Drill · Live\n${line}\n${teamName(d.away)} at ${teamName(d.home)}${rs.length ? `\nYou ${marks('you')}\n${who} ${marks('him')}` : ''}\nCall it live: ${SITE}/#live`;
+    const pre = el('div', 'grid-share', text), share = el('button', 'btn', 'Share');
+    share.type = 'button';
+    share.addEventListener('click', () => shareText(text, pre, 'live'));
+    box.append(pre, share);
+    if (rs.length) {
+      const img = el('button', 'btn ghostbtn', 'Share as a picture');
+      img.type = 'button';
+      img.addEventListener('click', () => liveImage({ d, rs, better, worse, n: counted.length, coach, who, line }));
+      box.append(img);
+    }
+    if (d.status !== 'open' && isPro()) {
+      const again = el('button', 'btn ghostbtn', 'Replay it from the first snap');
+      again.type = 'button';
+      again.addEventListener('click', () => { save(liveKey(d.id), { spots: [], id: d.id, k: 0, calls: {}, res: {}, done: false, replay: true, at: Date.now() }); location.reload(); });
+      box.append(again);
+    }
+    const more = el('a', 'btn ghostbtn', 'Live drills');
+    more.href = '#live';
+    box.append(more, homeBtn());
+    liveOthers(box);
+    box.append(disclaimer());
+  }
+  // the share picture: the same card as the day's (shareImage), the two rows of calls and the key line
+  async function liveImage(o) {
+    const W = 1080, H = 1350, cv = document.createElement('canvas'), x = cv.getContext('2d');
+    cv.width = W; cv.height = H;
+    try { await document.fonts.ready; } catch (e) { /* no font API */ }
+    const css = getComputedStyle(document.documentElement), col = (v, dflt) => (css.getPropertyValue(v) || '').trim() || dflt;
+    const DISP = '"Big Shoulders Display", "Arial Narrow", sans-serif', BODY = '"Libre Franklin", Arial, sans-serif';
+    const MK = { g: col('--sq-g', '#3d9a56'), y: col('--sq-y', '#d2ad2e'), o: col('--sq-o', '#e27c37'), r: col('--sq-r', '#d0463f') };
+    const bg = x.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, '#0f2a18'); bg.addColorStop(1, '#173d24');
+    x.fillStyle = bg; x.fillRect(0, 0, W, H);
+    x.strokeStyle = 'rgba(255,255,255,.07)'; x.lineWidth = 3;
+    for (let y = 90; y < H; y += 110) { x.beginPath(); x.moveTo(0, y); x.lineTo(W, y); x.stroke(); }
+    x.textAlign = 'center'; x.fillStyle = '#fff';
+    x.font = `900 64px ${DISP}`; x.fillText('TWO-MINUTE DRILL', W / 2, 130);
+    x.font = `700 34px ${BODY}`; x.fillStyle = '#ffb547'; x.fillText(`LIVE · ${teamName(o.d.away)} AT ${teamName(o.d.home)}`.toUpperCase(), W / 2, 185, W - 80);
+    x.fillStyle = '#fff'; x.font = `900 280px ${DISP}`; x.fillText(`${o.better}/${o.n}`, W / 2, 460);
+    x.font = `600 38px ${BODY}`; x.fillText(`snaps called better than ${o.coach}`, W / 2, 530, W - 80);
+    x.font = `900 66px ${DISP}`; x.fillStyle = o.better > o.worse ? MK.g : o.worse > o.better ? MK.r : '#fff';
+    x.fillText((o.better > o.worse ? `I out-called ${o.who}` : o.worse > o.better ? `${o.who} out-called me` : `Even with ${o.who}`).toUpperCase(), W / 2, 640, W - 80);
+    let y = 720;
+    [['YOU', 'you'], [o.who.toUpperCase(), 'him']].forEach(([lab, k]) => {
+      const n = Math.max(1, o.rs.length), GAP = 12, SQ = Math.min(64, Math.floor((W - 380 - (n - 1) * GAP) / n)), w = n * SQ + (n - 1) * GAP, x0 = (W - w) / 2 + 80;
+      x.font = `800 40px ${DISP}`; x.textAlign = 'right'; x.fillStyle = '#fff'; x.fillText(lab, x0 - 24, y + SQ * 0.7);
+      o.rs.forEach((r, i) => {
+        x.fillStyle = r[k] ? MK[markOf(r[k].c)] : 'rgba(255,255,255,.2)';
+        const xx = x0 + i * (SQ + GAP);
+        x.beginPath(); if (x.roundRect) x.roundRect(xx, y, SQ, SQ, 10); else x.rect(xx, y, SQ, SQ); x.fill();
+      });
+      x.textAlign = 'center'; y += SQ + 30;
+    });
+    x.font = `600 34px ${BODY}`; x.fillStyle = 'rgba(255,255,255,.85)';
+    x.fillText(o.d.end ? `The real drive: ${o.d.end.text || o.d.end.how}` : 'The real drive is still going', W / 2, y + 60, W - 80);
+    x.font = `700 40px ${BODY}`; x.fillStyle = '#fff'; x.fillText(`Call it live: ${SITE}/#live`, W / 2, H - 70);
+    await sharePng(cv, `live-${o.d.id}`, 'live');
+  }
+  // nothing open: what live drills are, a look each minute while the worker says one may open, and the ones played
+  async function liveIdle(v) {
+    show('arch');
+    const box = $('arch');
+    box.textContent = '';
+    box.append(el('h2', '', 'Live drills'), el('p', 'lead', 'When a real NFL game reaches a two-minute drill, it opens here: call each next play before you see the real one, then see both calls graded side by side, snap by snap, against the real coach.'));
+    box.append(el('p', 'note livest', v.on === true ? 'No game is in a two-minute spot right now. This page looks again every minute: leave it open.' : 'Nothing live right now. Live drills open on game nights.'));
+    if (v.on === true) {
+      const again = async () => {
+        if (!$('arch').isConnected || $('arch').hidden) return;
+        try { const w = await liveApi('/live'); const o = w && Array.isArray(w.drills) ? w.drills.filter((d) => liveFresh(d, w.now)) : []; if (o.length) { location.hash = `#live-${o[0].id}`; return; } } catch (e) { /* next minute */ }
+        setTimeout(again, 60e3);
+      };
+      setTimeout(again, 60e3);
+    }
+    let a = null;
+    try { a = await liveApi('/live/archive'); } catch (e) { a = null; }
+    const list = (a && Array.isArray(a.drills) ? a.drills : []).filter((x) => x && x.id && x.start && TEAMS[x.home] && TEAMS[x.away]);
+    if (list.length) {
+      box.append(el('h3', '', list[0].date && Date.now() - Date.parse(list[0].date) < 36 * 3600e3 ? 'Last night’s drills' : 'Drills played'));
+      const dl = el('div', 'days');
+      list.slice(0, 30).forEach((x) => {
+        const row = el('a', 'day drive live'), s = x.start;
+        row.href = `#live-${x.id}`;
+        row.append(el('b', '', teamName(x.player)), el('span', 'd', x.date ? liveDay(x.date) : ''),
+          el('span', 'm', `${teamName(x.away)} at ${teamName(x.home)} · ${liveLeft(s)}, ${liveSpot(s, x).split(', ').pop()} · ${x.n} snap${x.n === 1 ? '' : 's'}${x.how ? `, ${x.how}` : ''}`),
+          el('span', 'sc', isPro() ? 'Replay' : 'Pro'));
+        dl.append(row);
+      });
+      box.append(dl, el('p', 'note', isPro() ? 'Replay any of them snap by snap against the real calls, at your own pace.' : 'Pro replays them snap by snap against the real calls, at your own pace.'));
+    }
+    box.append(homeBtn());
+    track('live_idle', { on: v.on === true, played: list.length });
+  }
+  // a drill that is over, without Pro: what it was, and what Pro adds
+  function liveOverPitch(d) {
+    show('arch');
+    const box = $('arch');
+    box.textContent = '';
+    box.append(el('h2', '', 'Live drills'), el('p', 'lead', `${teamName(d.away)} at ${teamName(d.home)}: this live drill is over.`),
+      el('p', '', 'Pro replays every live drill snap by snap against the real calls, at your own pace.'), ...proNodes());
+    const a = el('a', 'btn ghostbtn', 'Live drills');
+    a.href = '#live';
+    box.append(a, homeBtn());
+  }
+
   async function boot() {
     gauntletFresh();
     rareGone();
@@ -11781,6 +12366,7 @@
     drawTaps();
     sheetSetup();
     boardInit();
+    liveBanner();                           // (a live drill open: the banner; only with <meta name="live">)
     addEventListener('hashchange', () => location.reload());       // Daily <-> Survivor
     $(SURV ? 'modeSurv' : ARCH || ARCH_DAY || DRIVE || CUSTOM || CUSTOM_BUILD || COMMUNITY ? 'modeArch' : 'modeDaily').setAttribute('aria-current', 'page');
     $('modeArch').hidden = !PRO_ON;
@@ -11832,7 +12418,7 @@
     // (not while a play runs: the redraw would wipe the animation; the next draw picks up the new size)
     window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); fitDock(fitKeys); }, 150); });
     show('boot');
-    if (!(VS || VS_LOBBY || ARCH || ARCH_DAY || DRIVE || RUN_N || CUSTOM || CUSTOM_BUILD || COMMUNITY || HOME_PG)) fetchData();      // the daily, survivor, practice
+    if (!(VS || VS_LOBBY || ARCH || ARCH_DAY || DRIVE || RUN_N || CUSTOM || CUSTOM_BUILD || COMMUNITY || HOME_PG || LIVE)) fetchData();      // the daily, survivor, practice
     try {
       idx = await fetch(asset('game.json')).then((r) => { if (!r.ok) throw new Error('game data ' + r.status); return r.json(); });
       idx.calls.forEach((c) => { CALL[c.id] = c; });
@@ -11853,6 +12439,7 @@
         return;
       }
       if (VS_LOBBY) { renderVsLobby(); return; }
+      if (LIVE) { await liveBoot(); return; }
       if (VS) {
         await BOARD.ready;
         if (!BOARD.api) { vsNote('Versus needs the website’s backend.'); return; }
