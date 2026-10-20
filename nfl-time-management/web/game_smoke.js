@@ -342,6 +342,20 @@ for (let k = 0; k < 100; k++) {
   assert.ok(lo >= 0.95 && s20 / n20 > 0.965 && s20 / n20 < 0.99, `field goals: 26 yards at least ${lo.toFixed(3)} (${who}); 20-29 ${(s20 / n20).toFixed(3)}`);
   console.log(`field goals: 20-29 yards ${(100 * s20 / n20).toFixed(1)}% on average (real 97.8%), a 26-yarder at least ${(100 * lo).toFixed(1)}% (${who})`);
 }
+// (5) "+5 yards from the 5 and no touchdown": a punt lands the ball on a whole yard line (the punter's rating moves the
+// net by a fraction of a yard: rounded up or down by chance, so it keeps its mean), so a gain the field shows reaching
+// the goal line is a touchdown
+{
+  let n = 0, frac = 0;
+  for (let k = 0; k < 4000; k++) {
+    const at = { ...root, t: 1500, phase: 0, score: [10, 10], pos: k % 2, down: 4, ytg: 8, yl: 40 + (k % 45), to: [3, 3], clock_running: false };
+    const r = sim.step(at, { action: { to_off: false, play: 'punt' }, seed: 20000 + k });
+    if (r.root.phase !== 0) continue;
+    n++; if (r.root.yl % 1) frac++;
+  }
+  assert.ok(n > 3500 && frac === 0, `punts land on whole yard lines: ${frac} of ${n} not`);
+  console.log(`punts: ${n} played, every one on a whole yard line`);
+}
 // Build a scenario (Pro, web/scenario.js, web/rosters: nflclock.scenario): every team-season the builder offers is a
 // full team; random valid scenarios of every era, regular season and playoffs, overtime and kickoffs included, play to
 // the end in the engine as game.js plays them (its startRoot, a second half from a first-half one, overtime started as

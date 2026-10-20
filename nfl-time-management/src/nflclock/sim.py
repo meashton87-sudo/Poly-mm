@@ -894,7 +894,10 @@ class Simulator:
         P = self.punt
         net = P["net"][j].copy()
         normal = ~P["blocked"][j] & ~P["ret_td"][j] & ~P["touchback"][j]
-        net = np.where(normal, net + self.ctx.punter_shift[o], net)
+        # the punter's rating moves the net by a fraction of a yard: the ball still lands on a whole yard line (rounded
+        # up or down by chance, so the rating keeps its mean; a spot at the 5.24 read "at the 5" and a 5-yard gain from
+        # it was no touchdown)
+        net = np.where(normal, np.floor(net + self.ctx.punter_shift[o] + u[ix, 3]), net)
         spot = yl0 - net
         recv_yl = np.where(P["touchback"][j] | (spot <= 0), 80.0, np.clip(100 - spot, 1, 99))
         ret = P["ret_td"][j]

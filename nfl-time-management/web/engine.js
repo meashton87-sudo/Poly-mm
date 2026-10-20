@@ -2064,7 +2064,10 @@
       if (st === 'rush') for (let k = 0; k < hi - lo && (P.retTd[j] || P.blocked[j]); k++) j = lo + ((j - lo + 1) % (hi - lo));
       let net = P.net[j];
       const normal = !P.blocked[j] && !P.retTd[j] && !P.touchback[j];
-      if (normal) net += this.ctx.punterShift[o];
+      // the punter's rating moves the net by a fraction of a yard: the ball still lands on a whole yard line (rounded
+      // up or down by chance, so the rating keeps its mean; a spot at the 5.24 read "at the 5" and a 5-yard gain from
+      // it was no touchdown)
+      if (normal) net = Math.floor(net + this.ctx.punterShift[o] + u[3]);
       if (normal && st === 'rush') net += ST_FAIR_GAIN;                 // a fair catch: no return yards
       const spot = yl0 - net;
       let recvYl = (P.touchback[j] || spot <= 0) ? 80 : clip(100 - spot, 1, 99);
