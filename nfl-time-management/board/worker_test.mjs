@@ -1061,7 +1061,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
 
   // stats: merged into the account, the best of each kept, cleaned; a read without stats; never another account's
   assert.strictEqual((await au('/auth/stats', { session: 'f'.repeat(64), stats: {} })).status, 401, 'signed out');
-  assert.deepStrictEqual(await ok(await au('/auth/stats', { session: sa }), 'read'), { stats: { days: {}, drives: {}, runs: {}, badges: {}, frozen: {}, scen: {} } }, 'nothing yet');
+  assert.deepStrictEqual(await ok(await au('/auth/stats', { session: sa }), 'read'), { stats: { days: {}, drives: {}, runs: {}, badges: {}, frozen: {}, scen: {}, surv: { best: 0, runs: 0 } } }, 'nothing yet');
   for (const [why, stats] of [['an array', []], ['days an array', { days: [1, 2] }], ['a string', 'x'], ['too many days', { days: Object.fromEntries(Array.from({ length: 2001 }, (_, i) => [i + 1, { p: 0.5 }])) }],
     ['too many drives', { drives: Object.fromEntries(Array.from({ length: 501 }, (_, i) => [i + 1, { p: 0.5 }])) }]]) {
     assert.strictEqual((await au('/auth/stats', { session: sa, stats })).status, 400, why);
@@ -1072,7 +1072,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
     drives: { 3: { p: 0.7, wpa: 0.05, tries: 2, won: false, at: 1790000000000, last: 0.6, prev: { p: 0.4, tries: 1 } }, 1000: { p: 0.5 } },
     runs: { 2: { p: 0.66, wpa: 0.3, w: 3, l: 1, n: 4, x: 'y' } } } }), 'first phone');
   assert.deepStrictEqual(d.stats, { days: { 5: { p: 0.5, wpa: 0.1, coach: 'Andy Reid' }, 6: { p: 0.8, wpa: 0.2, coach: null } },
-    drives: { 3: { p: 0.7, wpa: 0.05, tries: 2, won: false, last: 0.6, at: 1790000000000 } }, runs: { 2: { p: 0.66, wpa: 0.3, w: 3, l: 1, n: 4 } }, badges: {}, frozen: {}, scen: {} }, 'cleaned: junk entries and fields dropped');
+    drives: { 3: { p: 0.7, wpa: 0.05, tries: 2, won: false, last: 0.6, at: 1790000000000 } }, runs: { 2: { p: 0.66, wpa: 0.3, w: 3, l: 1, n: 4 } }, badges: {}, frozen: {}, scen: {}, surv: { best: 0, runs: 0 } }, 'cleaned: junk entries and fields dropped');
   d = await ok(await au('/auth/stats', { session: sa, stats: { days: { 5: { p: 0.4, wpa: 0.9, coach: 'Other' }, 6: { p: 0.9, wpa: 0.3, coach: 'Sean McVay', madden: 'zz' }, 10: { p: 0.3, wpa: 0, coach: 'John Madden', madden: 'ABCD1234' } },
     drives: { 3: { p: 0.6, wpa: 0, tries: 5, won: true }, 4: { p: 0.95, wpa: 0.2, tries: 1, won: true } }, runs: { 2: { p: 0.5, wpa: 0, w: 1, l: 3, n: 4 } } } }), 'second phone');
   assert.deepStrictEqual(d.stats.days, { 5: { p: 0.5, wpa: 0.1, coach: 'Andy Reid' }, 6: { p: 0.9, wpa: 0.3, coach: 'Sean McVay' }, 10: { p: 0.3, wpa: 0, coach: null } }, 'days: the higher score of each, the retired find dropped');
@@ -1080,7 +1080,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual(d.stats.runs[2].p, 0.66, 'runs: the best');
   d = await ok(await au('/auth/stats', { session: sa, stats: { days: { 10: { p: 0.6, wpa: 0, coach: 'Bill Belichick' } } } }), 'a better score on that day');
   assert.deepStrictEqual(d.stats.days[10], { p: 0.6, wpa: 0, coach: 'Bill Belichick' }, 'the better score stands');
-  assert.deepStrictEqual((await ok(await au('/auth/stats', { session: sb }), 'other')).stats, { days: {}, drives: {}, runs: {}, badges: {}, frozen: {}, scen: {} }, 'never another account\'s');
+  assert.deepStrictEqual((await ok(await au('/auth/stats', { session: sb }), 'other')).stats, { days: {}, drives: {}, runs: {}, badges: {}, frozen: {}, scen: {}, surv: { best: 0, runs: 0 } }, 'never another account\'s');
   // the newest 2000 days stand when a merge goes over
   store.set('stats:d:g:700003', Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [i + 1, { p: 0.5, wpa: 0, coach: null }])));
   d = await ok(await au('/auth/stats', { session: sc, stats: { days: { 2001: { p: 0.7 } } } }), 'over the cap');
@@ -1134,6 +1134,28 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.deepStrictEqual(d.stats.scen[S2], { at: 1790000009000, p: 0.9, tries: 1, won: true }, 'played again: back on the list');
   assert.deepStrictEqual(store.get('stats:s:g:700003'), d.stats.scen, 'kept on its own key');
   store.delete('stats:s:g:700003');
+  // survivor's best run follows the account (a player lost it on every other phone before): checked and rebuilt from
+  // its numbers; a high-water mark, the higher best and count stand, never lower; the extra-life mark goes with the
+  // best; a post without it (an older page) takes nothing away; never another account's
+  for (const [why, stats] of [['surv an array', { surv: [3] }], ['surv a string', { surv: '3' }], ['surv null', { surv: null }]]) {
+    assert.strictEqual((await au('/auth/stats', { session: sc, stats })).status, 400, why);
+  }
+  d = await ok(await au('/auth/stats', { session: sc, stats: { surv: { best: 4, runs: 2, life: true, junk: 'x' } } }), 'the first phone\'s best run');
+  assert.deepStrictEqual(d.stats.surv, { best: 4, runs: 2, life: true }, 'kept from its numbers');
+  assert.deepStrictEqual(store.get('stats:m:g:700003'), { badges: {}, frozen: {}, surv: { best: 4, runs: 2, life: true } }, 'kept beside the badges');
+  d = await ok(await au('/auth/stats', { session: sc, stats: { surv: { best: 2, runs: 1 } } }), 'a phone with less');
+  assert.deepStrictEqual(d.stats.surv, { best: 4, runs: 2, life: true }, 'never down');
+  d = await ok(await au('/auth/stats', { session: sc, stats: { days: { 3: { p: 0.6 } } } }), 'an older page');
+  assert.deepStrictEqual(d.stats.surv, { best: 4, runs: 2, life: true }, 'a post without it takes nothing away');
+  assert.deepStrictEqual((await ok(await au('/auth/stats', { session: sc }), 'read')).stats.surv, { best: 4, runs: 2, life: true }, 'and a read has it');
+  d = await ok(await au('/auth/stats', { session: sc, stats: { surv: { best: 4, runs: 3 } } }), 'the same best, without the extra life');
+  assert.deepStrictEqual(d.stats.surv, { best: 4, runs: 3 }, 'the mark stays only when both used it; the higher count');
+  d = await ok(await au('/auth/stats', { session: sc, stats: { surv: { best: 7, runs: 1, life: true } } }), 'a better run');
+  assert.deepStrictEqual(d.stats.surv, { best: 7, runs: 3, life: true }, 'the mark follows the best');
+  d = await ok(await au('/auth/stats', { session: sc, stats: { surv: { best: 1e9, runs: -4, life: 'yes' } } }), 'nonsense numbers');
+  assert.deepStrictEqual(d.stats.surv, { best: 7, runs: 3, life: true }, 'read as nothing: nothing taken away');
+  assert.deepStrictEqual((await ok(await au('/auth/stats', { session: sb }), 'other')).stats.surv, { best: 0, runs: 0 }, 'never another account\'s');
+  store.delete('stats:m:g:700003'); store.delete('stats:d:g:700003');
 
   // a username on the boards: the account's own name from any phone (the survivor board and the day's list); anyone
   // else, or the account under another name, as before
