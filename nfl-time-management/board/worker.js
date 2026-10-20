@@ -483,11 +483,11 @@ async function signedByStripe(req, body, secret) {
 //   POST /auth/logout  { session }      -> { ok }
 //   POST /auth/link    { session, code, key } -> { email, pro, code }   a valid Pro code (on this device: the device
 //                                          limit applies) joins the account; a code belongs to one account only
-//   POST /auth/stats   { session, stats? } -> { stats: { days, drives, runs, badges, frozen, scen } }   the page's
+//   POST /auth/stats   { session, stats? } -> { stats: { days, drives, runs, badges, frozen, scen, surv } }   the page's
 //                                          record (its stats days, the historic drives, the playoff runs, the badges
-//                                          earned, the days a streak freeze covered, the scenarios built) merged into
-//                                          the account's, the best of each kept (statsMerge), and the merged record
-//                                          back; without stats, a read
+//                                          earned, the days a streak freeze covered, the scenarios built, survivor's
+//                                          best run) merged into the account's, the best of each kept (statsMerge),
+//                                          and the merged record back; without stats, a read
 //   POST /auth/remind  { session, on }  -> the account, { remind }   the daily email (Resend; off: 503 without it)
 //   POST /auth/unsub?r=&t=  (or { r, t }) -> { ok }               the email's unsubscribe link (one click, no sign-in):
 //                                          r the account's opaque reference, t its HMAC (mailSecret); a mail app's
@@ -677,7 +677,9 @@ async function auth(req, env, storage, hits, h, url) {
     const merged = statsMerge(have, inc);
     if (JSON.stringify(merged.days) !== JSON.stringify(have.days)) await storage.put(`stats:d:${acct}`, merged.days);
     if (JSON.stringify([merged.drives, merged.runs]) !== JSON.stringify([have.drives, have.runs])) await storage.put(`stats:x:${acct}`, { drives: merged.drives, runs: merged.runs });
-    if (JSON.stringify([merged.badges, merged.frozen]) !== JSON.stringify([have.badges, have.frozen])) await storage.put(`stats:m:${acct}`, { badges: merged.badges, frozen: merged.frozen });
+    if (JSON.stringify([merged.badges, merged.frozen, merged.surv]) !== JSON.stringify([have.badges, have.frozen, have.surv])) {
+      await storage.put(`stats:m:${acct}`, { badges: merged.badges, frozen: merged.frozen, ...(merged.surv.best || merged.surv.runs ? { surv: merged.surv } : {}) });
+    }
     if (JSON.stringify(merged.scen) !== JSON.stringify(have.scen)) await storage.put(`stats:s:${acct}`, merged.scen);
     return json({ stats: merged }, 200, h);
   }
@@ -736,15 +738,19 @@ async function readBody(req) {
 // ---- Stats that follow the account (/auth/stats): the page keeps its record in the browser (game.js: the stats days,
 // the historic drives, the playoff runs); signed in, it is merged into the account's and back, so a streak and the
 // drives passed survive a new phone. Kept as stats:d:<acct> (the days: what a league board reads), stats:x:<acct>
-// (drives and runs), stats:m:<acct> (badges and frozen days) and stats:s:<acct> (My scenarios: { code: { at, p?, tries,
+// (drives and runs), stats:m:<acct> (badges, frozen days and survivor's best run) and stats:s:<acct> (My scenarios: { code: { at, p?, tries,
 // won, gone?, title? } }, keyed by the scenario's code, web/scenario.js; the newest touch of each stands, with the best score,
 // the most tries and won if either was; removed, gone: true until it is played again; over SCEN_MAX, the newest). Each entry is checked and rebuilt from its numbers
 // (nothing else of a post is kept); a kind with more entries than its cap, or not an object, refuses the post. Merged,
 // the higher score of each day, drive or run stands (a drive: the most tries, won if either was); over a
 // cap, the newest. Badges ({ id: when earned }) and frozen days ({ day: when the freeze was
 // spent }) are a union, the earliest time of each kept: earned on either phone is earned (the page knows which ids
-// are real; the worker only checks their shape, so a new badge needs no deploy here).
+// are real; the worker only checks their shape, so a new badge needs no deploy here). Survivor's best run (surv:
+// { best, runs, life? }: the wins of the best run, the runs played, whether the best used the extra life) is a
+// high-water mark: the higher best and the higher count stand, never lower (a phone with less takes the account's;
+// the life mark follows the best, and on a tie only stays when both used it); a post without it takes nothing away.
 const STATS_CAP = { days: [99999, 2000], drives: [999, 500], runs: [999, 500] };      // [highest key, most entries]
+const SURV_BEST_MAX = 999, SURV_RUNS_MAX = 1e6;       // (the board takes a best up to 999 too)
 // My scenarios (game.js scenRec), a scenario's code (web/scenario.js CODE_RE, the same: its 22 parts, then any lineup picks)
 const SCEN_MAX = 200, SCEN_RE = /^1(?:-[0-9A-Za-z]{1,4}){21}(?:-[yo][qrwtk][1-9][0-9a-z]{4}){0,24}$/;
 const GONE_BADGE = 'madden';        // (a retired badge: never kept)
@@ -805,7 +811,21 @@ function cleanStats(s) {
     out[kind] = {};
     for (const k of ks) { const at = num(o[k], 0, 1e14); if (ok(k) && at !== null) out[kind][k] = Math.round(at); }
   }
+  // survivor's best run: { best, runs, life? }, from its numbers (an older page posts none: nothing taken away)
+  if (s.surv !== undefined) {
+    const v = s.surv;
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return 'stats.surv: an object wanted';
+    out.surv = survEntry(v);
+  }
   return out;
+}
+const survEntry = (v) => ({ best: Math.round(num(v.best, 0, SURV_BEST_MAX) ?? 0), runs: Math.round(num(v.runs, 0, SURV_RUNS_MAX) ?? 0), ...(v.life === true ? { life: true } : {}) });
+// the best run on two phones: the higher best and the higher count; the life mark goes with the higher best, and on a
+// tie stays only when both used it (a run without the extra life is the better of equals, as the page keeps it)
+function survMerge(a, b) {
+  if (!a || !b) return a || b || { best: 0, runs: 0 };
+  const life = a.best === b.best ? !!(a.life && b.life) : a.best > b.best ? !!a.life : !!b.life;
+  return { best: Math.max(a.best, b.best), runs: Math.max(a.runs, b.runs), ...(life ? { life: true } : {}) };
 }
 function statBetter(kind, a, b) {
   if (!a || !b) return a || b;
@@ -828,6 +848,7 @@ function statsMerge(a, b) {
   out.frozen = Object.fromEntries(Object.keys(fz).map(Number).sort((x, y) => x - y).slice(-FROZEN_MAX).map((k) => [k, fz[k]]));
   out.badges = Object.fromEntries(Object.entries(bd).sort((x, y) => x[1] - y[1] || (x[0] < y[0] ? -1 : 1)).slice(0, BADGES_MAX));
   out.scen = scenMerge(a.scen, b.scen);
+  out.surv = survMerge(a.surv, b.surv);
   return out;
 }
 // a scenario on two phones: the newest touch stands (removed or not), with the best score, the most tries, won if either
@@ -847,7 +868,8 @@ async function statsOf(storage, acct) {
   const d = (await storage.get(`stats:d:${acct}`)) || {}, b = { ...(m.badges || {}) };
   delete b[GONE_BADGE];                    // (kept from before it was retired: read back without it, and without its find's coach)
   const days = Object.fromEntries(Object.entries(d).map(([k, v]) => [k, v && v.madden ? statEntry('days', v) : v]).filter(([, v]) => v));
-  return { days, drives: x.drives || {}, runs: x.runs || {}, badges: b, frozen: m.frozen || {}, scen: (await storage.get(`stats:s:${acct}`)) || {} };
+  return { days, drives: x.drives || {}, runs: x.runs || {}, badges: b, frozen: m.frozen || {}, scen: (await storage.get(`stats:s:${acct}`)) || {},
+    surv: m.surv && typeof m.surv === 'object' ? survEntry(m.surv) : { best: 0, runs: 0 } };
 }
 
 // ---- Friend leagues: a private group of accounts (a name and a join link) with its own board of the daily: each

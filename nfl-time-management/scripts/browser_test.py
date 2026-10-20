@@ -77,6 +77,9 @@ STUB_ASKED: set = set()
 # posted and played, the list read back from it
 COMM: dict = {"rows": [], "plays": [], "posts": []}
 SESSION = "ab" * 32
+# the account's record on the stub (board/worker.js /auth/stats, roughly: a union of each kind; survivor's best run and
+# its count of runs the higher of each, never down), what a page signed in posts and reads back
+ACCT: dict = {"stats": None}
 TRACE_HALF = False          # what else the pages asked the stub (printed at the end)
 # the game's page under the base address (daily_check.py --live: "", the site's front door, as players open it)
 PAGE = "index.html"
@@ -101,6 +104,17 @@ async def board_stub(route, path: str, comm: bool = False, headers: dict | None 
         await ok({"google": False, "email": True})
     elif comm and path == "/auth/me":
         await ok({"email": "tester@example.com", "name": "Tester", "pro": False})
+    elif comm and path == "/auth/stats":
+        acc = ACCT["stats"] or {"days": {}, "drives": {}, "runs": {}, "badges": {}, "frozen": {}, "scen": {}, "surv": {"best": 0, "runs": 0}}
+        inc = body.get("stats")
+        if isinstance(inc, dict):
+            for k in ("days", "drives", "runs", "badges", "frozen", "scen"):
+                if isinstance(inc.get(k), dict):
+                    acc[k].update(inc[k])
+            if isinstance(inc.get("surv"), dict):
+                acc["surv"] = {"best": max(acc["surv"]["best"], int(inc["surv"].get("best") or 0)), "runs": max(acc["surv"]["runs"], int(inc["surv"].get("runs") or 0))}
+        ACCT["stats"] = acc
+        await ok({"stats": acc})
     elif comm and path == "/scen/list":
         await ok({"sort": body.get("sort", "top"), "page": 0, "rows": COMM["rows"], "total": len(COMM["rows"]), "next": None})
     elif comm and path == "/scen/post":
@@ -1693,6 +1707,147 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     return lines, failed
 
 
+# survivor's record in this browser (game.js survStats: the runs, the best, whether the best used the extra life), the
+# run under way (its wins), and the home card's survivor number ("4 wins, your best run", "– no runs yet")
+SURV_REC = "() => JSON.parse(localStorage.getItem('tmd:v3:survstats') || 'null')"
+SURV_RUN = "() => { const s = JSON.parse(localStorage.getItem('tmd:v3:surv') || 'null'); return s ? { won: s.won, out: !!s.out, games: s.games.length } : null; }"
+SURV_CARD = "() => { const n = document.querySelector('#homeview a.hcard.hsurv .hnum'); return n ? [...n.children].map((c) => c.textContent).join(' ') : null; }"
+
+
+async def survivor_play(page, rnd, limit_s: int = 600) -> str:
+    """A survivor run by random calls (the episodes' way, shorter) to its end: the run-over card's verdict line."""
+    t0, last, since = time.time(), None, time.time()
+    while time.time() - t0 < limit_s:
+        try:
+            st = await page.evaluate(STATE)
+        except Exception:                # (the page reloading itself)
+            st = "loading"
+        if st != last:
+            last, since = st, time.time()
+        elif time.time() - since > LIMIT.get(st, STILL) + 30:
+            raise RuntimeError(f"frozen: the '{st}' screen did not change for {int(time.time() - since)} s")
+        try:
+            if st in ("errbar", "error"):
+                raise RuntimeError(st + ": " + await page.evaluate("() => (document.getElementById('errBar') || document.getElementById('dock')).innerText.slice(0, 300)"))
+            if st == "summary":
+                return await page.evaluate("() => (document.querySelector('#done .verdict') || {}).textContent || ''")
+            if st in ("modal", "deep"):
+                await page.click("#mClose" if st == "modal" else "#deepClose", timeout=3000)
+            elif st == "intro":
+                await page.click("#intro .btn", timeout=3000)
+            elif st == "animating":
+                await page.click("#field", timeout=1500)
+            elif st == "result":
+                await page.click("#dock .result .btn", timeout=3000)
+            elif st == "end":
+                await page.click("#dock .endcard .btn", timeout=3000)
+            elif st == "choose":
+                big = page.locator("#dock .key.big:visible")
+                n = await big.count()
+                if n:
+                    await big.nth(rnd.randrange(n)).click(timeout=3000)
+                else:
+                    btns = page.locator("#dock button:visible:not([disabled])")
+                    if await btns.count():
+                        await btns.nth(rnd.randrange(await btns.count())).click(timeout=3000)
+            else:
+                await page.wait_for_timeout(100)
+        except RuntimeError:
+            raise
+        except Exception:                # (a key gone between the look and the tap: look again)
+            await page.wait_for_timeout(100)
+    raise RuntimeError("the run did not end in time")
+
+
+async def survivor_best(browser, base: str, seed: int = 3) -> list[str]:
+    """Signed in, survivor's best run follows the account (board/worker.js /auth/stats surv; game.js statsSync,
+    statsTake): the account's record (a best of 4 from another phone) is on the home card, the stats modal and the
+    survivor label of a phone with nothing saved, before any run here; a run played here goes to the account with the
+    best of both kept, never down (a run of fewer wins leaves the best at 4; more wins raise it); the run-over card
+    says which; a fresh phone signed in gets it all back. (A player signed in lost his best on every other phone
+    before: it lived in one browser's storage only, and the sync left it out.)"""
+    out: list[str] = []
+    ACCT["stats"] = {"days": {}, "drives": {}, "runs": {}, "badges": {}, "frozen": {}, "scen": {}, "surv": {"best": 4, "runs": 2}}
+    rnd = random.Random(seed)
+
+    async def signed_in(k: int):
+        ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+        await pro_context(ctx, base, pro=False, comm=True)
+        await ctx.add_init_script(f"""(() => {{ let s = {seed * 7 + k} >>> 0; Math.random = () => {{ s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }}; }})();""")
+        page = await ctx.new_page()
+        page.on("pageerror", lambda e: out.append(f"script error: {e}"))
+        return ctx, page
+
+    async def shown(page, js: str, want: str, where: str, what: str):
+        """What the page shows once the account's record is in (the sync lands after the page is up)."""
+        got = None
+        for _ in range(100):
+            got = await look(page, js)
+            if got and want in got:
+                return
+            await page.wait_for_timeout(100)
+        out.append(f"{where}: {what} says {got!r}, not {want!r}")
+
+    async def home(page, want: str, where: str):
+        await page.goto(f"{base}/{PAGE}")
+        await shown(page, SURV_CARD, want, where, "the home card")
+        await page.click("#statsBtn", timeout=3000)
+        await page.wait_for_timeout(300)
+        t = await page.evaluate("() => document.getElementById('modal').innerText")
+        if f"Survivor: best run {want}" not in t:
+            line = re.search(r"Survivor:[^\n]*", t)
+            out.append(f"{where}: the stats modal says {line.group(0) if line else 'nothing of survivor'!r}, not {want!r}")
+        await page.click("#mClose", timeout=3000)
+
+    label = "() => document.getElementById('dayLabel').textContent"
+    ctx, page = await signed_in(1)
+    best = 4
+    try:
+        await home(page, "4 wins", "a phone with nothing saved, signed in")
+        async with page.expect_event("load"):
+            await page.goto(f"{base}/{PAGE}#survivor")
+        await shown(page, label, "best 4", "that phone, in survivor", "the label")
+        verdict = await survivor_play(page, rnd)
+        run = await page.evaluate(SURV_RUN)
+        won = run["won"] if run else 0
+        best = max(4, won)
+        rec = await page.evaluate(SURV_REC) or {}
+        if rec.get("best") != best or rec.get("runs") != 3:
+            out.append(f"after a run of {won} wins the record is {rec}, not best {best} of 3 runs")
+        want = "Your best run yet." if won >= 4 else "Your best run: 4 wins."
+        if verdict != want:
+            out.append(f"the run-over card after {won} wins says {verdict!r}, not {want!r}")
+        for _ in range(50):              # the finish goes to the account
+            if (ACCT["stats"]["surv"] or {}).get("runs") == 3:
+                break
+            await page.wait_for_timeout(100)
+        if ACCT["stats"]["surv"] != {"best": best, "runs": 3}:
+            out.append(f"the account's record after a run of {won} wins: {ACCT['stats']['surv']}, not best {best} of 3 runs")
+        await page.reload()
+        await shown(page, label, f"best {best}", "the run-over card reloaded", "the label")
+        await page.get_by_role("button", name="New run").click(timeout=3000)
+        await shown(page, label, f"0 wins · best {best}", "a new run", "the label")
+        await home(page, f"{best} wins", "the same phone, back home")
+        print(f"survivor best: a run of {won} wins on the first phone; the account's best {best} of 3 runs", flush=True)
+    except Exception as e:
+        out.append(f"survivor best, the first phone: {str(e).splitlines()[0][:200]}")
+    finally:
+        await ctx.close()
+    ctx, page = await signed_in(2)
+    try:
+        await home(page, f"{best} wins", "a fresh phone, signed in")
+        async with page.expect_event("load"):
+            await page.goto(f"{base}/{PAGE}#survivor")
+        await shown(page, label, f"0 wins · best {best}", "a fresh phone, in survivor", "the label")
+    except Exception as e:
+        out.append(f"survivor best, a fresh phone: {str(e).splitlines()[0][:200]}")
+    finally:
+        await ctx.close()
+    ACCT["stats"] = None
+    return out
+
+
 async def main(a) -> int:
     srv, port = serve(Path(a.site).resolve())
     stamped = stamps_of(Path(a.site))
@@ -1714,6 +1869,10 @@ async def main(a) -> int:
         print("Who plays, the quarterback (the sheet's first row, a backup put in plays and is graded on his simulator, back to the real lineup): "
               + ("ok" if not qb else "FAIL") + "".join(f"\n      {x}" for x in qb), flush=True)
         reach += qb
+        sb = await survivor_best(browser, base)
+        print("survivor's best run follows the account (another phone's best on a phone with nothing saved, a run played here kept on the account, a fresh phone signed in): "
+              + ("ok" if not sb else "FAIL") + "".join(f"\n      {x}" for x in sb), flush=True)
+        reach += sb
         if a.scenario:
             pitch = await scenario_pitch(browser, base)
             print("a scenario's link without Pro (the pitch, the scenario's summary), a bad link: " + ("ok" if not pitch else "FAIL")

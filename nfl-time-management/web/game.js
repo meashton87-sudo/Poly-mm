@@ -7648,12 +7648,13 @@
   }
   function renderSurvSummary(redraw) {
     show('done');
-    const st = survStats();
+    const st = survStats(), was = JSON.stringify(st);
     // (a run that took its extra life comes back here when it ends again: its wins count then too)
     if (st.last !== state.run) { st.runs += 1; st.last = state.run; }
     if (state.won > st.best || (state.won === st.best && st.bestLife && !state.life)) st.bestLife = !!state.life;
     st.best = Math.max(st.best, state.won);
     save(`${STORE}:survstats`, st);
+    if (JSON.stringify(st) !== was) statsSync(true);          // signed in: the best run follows the account (another phone sees it)
     // the board keeps your best (when you can write it and have a name on it), marked when it used the extra life
     if (BOARD.ready && myName()) BOARD.ready.then(() => boardPost(myName(), st.best, !!st.bestLife));
     $('dayLabel').textContent = survLabel();
@@ -9851,10 +9852,10 @@
   }
 
   // ---- Stats that follow the account (board /auth/stats): signed in, this browser's record (the stats days, the
-  // historic drives, the playoff runs) and the account's are merged, the best of each kept on both sides, so a streak
-  // and the drives passed come along to a new phone. On sign-in, on a page load (at most every SYNC_MS: switching
-  // modes reloads the page) and after each finished daily, drive or run. Drives only from the Gauntlet's start on
-  // (gauntletFresh moved the ones before aside).
+  // historic drives, the playoff runs, survivor's best run) and the account's are merged, the best of each kept on
+  // both sides, so a streak, the drives passed and the best run come along to a new phone. On sign-in, on a page load
+  // (at most every SYNC_MS: switching modes reloads the page) and after each finished daily, drive, run or survivor
+  // run. Drives only from the Gauntlet's start on (gauntletFresh moved the ones before aside).
   const SYNC_KEY = `${STORE}:synced`, SYNC_MS = 10 * 60e3, SYNC_CAP = { days: 2000, drives: 500, runs: 500, frozen: 500 };
   // the better of this browser's record of a day, drive or run and the account's (the board's rules, worker.js
   // statBetter); a drive keeps this browser's own try stamp and last result (renderSummary's: the try counted once)
@@ -9883,6 +9884,15 @@
       const m = st[kind] || (st[kind] = {});
       for (const [k, t] of Object.entries(acc[kind] || {})) if (typeof t === 'number' && !(m[k] <= t)) { m[k] = t; changed = true; }
     }
+    // survivor's best run: a high-water mark, never down (the higher best and the higher count of runs stand; the
+    // extra-life mark follows the best, and on a tie stays only when both used it: worker.js survMerge). A board
+    // from before it carried the best run answers none: this browser's stands
+    const sv = acc.surv, mine = survStats();
+    if (sv && typeof sv === 'object' && typeof sv.best === 'number') {
+      const best = Math.max(mine.best || 0, sv.best), runs = Math.max(mine.runs || 0, sv.runs || 0);
+      const life = (mine.best || 0) === sv.best ? !!(mine.bestLife && sv.life) : (mine.best || 0) > sv.best ? !!mine.bestLife : !!sv.life;
+      if (best !== mine.best || runs !== mine.runs || life !== !!mine.bestLife) { save(`${STORE}:survstats`, { ...mine, best, runs, bestLife: life }); changed = true; }
+    }
     // My scenarios: the newest touch of each, with the best score, the most tries, won if either (worker.js scenMerge)
     const L = scenList();
     let lc = false;
@@ -9903,9 +9913,10 @@
     syncQ = syncQ.catch(() => false).then(async () => {
       if (!signedIn() || !BOARD.api) return false;
       if (!force && Date.now() - Number(load(SYNC_KEY, 0) || 0) < SYNC_MS) return false;
-      const st = load(`${STORE}:stats`, { days: {} });
+      const st = load(`${STORE}:stats`, { days: {} }), sv = survStats();
       const stats = { days: newest(st.days, SYNC_CAP.days), drives: newest(gauntletDrives(load(`${STORE}:drives`, {})), SYNC_CAP.drives), runs: newest(load(`${STORE}:runs`, {}), SYNC_CAP.runs),
         badges: st.badges || {}, frozen: newest(st.frozen, SYNC_CAP.frozen),
+        surv: { best: sv.best || 0, runs: sv.runs || 0, ...(sv.bestLife ? { life: true } : {}) },
         scen: Object.fromEntries(Object.entries(scenList()).filter(([c, e]) => SCN && SCN.parse(c) && e && typeof e.at === 'number')
           .map(([c, e]) => [c, { at: e.at, ...(typeof e.p === 'number' ? { p: e.p } : {}), tries: e.tries || 0, won: !!e.won, ...(e.gone ? { gone: true } : {}), ...(e.title ? { title: e.title } : {}) }])) };
       let d;
@@ -9920,9 +9931,11 @@
     });
     return syncQ;
   }
-  // a day finished on another phone: the top bar's streak, and the end card's streak line if it is up, count it
+  // a day finished on another phone: the top bar's streak, and the end card's streak line if it is up, count it (and
+  // in survivor, a best run from another phone: the label's best)
   function streakRedraw() {
     if (homeUp) { renderHome(false, true); return; }
+    if (SURV) { if (state) $('dayLabel').textContent = survLabel(); return; }
     dayLabelSet();
     const line = document.querySelector('#done .streak');
     if (!line || !state || !state.done || SURV || PRACTICE || DRIVE || RUN_N || CUSTOM || ARCH_DAY) return;
