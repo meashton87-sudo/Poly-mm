@@ -13,7 +13,9 @@ after its first call: never mid-play, asked first, the day's state a new try mar
 end card saying it is off the leaderboard. Survivor never offers it. Every play shown keeps everyone and the ball on
 the ground (inside the end lines, at most a step past a sideline), and the first episode draws a sweep of short fields
 (the red zone, the goal line, backed up on its own 1 to 5) against every coverage and shell to the same test, then
-thousands of drawn runs, RPOs, defenses, kicks and kick rushes (DRAW_FUZZ). The bots also draw plays as they go (a run,
+600 passes of every kind of result, each measured as drawn against what happened (PASS_LOOK: a catch in his hands, a
+miss where its kind says and never in them; every real pass of the run too), then thousands of drawn runs, RPOs,
+defenses, kicks and kick rushes (DRAW_FUZZ). The bots also draw plays as they go (a run,
 an RPO, the defense, a kick), mostly calling what the drawing reads as.
 Needs Playwright with Chromium (pip install playwright; python -m playwright install chromium).
 scripts/daily_check.py plays the same episodes against the live site (its --live mode: ads, analytics and the real
@@ -238,6 +240,94 @@ SHORT_FIELD = """(yl) => {
   D.drawField();
   return { plays, bad: bad.slice(0, 12), n: bad.length };
 }"""
+# The pass looks like what happened (game.js missPlan, passCheck): pass plays of every kind of result, on spots from the
+# goal line to backed up, both teams, every pass call and charted route, drawn on the field and measured as drawn: a
+# catch (or a pick) is in the catcher's hands as the ball gets to him and just after; an incompletion never is, and
+# goes where its kind says (pass_look_problems)
+PASS_LOOK = """([n, seed]) => {
+  const D = window.__draw, { G } = D.get(), calls = Object.values(D.CALL);
+  let s = seed >>> 0;
+  const R = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const pick = (a) => a[Math.floor(R() * a.length)];
+  const logs = ['__sepLog', '__tackleLog', '__fpLog', '__offLog'], kept = logs.map((k) => (window[k] || []).length);
+  const ids = ['quick_strong', 'quick_weak', 'quick_middle', 'screen', 'deep_strong', 'deep_weak', 'deep_middle', 'pa_short', 'pa_deep', 'roll_strong', 'roll_weak'];
+  const routes = ['go', 'post', 'corner', 'out', 'deep_out', 'in', 'slant', 'cross', 'hitch', 'screen', 'flat', 'wheel', 'angle'];
+  const kinds = ['catch', 'catch', 'int', 'bad', 'bad', 'bad', 'break', 'break', 'tip', 'drop', 'pick', 'away', 'plain'];
+  const rows = [], off = [];
+  for (let i = 0; i < n; i++) {
+    const id = pick(ids), ci = calls.findIndex((c) => c.id === id), yl = pick([3, 8, 15, 25, 40, 55, 70, 85, 95, 99]);
+    const deep = /deep/.test(id), air = Math.round(Math.max(-3, Math.min(yl + 8, deep ? 14 + R() * 32 : -3 + R() * 15)));
+    const k = pick(kinds), ch = (c, x, d) => ({ catchable: c, contested: x, defended: d });
+    const yards = Math.min(yl, Math.max(air, air + Math.floor(R() * 9)));
+    const o = { catch: { air, yards, td: yards >= yl, ...ch(true, R() < 0.2, false) }, int: { air, yards: 0, evt: 'interception', turnover: true },
+      bad: { air, yards: 0, incomplete: true, ...ch(false, R() < 0.25, false) }, break: { air, yards: 0, incomplete: true, ...ch(R() < 0.3, R() < 0.6, true) },
+      tip: { air, yards: 0, incomplete: true, ...ch(true, false, false) }, drop: { air, yards: 0, incomplete: true, evt: 'drop', ...ch(true, R() < 0.2, false) },
+      pick: { air, yards: 0, incomplete: true, evt: 'near_pick', ...ch(false, true, true) }, away: { yards: 0, incomplete: true, evt: 'throwaway' },
+      plain: { air, yards: 0, incomplete: true } }[k];
+    const r = { ...G.root, phase: 0, down: 1 + Math.floor(R() * 4), ytg: Math.min(yl, 10), yl, pos: R() < 0.5 ? G.me : 1 - G.me, try2: false, t: 1700 - i };
+    const e = { ev: 'play', team: r.pos, call: ci, row: -1, t: r.t, kind: 1, ...o };
+    if (R() < 0.75 && k !== 'away') e.route = pick(routes);
+    const n0 = window.__sepLog.length, side = R() < 0.5 ? 1 : -1;
+    const sc = D.makeScene(r, side), P = D.choreograph(sc, e, { action: null, log: [e], root: { ...r, yl: Math.max(1, yl - (e.yards || 0)) } }, false);
+    if (!P) continue;
+    D.offField(sc, P, false).slice(0, 2).forEach((b) => { if (off.length < 10) off.push({ id, k, yl, ...b }); });
+    if (window.__sepLog.length > n0) rows.push({ ...window.__sepLog[window.__sepLog.length - 1], id, want: k, yl });
+  }
+  logs.forEach((k, i) => { if (window[k]) window[k].length = kept[i]; });
+  D.drawField();
+  return { rows, off };
+}"""
+
+
+def pass_look_problems(rows: list) -> list:
+    """What a pass shows against what happened (game.js passCheck's measures, in yards): a catch or a pick in his hands
+    as the ball gets there and just after; a miss never in the receiver's hands (a drop: a moment, then out), never
+    ending at his feet, out of his reach while low enough to catch, and gone where its kind says."""
+    bad = []
+    for x in rows:
+        k, why = x.get("miss"), []
+        if k in ("catch", "pick6"):
+            if x.get("gap", 0) > 1.0:
+                why.append(f"the ball {x.get('gap')} yd from his hands at the catch")
+        elif k:
+            if "rest" not in x:
+                continue
+            if k == "drop":
+                if not (0 < x["held"] <= 0.3 and x["gap"] <= 0.5):
+                    why.append(f"a drop not in his hands, then out (held {x['held']} s, {x['gap']} yd off)")
+            elif x["held"] > 0:
+                why.append("in his hands")
+            if k != "away" and x["rest"] < 1.0:
+                why.append(f"ends {x['rest']} yd from him")
+            if k in ("over", "behind", "ahead", "wide") and x["low"] < 1.5:
+                why.append(f"within his reach ({x['low']} yd) low enough to catch")
+            if k == "under" and x["low"] < 1.0:
+                why.append(f"within his reach ({x['low']} yd) low enough to catch")
+            if k == "over" and (x["past"] < 1.5 or x["zc"] < 0.5):
+                why.append(f"not over him (lands {x['past']} yd past him, {x['zc']} high as it gets to him)")
+            if k == "under" and x["past"] > -1.2:
+                why.append(f"not short of him ({x['past']} yd)")
+            if k == "behind" and x["lead"] > -1.5:
+                why.append(f"not behind him ({x['lead']} yd)")
+            if k == "ahead" and x["lead"] < 1.5:
+                why.append(f"not ahead of him ({x['lead']} yd)")
+            if k == "wide" and x["reach"] < 1.8:
+                why.append(f"not wide of him ({x['reach']} yd)")
+            if k in ("break", "pick") and x["defAt"] > 1.3:
+                why.append(f"no defender at the ball ({x['defAt']} yd)")
+            # (broken up, or nearly picked, only with a defender at the catch point: never a man in the open, nor one wide
+            # open as the ball was thrown, the defender closing more than 4 yards a second of its flight)
+            if k in ("break", "pick") and x.get("defNear", 99) > 1.5:
+                why.append(f"no defender within 1.5 yd of him at the catch ({x.get('defNear')} yd)")
+            if k in ("break", "pick") and x.get("atThrow", 0) > 2.5 + 4 * (x["tCatch"] - x["tThrow"]):
+                why.append(f"wide open as it was thrown ({x.get('atThrow'):.1f} yd, {x['tCatch'] - x['tThrow']:.1f} s in the air)")
+            if k == "tip" and not 0.9 <= x["reach"] <= 1.9:
+                why.append(f"not at his fingertips ({x['reach']} yd)")
+        if why:
+            bad.append({"miss": k, "label": x.get("label"), "air": x.get("air"), "kind": x.get("kind"), "fit": x.get("fit"), "why": why})
+    return bad
+
+
 # Drawing every kind of call (game.js readRun, readQb, readDef, readKick): thousands of random lines from the men a
 # drawing starts from, on spots from the goal line to backed up on the 1, against every look and full call. Every
 # drawing is read as a call the keys make here (a run or an RPO callOptions offers, a defensive look or a full call
@@ -800,6 +890,23 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     print(f"{name}: short fields, {plays} plays drawn, {len(off)} off the ground")
                     if off:
                         problems.append(f"off the field on a short field: {off[:4]}")
+                elif st == "choose" and sweep and "pass_look" not in chaos_done:
+                    chaos_done.add("pass_look"); act("pass-look sweep")
+                    rows, off, t_pl = [], [], time.time()
+                    for k in range(4):                    # (in batches: a page drawing them all at once ran out of memory)
+                        pl = await page.evaluate(PASS_LOOK, [150, seed * 17 + k])
+                        rows += pl["rows"]; off += pl["off"]
+                    since = time.time()
+                    t_start += since - t_pl
+                    mix = {}
+                    for x in rows:
+                        mix[x.get("label") or x.get("miss")] = mix.get(x.get("label") or x.get("miss"), 0) + 1
+                    wrong = pass_look_problems(rows)
+                    print(f"{name}: pass looks, {len(rows)} passes drawn {dict(sorted(mix.items(), key=lambda kv: -kv[1]))}, {len(wrong)} not as they went, {len(off)} off the ground")
+                    if wrong:
+                        problems.append(f"a pass not drawn as it went: {wrong[:4]}")
+                    if off:
+                        problems.append(f"off the field on a pass: {off[:4]}")
                 elif st == "choose" and sweep and "draw_fuzz" not in chaos_done:
                     # thousands of drawings of every kind (runs, RPOs, the defense, kicks, the rush on theirs)
                     chaos_done.add("draw_fuzz"); act("drawing fuzz")
@@ -1319,6 +1426,20 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     say(f"plays drawn: {sum(r.get('sketched', 0) for r in results)} drags (runs, RPOs, defense, kicks), snapped as drawn: {by} (since the last reload)")
     late = sum(1 for r in results for x in r.get("seps", []) if x.get("late"))
     say(f"cover man too far to break it up (shown as a bad ball instead): {late} of {len(inc)} incompletions")
+    # the pass looks like what happened, on every real pass of the run (pass_look_problems): a catch in his hands, a
+    # miss gone where its kind says and never into his hands
+    allseps = [x for r in results for x in r.get("seps", [])]
+    kinds = {}
+    for x in allseps:
+        kinds[x.get("label") or x.get("miss") or "?"] = kinds.get(x.get("label") or x.get("miss") or "?", 0) + 1
+    looks = pass_look_problems(allseps)
+    # "Broken up" (or "Almost picked!") with no defender within a step and a half of him at the catch point: a ball knocked
+    # away from a man in the open (players saw it)
+    open_bu = [x for x in allseps if x.get("miss") in ("break", "pick") and x.get("defNear", 99) > 1.5]
+    say(f"broken up or nearly picked: {sum(1 for x in allseps if x.get('miss') in ('break', 'pick'))}, with no defender within 1.5 yards of him at the catch: {len(open_bu)}")
+    say(f"passes as drawn: {dict(sorted(kinds.items(), key=lambda kv: -kv[1]))}; not as they went: {len(looks)}")
+    if looks:
+        fail("pass-look", f"FAIL: a pass not drawn as it went {looks[:5]}")
     lonely = [x for r in results for x in r.get("seps", []) if x.get("label") == "Broken up" and x.get("ballD", 0) > 3]
     if lonely:
         fail("broken-up", f"FAIL: {len(lonely)} passes called 'Broken up' with no defender within 3 yards of the ball")

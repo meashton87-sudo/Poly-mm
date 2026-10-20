@@ -1192,11 +1192,13 @@
       sc.named = true;
     }
     if (mode === 'kick') kickoffUnits(sc, r, L, dir);
-    const ball = S('g', {}), inner = S('g', { class: 'ballmove' });
-    inner.append(S('ellipse', { cx: 0, cy: 0, rx: 3.4, ry: 5.2, fill: 'var(--ball)', stroke: 'rgba(255,255,255,.75)', 'stroke-width': 0.8 }));
+    const ball = S('g', {}), inner = S('g', { class: 'ballmove' }), lift = S('g', {});
+    const shadow = S('ellipse', { cx: 0, cy: 0, rx: 3.6, ry: 2.6, fill: '#000', opacity: 0 });
+    lift.append(S('ellipse', { cx: 0, cy: 0, rx: 3.4, ry: 5.2, fill: 'var(--ball)', stroke: 'rgba(255,255,255,.75)', 'stroke-width': 0.8 }));
+    inner.append(shadow, lift);
     ball.append(inner);
     svg.append(ball);
-    sc.ball = { g: ball, inner, x: sc.bx, L, z: 0, show: true };
+    sc.ball = { g: ball, inner, lift, shadow, x: sc.bx, L, z: 0, up: 0, show: true };
     sc.callLayer = put(S('g', {}));
     if (mode === 'kick') showCall(sc, { text: r.free_kick ? 'Free kick' : 'Kickoff', kind: 'info', slot: 0, x: 180, L: L + dir * 7 });
     place(sc);
@@ -1256,16 +1258,27 @@
     sc.actors.forEach((a) => a.g.setAttribute('transform', `translate(${a.x.toFixed(1)},${clip(Y(a.L) + a.side * GAP * a.w, yIn[0], yIn[1]).toFixed(1)})`));
     const b = sc.ball;
     if (b) {
-      b.g.setAttribute('transform', `translate(${b.x.toFixed(1)},${Y(b.L).toFixed(1)}) scale(${(1 + 0.35 * b.z).toFixed(2)})`);
+      // (on the ground where it is; in the air, the ball over its shadow by its height, and bigger as it comes up)
+      const up = b.up || 0;
+      b.g.setAttribute('transform', `translate(${b.x.toFixed(1)},${Y(b.L).toFixed(1)})`);
+      b.lift.setAttribute('transform', `translate(0,${(-up).toFixed(1)}) scale(${(1 + 0.35 * b.z).toFixed(2)})`);
+      b.shadow.setAttribute('opacity', up > 0.4 ? clip(0.45 - up * 0.012, 0.25, 0.45).toFixed(2) : 0);
       b.g.style.opacity = b.show ? 1 : 0;
     }
     // (a call-out stays clear of the scoreboard over the field's top on a phone: under the man it follows, if need be)
     const top = 18 + (bcast() ? PLAY_COVER.top * (360 / (sc.svg.parentElement.clientWidth || 360)) : 0);
     sc.calls.forEach((c) => {
       const at_ = c.follow ? { x: c.follow.x, L: c.follow.L } : c;
-      let y = Y(at_.L) - 26 - c.slot * 30;
-      if (y < top && c.follow) y = Y(at_.L) + 26 + c.slot * 30;
-      const x = clip(at_.x, c.w / 2 + 6, 354 - c.w / 2);
+      let y = c.below ? Y(at_.L) + 32 + c.slot * 30 : Y(at_.L) - 26 - c.slot * 30;
+      if (y < top && (c.follow || c.below === false)) y = Y(at_.L) + 26 + c.slot * 30;
+      let x = clip(at_.x, c.w / 2 + 6, 354 - c.w / 2);
+      // (beside the spot instead, on its side: a miss's call clear of the man and the ball; the other side at the edge)
+      if (c.side) {
+        y = Y(at_.L) - c.slot * 30;
+        x = at_.x + c.side * (c.w / 2 + 16);
+        if (x - c.w / 2 < 6 || x + c.w / 2 > 354) x = at_.x - c.side * (c.w / 2 + 16);
+        x = clip(x, c.w / 2 + 6, 354 - c.w / 2);
+      }
       y = clip(y, top, sc.H - 18);
       c.g.setAttribute('transform', `translate(${x.toFixed(1)},${y.toFixed(1)})`);
     });
@@ -2274,6 +2287,9 @@
   // how far through its flight the ball is at u (0 to 1) of the time: it slows as it goes (drag; d: how much, a deep
   // ball's more), leaving the hand d above its average speed and getting there d below
   const dragU = (u, d) => u * (1 + d) - d * u * u;
+  // a pass in the air is drawn this many points above its shadow for each unit of its height (z: a deep ball's arc
+  // tops out near 2.4), the way a camera behind the play sees it go up and come down: over a man's head, or short of him
+  const BALL_LIFT = 7;
   const flight = (air, arm) => (Math.abs(air) + 7) / ballSpeed(air, arm);              // seconds the ball is in the air
   const PLAY_SPEED = 1;        // real time, your snaps and theirs
   // the player's own speed-up (1x, 1.5x, 2x: the button on the field), kept on the device; a tap on the field skips
@@ -2338,15 +2354,15 @@
   function ballAt(sc, P, t) {
     let seg = null;
     for (const s of P.segs) if (s.t0 <= t + 1e-9) seg = s;
-    if (!seg) return { x: sc.bx, L: sc.losL, z: 0, show: true };
+    if (!seg) return { x: sc.bx, L: sc.losL, z: 0, up: 0, show: true };
     // (in his arms: at his side, on the drawn turf when he is out of bounds)
-    if (seg.kind === 'hold') { const p = at(seg.a, t); return { x: Math.min(p.x + 5, SX1 + XYD), L: p.L, z: 0, show: true }; }
+    if (seg.kind === 'hold') { const p = at(seg.a, t); return { x: Math.min(p.x + 5, SX1 + XYD), L: p.L, z: 0, up: 0, show: true }; }
     if (seg.kind === 'fly') {
       const u = clip((t - seg.t0) / Math.max(seg.t1 - seg.t0, 1e-6), 0, 1);
-      const w = seg.d ? dragU(u, seg.d) : u;
-      return { x: lerp(seg.x0, seg.x1, w), L: lerp(seg.L0, seg.L1, w), z: seg.h * 4 * u * (1 - u), show: true };
+      const w = seg.d ? dragU(u, seg.d) : u, z = seg.h * 4 * u * (1 - u);
+      return { x: lerp(seg.x0, seg.x1, w), L: lerp(seg.L0, seg.L1, w), z, up: seg.lift ? z * BALL_LIFT : 0, show: true };
     }
-    return { x: seg.x, L: seg.L, z: 0, show: !seg.hide };
+    return { x: seg.x, L: seg.L, z: 0, up: 0, show: !seg.hide };
   }
   function cast(sc) {
     const off = sc.actors.filter((a) => a.off), def = sc.actors.filter((a) => !a.off);
@@ -2365,7 +2381,8 @@
     const jit = (n) => (R() * 2 - 1) * n;
     const pickOf = (arr) => arr[Math.min(arr.length - 1, Math.floor(R() * arr.length))];
     const say = (t, text, kind, o) => P.calls.push({ t, text, kind, slot: 0, x: bx, L: L0, ...(o || {}) });
-    const fly = (t0, t1, x0, La, x1, Lb, h, d) => P.segs.push({ t0, t1, kind: 'fly', x0, L0: La, x1, L1: Lb, h: h || 0, d: d || 0 });
+    // (lift: a pass, drawn above its shadow by its height)
+    const fly = (t0, t1, x0, La, x1, Lb, h, d, lift) => P.segs.push({ t0, t1, kind: 'fly', x0, L0: La, x1, L1: Lb, h: h || 0, d: d || 0, lift: !!lift });
     const hold = (t0, a) => { if (a) P.segs.push({ t0, kind: 'hold', a }); };
     const rest = (t0, x, L, hide) => P.segs.push({ t0, kind: 'rest', x, L, hide });
     const fxAt = (t, f) => P.fx.push({ t, f });
@@ -3156,6 +3173,57 @@
     // who didn't catch it got a bad ball (which the play then shows). Buckets in yards, how often throws find each,
     // and the completion rate in each (approximate, after NGS).
     const SEP = [[0.4, 1], [1, 2], [2, 3], [3, 5], [5, 8]], SEP_P = [0.2, 0.27, 0.2, 0.2, 0.13], SEP_C = [0.42, 0.58, 0.7, 0.79, 0.87];
+    // How an incompletion misses (missOf). Of 2022-2025's (FTN charting, the play-by-play's passes defensed), 41% were a
+    // bad ball nobody got a hand on (not catchable, no pass defensed), 27% broken up (a defender credited with defending
+    // it, or a catchable ball contested), 12% thrown away, 11% dropped, 6% nearly intercepted and 4% catchable,
+    // uncontested and not caught (off his fingertips). A play the charting missed (and the game's own two-point tries) is
+    // drawn at the rates at its depth: [air yards up to, [bad ball, broken up, off his fingertips]], the drops and near
+    // picks aside (those are the real play's events)
+    const MISS_P = [[0, [0.434, 0.518, 0.048]], [5, [0.521, 0.414, 0.065]], [10, [0.548, 0.399, 0.053]], [15, [0.563, 0.376, 0.061]],
+      [20, [0.639, 0.318, 0.043]], [30, [0.693, 0.274, 0.033]], [Infinity, [0.687, 0.284, 0.029]]];
+    // which way a bad ball misses, by how he is moving as it comes: no public charting has it (FTN marks a ball
+    // uncatchable, not where it went), so the split is ours. Down the field (running along the throw, deep: 15 air yards
+    // or more) mostly long, then short; crossing the field mostly behind him or out ahead; standing still (a hitch, a
+    // screen) high or low, or wide of him
+    const BAD_DIR = { deep: [['over', 0.55], ['under', 0.3], ['wide', 0.15]], vert: [['over', 0.45], ['under', 0.35], ['wide', 0.2]],
+      side: [['behind', 0.35], ['ahead', 0.3], ['over', 0.2], ['under', 0.15]], still: [['under', 0.4], ['over', 0.35], ['wide', 0.25]] };
+    // (a catcher's hands: where the ball rides with him, at his side; ballAt's hold)
+    const handsOf = (p) => [Math.min(p[0] + 5 / XYD, FW + 1), p[1]];
+    const hands = (a, t) => handsOf(Wd.posAt(a.b, t));
+    // (tests, window.__sepLog: the pass as drawn, once baked, in yards: the ball against the man it went to. A catch or a
+    // pick: how far the ball is from his hands as it gets there and just after (gap). A miss: whether it was ever in his
+    // hands (held, seconds), how near it came to him while low enough to catch, out of the pocket (low; lowV as the camera
+    // draws it, in yards across the field), how far past him it came down
+    // along the throw (past), how far ahead of him along his run (lead) or to his side (side) it went by as he got
+    // there, how high (zc) and how far from him (reach), the nearest defender to it then (defAt) and to him (defNear),
+    // and where it ends up against him (rest))
+    function passCheck(row, o) {
+      const yd = (x) => (x - SX0) / XYD, d2 = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]), r2 = (v) => Math.round(v * 100) / 100;
+      const ball = (t) => { const b = ballAt(sc, P, t); return [yd(b.x), b.L, b.z || 0]; };
+      const body = (a, t) => { const p = at(a, t); return [yd(p.x), p.L]; };
+      const handsAt = (a, t) => { const p = at(a, t); return [yd(Math.min(p.x + 5, SX1 + XYD)), p.L]; };
+      const { tgt, by, B0, tThrow, tCatch, M } = o;
+      Object.assign(row, { tThrow: r2(tThrow), tCatch: r2(tCatch), t1: M ? r2(M.t1) : null, tEnd: M ? r2(M.tEnd) : null, fit: M ? r2(M.fit) : 0 });
+      if (!M) {
+        row.gap = r2(Math.max(d2(ball(tCatch - 0.004), handsAt(by, tCatch)), d2(ball(tCatch + 0.06), handsAt(by, tCatch + 0.06))));
+        return;
+      }
+      const Rc = body(tgt, tCatch), w = unit(Rc[0] - B0[0], Rc[1] - B0[1]), n = [-w[1], w[0]];
+      const a0 = body(tgt, tCatch - 0.6), a1 = body(tgt, tCatch - 0.3), u = unit(a1[0] - a0[0], a1[1] - a0[1]);
+      const t1 = M.t1, Lp = ball(t1 - 0.004), Rl = body(tgt, t1), C = ball(tCatch), segs = P.segs;
+      let held = 0, low = 99, lowV = 99;
+      const rh = (sc.H - 6) / (P.cam.hi - P.cam.lo) / XYD;          // (the camera's yards along the field to one across)
+      segs.forEach((s, i) => { if (s.kind === 'hold' && s.a === tgt && s.t0 > tThrow) held += (i + 1 < segs.length ? segs[i + 1].t0 : P.T) - s.t0; });
+      for (let t = tThrow + 0.15; t <= t1; t += 0.02) {
+        const q = ball(t), b = body(tgt, t);
+        if (q[2] < 0.5 && d2(q, B0) >= 4) { low = Math.min(low, d2(q, b)); lowV = Math.min(lowV, Math.hypot(q[0] - b[0], (q[1] - b[1]) * rh)); }
+      }
+      Object.assign(row, { held: r2(held), low: r2(low), lowV: r2(lowV), past: r2((Lp[0] - Rl[0]) * w[0] + (Lp[1] - Rl[1]) * w[1]),
+        lead: r2((C[0] - Rc[0]) * u[0] + (C[1] - Rc[1]) * u[1]), side: r2(Math.abs((C[0] - Rc[0]) * n[0] + (C[1] - Rc[1]) * n[1])),
+        zc: r2(C[2]), reach: r2(d2(C, Rc)), defAt: r2(Math.min(...K.def.map((d) => d2(C, body(d, tCatch))))),
+        defNear: r2(Math.min(...K.def.map((d) => d2(body(d, tCatch), Rc)))),
+        gap: r2(d2(ball(tCatch - 0.004), handsAt(tgt, tCatch))), rest: r2(d2(ball(P.T), body(tgt, P.T))) });
+    }
     // an incompletion is drawn contested: a man at most ~3.5 yd off (3 on a deep ball), never wide open. NFL tracking has
     // some throws to open men falling incomplete, but drawn that way they read as a rigged game (players said so)
     function separationFor(caught, yac, R, air) {
@@ -3349,11 +3417,23 @@
       const intc = e.evt === 'interception' || e.evt === 'pick_six';
       const caught = !intc && (!e.incomplete || e.evt === 'drop');
       const graded = !thrownAway && kind !== 'hail' && e.evt !== 'throwaway';
-      const sepd = !graded ? null : intc ? { sep: 0.4 + R() * 0.5, bucket: 0 } : e.evt === 'near_pick' ? { sep: 0.4 + R() * 0.6, bucket: 0 }
-        : separationFor(caught, Math.max(0, (e.yards || 0) - air), R, air);
+      // how it falls incomplete (missOf: the real play's charting), and the coverage to fit: a ball broken up or
+      // contested (FTN) had a man right there, one nobody contested a man a step or two off
+      const miss = !intc && (e.incomplete || thrownAway) ? missOf() : null;
+      const yacD = Math.max(0, (e.yards || 0) - air);
+      const sepd = !graded ? null : intc ? { sep: 0.4 + R() * 0.5, bucket: 0 } : miss === 'pick' ? { sep: 0.4 + R() * 0.6, bucket: 0 }
+        : miss === 'break' ? { sep: 0.4 + R() * 1, bucket: 1 } : miss && e.contested ? { sep: 0.5 + R() * 1.3, bucket: 1 }
+        // (a contested catch, FTN, with little after it: the man on him arrives with the ball)
+        : caught && !e.incomplete && e.contested && yacD < 5 ? { sep: 0.8 + R() * 0.9, bucket: 1 }
+        : separationFor(caught, yacD, R, air);
+      if (sepd && miss && miss !== 'break' && miss !== 'pick' && e.contested === false) sepd.sep = Math.max(1.6, sepd.sep);
       let shadow = null;
       if (sepd) {
-        const tS = Math.max(REACT_DEF + 0.3, tThrow - 1.6);
+        // (a man who will be right on him at the ball, contested as charted, broken up, picked: on him from early in the
+        // route and as the ball is thrown, never closing from wide open in its flight; one a step or two off closes as
+        // it comes)
+        const tight = sepd.sep < 2 && (intc || miss === 'break' || miss === 'pick' || !!e.contested);
+        const tS = tight ? REACT_DEF + 0.3 : Math.max(REACT_DEF + 0.3, tThrow - 1.6);
         Wd.run(tS);
         const rAt = (t) => tp.at(Math.max(0, t - tStart));
         const end = rAt(tCatch);
@@ -3367,6 +3447,7 @@
         const runOn = caught && !e.incomplete && (e.td || (e.yards || 0) - air >= 5);
         const ins = Math.sign(BX - end[0]) || 1, toBreak = (e.incomplete || e.evt === 'near_pick') && e.evt !== 'drop' && !thrownAway && kind !== 'hail' && sepd.sep < 2;
         const span = Math.max(0.3, tCatch - tS), t0 = Wd.t;
+        const spanS = tight ? Math.max(0.3, Math.min(tCatch, tThrow + 0.3) - tS) : span;
         const shadowOn = (d) => {
           const r0 = rAt(tS), d0 = here(d);
           const rel0 = [d0[0] - r0[0], d0[1] - r0[1]];
@@ -3380,7 +3461,7 @@
           const u = cov.man ? (toBreak ? [ins * 0.89, -dir * 0.45] : [ins * 0.55, -dir * 0.83]) : toBreak ? unit((Math.sign(z[0]) || ins) * 0.9, z[1] * 0.5)
             : runOn && dir * z[1] > -0.3 ? unit(away, -dir * 0.3) : z;
           leg(d, tS, 'track', { gain: 3, eff: 1, fn: (t) => {
-            const k = clip((t - tS) / span, 0, 1), q = rAt(Math.min(t, tCatch));
+            const k = clip((t - tS) / spanS, 0, 1), q = rAt(Math.min(t, tCatch));
             return [q[0] + rel0[0] * (1 - k) + u[0] * sepd.sep * k, q[1] + rel0[1] * (1 - k) + u[1] * sepd.sep * k];
           } });
         };
@@ -3464,14 +3545,267 @@
           });
         }
       }
+      // how this throw falls incomplete: as the real play went where it was charted (game_worker.js describe: FTN
+      // charting and the play-by-play's passes defensed), else at those plays' rates at its depth (MISS_P)
+      function missOf() {
+        if (thrownAway) return 'away';
+        if (e.evt === 'drop') return 'drop';
+        if (e.evt === 'near_pick') return 'pick';
+        if (kind === 'hail') return 'hail';
+        if (e.catchable !== undefined) return e.defended || (e.contested && e.catchable) ? 'break' : e.catchable ? 'tip' : 'bad';
+        const p = MISS_P.find(([a]) => air <= a)[1], u = R();
+        return u < p[0] ? 'bad' : u < p[0] + p[1] ? 'break' : 'tip';
+      }
+      // ---- the miss, made to look like what it was. A bad ball: over him (still above his reach as it gets to him,
+      // landing well past), short (it dies in front of him as he pulls up and comes back for it), behind a man on the
+      // move (he twists back for it) or out ahead of him (he goes for it), or wide of a man standing still. Broken up:
+      // the ball meets the defender's hand between them and is knocked away; nearly picked, it bounces off the
+      // defender's hands; off his fingertips, at the end of his dive; dropped, in his hands and out of them. He reacts
+      // as the ball comes (his envelope's turns and stops), then its path is fitted to where he really is: out of his
+      // reach (and the defenders') until it is down, unless it is one of those it reaches. Worked out on the world run
+      // on and back (look); a kind that cannot be drawn there (a man in the way, the sideline) gives way to the next
+      // likeliest. Returns the ball's segments to send, the call-out, when and where.
+      function missPlan() {
+        const t0 = Wd.t, rv = tgt, legs0 = rv.b.legs.slice();
+        const look = (t1) => {
+          Wd.run(t1);
+          const m = new Map(sc.actors.map((a) => [a, [a.b.hx.slice(), a.b.hy.slice()]]));
+          Wd.rewind(t0);
+          return (a, t) => {
+            const [hx, hy] = m.get(a), i = clip(t / Wd.dt, 0, hx.length - 1), j = Math.floor(i), j2 = Math.min(j + 1, hx.length - 1), u = i - j;
+            return [hx[j] + (hx[j2] - hx[j]) * u, hy[j] + (hy[j2] - hy[j]) * u];
+          };
+        };
+        const pos0 = look(tCatch + 0.1);
+        const R0 = pos0(rv, tCatch), Rb = pos0(rv, tCatch - 0.25), V0 = [(R0[0] - Rb[0]) / 0.25, (R0[1] - Rb[1]) / 0.25], s0 = Math.hypot(V0[0], V0[1]);
+        const w = unit(R0[0] - B0[0], R0[1] - B0[1]), nrm = [-w[1], w[0]];
+        const u0 = s0 > 0.3 ? [V0[0] / s0, V0[1] / s0] : w;
+        const moving = s0 >= 2.5, along = Math.abs(u0[0] * w[0] + u0[1] * w[1]) >= 0.7;
+        const add = (p, v, k) => [p[0] + v[0] * k, p[1] + v[1] * k];
+        const ground = (p) => [clip(p[0], -0.95, FW + 0.95), clip(p[1], FULL.lo + 0.6, FULL.hi - 0.6)];    // (the drawn turf)
+        const onGround = (p) => dist(p, ground(p)) < 1e-6;
+        let kind0 = miss, late = false;
+        // "Broken up" only with a defender really at the ball: when the cover man could not get there in time (he
+        // started too far off), it was a bad ball, and it shows (players saw "Broken up" with nobody near)
+        // (and at the catch point: within a step and a half of him as it gets there, never a ball knocked away from a man
+        // in the open; and never one who was wide open as it was thrown, a defender closing more than 4 yards a second of
+        // its flight: players saw "Broken up" with receivers wide open)
+        if (miss === 'break' || miss === 'pick') {
+          const bd = Math.min(...K.def.map((d) => dist(pos0(d, tCatch), catchPt)));
+          if (broke && (bd > 2.5 || dist(pos0(broke, tCatch), R0) > 1.5
+            || dist(pos0(broke, tThrow), pos0(rv, tThrow)) > 2.5 + 4 * (tCatch - tThrow))) late = true;
+          if (!broke || late) kind0 = 'bad';
+        }
+        // (the first man there, when nobody broke it up, arrives just after it, on the man it went to)
+        const brk = kind0 === 'break' || kind0 === 'pick' ? null : breakers[0];
+        if (brk && !thrownAway && miss !== 'drop') leg(brk, Math.max(t0, tCatch - 0.1), 'go', { x: R0[0] + out * 0.5, y: R0[1] + dir * 0.4, eff: 0.7 });
+        // the bad ball's way, drawn by how he is moving (BAD_DIR), then the others, likeliest first
+        const cls = !moving ? 'still' : along ? (air >= 15 ? 'deep' : 'vert') : 'side';
+        const odds = BAD_DIR[cls].slice(), order = [];
+        while (odds.length) {
+          const tot = odds.reduce((a, x) => a + x[1], 0);
+          let u = R() * tot, i = 0;
+          while (i < odds.length - 1 && u > odds[i][1]) { u -= odds[i][1]; i++; }
+          order.push(odds[i][0]); odds.splice(i, 1);
+          if (order.length === 1) odds.sort((a, b) => b[1] - a[1]);      // (after the first, the likeliest)
+        }
+        const ways = order.flatMap((k) => (k === 'wide' ? ['wide+', 'wide-'] : [k]));
+        const kinds = kind0 === 'bad' ? ways : kind0 === 'tip' ? ['tip', ...ways] : kind0 === 'drop' ? ['drop+', 'drop-'] : [kind0];
+        const sg = R() < 0.5 ? 1 : -1;             // (wide of him: this side first)
+        const jx = jit(0.3), r1 = R(), r2 = R();
+        // a flight from his hand to p, landing at t1 (h, d: its arc and drag): where it is, and how high, at time t
+        const flightOf = (p, t1, h, d) => (t) => {
+          const u = clip((t - tThrow) / Math.max(t1 - tThrow, 1e-3), 0, 1), f = dragU(u, d);
+          return [B0[0] + (p[0] - B0[0]) * f, B0[1] + (p[1] - B0[1]) * f, h * 4 * u * (1 - u)];
+        };
+        // through C as he gets there (tCatch) and on, `ext` yards past it: where it comes down, and when
+        const through = (C, ext, d) => {
+          const L = Math.max(dist(B0, C), 0.5), k = (L + ext) / L, f = L / (L + ext);
+          const uc = d > 1e-6 ? ((1 + d) - Math.sqrt((1 + d) ** 2 - 4 * d * f)) / (2 * d) : f;
+          return { p: [B0[0] + (C[0] - B0[0]) * k, B0[1] + (C[1] - B0[1]) * k], t1: tThrow + (tCatch - tThrow) / Math.max(uc, 0.05), uc };
+        };
+        const ZR = 0.5, REACH = 1.6;               // (out of his reach: above his hands, or more than an arm and a step off)
+        // (and out of it as it looks: on a phone a yard across the field is drawn much smaller than a yard along it, the
+        // camera's yards along it to one across, rho, about what the play's camera will be; distances `vis` in yards across)
+        const rho = clip((sc.H - 6) / clip(Math.abs(catchPt[1] - L0) + 42, 36, 120) / XYD, 1, 3.2);
+        // how far the ball, low enough to be caught, comes within reach of who (r yards, and vis as it looks), over its flight
+        // once out of the pocket: [in reach, in reach as it looks]
+        const inReach = (pos, f, t1, who, r, vis) => {
+          let p = 0, v = 0;
+          for (let t = tThrow + 0.15; t <= t1 + 1e-9; t += 0.02) {
+            const b = f(t);
+            if (b[2] >= ZR || dist(b, B0) < 4) continue;
+            for (const a of who) {
+              const q = pos(a, t), dd = Math.hypot(b[0] - q[0], b[1] - q[1]), dv = Math.hypot(b[0] - q[0], (b[1] - q[1]) * rho);
+              p = Math.max(p, r - dd); v = Math.max(v, (vis - dv) * 0.5);
+            }
+          }
+          return [p, v];
+        };
+        // what he does as it comes, from when he can tell where it is going, and after it (he pulls up: no faster than
+        // his envelope stops him)
+        const react = (k) => {
+          rv.b.legs = legs0.slice();
+          const tR = (x) => Math.max(t0, x), wd = k === 'wide+' ? sg : -sg;
+          if (k === 'over') { leg(rv, tR(tCatch - 0.25), 'go', { ...xy(add(R0, w, 9)), eff: 1 }); leg(rv, tCatch + 0.3, 'stand'); }       // after it, flat out
+          else if (k === 'under') leg(rv, tR(Math.max(tThrow + 0.5 * (tCatch - tThrow), tCatch - 0.9)), 'go', { ...xy(add(R0, w, air >= 15 ? -1.2 : 0.3)), eff: 0.95 });   // pulls up, comes back
+          else if (k === 'behind') { leg(rv, tR(tCatch - 0.3), 'go', { ...xy(add(R0, u0, -2.2)), eff: 0.8 }); leg(rv, tCatch + 0.35, 'stand'); }   // twists back for it
+          else if (k === 'ahead') { leg(rv, tR(tCatch - 0.3), 'go', { ...xy(add(R0, u0, 5)), eff: 1 }); leg(rv, tCatch + 0.45, 'stand'); }        // goes for it
+          else if (k === 'wide+' || k === 'wide-') { leg(rv, tR(tCatch - 0.3), 'go', { x: R0[0] + wd * 1.1, y: R0[1], eff: 0.6 }); leg(rv, tCatch + 0.3, 'stand'); }
+          else if (k === 'tip') { leg(rv, tR(tCatch - 0.35), 'go', { ...xy(add(R0, moving ? u0 : nrm, (moving ? 1 : sg) * 2.4)), eff: 1 }); leg(rv, tCatch + 0.3, 'stand'); }   // lays out
+          else leg(rv, tCatch + (k === 'drop+' || k === 'drop-' ? 0.2 : 0.1), 'stand');
+        };
+        const LABEL = { over: air >= 10 ? 'Overthrown' : 'Over his head', under: air >= 10 ? 'Underthrown' : 'In the dirt', behind: 'Behind him',
+          ahead: 'Led too far', 'wide+': 'Wide of him', 'wide-': 'Wide of him', tip: 'Off his fingertips', break: 'Broken up', pick: 'Almost picked!',
+          'drop+': 'Dropped!', 'drop-': 'Dropped!', away: 'Thrown away', hail: 'Knocked down' };
+        // the ball's path for kind k with him (and everyone) where pos has them; s: a little farther off each try.
+        // Returns its segments, where the call goes and when, and how far it is from working: hard, what makes it read as
+        // k (out of his reach, where k says, on the ground); soft, how it looks (clear of the others, roomy). 0: it does
+        const shape = (k, pos, s) => {
+          const Rc = pos(rv, tCatch), out_ = { k, segs: [], hard: 0, soft: 0, tSay: tCatch, at: Rc };
+          const sum = (a) => a[0] + a[1];
+          // (its flight, never past the drawn turf: one that would have to be is all but never the one drawn)
+          const main = (p0, t1, h, d) => {
+            const p = ground(p0);
+            if (dist(p, p0) > 1e-6) out_.hard += 50;
+            out_.segs.push(['fly', tThrow, t1, B0, p, h, d, true]); out_.f = flightOf(p, t1, h, d); out_.t1 = t1; out_.land = p;
+          };
+          const hop = (t, p, v, len, h, T) => { const q = ground(add(p, v, len)); out_.segs.push(['fly', t, t + T, p, q, h, 0]); return q; };
+          const restAt = (t, p) => { out_.segs.push(['rest', t, p]); out_.rest = p; out_.tEnd = t; };
+          // (him: out of his reach, and as it looks; everyone else, the defense and his teammates, who it must not look
+          // thrown to either)
+          const others = sc.actors.filter((a) => a !== rv && a !== passer);
+          const clearOfHim = (f, t1, r, vis) => { const [p, v] = inReach(pos, f, t1, [rv], r, vis); out_.hard += p; out_.soft += v; };
+          const clearOfAll = (f, t1, r, vis) => { out_.soft += sum(inReach(pos, f, t1, others, r, vis)); };
+          // (his way just before he could react: what behind and ahead of him mean)
+          const ua = pos(rv, tCatch - 0.6), ub = pos(rv, tCatch - 0.3), ut = unit(ub[0] - ua[0], ub[1] - ua[1]);
+          if (k === 'over' || k === 'behind' || k === 'ahead' || k === 'wide+' || k === 'wide-') {
+            // (over him: just past him, up where he cannot get a hand to it, as he runs under it)
+            const C = k === 'over' ? add(add(Rc, moving ? u0 : w, 1.2), nrm, jx) : k === 'behind' ? add(Rc, u0, -(2.6 + r1 * 0.8 + s * 0.7)) : k === 'ahead' ? add(Rc, u0, 3 + r1 * 0.8 + s * 0.8)
+              : [Rc[0] + (k === 'wide+' ? sg : -sg) * (2.6 + r1 * 0.6 + s * 0.7), Rc[1]];             // (wide: to his side, across the field)
+            let ext = k === 'over' ? (air >= 15 ? 5 : 3.5) + r2 * 2 + s * 1.5 : k === 'wide+' || k === 'wide-' ? 1.2 + r2 : 2 + r2 * 1.5;
+            let T = through(C, ext, arcD);
+            for (let i = 0; i < 6 && !onGround(T.p); i++) { ext *= 0.6; T = through(C, ext, arcD); }
+            // (over him: above his hands as it gets to him, a short one thrown high enough to be)
+            const h = k === 'over' ? Math.max(arcH, 1.15, 1.25 / Math.max(4 * T.uc * (1 - T.uc), 0.05)) : arcH;
+            main(T.p, T.t1, h, arcD);
+            const v = unit(T.p[0] - B0[0], T.p[1] - B0[1]), q = hop(T.t1, T.p, v, k === 'over' && air >= 15 ? 3 : 1.5, 0.2, 0.35);
+            restAt(T.t1 + 0.35, q);
+            out_.at = C;
+            clearOfHim(out_.f, T.t1, REACH, 2.6);
+            clearOfAll(out_.f, T.t1, 1.2, 2);
+            const lead = (C[0] - Rc[0]) * ut[0] + (C[1] - Rc[1]) * ut[1];
+            if (k === 'behind') out_.hard += Math.max(0, lead + 1.6);
+            else if (k === 'ahead') out_.hard += Math.max(0, 1.6 - lead);
+            else if (k !== 'over') out_.hard += Math.max(0, 1.9 - dist(C, Rc));
+            else {
+              const R1 = pos(rv, T.t1), past = (T.p[0] - R1[0]) * w[0] + (T.p[1] - R1[1]) * w[1];
+              out_.hard += Math.max(0, 1.6 - past);
+              out_.soft += Math.max(0, 2.2 - dist(T.p, R1));
+              out_.tSay = Math.min(T.t1, tCatch + 0.15);
+            }
+            if (k === 'ahead' && Math.min(...[0, 0.1, 0.2, 0.3].map((x) => dist(pos(rv, T.t1 + x), T.p))) < 3.2) out_.dive = T.t1;
+          } else if (k === 'under') {
+            const tL = tCatch - 0.12, Rl = pos(rv, tL), us = (air >= 15 ? 4.2 + r1 * 1.2 : 1.9 + r1) + s * 0.7;
+            const p = add(Rl, w, -us);
+            main(p, tL, arcH * 1.15, arcD);
+            const q = hop(tL, p, unit(w[0] + nrm[0] * sg * 0.8, w[1] + nrm[1] * sg * 0.8), 0.45, 0.1, 0.3);
+            restAt(tL + 0.3, q);
+            out_.at = p; out_.tSay = tL;
+            // (into the ground in front of him: it may come down at his feet, a step short of his hands)
+            const ahead_ = (Rl[0] - p[0]) * w[0] + (Rl[1] - p[1]) * w[1];
+            clearOfHim(out_.f, tL, 1.1, 1.8);
+            clearOfAll(out_.f, tL, 1.2, 2);
+            out_.hard += Math.max(0, 1.5 - ahead_);
+          } else if (k === 'tip') {
+            // (at the end of his reach the way he is going; each try a little to one side of it, then the other)
+            const a0 = [0, 0.6, -0.6, 1, -1, 0.3][s] || 0, d0 = moving ? u0 : [nrm[0] * sg, nrm[1] * sg];
+            const dv = [d0[0] * Math.cos(a0) - d0[1] * Math.sin(a0), d0[0] * Math.sin(a0) + d0[1] * Math.cos(a0)], C = add(Rc, dv, 1.3);
+            main(C, tCatch, arcH, arcD);
+            // (it glances off across his dive, not on along it where he lands; each try the other way, then farther)
+            const v = unit(C[0] - B0[0], C[1] - B0[1]), along = v[0] * dv[0] + v[1] * dv[1], pv = [v[0] - dv[0] * along, v[1] - dv[1] * along];
+            const off_ = Math.hypot(pv[0], pv[1]) > 0.3 ? unit(pv[0], pv[1]) : [-dv[1], dv[0]], sd = r1 < 0.5 ? 1 : -1;
+            const gv = unit(off_[0] * sd + dv[0] * 0.3, off_[1] * sd + dv[1] * 0.3);
+            const q1 = hop(tCatch, C, gv, 1.6 + r2 * 0.8 + (s >= 3 ? 0.8 : 0), 0.32, 0.35);
+            const q = hop(tCatch + 0.35, q1, gv, 0.7, 0.08, 0.22);
+            restAt(tCatch + 0.57, q);
+            out_.at = C; out_.dive = tCatch + 0.12;
+            clearOfAll(out_.f, tCatch - 0.15, 1, 1.4);
+          } else if (k === 'break' || k === 'pick') {
+            const D = pos(broke, tCatch), Hh = handsOf(Rc), g = Math.min(k === 'pick' ? 0.25 : 0.55, 0.5 * dist(Hh, D)), Kp = add(D, unit(Hh[0] - D[0], Hh[1] - D[1]), g);
+            main(Kp, tCatch, arcH, arcD);
+            // (knocked away to one side of its line, or off his hands and up: each try the other side, then farther)
+            const v = unit(Kp[0] - B0[0], Kp[1] - B0[1]), sd = (s % 2 ? -1 : 1) * (r1 < 0.5 ? 1 : -1), far = Math.floor(s / 2) * 1.2;
+            const rot = (a) => [v[0] * Math.cos(a) - v[1] * Math.sin(a), v[0] * Math.sin(a) + v[1] * Math.cos(a)];
+            const q1 = k === 'pick' ? hop(tCatch, Kp, rot(sd * 0.35), 1.4 + r2 + far, 0.6, 0.5) : hop(tCatch, Kp, rot(sd * 0.95), 2.4 + r2 * 1.5 + far, 0.45, 0.45);
+            const tq = tCatch + (k === 'pick' ? 0.5 : 0.45), q = hop(tq, q1, v, 0.8, 0.08, 0.25);
+            restAt(tq + 0.25, q);
+            out_.at = Kp;
+          } else if (k === 'drop+' || k === 'drop-') {
+            const Hh = handsOf(Rc), tOut = tCatch + 0.16, H2 = handsOf(pos(rv, tOut)), sd = k === 'drop+' ? sg : -sg;
+            main(Hh, tCatch, arcH, arcD);
+            out_.segs.push(['hold', tCatch]);
+            // (it pops off his hands to one side and drops behind him as he runs on)
+            const pv = unit(-u0[0] * 0.35 - u0[1] * sd, -u0[1] * 0.35 + u0[0] * sd);
+            const q1 = hop(tOut, H2, pv, 1.3 + r2 * 0.5, 0.28, 0.4);
+            const q = hop(tOut + 0.4, q1, pv, 0.5, 0.06, 0.2);
+            restAt(tOut + 0.6, q);
+            out_.at = Hh; out_.tSay = tCatch + 0.1;
+          } else if (k === 'hail') {
+            main(catchPt, tCatch, arcH, arcD);
+            const q = hop(tCatch, catchPt, unit(jit(1), dir), 1.4 + r2, 0.35, 0.4);
+            restAt(tCatch + 0.4, q);
+            out_.at = catchPt;
+          } else {           // thrown away: out of bounds, past the sideline
+            main(catchPt, tCatch, arcH, arcD);
+            restAt(tCatch, catchPt);
+            out_.at = catchPt;
+          }
+          // (and it lies on the ground clear of him to the end of the play: never ending up in his hands)
+          if (out_.rest && k !== 'away') {
+            for (let t = out_.tEnd; t <= out_.tEnd + 1.3; t += 0.1) out_.soft += Math.max(0, 1.5 - dist(out_.rest, pos(rv, t))) * 0.2;
+            out_.hard += Math.max(0, 1.1 - dist(out_.rest, pos(rv, out_.tEnd + 1.2)));
+          }
+          out_.bad = out_.hard * 100 + out_.soft;
+          return out_;
+        };
+        // (a near miss of its own kind before a wider one; a wider one of its own kind before the next kind)
+        let best = null;
+        const seen = new Map();
+        for (const ss of [[0, 1, 2], [3, 4, 5]]) {
+          for (const k of kinds) {
+            if (!seen.has(k)) { react(k); seen.set(k, look(tCatch + 3.2)); }
+            for (const s of ss) {
+              const o = shape(k, seen.get(k), s);
+              if (!best || o.bad < best.bad - 1e-9) best = o;
+              if (o.bad <= 1e-9) break;
+            }
+            if (best.bad <= 1e-9) break;
+          }
+          if (best.bad <= 1e-9) break;
+        }
+        react(best.k);
+        const k = best.k;
+        if (best.dive) down(best.dive, rv);           // (a dive: down where he lands)
+        return { kind: k.replace(/[+-]$/, ''), late, text: LABEL[k], tSay: best.tSay, at: best.at, tEnd: best.tEnd, land: best.land, t1: best.t1, rest: best.rest, fit: best.bad,
+          send: () => best.segs.forEach((g) => {
+            if (g[0] === 'fly') fly(g[1], g[2], px(g[3][0]), g[3][1], px(g[4][0]), g[4][1], g[5], g[6], g[7]);
+            else if (g[0] === 'hold') hold(g[1], rv);
+            else { rest(g[1], px(g[2][0]), g[2][1]); rest(g[1] + 1.0, px(g[2][0]), g[2][1], true); }
+          }) };
+      }
       // the throw
       Wd.run(tThrow);
       const qT = here(passer);
       // (a throwaway sails out past the sideline it is thrown to: 2.5 yards beyond it, never landing in bounds)
       // (over the sideline, on the drawn turf: never into the stands)
       if (thrownAway) { const sx = sidelineX(qT[0] + side * 10); catchPt = [sx + Math.sign(sx - FW / 2) * 0.3, inL(fwd(L0, Math.max(3, air)))]; }
-      // (a lofted ball, higher and slowing more; a line drive, flatter)
-      fly(tThrow, tCatch, px(qT[0]) + 4, qT[1], px(catchPt[0]), catchPt[1], Math.min(2.4, 0.3 + Math.max(0, air) * 0.055), air >= 20 ? 0.22 : air > 0 ? 0.14 : 0.08);
+      // the ball's flight: from his hand (where he carries it, a step to his side) on a straight line over the ground,
+      // in an arc above its shadow (a lofted ball higher and slowing more; a line drive, flatter). It goes out once
+      // where it ends is known: in the catcher's hands as he gets there, the picker's, or where the miss takes it
+      const B0 = [qT[0] + 4 / XYD, qT[1]];
+      const arcH = Math.min(2.4, 0.3 + Math.max(0, air) * 0.055), arcD = air >= 20 ? 0.22 : air > 0 ? 0.14 : 0.08;
+      const throwTo = (t1, p, h, d) => fly(tThrow, t1, px(B0[0]), B0[1], px(p[0]), p[1], h ?? arcH, d ?? arcD, true);
       ring(tThrow, passer, false);
       leg(passer, tThrow + 0.15, 'go', { x: qT[0] + jit(1), y: qT[1] + dir * 1.2, eff: 0.25 });
       // the defense breaks on the ball a beat after it is out: the nearest two to where it is going
@@ -3485,16 +3819,11 @@
         const pl = runFrom(picker, tThrow + 0.2, [[catchPt[0] - out * 0.4, catchPt[1] - dir * 0.6]], { T: tCatch - tThrow - 0.2 });
         if (pl.late > 0.05) tCatch += pl.late;
       }
-      // an incompletion has to read as one: the nearest defender gets to the ball and breaks it up, or, when nobody
-      // can (the receiver really was open), the throw sails past him. Never a dead-open man and a ball that just
-      // falls (players called that the game cheating)
-      let broke = null, overthrow = false;
-      const contest = !intc && !thrownAway && kind !== 'hail' && (e.incomplete || e.evt === 'near_pick') && e.evt !== 'drop';
-      if (contest) {
-        // a covered man: his defender gets a hand on it; an open one (the rare open incompletion): a bad ball
-        if (shadow && sepd && sepd.sep < 2) broke = shadow;            // (he goes for the ball below)
-        else overthrow = true;
-      }
+      // an incompletion has to read as what it was (missOf): broken up, the cover man gets to the ball and gets a hand
+      // on it; a bad ball misses where you can see it. Never a dead-open man and a ball that just falls (players called
+      // that the game cheating)
+      let broke = null;
+      if ((miss === 'break' || miss === 'pick') && shadow && sepd && sepd.sep < 2) broke = shadow;            // (he goes for the ball below)
       breakers.forEach((d, i) => {
         if (d === picker || d === broke || d === shadow) return;
         const near_ = dist(here(d), catchPt);
@@ -3516,30 +3845,35 @@
       // the breakup: from the step or two he was off, he closes on the ball as it comes and gets a hand to it (a
       // "Broken up" with the man still a stride away reads as no play on the ball at all)
       if (broke) {
-        const tB = Math.max(Wd.t, tCatch - 0.8), to = [catchPt[0] - out * 0.25, catchPt[1] + dir * 0.3];
+        const tB = Math.max(Wd.t, tCatch - 1), to = [catchPt[0] - out * 0.25, catchPt[1] + dir * 0.3];
         Wd.run(tB);
         // (already running his way, as a man trailing a receiver is: straight there; runFrom's step along his
         // momentum would carry him past the ball and back)
         const p = here(broke), [ux, uy] = unit(to[0] - p[0], to[1] - p[1]), s = vel(broke);
-        if (s < 1 || (broke.b.vx * ux + broke.b.vy * uy) / s > 0.85) follow(broke, Wd.t, plan(broke, [p, to], { v0: s, T: tCatch - Wd.t + 0.02, v1: 2 }));
-        else runFrom(broke, tB, [to], { T: tCatch - tB + 0.02, v1: 2 });
+        // (at speed to the ball as it gets there: a man easing up to it there falls a step behind a receiver in full stride)
+        if (s < 1 || (broke.b.vx * ux + broke.b.vy * uy) / s > 0.85) follow(broke, Wd.t, plan(broke, [p, to], { v0: s, T: tCatch - Wd.t + 0.02 }));
+        else runFrom(broke, tB, [to], { T: tCatch - tB + 0.02 });
       }
+      // the miss: what he does as the ball comes and where it goes (missPlan, worked out on the world run on and back)
+      const M = miss ? missPlan() : null;
+      if (M && M.late) broke = null;
       Wd.run(tCatch);
-      // "Broken up" only with a defender really at the ball: when the cover man could not get there in time (he
-      // started too far off), it was a bad ball, and it says so (players saw "Broken up" with nobody near)
       const ballD = Math.min(...K.def.map((d) => dist(here(d), catchPt)));
-      const late = !!(broke && ballD > 2.5);
-      if (late) { broke = null; overthrow = true; }
+      const late = !!(M && M.late);
       // (tests: how open the target really was on the field when the ball got there, against the outcome)
       const sepRow = window.__sepLog ? { evt: e.evt || '', inc: !!e.incomplete, caught, intc, yac: Math.max(0, (e.yards || 0) - air), air,
         late, drawn: sepd && sepd.sep, actual: Math.min(...K.def.map((d) => dist(here(d), here(tgt)))), ballD, kind,
+        atThrow: Math.min(...K.def.map((d) => dist(Wd.posAt(d.b, tThrow), Wd.posAt(tgt.b, tThrow)))),
         openDeep: K.recv.filter((a) => a !== tgt && a !== passer && Math.abs(here(a)[1] - L0) > 12 && Math.min(...K.def.map((d) => dist(here(d), here(a)))) > 5).length,
         deep: K.recv.filter((a) => a !== tgt && a !== passer && Math.abs(here(a)[1] - L0) > 12).map((a) => [a.label, +Math.abs(here(a)[1] - L0).toFixed(0), +Math.min(...K.def.map((d) => dist(here(d), here(a)))).toFixed(1)]),
-        man: !!cov.man, shell: cov.shell,
+        man: !!cov.man, shell: cov.shell, miss: M ? M.kind : intc ? 'pick6' : 'catch', who: sc.actors.indexOf(tgt), data: e.catchable === undefined ? '' : `${e.catchable ? 'c' : ''}${e.contested ? 'x' : ''}${e.defended ? 'd' : ''}`,
         crowd: K.def.filter((d) => dist(here(d), here(tgt)) < Math.max(2.5, (sepd ? sepd.sep : 0) + 1.5)).length } : null;
       if (sepRow) window.__sepLog.push(sepRow);
+      // (tests: where the ball really is, as drawn, against the man it goes to: passCheck, once the play is baked)
+      if (sepRow) P.chk = () => passCheck(sepRow, { tgt, by: intc ? picker : tgt, B0, tThrow, tCatch, M });
       // what happened at the catch point
       if (intc) {
+        throwTo(tCatch, hands(picker, tCatch));
         hold(tCatch, picker);
         ring(tCatch, picker);
         say(tCatch, 'Intercepted!', 'hit', { follow: picker });
@@ -3551,26 +3885,23 @@
         lastEnd(tEnd + 1.0);
         return;
       }
-      if (e.incomplete || ['throwaway', 'drop', 'near_pick'].includes(e.evt)) {
-        const brk = broke ? null : breakers[0];
-        // a bad ball misses where you can see it: long past him on a deep throw, behind him or at his feet short
-        const g = thrownAway ? catchPt : overthrow ? (air >= 15 ? [inX(catchPt[0] + out * 1.5 + jit(1)), inL(catchPt[1] + dir * 4)]
-          : [inX(catchPt[0] - out * 2.2 + jit(0.8)), inL(catchPt[1] - dir * 1.5)])
-          : [inX(catchPt[0] + jit(1.5)), inL(catchPt[1] + dir * 1.4)];
-        fly(tCatch, tCatch + 0.2, px(catchPt[0]), catchPt[1], px(g[0]), g[1], 0.15);
-        rest(tCatch + 0.2, px(g[0]), g[1]);
-        rest(tCatch + 1.0, px(g[0]), g[1], true);
-        if (brk && !thrownAway) leg(brk, tCatch - 0.1, 'go', { x: catchPt[0] + out * 0.5, y: catchPt[1] + dir * 0.4, eff: 0.7 });
-        const text = e.evt === 'drop' ? 'Dropped!' : e.evt === 'near_pick' ? 'Almost picked!' : thrownAway ? 'Thrown away'
-          : kind === 'hail' ? 'Knocked down' : two ? 'Incomplete: no good' : overthrow ? (air >= 15 ? 'Overthrown' : 'Off target') : broke ? 'Broken up' : 'Incomplete';
-        if (sepRow) sepRow.label = text;
-        say(tCatch, text, e.evt === 'near_pick' ? 'boom' : 'info', { x: px(inX(catchPt[0])), L: catchPt[1] });
-        if (e.evt === 'drop') down(tCatch + 0.1, tgt);
-        leg(tgt, tCatch + 0.1, 'stand');
-        whistle(tCatch + 0.2, catchPt);
-        lastEnd(tCatch + 1.4);
+      if (M) {
+        M.send();
+        if (sepRow) sepRow.label = M.text;
+        // (the call by him, clear of his way and the ball's: above him, below, or to a side, whichever he is not running
+        // toward and the ball did not go; a side that runs off the field the least)
+        const Rs = here(tgt), v = [tgt.b.vx, tgt.b.vy], mid = M.rest ? [(M.at[0] + M.rest[0]) / 2, (M.at[1] + M.rest[1]) / 2] : M.at;
+        const lw = (M.text.length * 8.5 + 20) / XYD + 2.5, lay = [[{ below: false }, [0, 1]], [{ below: true }, [0, -1]], [{ side: 1 }, [1, 0]], [{ side: -1 }, [-1, 0]]]
+          .map(([o, d]) => [o, Math.max(0, v[0] * d[0] + v[1] * d[1]) + 4 * Math.max(0, (mid[0] - Rs[0]) * d[0] + (mid[1] - Rs[1]) * d[1])
+            + (d[0] && (Rs[0] + d[0] * lw < 0 || Rs[0] + d[0] * lw > FW) ? 3 : 0) + (d[0] ? 0.3 : 0)])
+          .reduce((a, b) => (b[1] < a[1] ? b : a))[0];
+        say(M.tSay, two ? `${M.text.replace(/!$/, '')}: no good` : M.text, M.kind === 'pick' ? 'boom' : 'info', { x: px(inX(Rs[0])), L: Rs[1], ...lay });
+        whistle(M.tEnd + 0.2, here(tgt));
+        lastEnd(M.tEnd + 1.2);
         return;
       }
+      // a catch: the ball gets to his hands as he does, and stays in them
+      throwTo(tCatch, hands(tgt, tCatch));
       hold(tCatch, tgt);
       ring(tCatch, tgt);
       const yac = e.td ? 99 : fwd(0, fwd(L0, e.yards) - catchPt[1]);
@@ -3928,7 +4259,9 @@
     } else if (e.ev === 'kickoff') {
       kickoff();
     } else return null;
-    return finishCamera();
+    finishCamera();
+    if (P.chk) P.chk();
+    return P;
 
     // ---- special teams
     function specialKick() {

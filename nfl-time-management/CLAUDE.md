@@ -93,6 +93,11 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   engine never reads them; game_sweep.js checks the same seed plays the same with them). Never let a drawing reach the
   engine's sampling or the grading; in Versus vsSealed sends the room only what its cleanAction keeps. A new kind of
   drawing gets a fault message in SKETCH_FAULT and a case in browser_test.py's DRAW_FUZZ.
+- How a pass looks (every mode; game.js missOf, missPlan, passCheck): presentation only, never the engine's draw or
+  the grading. A catch goes to the catcher's hands; an incompletion is drawn as its real play was charted (playbook.py
+  _ball: FTN catchable and contested, a pass defensed; describe() hands them to the animation), fitted to where everyone
+  is (the world run on and back) and out of the receiver's reach until it is down. browser_test.py PASS_LOOK draws every
+  kind of result and pass_look_problems checks each as drawn, on the real plays too: keep both passing.
 - Pro data (src/nflclock/pro.py build: pro_drives.json, pro_runs.json -> web/pro/drives.json, runs.json, d*.json, r*.json;
   generated, never committed; the site workflow builds it and deploys it to the worker's assets). Each spot's teams come
   from history.History.teams with drive=True: the lineup of the real drive from the spot on, everyone who touched the

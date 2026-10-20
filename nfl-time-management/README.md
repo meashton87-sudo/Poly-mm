@@ -568,7 +568,14 @@ measured depth curves (pass blockers about 4 yards in 3 s), and a pressured pass
 he throws. Backs reach the line about 2.5 s after the snap, as in tracking. After the catch or handoff the
 ball carrier runs to daylight; the defender who can get to him first comes at a pursuit angle and meets
 him a yard or two short of the spot, a second arrives just after, the rest chase, his teammates block,
-and after the whistle everyone eases up. A go route is 20.5 yards deep 3.5 s after the snap (tracking:
+and after the whistle everyone eases up. The ball flies over its shadow, drawn higher the higher it is. A catch
+lands in the receiver's hands as he gets there; an incompletion looks like what the real play's FTN charting
+says it was (2022-2025: of the incompletions, 41% a bad ball nobody touched, 27% broken up, 12% thrown away,
+11% dropped, 6% nearly intercepted, 4% catchable but not caught): a bad ball sails over his head and lands well
+past him, dies in front of him as he pulls up, goes behind a man on the move or out ahead of him, or wide of one
+standing still (which way is ours to draw, by how he is moving: nobody charts it publicly), always out of his
+reach until it is down; a breakup meets the defender's hand between them, a near pick bounces off a defender's
+hands, a ball off his fingertips ends his dive, a drop is in his hands and out of them. A go route is 20.5 yards deep 3.5 s after the snap (tracking:
 19.4); `node web/motion_test.js` checks the envelope, the routes and the coverage. Punts, field goals and extra points shift into their formations
 before the snap, and kickoffs line up the 2024 way (the kicking team at the receiving 40, nine in the
 setup zone, two returners deep, nobody moving until the catch); special-teams units are drawn in team
