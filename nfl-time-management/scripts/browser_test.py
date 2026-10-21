@@ -1587,7 +1587,7 @@ WORKER_SPY = """(() => {
   const pm = Worker.prototype.postMessage;
   Worker.prototype.postMessage = function (m, t) {
     try { if (m && m.scen && m.type !== 'init') (window.__scenIds = window.__scenIds || []).push(`${m.type}|${m.scen.id}`); } catch (e) { /* not the game's */ }
-    try { if (m && m.type === 'step' && m.action && m.action.call != null) (window.__stepActs = window.__stepActs || []).push({ call: m.action.call, pers: m.action.pers ?? null }); } catch (e) { /* not the game's */ }
+    try { if (m && m.type === 'step' && m.action && m.action.call != null) (window.__stepActs = window.__stepActs || []).push({ call: m.action.call, pers: m.action.pers ?? null, form: m.action.form ?? null }); } catch (e) { /* not the game's */ }
     return pm.call(this, m, t);
   };
 })();"""
@@ -1712,6 +1712,115 @@ async def qb_swap(browser, base: str, shots: str = "") -> list[str]:
 
 # your grouping as the page has it, the men swapped in, and the calls snapped so far (WORKER_SPY)
 PERS_NOW = """() => { const { G } = window.__draw.get(); return { pers: G.pers || null, who: G.persWho || null, acts: window.__stepActs || [] }; }"""
+
+
+# the formation as the page has it, and your quarterback's and your back's dots on the field (page x, y: down the screen)
+FORM_NOW = """() => { const { G } = window.__draw.get(), M = document.getElementById('field').getScreenCTM();
+  const at = (re) => { const g = [...document.querySelectorAll('#field g.dot.me')].find((x) => re.test(x.getAttribute('aria-label') || '')); if (!g) return null;
+    const m = /translate\\(([-\\d.]+),([-\\d.]+)\\)/.exec(g.getAttribute('transform') || ''); const p = new DOMPoint(+m[1], +m[2]).matrixTransform(M); return [p.x, p.y]; };
+  return { form: G.form || null, qb: at(/Quarterback/), rb: at(/Running back/), chip: (document.getElementById('formBtn') || {}).textContent || '', acts: window.__stepActs || [] }; }"""
+
+
+async def formation_pick(browser, base: str, shots: str = "") -> list[str]:
+    """The formation (game.js openForm, formation; engine.js FORM_CODE), on a phone: the chip beside Personnel opens a
+    sheet of the quarterback's spots and the receivers' looks; Pistol moves the quarterback up and the back behind him,
+    the chip says so, and the pass snapped goes to the simulator with form 'pistol'; Empty takes the back out of the
+    backfield and goes to the simulator with no formation (the lineup only); Back to the real lineup clears it."""
+    out: list[str] = []
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    await ctx.add_init_script("window.__sepLog = []; try { localStorage.setItem('tmd:v3:seen', 'true'); } catch (e) {}")
+    await ctx.add_init_script(WORKER_SPY)
+    page = await ctx.new_page()
+    errs: list[str] = []
+    page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+
+    async def pick(label):
+        await page.click("#formBtn", timeout=3000)
+        await page.wait_for_selector("#mBody .pgroup", timeout=5000)
+        if shots:
+            await page.screenshot(path=str(Path(shots) / f"formation-sheet-{label.lower()}.png"))
+        await page.locator("#mBody .pgroup", has_text=label).first.click(timeout=3000)
+        await page.wait_for_timeout(200)
+        await page.click("#mBody .pdone", timeout=3000)
+        await page.wait_for_timeout(1500)        # (the men jog to their new spots)
+        return await page.evaluate(FORM_NOW)
+
+    async def snap_pass():
+        n0 = len((await page.evaluate(FORM_NOW))["acts"])
+        await page.locator("#dock .key.big:visible", has_text="Pass").first.click(timeout=3000)
+        await page.wait_for_selector("#snapGo", timeout=10000)
+        await page.click("#snapGo", timeout=5000)
+        for _ in range(100):
+            await page.wait_for_timeout(100)
+            acts = (await page.evaluate(FORM_NOW))["acts"]
+            if len(acts) > n0:
+                return acts[n0]
+        return None
+
+    async def next_snap():
+        for _ in range(300):
+            await page.wait_for_timeout(100)
+            if await page.locator("#field.playing").count():
+                await page.click("#field", timeout=2000)
+            elif await page.locator("#dock .result .btn:visible").count():
+                await page.locator("#dock .result .btn").first.click(timeout=2000)
+            elif await page.locator("#formBtn:visible").count() and await page.locator("#dock .key.big:visible", has_text="Pass").count():
+                return True
+        return False
+    try:
+        if not await to_offense(page, base):
+            return ["the formation: the first snap never came up"]
+        if not await page.locator("#formBtn:visible").count():
+            return ["the formation: no Formation chip beside Personnel"]
+        before = await page.evaluate(FORM_NOW)
+        if "as lined up" not in before["chip"]:
+            out.append(f"the formation: the chip does not say as lined up at first: {before['chip']!r}")
+        now = await pick("Pistol")
+        if not now["form"] or now["form"].get("qb") != "pistol":
+            out.append(f"the formation: Pistol picked, but the page has {now['form']!r}")
+        if "Pistol" not in now["chip"]:
+            out.append(f"the formation: Pistol picked, but the chip says {now['chip']!r}")
+        # (the quarterback a yard nearer the line than in the shotgun, the back behind him: the same column, deeper)
+        if before["qb"] and now["qb"] and now["rb"] and not (abs(now["qb"][1] - before["qb"][1]) > 2 and abs(now["rb"][0] - now["qb"][0]) < 6):
+            out.append(f"the formation: Pistol picked, but the dots did not line up in it: qb {before['qb']} -> {now['qb']}, rb {now['rb']}")
+        if shots:
+            await page.screenshot(path=str(Path(shots) / "formation-pistol.png"))
+        a = await snap_pass()
+        if a is None or a["form"] != "pistol":
+            out.append(f"the formation: Pistol picked, but the snap went with {a and a['form']!r}")
+        if not await next_snap():
+            return out + errs
+        now = await pick("Empty")
+        if not now["form"] or now["form"].get("qb") != "empty":
+            out.append(f"the formation: Empty picked, but the page has {now['form']!r}")
+        if now["qb"] and now["rb"] and not (abs(now["rb"][0] - now["qb"][0]) > 40):
+            out.append(f"the formation: Empty picked, but the back is still in the backfield: qb {now['qb']}, rb {now['rb']}")
+        if shots:
+            await page.screenshot(path=str(Path(shots) / "formation-empty.png"))
+        a = await snap_pass()
+        if a is None or a["form"] is not None:
+            out.append(f"the formation: Empty (the lineup only) picked, but the snap went with {a and a['form']!r}")
+        if not await next_snap():
+            return out + errs
+        now = await pick("Bunch")
+        if not now["form"] or now["form"].get("look") != "bunch":
+            out.append(f"the formation: Bunch picked, but the page has {now['form']!r}")
+        if shots:
+            await page.screenshot(path=str(Path(shots) / "formation-bunch.png"))
+        await page.click("#formBtn", timeout=3000)
+        await page.wait_for_selector("#mBody .pgroup", timeout=5000)
+        await page.locator("#mBody .ghost", has_text="Back to the real lineup").first.click(timeout=3000)
+        await page.wait_for_timeout(200)
+        await page.click("#mBody .pdone", timeout=3000)
+        await page.wait_for_timeout(400)
+        now = await page.evaluate(FORM_NOW)
+        if now["form"] or "as lined up" not in now["chip"]:
+            out.append(f"the formation: Back to the real lineup, but the page has {now['form']!r}, the chip {now['chip']!r}")
+    except Exception as e:
+        out.append(f"the formation: {e}")
+    finally:
+        await ctx.close()
+    return out + errs
 
 
 async def pers_group(browser, base: str) -> list[str]:
@@ -2677,6 +2786,10 @@ async def main(a) -> int:
         print("Who plays, the quarterback (the sheet's first row, a backup put in plays and is graded on his simulator, back to the real lineup): "
               + ("ok" if not qb else "FAIL") + "".join(f"\n      {x}" for x in qb), flush=True)
         reach += qb
+        fp = await formation_pick(browser, base, a.shots)
+        print("the formation (the chip beside Personnel, Pistol lines up and snaps as pistol, Empty is the lineup only, a look, back to the real lineup): "
+              + ("ok" if not fp else "FAIL") + "".join(f"\n      {x}" for x in fp), flush=True)
+        reach += fp
         pg = await pers_group(browser, base)
         print("Who plays, the grouping (a receiver swapped: the snap goes without one, the grouping lined up in; another picked goes with it): "
               + ("ok" if not pg else "FAIL") + "".join(f"\n      {x}" for x in pg), flush=True)
