@@ -8175,7 +8175,7 @@
         el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers${resultScored() ? ', the calls and the result' : ''}`),
         ...(scoreWhy(p) ? [el('p', 'pct-why', scoreWhy(p))] : []),
         Object.assign(el('div', 'pct-lab brag'), { hidden: true }),
-        el('div', 'streak', RUN_N ? 'Playoff run' : ARCH_DAY ? 'From the archive' : streakLine(sk)));
+        RUN_N || ARCH_DAY ? el('div', 'streak', RUN_N ? 'Playoff run' : 'From the archive') : endStreakEl(sk));
       if (todayDaily() && state.restarts) box.append(el('p', 'note rsnote', 'Restarted: this counts for your streak and stats, not on today’s leaderboard.'));
       if (sideTaken()) {            // a day of two sides: the one taken, and what that team really did from there
         const sp = today[0], sb = el('div', 'sidetook');
@@ -8251,7 +8251,7 @@
     if (chc) box.insertBefore(chc, box.children[k3] || null);
     const share = { text };
     const pre = el('div', 'grid-share', text);
-    const btn = el('button', 'btn', 'Share your score');
+    const btn = el('button', 'btn sharebtn', 'Share your score');
     btn.type = 'button';
     btn.addEventListener('click', () => shareText(share.text, pre, 'daily'));
     box.insertBefore(pre, dbox);
@@ -8263,7 +8263,7 @@
       share.brag = line;
     };
     box.insertBefore(btn, dbox);
-    const img = el('button', 'btn ghostbtn', 'Share as a picture');
+    const img = el('button', 'btn ghostbtn xshare', 'Share as a picture');
     img.type = 'button';
     img.addEventListener('click', () => shareImage({
       title: DRIVE ? PRO.drives[DRIVE - 1].title : CUSTOM ? `My scenario · ${matchLine(today[0])}` : RUN_N ? `The ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Daily #${dayN}${dayTitle(dayN) ? ` · ${dayTitle(dayN)}` : ''}${took ? ` · ${teamName(today[0].player)} side` : ''}`,
@@ -8275,7 +8275,7 @@
       rows: today.map((sp, i) => ({ team: sp.player, res: (rows[i] || '').split(' ')[1] || '', marks: squeeze((state.spots[i] && state.spots[i].decisions) || []) })) }));
     box.insertBefore(img, dbox);
     if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY && weekDays(st, dayN).filter((w) => w.d).length >= 3) {
-      const wk = el('button', 'btn ghostbtn', 'Share my week');
+      const wk = el('button', 'btn ghostbtn xshare', 'Share my week');
       wk.type = 'button';
       wk.addEventListener('click', () => weekImage(load(`${STORE}:stats`, { days: {} }), dayN, streak));
       box.insertBefore(wk, dbox);
@@ -8283,6 +8283,7 @@
     box.insertBefore(callsExplained(decs), dbox);
     if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) { const lg = el('p', 'lglink'); lg.hidden = true; box.insertBefore(lg, dbox); leagueNudge(); }
     badgeShow(box, state.badges || [], firstFinish);
+    if (!DRIVE && !RUN_N && !CUSTOM) endSimplify(box);
     box.append(countdown(streak >= 1 ? 'Keep the streak: next drive in ' : null));
     if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) box.append(a2hsSlotEl(), reminderNodes());     // the habit: an icon on the phone, a reminder
     const ad = adBox('done');
@@ -8387,6 +8388,40 @@
   }
   const freezeTxt = (n) => `❄️ ${n} streak freeze${n === 1 ? '' : 's'}`;
   // the end card's streak line (and the freezes held beside it)
+  // the end card's streak: its flame and the line
+  function endStreakEl(sk) {
+    const d = el('div', 'streak endstk');
+    d.append(flameEl(sk.n), el('span', '', streakLine(sk).replace(/^🔥 /, '')));
+    return d;
+  }
+  // The end card kept short: the score, the streak, two chips (you against the real coach, who you coached like),
+  // Share, and what to play next. Everything else (those cards in full, the calls line, your calls explained, the
+  // share text, the picture) is one tap away under "See the breakdown"; a chip opens it at its card
+  function endSimplify(box) {
+    const kid = (q) => box.querySelector(`:scope > ${q}`);
+    const vs = kid('.h2h') || kid('.h2h-day'), coach = kid('.coach');
+    const more = el('details', 'endmore'), inn = el('div', 'in');
+    more.append(el('summary', '', 'See the breakdown'), inn);
+    [vs, coach, kid('.pct-why'), kid('.verdict'), kid('.old-way'), kid('.explain'), kid('.grid-share'), ...box.querySelectorAll(':scope > .xshare')]
+      .forEach((n) => { if (n) inn.append(n); });
+    const chips = el('div', 'endchips');
+    const chip = (k, v, at) => {
+      const b = el('button', 'echip');
+      b.type = 'button';
+      b.append(el('span', 'k', k), el('b', '', v));
+      b.addEventListener('click', () => { more.open = true; at.scrollIntoView({ block: 'center', behavior: reduced() ? 'auto' : 'smooth' }); });
+      chips.append(b);
+    };
+    if (vs) {
+      const k = vs.querySelector('.k'), v = vs.querySelector('.res') || vs.querySelector('b');
+      chip(k ? k.textContent : 'Vs the real coach', v ? v.textContent : '', vs);
+    }
+    if (coach) { const nm = coach.querySelector('.name'); if (nm) chip('Coached like', nm.textContent, coach); }
+    const top = kid('.streak') || kid('.pct-lab');
+    if (chips.childNodes.length && top) top.after(chips);
+    const share = kid('.sharebtn');
+    if (share) share.after(more); else box.append(more);
+  }
   function streakLine(sk) {
     if (sk.n < 2) return sk.held ? `Day 1 of your streak · ${freezeTxt(sk.held)}` : 'Day 1 of your streak · come back tomorrow';
     return `🔥 ${sk.n}-day streak${sk.held ? ` · ${freezeTxt(sk.held)}` : ` · a freeze at ${Math.ceil((sk.n + 1) / FREEZE_EVERY) * FREEZE_EVERY}`}`;
@@ -8470,7 +8505,9 @@
     const c = badgeCard(ids), old = box.querySelector('.newbadge');
     if (old) old.remove();
     if (!c) return;
-    box.insertBefore(c, box.querySelector('.coach, .verdict, .grid-share'));
+    // (before the breakdown on the short end card: endSimplify; else before the coach, the verdict or the share text)
+    const ref = box.querySelector(':scope > .endmore') || box.querySelector(':scope > .coach, :scope > .verdict, :scope > .grid-share');
+    box.insertBefore(c, ref);
     if (fresh) badgeToast(ids, c);
   }
   // a new badge: its card says so; the toast too only when the card is out of sight, and then at the foot of the
@@ -10052,7 +10089,7 @@
     dayLabelSet();
     const line = document.querySelector('#done .streak');
     if (!line || !state || !state.done || SURV || PRACTICE || DRIVE || RUN_N || CUSTOM || ARCH_DAY) return;
-    line.textContent = streakLine(streakOf(load(`${STORE}:stats`, { days: {} }), dayN));
+    line.replaceWith(endStreakEl(streakOf(load(`${STORE}:stats`, { days: {} }), dayN)));
   }
 
   // ---- Friend leagues (board /league/*): a private board of the daily for a group of friends: each member's

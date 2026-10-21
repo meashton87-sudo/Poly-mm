@@ -311,12 +311,24 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .flame.t5 { --f1: #ffcc33; --f2: #fff6c8; --fs: 46px; filter: drop-shadow(0 0 10px rgba(255, 200, 60, .9)); animation: flick 1s ease-in-out infinite, hue 4s linear infinite; }
 @keyframes flick { 0%, 100% { transform: scale(1) rotate(0); } 50% { transform: scale(1.07, 1.12) rotate(-2deg); } }
 @keyframes hue { to { filter: drop-shadow(0 0 10px rgba(255, 200, 60, .9)) hue-rotate(360deg); } }
-.streak { display: flex; align-items: center; gap: 12px; }
-.streak .flame { --fs: 44px; }
-.streak.t3 .flame { --fs: 50px; } .streak.t4 .flame { --fs: 56px; } .streak.t5 .flame { --fs: 62px; }
-.streak .stx { display: grid; gap: 2px; min-width: 0; }
-.streak b { font: 900 24px/1 var(--display); text-transform: uppercase; }
-.streak span { font-size: 13px; color: var(--muted); }
+.phub .streak { display: flex; align-items: center; gap: 12px; }
+.phub .streak .flame { --fs: 44px; }
+.phub .streak.t3 .flame { --fs: 50px; } .phub .streak.t4 .flame { --fs: 56px; } .phub .streak.t5 .flame { --fs: 62px; }
+.phub .streak .stx { display: grid; gap: 2px; min-width: 0; }
+.phub .streak b { font: 900 24px/1 var(--display); text-transform: uppercase; }
+.phub .streak span { font-size: 13px; color: var(--muted); }
+/* the end card kept short (game.js endSimplify) */
+.endstk { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.endstk .flame { --fs: 26px; }
+.endchips { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.echip { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); font: inherit; text-align: center; cursor: pointer; min-width: 0; }
+.echip .k { font: 700 10px var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); overflow-wrap: anywhere; }
+.echip b { font: 900 20px/1.05 var(--display); text-transform: uppercase; overflow-wrap: anywhere; }
+.endmore > summary { cursor: pointer; font: 700 14px var(--body); text-align: center; padding: 10px; border: 1px solid var(--line); border-radius: 12px; list-style: none; }
+.endmore > summary::-webkit-details-marker { display: none; }
+.endmore > summary::after { content: ' ▾'; }
+.endmore[open] > summary::after { content: ' ▴'; }
+.endmore > .in { display: grid; gap: 12px; margin-top: 12px; }
 .hfoot .flame { --fs: 28px; margin-right: 6px; }
 .hfoot .flame.t2 { --fs: 32px; } .hfoot .flame.t3 { --fs: 36px; } .hfoot .flame.t4 { --fs: 40px; } .hfoot .flame.t5 { --fs: 44px; }
 @media (prefers-reduced-motion: reduce) { .flame { animation: none !important; } }
