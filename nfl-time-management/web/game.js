@@ -9321,7 +9321,7 @@
   let adsIn = false, adsDue = Infinity, adsT = 0;
   function adsLoad() {
     const m = document.querySelector('meta[name="ads-src"]');
-    if (adsIn || !m) return;
+    if (adsIn || !m || noAds()) return;
     adsIn = true;
     clearTimeout(adsT);
     const sc = document.createElement('script');
@@ -9397,6 +9397,7 @@
     return box;
   }
   function adBox(kind) {
+    if (noAds()) return null;
     if (EZ && EZ_KINDS.includes(kind)) ezBreak();
     if (EZ) return ezBox(kind);
     // another network's banner (site.py: web/ads/banner.html, e.g. Adsterra): in a sandboxed frame of its own, so its
@@ -10066,7 +10067,20 @@
   const proShownCode = () => (acctPro() && ACCT.me.code) || proCode();
   // a session the board no longer knows (signed out elsewhere, expired, accounts off): forget it, Pro by code goes on
   function authLost() { const was = !!authSession(); authClear(); if (was) toast('You are signed out. Sign in again on the Pro tab.'); }
-  async function proVerify() {
+  // Pro is ad-free: confirmed Pro marks the phone (NOADS_KEY: the page's head then never loads the ad script, site.py
+  // EZOIC_HEAD) and takes this page's ads away now; Pro confirmed gone clears the mark (offline: left as it was)
+  const NOADS_KEY = `${STORE}:noads`;
+  const noAds = () => isPro() || document.documentElement.classList.contains('noads');
+  function noAdsSync() {
+    if (PRO_LIVE === null) return;
+    const on = PRO_LIVE === true;
+    try { if (on) localStorage.setItem(NOADS_KEY, '1'); else localStorage.removeItem(NOADS_KEY); } catch (e) { /* no storage */ }
+    if (!on) return;
+    document.documentElement.classList.add('noads');
+    ezq((z) => { z.setInterstitialAllowed(false, { reason: 'pro' }); z.setOutstreamAllowed(false, { reason: 'pro' }); });
+  }
+  async function proVerify() { await proCheck(); noAdsSync(); }
+  async function proCheck() {
     if (!PRO_ON) { PRO_LIVE = false; return; }
     if (authSession() && BOARD.api) {
       try {
