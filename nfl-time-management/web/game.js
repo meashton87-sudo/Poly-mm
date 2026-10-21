@@ -299,7 +299,7 @@
   }
   // versus (two players, live; the site build's --vs turns it on: <meta name="vs">): #vs the lobby, #vs-CODE a room
   const VS_ON = !!document.querySelector('meta[name="vs"]');
-  const VS_LOBBY = VS_ON && location.hash === '#vs';
+  const VS_LOBBY = VS_ON && (location.hash === '#vs' || location.hash === '#vs-ladder');
   const VS_ROOM = VS_ON ? ((location.hash.match(/^#vs-([A-HJ-KM-NP-Z2-9]{6})$/) || [])[1] || '') : '';
   const VS = !!VS_ROOM;
   // the full defensive call (personnel, front, coverage, rush) everywhere: Versus always; elsewhere only when the site
@@ -5089,7 +5089,7 @@
       dd.append(el('b', '', r.try2 ? 'Two-point try' : ddText(r)), ' · ', el('span', 'sp', spotText(r)));
       // (the clock its own piece: on a phone it takes a line of its own, never cut to "clock sto…", game.html)
       // (why it is stopped, when a timeout stopped it or no time is left)
-      if (!VS) { const ck = el('span', 'ck'); ck.append(el('span', 'sep', ' · '), r.untimed ? 'untimed down' : r.timeout ? 'stopped (timeout)' : `clock ${r.clock_running ? 'running' : 'stopped'}`); dd.append(ck); }
+      if (!VS || !G.cot) { const ck = el('span', 'ck'); ck.append(el('span', 'sep', ' · '), r.untimed ? 'untimed down' : r.timeout ? 'stopped (timeout)' : `clock ${r.clock_running ? 'running' : 'stopped'}`); dd.append(ck); }
     }
     else dd.textContent = r.phase === PAT ? `Try after the touchdown${ck.text === '0:00' ? ' (untimed)' : ''}` : r.phase === KICKOFF ? 'Kickoff' : r.t >= 1800 ? 'Halftime' : 'Final';
   }
@@ -5360,12 +5360,12 @@
   function newSpot(i) {
     const sc = today[i];
     return { si: i, scen: sc, me: VS ? vs.seat : sc.player === sc.home ? 0 : 1, root: startRoot(sc), decisions: [], log: [],
-      seq: 0, snapN: 0, over: false, result: null, side: 1, fast: false, started: false, vsN: 0, ...(VS && vs.ms ? { root: vs.ms.root, cot: vs.ms.cot } : {}) };
+      seq: 0, snapN: 0, over: false, result: null, side: 1, fast: false, started: false, vsN: 0, ...(VS && vs.ms ? { root: vs.ms.root, cot: vs.ms.cot, reg: vs.ms.reg || null } : {}) };
   }
   function persist() {
     state.spots[G.si] = { id: G.scen.id, root: G.root, decisions: G.decisions, log: G.log, seq: G.seq, snapN: G.snapN, over: G.over,
       result: G.result, started: G.started, pending: G.pending || null, regrade: G.regrade && G.regrade.length ? G.regrade : null,
-      pers: G.pers || null, persWho: G.persWho || null, qb: G.qb || null, vsN: G.vsN || 0, cot: G.cot || null, ...(VS ? { vsCalls: G.vsCalls || [] } : {}) };
+      pers: G.pers || null, persWho: G.persWho || null, qb: G.qb || null, vsN: G.vsN || 0, cot: G.cot || null, ...(VS ? { vsCalls: G.vsCalls || [], reg: G.reg || null } : {}) };
     saveState();
   }
   function resumeSpot(i) {
@@ -5373,7 +5373,7 @@
     let s = state.spots[i];
     if (s && s.id && s.id !== G.scen.id) s = state.spots[i] = null;   // saved on another game (a changed schedule): start fresh
     if (s) Object.assign(G, { root: s.root, decisions: s.decisions || [], log: s.log || [], seq: s.seq || 0, snapN: s.snapN || 0,
-      over: s.over, result: s.result, started: !!s.started, pers: s.pers || null, persWho: s.persWho || null, qb: (!VS && s.qb) || null, vsN: s.vsN || 0, cot: s.cot || G.cot || null, vsCalls: s.vsCalls || [],
+      over: s.over, result: s.result, started: !!s.started, pers: s.pers || null, persWho: s.persWho || null, qb: (!VS && s.qb) || null, vsN: s.vsN || 0, cot: s.cot || G.cot || null, vsCalls: s.vsCalls || [], reg: s.reg || G.reg || null,
       // a snap left mid-play by a reload: its grading is redone in the background (regradeBg), with any still waiting
       regrade: (s.regrade || []).concat(s.pending ? [s.pending] : []), pending: null });
     G.side = sideFor(G.seq);
@@ -6231,8 +6231,8 @@
   function toButton() {
     const b = $('toBtn'), r = G && G.root;
     if (!b) return;
-    // (never in Versus: college overtime has no clock to stop, so it only ever read "clock stopped", even on the final)
-    if (VS) { b.hidden = true; return; }
+    // (not in Versus's overtime: no clock to stop, so it only ever read "clock stopped", even on the final)
+    if (VS && (G.cot || !G.root || G.over || vs.ui !== 'prompt')) { b.hidden = true; return; }
     // (on a phone it is the only timeout control, so it shows whenever a timeout can be called, late or not, on every
     // step of your call: players looked for it after picking Pass. When it can't be called, it says why, greyed out:
     // "I don't see the timeout option always")
@@ -6688,7 +6688,7 @@
       if (window.__sepLog) (window.__drawSnaps = window.__drawSnaps || []).push({ kind: 'def', call: sk.dc.cover });
       track('defense_call', { mode: modeName(), call: `${sk.dc.pers}/${sk.dc.front}/${sk.dc.cover}/${sk.dc.rush}` });
       ui.step = 'sent';
-      if (VS) vsSubmit({ dc: { ...sk.dc } }, sk.draw);
+      if (VS) vsSubmit({ dc: { ...sk.dc }, ...(ui.to ? { to_def: true } : {}) }, sk.draw);
       else decideDefense({ ...sk.dc }, sk.draw);
     });
     const presets = el('div', 'vpresets');
@@ -6744,7 +6744,7 @@
     custom.append(cs, box);
     if (!VS && share) custom.append(el('p', 'vdeftip', 'NFL %: how often NFL defenses lined up each way in this spot. It starts on the most common.'));
     d.append(presets, sum, tip, custom);
-    if (!VS && defTimeoutOk(r) && !toOnField()) {          // (a phone: the button on the field, toButton)
+    if (defTimeoutOk(r) && (VS ? !G.cot : !toOnField())) {          // (a phone: the button on the field, toButton; Versus: here, sealed with the call)
       const tg = el('div', 'toggle');
       const lab = el('div', 'lab', 'Timeout first');
       lab.append(el('small', '', `Stop the clock before their snap · ${r.to[G.me]} left`));
@@ -6763,7 +6763,7 @@
       if (busy || ui.step !== 'vdef') return;
       track('defense_call', { mode: modeName(), call: `${ui.dc.pers}/${ui.dc.front}/${ui.dc.cover}/${ui.dc.rush}` });
       ui.step = 'sent';
-      if (VS) vsSubmit({ dc: { ...ui.dc } });
+      if (VS) vsSubmit({ dc: { ...ui.dc }, ...(ui.to ? { to_def: true } : {}) });
       else decideDefense({ ...ui.dc });
     });
     keys.append(go);
@@ -7436,8 +7436,12 @@
     const tn = (t) => teamName(code(t)), mine = (t) => t === G.me;
     for (const x of notes || []) {
       if (x.k === 'pick') addLog(`${tn(x.team)} chooses ${x.choice}${x.auto ? ' (out of time)' : ''}: ${tn(x.first)} ball first`, VSCore.COT_T, mine(x.team));
-      else if (x.k === 'end') addLog(`${tn(x.team)} takes the end of the field: ${tn(1 - x.team)} chooses offense or defense`, VSCore.COT_T, mine(x.team));
-      else if (x.k === 'timeout') addLog(`Timeout, ${tn(x.team)}`, VSCore.COT_T, mine(x.team));
+      else if (x.k === 'end') addLog(`${tn(x.team)} takes the end of the field: ${tn(1 - x.team)} chooses ${G.cot ? 'offense or defense' : 'to receive or kick'}`, G.cot ? VSCore.COT_T : G.root.t, mine(x.team));
+      else if (x.k === 'timeout') addLog(`Timeout, ${tn(x.team)}${x.left != null ? ` (${x.left} left)` : ''}${x.rundown ? ': ran it down for the kick' : ''}`, x.t ?? VSCore.COT_T, mine(x.team));
+      else if (x.k === 'toss') addLog(`${tn(x.team)} calls ${x.call}${x.auto ? ' (out of time)' : ''}: it's ${x.coin}. ${tn(x.winner)} wins the toss`, G.root.t, mine(x.winner));
+      else if (x.k === 'rpick') addLog(`${tn(x.team)} chooses to ${x.choice === 'kick' ? 'kick off' : 'receive'}${x.auto ? ' (out of time)' : ''}`, G.root.t, mine(x.team));
+      else if (x.k === 'regend') addLog(`Tied ${x.score[G.me]}–${x.score[1 - G.me]} at 0:00: overtime`, 0, true);
+      else if (x.k === 'ottoss') addLog(`Overtime coin toss: ${tn(x.team)} wins it and chooses first`, VSCore.COT_T, mine(x.team));
       else if (x.k === 'two') addLog('Going for two', VSCore.COT_T, mine(x.team));
       else if (x.k === 'must2') addLog('Second overtime on: a touchdown has to go for two', VSCore.COT_T, mine(x.team));
       else if (x.k === 'poss') addLog(`${tn(x.team)} ball${x.round >= 3 ? ': a two-point play' : ' at the 25'}`, VSCore.COT_T, mine(x.team));
@@ -11915,34 +11919,48 @@
   }
 
   // -------------------------------------------------------------- versus ---
-  // Two players, college overtime (web/vs_core.js: the toss choice, the ball at the 25, a touchdown going for two from
-  // the 2nd overtime, two-point plays from the 3rd). Each brings a team; the team with the ball calls the offense, the
-  // other the defense, each on their own phone. The room (board/match.js) plays the football: this phone sends its
-  // half of each decision, sealed until every half is in; the room plays the snap with the engine and sends the
-  // result to both phones, which animate it. The room keeps the play clock and the score, calls forfeits and rates
-  // ranked matches; a phone only ever sends a call. Modes: ranked (the ladder: matched by rating), casual, a friend.
-  const VS_TEAM_KEY = `${STORE}:vsteam`;
-  const VS_MODES = { ranked: 'Ranked', casual: 'Casual', friend: 'Friend match' };
-  const VS_FORFEIT = 60;             // seconds a phone can be gone before its side forfeits (match.js FORFEIT_MS)
-  const vs = { ws: null, seat: -1, mode: 'friend', teams: [null, null], taken: '', names: ['', ''], full: false, online: [false, false], off: [0, 0],
+  // Two players, each calling their own side (web/vs_core.js holds the rules). The Five-Minute Drill (the default): 5:00
+  // of the fourth quarter, tied 0-0, NFL rules and clock, three timeouts each, a coin toss and a kickoff; tied at 0:00,
+  // college overtime after a fresh toss. The overtime shootout: college overtime only (the ball at the 25, a touchdown
+  // going for two from the 2nd overtime, two-point plays from the 3rd). Each brings a team; the team with the ball calls
+  // the offense, the other the defense, each on their own phone. The room (board/match.js) plays the football: this
+  // phone sends its half of each decision, sealed until every half is in; the room plays the snap with the engine and
+  // sends the result to both phones, which animate it. The room keeps the play clock and the score, calls forfeits and
+  // rates ranked matches; a phone only ever sends a call. Modes: ranked (the ladder: matched by rating, even teams),
+  // casual, a friend, the computer (unranked).
+  const VS_TEAM_KEY = `${STORE}:vsteam`, VS_GAME_KEY = `${STORE}:vsgame`, VS_SEEN_KEY = `${STORE}:vsintro`, VS_MUTE_KEY = `${STORE}:vsmute`;
+  const VS_MODES = { ranked: 'Ranked', casual: 'Casual', friend: 'Friend match', cpu: 'Against the computer' };
+  const VS_GAMES = { five: 'Five-Minute Drill', ot: 'Overtime shootout' };
+  const VS_FORFEIT = 90;             // seconds a phone can be gone before its side forfeits (match.js FORFEIT_MS)
+  const VS_AFK = 3;                  // play clocks run out in a row: a forfeit (match.js AFK_LIMIT)
+  // the ladder's tiers (match.js TIERS: the Pro ranks' names)
+  const VS_TIERS = [[0, 'Rookie play-caller'], [900, 'Position coach'], [1050, 'Coordinator'], [1200, 'Head coach'], [1350, 'Super Bowl coach'], [1500, 'Hall of Fame']];
+  const vsTier = (r) => VS_TIERS.filter(([lo]) => r >= lo).pop()[1];
+  const tierBadge = (r) => { const t = vsTier(r), b = el('span', `tier t${VS_TIERS.findIndex((x) => x[1] === t)}`, t); return b; };
+  const EMOTE = { nice: 'Nice call', choke: 'Choke', gg: 'GG', fire: '🔥', wow: 'Wow', rematch: 'Rematch?' };
+  const vs = { ws: null, seat: -1, mode: 'friend', game: 'five', teams: [null, null], taken: '', names: ['', ''], full: false, online: [false, false], off: [0, 0],
     phase: 'wait', n: 0, ms: null, ms0: null, got: {}, waiting: -1, last: null, deadline: 0, skew: 0, result: null, rated: null, started: false,
-    timer: null, retry: 0, closedByUs: false, pool: null, banner: '', oppLocked: -1, oppDl: 0, ui: 'none', cardTimer: null, q: null };
+    timer: null, retry: 0, closedByUs: false, pool: null, banner: '', oppLocked: -1, oppDl: 0, ui: 'none', cardTimer: null, q: null, cpu: null };
   const vsNow = () => Date.now() + vs.skew;                       // the room's clock
   const vsLink = (room) => `${location.origin}${location.pathname}#vs-${room}`;
   const vsMyTeam = () => { const t = load(VS_TEAM_KEY, ''); return TEAMS[t] ? t : ''; };
+  const vsGamePick = () => (VS_GAMES[load(VS_GAME_KEY, 'five')] ? load(VS_GAME_KEY, 'five') : 'five');
+  const vsOpp = () => vs.names[1 - vs.seat] || (vs.mode === 'cpu' ? 'The computer' : 'your opponent');
+  const newCode = () => { const a = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; return Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => a[b % a.length]).join(''); };
   async function vsLoadPool() {
     if (!vs.pool) vs.pool = await fetch(asset('teams.json')).then((r) => { if (!r.ok) throw new Error('teams ' + r.status); return r.json(); });
     return vs.pool;
   }
   // where this phone was in the match (its saved decisions), to catch up from on connecting
   function vsSince() { const st = load(stateKey(), null); const s = st && st.spots && st.spots[0]; return s && s.vsN ? s.vsN : 0; }
+  const vsStore = (room, mode, game) => { try { sessionStorage.setItem(`tmd:vsmode:${room}`, mode); sessionStorage.setItem(`tmd:vsgame:${room}`, game); } catch (e) { /* none */ } };
 
   function vsSend(m) { try { if (vs.ws && vs.ws.readyState === 1) { vs.ws.send(JSON.stringify(m)); return true; } } catch (e) { /* reconnects */ } return false; }
   function vsConnect() {
-    let mode = 'friend';
-    try { mode = sessionStorage.getItem(`tmd:vsmode:${VS_ROOM}`) || 'friend'; } catch (e) { /* none */ }
+    let mode = 'friend', game = vsGamePick();
+    try { mode = sessionStorage.getItem(`tmd:vsmode:${VS_ROOM}`) || 'friend'; game = sessionStorage.getItem(`tmd:vsgame:${VS_ROOM}`) || game; } catch (e) { /* none */ }
     const since = vs.started && G ? G.vsN : vsSince();
-    const url = `${BOARD.api.replace(/^http/, 'ws')}/vs/ws?room=${VS_ROOM}&key=${encodeURIComponent(deviceKey())}&mode=${mode}&since=${since}`;
+    const url = `${BOARD.api.replace(/^http/, 'ws')}/vs/ws?room=${VS_ROOM}&key=${encodeURIComponent(deviceKey())}&mode=${mode}&game=${game}&since=${since}`;
     let ws;
     try { ws = new WebSocket(url); } catch (e) { return vsRetry(); }
     vs.ws = ws;
@@ -11951,6 +11969,7 @@
       if (vs.ws !== ws || vs.closedByUs) return;
       if (ev.code === 4000) { vsNote('This match is open on another tab or device.'); return; }
       if (ev.code === 4001) { vsNote('This match has expired.'); return; }
+      if (ev.code === 4002) return;                // (busy: said already)
       vsRetry();
     };
     ws.onerror = () => { /* onclose follows */ };
@@ -11962,24 +11981,34 @@
       return;
     }
     if (vs.retry > 14) { vsBanner(`Lost the connection. Reload to get back in: after ${VS_FORFEIT} seconds away the match is a forfeit.`); return; }
-    vsBanner('Reconnecting…');
+    vsBanner(navigator.onLine === false ? 'You’re offline. Reconnecting when you’re back…' : 'Reconnecting…');
     setTimeout(() => { if (!vs.ws || vs.ws.readyState > 1) vsConnect(); }, Math.min(4000, 400 * 2 ** vs.retry));
   }
   // back to the app, or back online: reconnect now, not on the next retry
   const vsKick = () => { if (VS && BOARD.api && vs.ws && vs.ws.readyState > 1 && !vs.closedByUs) { vs.retry = 0; vsConnect(); } };
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) vsKick(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { vsKick(); vsTitle(false); } });
   addEventListener('online', vsKick);
   setInterval(() => vsSend({ t: 'ping' }), 25000);
+  // your call while the page is in the background: a buzz, and the tab's title says so until you look
+  const TITLE0 = document.title;
+  function vsTitle(on) {
+    clearInterval(vs.titleT);
+    if (!on) { document.title = TITLE0; return; }
+    let f = false;
+    vs.titleT = setInterval(() => { f = !f; document.title = f ? '▶ Your call · Versus' : TITLE0; if (!document.hidden) vsTitle(false); }, 1000);
+  }
+  function vsBuzz(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) { /* none */ } }
   function vsSendTeam() {
     const t = vsMyTeam();
     if (t && vs.seat >= 0 && vs.phase === 'wait' && !vs.teams[vs.seat] && !vs.taken) vsSend({ t: 'team', team: t, name: myName() });
   }
   function vsOn(m) {
     if (typeof m.now === 'number') vs.skew = m.now - Date.now();
+    if (m.t === 'busy') { vsBusy(); return; }
     if (m.t === 'hello') {
       vs.retry = 0; vs.helloed = true;
-      Object.assign(vs, { seat: m.seat, mode: m.mode || vs.mode, teams: m.teams, names: m.names, full: !!m.full, online: m.online, off: m.off || [0, 0],
-        phase: m.phase, n: m.n, ms: m.ms, ms0: m.ms0 || vs.ms0, deadline: m.deadline || 0, dl: m.dl || null, result: m.result || null, rated: m.rated || vs.rated,
+      Object.assign(vs, { seat: m.seat, mode: m.mode || vs.mode, game: m.game || vs.game, teams: m.teams, names: m.names, full: !!m.full, online: m.online, off: m.off || [0, 0],
+        phase: m.phase, n: m.n, ms: m.ms, ms0: m.ms0 || vs.ms0, deadline: m.deadline || 0, dl: m.dl || null, result: m.result || null, rated: m.rated || vs.rated, cpu: m.cpu ?? null,
         oppDl: m.dl && m.seat >= 0 && m.dl[1 - m.seat] < m.deadline ? m.dl[1 - m.seat] : 0 });
       (m.decisions || []).forEach((d) => { if (d) vs.got[d.n] = d; });
       if (vs.last && vs.last.n === m.n && m.phase === 'live') vsSend(vs.last);    // a call sent as the line dropped
@@ -12008,7 +12037,7 @@
       if (m.n === vs.n && m.seat !== vs.seat) { vs.oppLocked = m.n; vsDrawBar(); }
       if (m.n === vs.n && m.seat === vs.seat && vs.waiting !== m.n) {          // back after a reload: your call is already in
         vs.waiting = m.n;
-        if (vs.ui === 'prompt' && G && G.vsN === m.n) { clearInterval(vs.timer); vs.ui = 'idle'; status('Locked in. Waiting for your opponent…'); vsDrawBar(); }
+        if (vs.ui === 'prompt' && G && G.vsN === m.n) { clearInterval(vs.timer); vs.ui = 'idle'; vsWaitLine(); vsDrawBar(); }
       }
     } else if (m.t === 'step') {
       vs.got[m.n] = m;
@@ -12024,21 +12053,38 @@
       if (!vs.started && vs.phase === 'over') vsCalledOff(); else vsShowRating();
     } else if (m.t === 'rematch-ask') {
       const btn = $('vsAgain');
-      if (btn && m.seat !== vs.seat) { btn.textContent = 'Your opponent wants a rematch: play again'; btn.classList.add('ask'); }
+      if (btn && m.seat !== vs.seat) { btn.textContent = `${vsOpp()} wants a rematch: play again`; btn.classList.add('ask'); }
     } else if (m.t === 'rematch') {
       vs.closedByUs = true;
-      try { sessionStorage.setItem(`tmd:vsmode:${m.room}`, vs.mode === 'friend' ? 'friend' : 'casual'); } catch (e) { /* none */ }
+      vsStore(m.room, vs.mode === 'friend' || vs.mode === 'cpu' ? vs.mode : 'casual', vs.game);
       location.hash = `#vs-${m.room}`;
+    } else if (m.t === 'emote') {
+      if (!load(VS_MUTE_KEY, false) || m.seat === vs.seat) vsBubble(m.seat, m.e);
     }
+  }
+  // Versus off, or full: say so (and the computer is there), never a spinner
+  function vsBusy() {
+    vs.closedByUs = true;
+    show('arch');
+    const box = $('arch');
+    box.textContent = '';
+    box.append(el('h2', '', 'Versus is busy'), el('p', 'lead', 'Too many players right now. Try again in a minute, or play the computer meanwhile.'));
+    const row = el('div', 'row'), cpu = el('button', 'btn', 'Play the computer (unranked)');
+    cpu.type = 'button';
+    cpu.addEventListener('click', () => vsCpuRoom('busy'));
+    const back = el('a', 'btn ghostbtn', 'Back to Versus');
+    back.href = '#vs';
+    row.append(cpu, back);
+    box.append(row);
   }
   // the opponent's connection: gone, and how long until it is a forfeit
   function vsPeer() {
     clearInterval(vs.peerTimer);
     const o = 1 - vs.seat, gone = vs.seat >= 0 && vs.phase === 'live' && !vs.online[o] && vs.off[o];
-    if (!gone) { if (vs.banner.startsWith('Your opponent')) vsBanner(''); return; }
+    if (!gone) { if (vs.banner.includes('reconnecting')) vsBanner(''); return; }
     const tick = () => {
       const left = Math.max(0, Math.ceil((vs.off[o] + VS_FORFEIT * 1000 - vsNow()) / 1000));
-      vsBanner(`Your opponent lost the connection: if they're not back in ${left} s, you win by forfeit.`);
+      vsBanner(`${vsOpp()} reconnecting… The play clock keeps running; ${left} s until it’s a forfeit.`);
       if (!left || vs.phase !== 'live') clearInterval(vs.peerTimer);
     };
     tick();
@@ -12051,20 +12097,25 @@
     vs.started = true;
     let pool;
     try { pool = await vsLoadPool(); } catch (e) { vsNote('The teams did not load (' + e.message + '). Reload to try again.'); return; }
-    const H = vs.teams[0], A = vs.teams[1], TH = pool.teams[H], TA = pool.teams[A];
+    const H = vs.teams[0], A = vs.teams[1];
+    // ranked: both teams at the league's strength, as the room plays them (vs_core.js evenTeam): the odds on the keys too
+    const even = vs.mode === 'ranked', TH = pool.teams[H] && (even ? VSCore.evenTeam(pool.teams[H], pool) : pool.teams[H]), TA = pool.teams[A] && (even ? VSCore.evenTeam(pool.teams[A], pool) : pool.teams[A]);
     if (!TH || !TA) { vsNote('A team in this match is not in this version of the game. Reload the page.'); return; }
+    const five = vs.game === 'five';
     const sp = { id: `vs:${VS_ROOM}`, category: 'ot', home: H, away: A, player: vs.seat === 0 ? H : A, indoor: false, wind: 0, spread: 0,
-      league: pool.league, start: { qtr: 4, clock: VSCore.COT_T, score: [0, 0], pos: H, down: 1, ytg: 10, yl: 25, to: [1, 1], running: false, receive2h: H },
+      league: even ? { ...pool.league, home_pass: 0, home_rush: 0 } : pool.league,
+      start: five ? { qtr: 4, clock: VSCore.FIVE_T, score: [0, 0], pos: H, down: 1, ytg: 10, yl: 65, to: [VSCore.FIVE_TO, VSCore.FIVE_TO], running: false, receive2h: H, phase: 'kick' }
+        : { qtr: 4, clock: VSCore.COT_T, score: [0, 0], pos: H, down: 1, ytg: 10, yl: 25, to: [1, 1], running: false, receive2h: H },
       real: { season: pool.season, week: pool.week, type: 'REG', coach: null, call: null, drive: null, final: null } };
     today = [buildScen(sp, { home: TH, away: TA })];
-    $('dayLabel').textContent = `${VS_MODES[vs.mode] || 'Versus'} · ${VS_ROOM}`;
+    $('dayLabel').textContent = `${VS_MODES[vs.mode] || 'Versus'} · ${VS_GAMES[vs.game] || ''} · ${VS_ROOM}`;
     state = load(stateKey(), null) || { spots: [], current: 0, done: false };
     startWorkers();
-    track('vs_start', { mode: vs.mode, seat: vs.seat });
+    track('vs_start', { mode: vs.mode, seat: vs.seat, game: vs.game });
     resumeSpot(0);
     // this phone against the room: catch up decision by decision from where it was, or (too far behind) jump to now
     const have = (i) => !!vs.got[i];
-    if (G.vsN === 0 && vs.ms0) { G.root = vs.ms0.root; G.cot = vs.ms0.cot; G.seq = 0; }
+    if (G.vsN === 0 && vs.ms0) { G.root = vs.ms0.root; G.cot = vs.ms0.cot; G.reg = vs.ms0.reg || null; G.seq = 0; }
     let ok = true;
     for (let i = G.vsN; i < vs.n; i++) if (!have(i)) ok = false;
     if (!ok) vsJump();
@@ -12072,7 +12123,7 @@
     if (G.started || G.over || vs.n > 0 || vs.phase === 'over') enterField(); else renderIntro();
   }
   function vsJump() {
-    G.root = vs.ms.root; G.cot = vs.ms.cot; G.seq = vs.ms.seq; G.vsN = vs.n;
+    G.root = vs.ms.root; G.cot = vs.ms.cot; G.reg = vs.ms.reg || null; G.seq = vs.ms.seq; G.vsN = vs.n;
     G.started = true;
     persist();
   }
@@ -12086,7 +12137,7 @@
       box.append(el('h2', '', r.winner === vs.seat ? 'You win: they didn’t show' : 'You forfeited'),
         el('p', 'lead', r.winner === vs.seat ? 'Your opponent never joined the match. It counts as a win.' : 'You were matched but didn’t join in time. In ranked that counts as a loss.'));
       const p = el('p', 'vsrating', '');
-      const x = vs.rated && vs.rated.ratings && vs.rated.ratings[vs.seat];
+      const x = (vs.rated && vs.rated.ratings && vs.rated.ratings[vs.seat]) || (r.est && r.est.ratings && r.est.ratings[vs.seat]);
       if (x) p.textContent = `Rating ${x.before} → ${x.after} (${x.delta >= 0 ? '+' : '−'}${Math.abs(x.delta)})${x.rank ? ` · #${x.rank}` : ''}`;
       box.append(p);
     } else box.append(el('h2', '', 'Match called off'), el('p', 'lead', them ? 'Your opponent didn’t show up. Nobody’s rating changed.' : 'The match didn’t start in time. Nobody’s rating changed.'));
@@ -12103,30 +12154,35 @@
     box.append(row);
   }
   function renderVsIntro() {
-    const box = $('intro'), me = code(G.me), op = code(1 - G.me), first = G.cot ? G.cot.toss : 0;
-    const oppName = vs.names[1 - vs.seat];
-    box.append(el('div', 'cat', `${VS_MODES[vs.mode] || 'Versus'} · College overtime`),
-      el('div', 'game', `Your ${teamName(me)} vs ${oppName ? `${oppName}’s` : 'their'} ${teamName(op)}`), el('div', 'big', 'Overtime'));
-    box.append(el('p', 'story', `Each team gets the ball at the other’s 25, no clock. From the second overtime, a touchdown has to go for two; from the third, it’s a two-point play each. Ahead after both teams have had it, you win. ${first === G.me ? 'You won the toss: you choose offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`} The choice alternates every overtime.`));
-    box.append(el('div', 'who', 'You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap. You get 30 seconds a call; miss two in a row and you forfeit.'));
-    const go = el('button', 'btn', 'Kick it off');
+    const box = $('intro'), me = code(G.me), op = code(1 - G.me);
+    const oppName = vs.names[1 - vs.seat], five = vs.game === 'five';
+    box.append(el('div', 'cat', `${VS_MODES[vs.mode] || 'Versus'} · ${VS_GAMES[vs.game]}${vs.mode === 'ranked' ? ' · even teams' : ''}`),
+      el('div', 'game', `Your ${teamName(me)} vs ${oppName ? `${oppName}’s` : 'their'} ${teamName(op)}`), el('div', 'big', five ? '0–0 · 5:00 left' : 'Overtime'));
+    box.append(el('p', 'story', five
+      ? `Tied, five minutes left in the fourth quarter, three timeouts each, NFL rules: the two-minute warning, the clock, every call the daily has. ${vs.seat === 0 ? 'You call the coin toss.' : `${teamName(op)} calls the coin toss.`} The winner picks receive, kick or the end of the field. Ahead at 0:00 wins; tied, college overtime after a new toss.`
+      : `Each team gets the ball at the other’s 25, no clock. From the second overtime, a touchdown has to go for two; from the third, it’s a two-point play each. Ahead after both teams have had it, you win. ${(G.cot ? G.cot.toss : 0) === G.me ? 'You won the toss: you choose offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`} The choice alternates every overtime.`));
+    box.append(el('div', 'who', `You call your side: the offense when you have it, the defense when they do. Both calls lock in, sealed, before the snap. 30 seconds a call: when it runs out, the coach calls it for you; ${VS_AFK} in a row and you forfeit.`));
+    const go = el('button', 'btn', 'Let’s go');
     go.type = 'button';
     go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
     box.append(go, el('div', 'from legal', 'Fan-made. Not affiliated with or endorsed by the NFL or its teams.'));
     go.focus({ preventScroll: true });
   }
-  // the team picker: your team for every versus match until you change it
+  // the team picker: your team for every versus match until you change it (with each team's strength: it counts in
+  // casual and friend matches; ranked plays even)
   function vsTeamPicker(onPick, skip) {
     const wrap = el('div', 'vsteams'), cur = vsMyTeam();
     Object.keys(TEAMS).filter((c) => c !== skip && !COLLEGE.has(c)).sort((a, b) => teamName(a).localeCompare(teamName(b))).forEach((c) => {
       const b = el('button', `vsteam${c === cur ? ' on' : ''}`);
       b.type = 'button';
+      b.dataset.team = c;
       const sw = el('span', 'sw'); sw.style.background = color(c);
-      b.append(sw, el('span', 'nm', teamName(c)));
+      b.append(sw, el('span', 'nm', teamName(c)), el('span', 'ovr', ''));
       b.setAttribute('aria-pressed', String(c === cur));
       b.addEventListener('click', () => { save(VS_TEAM_KEY, c); track('vs_team', { team: c }); onPick(c); });
       wrap.append(b);
     });
+    vsLoadPool().then((pool) => wrap.querySelectorAll('.vsteam').forEach((b) => { const s = VSCore.strength(pool, b.dataset.team); if (s != null) { b.lastChild.textContent = s; b.title = `Strength ${s} (80: the league's average)`; } })).catch(() => {});
     requestAnimationFrame(() => { const on = wrap.querySelector('.on'); if (on) wrap.scrollTop = on.offsetTop - 4; });   // your team in view
     return wrap;
   }
@@ -12136,7 +12192,7 @@
     show('arch');
     const box = $('arch');
     box.textContent = '';
-    box.append(el('h2', '', VS_MODES[vs.mode] || 'Versus'));
+    box.append(el('h2', '', `${VS_MODES[vs.mode] || 'Versus'} · ${VS_GAMES[vs.game] || ''}`));
     if (vs.seat >= 0 && !vs.teams[vs.seat] && (!vsMyTeam() || vs.taken)) {
       const lead = vs.taken ? `Your opponent already has ${teamName(vs.taken)}. Pick another team.` : 'Pick your team for this match: its real lineup this week.';
       box.append(el('p', 'lead', lead), vsTeamPicker(() => { vs.taken = ''; vsSendTeam(); renderVsWaiting(); }, vs.taken));
@@ -12147,7 +12203,7 @@
     if (vs.full || vs.mode !== 'friend') {
       // the kickoff waits for both phones (match.js bothHere): say what it is waiting on
       const o = 1 - vs.seat, who = vs.mode === 'friend' ? 'Your friend' : 'Your opponent';
-      const lead = !vs.full ? 'Opponent found. Getting the match ready…'
+      const lead = vs.mode === 'cpu' ? 'Setting up the computer…' : !vs.full ? 'Opponent found. Getting the match ready…'
         : !vs.online[o] ? `${who} stepped away. The match starts as soon as they’re back on this page.`
           : !vs.teams[o] ? `${who} is here, picking a team…` : 'Getting the match ready…';
       box.append(el('p', 'lead', lead));
@@ -12165,7 +12221,7 @@
     if (navigator.share) {
       const sh = el('button', 'btn ghostbtn', 'Share');
       sh.type = 'button';
-      sh.addEventListener('click', () => { track('vs_invite_share'); navigator.share({ title: 'Two-Minute Drill: versus', text: `College overtime, you and me: call the plays against my ${teamName(vsMyTeam() || mine)}. Pick your team.`, url: vsLink(VS_ROOM) }).catch(() => {}); });
+      sh.addEventListener('click', () => { track('vs_invite_share'); navigator.share({ title: 'Two-Minute Drill: versus', text: `${VS_GAMES[vs.game]}, you and me: call the plays against my ${teamName(vsMyTeam() || mine)}. Pick your team.`, url: vsLink(VS_ROOM) }).catch(() => {}); });
       row.append(sh);
     }
     box.append(row, el('p', 'note', 'Or they type the code under Friend’s code on the Versus screen. You can leave to send it: the match waits for you to come back to this page.'));
@@ -12173,82 +12229,134 @@
     back.href = '#vs';
     box.append(back);
   }
-  // matchmaking: in the lobby's queue until it finds you an opponent (ranked: someone near your rating)
+  // matchmaking: in the lobby's queue until it finds you an opponent (ranked: someone near your rating). After 20 s,
+  // still in the queue: the computer, or a friend
   function vsQueue(mode) {
     show('arch');
     const box = $('arch');
     box.textContent = '';
+    const game = vsGamePick();
     const t0 = Date.now(), line = el('p', 'lead', 'Finding you an opponent…'), info = el('p', 'note', '');
     const cancel = el('button', 'btn ghostbtn', 'Cancel');
     cancel.type = 'button';
-    box.append(el('h2', '', VS_MODES[mode]), el('p', 'note', `Your team: ${teamName(vsMyTeam())}`), line, info, cancel);
+    box.append(el('h2', '', `${VS_MODES[mode]} · ${VS_GAMES[game]}`), el('p', 'note', `Your team: ${teamName(vsMyTeam())}${mode === 'ranked' ? ' · ranked plays even teams' : ''}`), line, info);
+    const alt = el('div', 'row vsalt');
+    alt.hidden = true;
+    const cpu = el('button', 'btn', 'Play the computer (unranked)'), friend = el('button', 'btn ghostbtn', 'Invite a friend');
+    cpu.type = 'button'; friend.type = 'button';
+    alt.append(cpu, friend);
+    box.append(alt, cancel);
     let ws, closed = false, tries = 0, size = 0, rating = 0;
     const done = () => { closed = true; clearInterval(tk); try { ws && ws.close(); } catch (e) { /* gone */ } };
     const draw = () => {
       const s = Math.round((Date.now() - t0) / 1000);
-      info.textContent = `${size > 1 ? `${size} players searching` : 'Searching'} · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}${mode === 'ranked' && rating ? ` · your rating ${rating}` : ''}`;
+      info.textContent = `${size > 1 ? `${size} players looking` : 'Searching'} · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}${mode === 'ranked' && rating ? ` · your rating ${rating}` : ''}`;
       if (mode === 'ranked' && s > 25) line.textContent = 'Widening the search…';
-      if (s > 90) line.textContent = 'Not many players on right now. Keep waiting, or play a friend.';
-      if (s >= 20 && !friend.isConnected) box.insertBefore(friend, cancel);       // (a long wait: the link to a friend, one tap)
+      if (s > 90) line.textContent = 'Not many players on right now. Keep waiting, or play the computer or a friend.';
+      if (s >= 20) alt.hidden = false;
     };
-    const friend = el('button', 'btn', 'Play a friend instead');
-    friend.type = 'button';
+    cpu.addEventListener('click', () => { done(); vsCpuRoom('queue'); });
     friend.addEventListener('click', () => { done(); vsFriendRoom('queue'); });
     const tk = setInterval(draw, 1000);
     cancel.addEventListener('click', () => { done(); track('vs_queue_cancel', { mode, secs: Math.round((Date.now() - t0) / 1000) }); renderVsLobby(); });
     const open = () => {
       if (closed) return;
-      const q = new URLSearchParams({ key: deviceKey(), mode, team: vsMyTeam(), name: myName() });
+      const q = new URLSearchParams({ key: deviceKey(), mode, game, team: vsMyTeam(), name: myName() });
       try { ws = new WebSocket(`${BOARD.api.replace(/^http/, 'ws')}/vs/queue?${q}`); } catch (e) { return setTimeout(open, 2000); }
       vs.q = ws;
       ws.onmessage = (ev) => {
         let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
         if (m.t === 'queued') { size = m.size; rating = m.rating; tries = 0; draw(); }
+        if (m.t === 'busy') { done(); vsBusy(); }
         if (m.t === 'match') {
           done();
-          try { sessionStorage.setItem(`tmd:vsmode:${m.room}`, m.mode); } catch (e) { /* none */ }
-          track('vs_matched', { mode, secs: Math.round((Date.now() - t0) / 1000) });
+          vsStore(m.room, m.mode, m.game || game);
+          track('vs_matched', { mode, game, secs: Math.round((Date.now() - t0) / 1000) });
           location.hash = `#vs-${m.room}`;
         }
       };
       ws.onclose = (ev) => {
         if (closed) return;
         if (ev.code === 4000) { done(); line.textContent = 'You’re searching in another tab or on another device.'; return; }    // replaced: never fight it
-        if (++tries < 10) setTimeout(open, Math.min(4000, 500 * tries)); else line.textContent = 'Lost the connection to matchmaking.';
+        if (++tries < 10) { line.textContent = navigator.onLine === false ? 'You’re offline. Back in the queue when you’re online…' : 'Finding you an opponent…'; setTimeout(open, Math.min(4000, 500 * tries)); }
+        else { line.textContent = 'Lost the connection to matchmaking. Play the computer, or try again in a minute.'; alt.hidden = false; }
       };
     };
     open();
-    track('vs_queue', { mode });
+    track('vs_queue', { mode, game });
   }
   // a new friend room: its code is the link to send
   function vsFriendRoom(from) {
-    const a = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', room = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => a[b % a.length]).join('');
-    try { sessionStorage.setItem(`tmd:vsmode:${room}`, 'friend'); } catch (e) { /* none */ }
+    const room = newCode();
+    vsStore(room, 'friend', vsGamePick());
     track('vs_friend', from ? { from } : undefined);
     location.hash = `#vs-${room}`;
   }
-  // the Versus screen (#vs): your team, then ranked, casual or a friend; the ladder
+  // the computer: a room of your own, seat 1 the engine's calls (unranked)
+  function vsCpuRoom(from) {
+    if (!vsMyTeam()) { toast('Pick your team first'); return; }
+    const room = newCode();
+    vsStore(room, 'cpu', vsGamePick());
+    track('vs_cpu', from ? { from } : undefined);
+    location.hash = `#vs-${room}`;
+  }
+  // how Versus works, once (a 20-second read)
+  function vsFirstCard(box) {
+    if (load(VS_SEEN_KEY, false)) return;
+    const c = el('div', 'vsfirst');
+    c.append(el('h3', '', 'How Versus works'));
+    const ul = el('ul');
+    ['Two players, two phones. You call your offense; they call the defense. Then the other way round.',
+      'Five-Minute Drill: tied 0–0, 5:00 left, three timeouts each. Ahead at 0:00 wins; tied goes to college overtime.',
+      'It opens with a coin toss: call heads or tails; the winner picks receive, kick or the end of the field.',
+      'Calls are sealed: neither side sees the other’s until both are in. Then both phones run the same play.',
+      `30 seconds a call. Run out and the coach calls it for you; ${VS_AFK} in a row is a forfeit.`].forEach((t) => ul.append(el('li', '', t)));
+    const ok = el('button', 'btn', 'Got it');
+    ok.type = 'button';
+    ok.addEventListener('click', () => { save(VS_SEEN_KEY, true); c.remove(); });
+    c.append(ul, ok);
+    box.append(c);
+  }
+  // the Versus screen (#vs): the game, your team, then ranked, casual, a friend or the computer; the ladder (#vs-ladder)
   async function renderVsLobby() {
+    if (location.hash === '#vs-ladder') return renderVsLadder();
     show('arch');
     const box = $('arch');
     box.textContent = '';
-    box.append(el('h2', '', 'Versus'), el('p', 'lead', 'College overtime against another player: each team gets the ball at the other’s 25, no clock. You call your offense and your defense; both calls lock in before the snap, and the same play runs on both phones.'));
+    box.append(el('h2', '', 'Versus'), el('p', 'lead', 'Call the plays against another player: you on offense, they on defense, then the other way round. Both calls lock in before the snap, and the same play runs on both phones.'));
+    vsFirstCard(box);
+    // the game: the Five-Minute Drill or the overtime shootout
+    const games = el('div', 'vsgames');
+    const drawGames = () => {
+      games.textContent = '';
+      Object.entries(VS_GAMES).forEach(([g, label]) => {
+        const b = el('button', `chip${vsGamePick() === g ? ' on' : ''}`, label);
+        b.type = 'button';
+        b.setAttribute('aria-pressed', String(vsGamePick() === g));
+        b.addEventListener('click', () => { save(VS_GAME_KEY, g); drawGames(); });
+        games.append(b);
+      });
+      games.append(el('p', 'note', vsGamePick() === 'five' ? '0–0, 5:00 left in the fourth, three timeouts each. Tied at 0:00: college overtime.' : 'College overtime only: the ball at the 25, no clock. Quick.'));
+    };
+    drawGames();
     const pick = el('div', 'vspick');
     const drawPick = () => {
       pick.textContent = '';
       const t = vsMyTeam();
-      pick.append(el('h3', '', t ? `Your team: ${teamName(t)}` : 'Pick your team'), vsTeamPicker(() => { drawPick(); }));
+      pick.append(el('h3', '', t ? `Your team: ${teamName(t)}` : 'Pick your team'), vsTeamPicker(() => { drawPick(); }),
+        el('p', 'note', 'The number is each team’s strength (80 is average): it counts in casual and friend matches. Ranked: even teams.'));
     };
     const modes = el('div', 'vsmodes');
     const go = (mode) => {
       if (!vsMyTeam()) { toast('Pick your team first'); return; }
       if (mode === 'ranked' && !myName()) { toast('Ranked needs a name: set it below'); nameIn.focus(); return; }
       if (mode === 'friend') { vsFriendRoom(); return; }
+      if (mode === 'cpu') { vsCpuRoom('lobby'); return; }
       if (mode === 'ranked' && typeof TMDScenario !== 'undefined' && TMDScenario.blocked(myName())) { toast('That name isn’t allowed on the ladder: pick another'); nameIn.focus(); return; }
       vsQueue(mode);
     };
-    [['ranked', 'Ranked', 'Win to climb the ladder'], ['casual', 'Casual', 'Quick match, no rating'], ['friend', 'Friend', 'Send a link']].forEach(([m, label, sub]) => {
-      const b = el('button', `btn${m === 'friend' ? ' ghostbtn' : ''}`);
+    [['ranked', 'Ranked', 'Even teams · the ladder'], ['casual', 'Casual', 'Quick match, no rating'], ['friend', 'Friend', 'Send a link'], ['cpu', 'Computer', 'Practice, unranked']].forEach(([m, label, sub]) => {
+      const b = el('button', `btn${m === 'friend' || m === 'cpu' ? ' ghostbtn' : ''}`);
       b.type = 'button';
       b.append(document.createTextNode(label), el('small', '', sub));
       b.disabled = !BOARD.api;
@@ -12256,10 +12364,15 @@
       modes.append(b);
     });
     drawPick();
-    box.append(pick, modes);
+    const status = el('p', 'note vsstatus', '');
+    box.append(games, pick, modes, status);
     const nameRow = el('div', 'row'), nameIn = el('input');
     nameIn.placeholder = 'Your name (for ranked)'; nameIn.maxLength = 24; nameIn.value = myName(); nameIn.setAttribute('aria-label', 'Your name');
-    nameIn.addEventListener('change', () => { save(NAME_KEY, nameIn.value.trim().slice(0, 24)); track('name_set', { mode: 'versus' }); });
+    nameIn.addEventListener('change', () => {
+      const v = nameIn.value.trim().slice(0, 24);
+      if (v && typeof TMDScenario !== 'undefined' && TMDScenario.blocked(v)) { toast('That name isn’t allowed: pick another'); return; }
+      save(NAME_KEY, v); track('name_set', { mode: 'versus' });
+    });
     nameRow.append(nameIn);
     box.append(nameRow);
     const join = el('div', 'row'), inp = el('input'), jb = el('button', 'btn ghostbtn', 'Join');
@@ -12274,23 +12387,65 @@
     join.append(inp, jb);
     box.append(join);
     if (!BOARD.api) { box.append(el('p', 'note', 'Versus needs the website’s backend.')); return; }
-    // straight back into the queue (a no-show's "find another match")
+    // straight back into the queue (a no-show's "find another match", "play ranked again")
     let again = null;
     try { again = sessionStorage.getItem('tmd:vsqueue'); sessionStorage.removeItem('tmd:vsqueue'); } catch (e) { /* none */ }
     if ((again === 'ranked' || again === 'casual') && vsMyTeam()) { vsQueue(again); return; }
+    // on or off, how many are looking
+    await BOARD.ready;
+    fetch(`${BOARD.api}/vs/status`).then((r) => r.json()).then((s) => {
+      if (!s.on) { status.textContent = 'Versus is busy: matchmaking is paused for a minute. The computer is open.'; modes.querySelectorAll('button').forEach((b, i) => { if (i < 3) b.disabled = true; }); }
+      else if (s.waiting > 0) status.textContent = `${s.waiting} ${s.waiting === 1 ? 'player' : 'players'} looking for a match right now.`;
+    }).catch(() => {});
     // the ladder, and you on it
     const lad = el('div', 'vsladder');
-    box.append(el('h3', '', 'Ranked ladder'), lad);
+    const more = el('a', 'chip', 'The full ladder ▶');
+    more.href = '#vs-ladder';
+    box.append(el('h3', '', 'Ranked ladder'), lad, more);
+    try {
+      const [top, me] = await Promise.all([fetch(`${BOARD.api}/vs/ladder`).then((r) => r.json()), fetch(`${BOARD.api}/vs/me`, POST_JSON({ key: deviceKey() })).then((r) => r.json())]);
+      lad.append(vsMeLine(me));
+      const ol = el('ol', 'board');
+      (top.top || []).slice(0, 5).forEach((x) => ol.append(vsLadderRow(x)));
+      if (!(top.top || []).length) lad.append(el('p', 'note', 'Nobody yet. Be the first.'));
+      else lad.append(ol);
+    } catch (e) { lad.append(el('p', 'note', 'The ladder did not load.')); }
+  }
+  function vsMeLine(me) {
+    const p = el('p', 'note vsme');
+    if (!me.games) { p.append('You: 1000 · no ranked games yet · ', tierBadge(1000)); return p; }
+    const streak = me.streak > 1 ? ` · ${me.streak} wins in a row` : me.streak < -1 ? ` · ${-me.streak} losses in a row` : '';
+    p.append(`You: ${me.rating}${me.rank ? ` · #${me.rank}` : ''} · ${me.w}–${me.l}${streak}${me.provisional ? ` · placement (${me.games} of 10)` : ''} · `, tierBadge(me.rating));
+    return p;
+  }
+  function vsLadderRow(x) {
+    const li = el('li');
+    li.append(el('span', 'nm', x.name), tierBadge(x.rating), el('span', 'n', `${x.rating}${x.provisional ? '?' : ''} · ${x.w}–${x.l}`));
+    return li;
+  }
+  // the ladder (#vs-ladder): the top 25, you, this week's most wins
+  async function renderVsLadder() {
+    show('arch');
+    const box = $('arch');
+    box.textContent = '';
+    const back = el('a', 'chip', '◀ Versus');
+    back.href = '#vs';
+    box.append(back, el('h2', '', 'Ranked ladder'), el('p', 'note', 'Ranked plays even teams: only the calls count. Elo: beat a higher rating to climb faster; the first 10 games are placement.'));
+    if (!BOARD.api) { box.append(el('p', 'note', 'The ladder needs the website’s backend.')); return; }
     try {
       await BOARD.ready;
       const [top, me] = await Promise.all([fetch(`${BOARD.api}/vs/ladder`).then((r) => r.json()), fetch(`${BOARD.api}/vs/me`, POST_JSON({ key: deviceKey() })).then((r) => r.json())]);
-      const streak = me.streak > 1 ? ` · ${me.streak} wins in a row` : me.streak < -1 ? ` · ${-me.streak} losses in a row` : '';
-      lad.append(el('p', 'note', me.games ? `You: ${me.rating}${me.rank ? ` · #${me.rank}` : ''} · ${me.w}–${me.l}${streak}${me.provisional ? ` · placement (${me.games} of 10)` : ''}` : 'You: 1000 · no ranked games yet'));
+      box.append(vsMeLine(me));
       const ol = el('ol', 'board');
-      (top.top || []).slice(0, 20).forEach((x) => { const li = el('li'); li.append(el('span', 'nm', x.name), el('span', 'n', `${x.rating}${x.provisional ? '?' : ''} · ${x.w}–${x.l}`)); ol.append(li); });
-      if (!(top.top || []).length) lad.append(el('p', 'note', 'Nobody yet. Be the first.'));
-      else lad.append(ol, el('p', 'note', '? : still in placement (the first 10 ranked games move a rating faster)'));
-    } catch (e) { lad.append(el('p', 'note', 'The ladder did not load.')); }
+      (top.top || []).slice(0, 25).forEach((x) => ol.append(vsLadderRow(x)));
+      box.append((top.top || []).length ? ol : el('p', 'note', 'Nobody yet. Be the first.'));
+      if ((top.week || []).length) {
+        const wk = el('ol', 'board');
+        top.week.forEach((x) => { const li = el('li'); li.append(el('span', 'nm', x.name), el('span', 'n', `${x.wins} ${x.wins === 1 ? 'win' : 'wins'}`)); wk.append(li); });
+        box.append(el('h3', '', 'This week’s most wins'), wk);
+      }
+      box.append(el('p', 'note', `${top.players || 0} ranked players · ? : still in placement`));
+    } catch (e) { box.append(el('p', 'note', 'The ladder did not load. Try again in a minute.')); }
   }
   function vsNote(text) {
     show('arch');
@@ -12300,7 +12455,7 @@
     a.href = '#vs';
     box.append(el('h2', '', 'Versus'), el('p', 'lead', text), a);
   }
-  // a line above the field: the play clock, the opponent's lock, a dropped connection
+  // a line above the field: the play clock, whose call it is, a dropped connection, the emotes
   function vsBanner(text) { vs.banner = text; vsDrawBar(); }
   function vsDrawBar() {
     let b = $('vsbar');
@@ -12314,20 +12469,47 @@
     if (vs.banner) b.append(el('span', 'warn', vs.banner));
     if (vs.ui === 'prompt' && vsMyDl()) {
       const s = Math.max(0, Math.ceil((vsMyDl() - vsNow()) / 1000));
-      b.append(el('span', `clk${s <= 10 ? ' low' : ''}`, `Play clock ${s}`));
+      b.append(el('span', `clk${s <= 10 ? ' low' : ''}`, s <= 10 ? `Play clock ${s} · call it!` : `Play clock ${s}`));
     }
-    if (G && vs.oppLocked === G.vsN && vs.n === G.vsN && vs.ui !== 'card' && vs.ui !== 'end') b.append(el('span', 'lock', 'Opponent locked in'));
+    if (G && vs.oppLocked === G.vsN && vs.n === G.vsN && vs.ui !== 'card' && vs.ui !== 'end') b.append(el('span', 'lock', `${vsOpp()} is locked in`));
     else if (G && !busy && vs.ui === 'idle' && vs.phase === 'live' && vs.n === G.vsN && vs.ms && VSCore.need(vs.ms).includes(1 - vs.seat)) {
       // whose turn: theirs, on their play clock once their call is up (the room's oclock)
       const s = vs.oppDl ? Math.max(0, Math.ceil((vs.oppDl - vsNow()) / 1000)) : null;
-      b.append(el('span', 'their', s == null ? 'Their call' : `Their call · ${s}`));
+      b.append(el('span', 'their', s == null ? `${vsOpp()}’s call` : `${vsOpp()}’s call · ${s}`));
       clearTimeout(vs.barT); vs.barT = setTimeout(vsDrawBar, 1000);
     }
+    if (vs.started && vs.phase === 'live' && vs.mode !== 'cpu') b.append(vsEmotes());
     b.hidden = !b.childNodes.length;
+  }
+  // the emotes: six presets (no free text), a few seconds apart, muted with a tap
+  function vsEmotes() {
+    const w = el('span', 'emo');
+    const open = el('button', 'emobtn', '💬');
+    open.type = 'button'; open.setAttribute('aria-label', 'Quick chat');
+    open.addEventListener('click', () => {
+      const old = document.querySelector('.emopick');
+      if (old) { old.remove(); return; }
+      const p = el('div', 'emopick');
+      Object.entries(EMOTE).forEach(([k, t]) => { const x = el('button', '', t); x.type = 'button'; x.addEventListener('click', () => { vsSend({ t: 'emote', e: k }); p.remove(); }); p.append(x); });
+      const mute = el('button', 'mute', load(VS_MUTE_KEY, false) ? 'Unmute theirs' : 'Mute theirs');
+      mute.type = 'button';
+      mute.addEventListener('click', () => { save(VS_MUTE_KEY, !load(VS_MUTE_KEY, false)); p.remove(); });
+      p.append(mute);
+      document.body.append(p);
+    });
+    w.append(open);
+    return w;
+  }
+  function vsBubble(seat, e) {
+    const t = EMOTE[e];
+    if (!t) return;
+    const bb = el('div', `emobubble ${seat === vs.seat ? 'me' : 'them'}`, `${seat === vs.seat ? 'You' : vsOpp()}: ${t}`);
+    document.body.append(bb);
+    setTimeout(() => bb.remove(), 3000);
   }
   // your call's clock: 30 seconds from the moment the call is up (the room starts it on {t:'ready'} and says when it
   // runs out; until it answers, the same 30 seconds here), never past the decision's last moment. Out of time: the
-  // room plays your default
+  // coach's call is played
   const vsDls = () => (vs.dl && vs.dl.length === 2 ? vs.dl.slice() : [vs.deadline, vs.deadline]);
   const vsMyDl = () => (vs.seat >= 0 ? vsDls()[vs.seat] : vs.deadline);
   function vsClockStart() {
@@ -12338,11 +12520,15 @@
       vs.dl[vs.seat] = Math.min(vs.dl[vs.seat], vsNow() + VS_DECIDE_MS);
       vsSend({ t: 'ready', n: G.vsN });
     }
+    if (document.hidden) { vsBuzz([120, 80, 120]); vsTitle(true); }
+    let warned = false;
     vs.timer = setInterval(() => {
       if (vs.ui !== 'prompt') { clearInterval(vs.timer); return; }
-      if (vsNow() >= vsMyDl()) {
+      const left = vsMyDl() - vsNow();
+      if (!warned && left <= 10000) { warned = true; vsBuzz(60); }
+      if (left <= 0) {
         clearInterval(vs.timer);
-        if (!busy && vs.waiting !== G.vsN) { vs.ui = 'idle'; status('Out of time: your default call is in'); }
+        if (!busy && vs.waiting !== G.vsN) { vs.ui = 'idle'; status('Out of time: the coach called it for you'); }
       }
       vsDrawBar();
     }, 250);
@@ -12350,7 +12536,7 @@
   }
   // what goes to the room: the call only (what the room's cleanAction keeps, vs_core.js), never a drawing. The drawing
   // stays on this phone, for the animation of its own play when the room plays that call (vsApply)
-  const VS_SEALED = ['to_off', 'to_def', 'play', 'call', 'oob', 'pers', 'route', 'who', 'philly', 'pat', 'tempo', 'looks'];
+  const VS_SEALED = ['to_off', 'to_def', 'play', 'call', 'oob', 'pers', 'route', 'who', 'philly', 'pat', 'tempo', 'looks', 'kick'];
   const DRAW_ONLY = ['path', 'carrier', 'shape', 'drawn', 'routes', 'target', 'targetName', 'targetPos', 'pa', 'roll', 'qbPath', 'ddraw', 'open'];
   function vsSealed(half) {
     if (!half || !half.action) return half;
@@ -12358,6 +12544,7 @@
     VS_SEALED.forEach((k) => { if (half.action[k] !== undefined) a[k] = half.action[k]; });
     return { ...half, action: a };
   }
+  const vsWaitLine = () => status(`Call in. Waiting for ${vsOpp()}…`);
   // your half of the decision: once, sealed until the other side's is in
   function vsSubmit(half, local) {
     const n = G.vsN;
@@ -12370,7 +12557,7 @@
     vs.last = { t: 'half', n, half: vsSealed(half) };
     vsSend(vs.last);
     vs.ui = 'idle';
-    status('Locked in. Waiting for your opponent…');
+    vsWaitLine();
     vsDrawBar();
   }
   // the room sent something: play it now, unless a play is running or its result is up (Next play, or the clock)
@@ -12395,17 +12582,22 @@
       const pe = res.log.find((x) => x.ev === 'play');
       const look = pe && pe.look && pe.look.box && res.action && (res.action.dc || (before.pos !== G.me && res.action.def)) ? (pe.look.box >= 7 ? 2 : 0) + (pe.look.blitz ? 1 : 0) : null;
       G.lastPlay = { before, res, side, look };
-      // the match's calls, both sides, for the end card (kept with the match: a reload still has them)
+      // the match's calls, both sides, for the end card (kept with the match: a reload still has them); good: the
+      // snap went your side's way (the share's squares)
       const main = res.log.find((e) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(e.ev));
       if (!(G.vsCalls || []).some((x) => x.n === d.n)) {
-        G.vsCalls = [...(G.vsCalls || []), { n: d.n, at: before.phase === SNAP ? (before.try2 ? 'Two-point try' : `${ddText(before)} · ${spotText(before)}`) : 'The try',
-          poss: before.pos, round: G.cot ? G.cot.round : 1, calls: vsCalls(d, before), head: headline(main, res.log), score: G.root.score.slice() }];
+        const mineOff = before.pos === G.me, sc = G.root.score, d0 = sc[G.me] - before.score[G.me], d1 = sc[1 - G.me] - before.score[1 - G.me];
+        const gain = main && main.ev === 'play' ? (main.yards > 0 && !main.turnover) : d0 > 0;
+        const good = d0 > d1 ? true : d1 > d0 ? false : main && main.ev === 'play' ? (mineOff ? gain : !gain) : mineOff;
+        G.vsCalls = [...(G.vsCalls || []), { n: d.n, at: before.phase === SNAP ? (before.try2 ? 'Two-point try' : `${ddText(before)} · ${spotText(before)}`) : before.phase === KICKOFF ? 'Kickoff' : 'The try',
+          poss: before.pos, round: G.cot ? G.cot.round : 0, t: G.cot ? null : before.t, calls: vsCalls(d, before), head: headline(main, res.log), score: sc.slice(), good }];
       }
       res.animated = await animatePlay(before, res, side, false, look);
       out = { res, d };
     } else if (d.kind === 'timeout') out = { res: { log: [], action: { to_off: true } }, head: 'Timeout', d };
+    else if (d.kind === 'toss') out = { toss: (d.notes || []).find((x) => x.k === 'toss'), d };
     cotLog(d.notes);
-    G.root = d.ms.root; G.cot = d.ms.cot; G.seq = d.ms.seq;
+    G.root = d.ms.root; G.cot = d.ms.cot; G.reg = d.ms.reg || null; G.seq = d.ms.seq;
     persist();
     return out;
   }
@@ -12431,9 +12623,11 @@
   function vsCalls(d, root) {
     const off = d.halves[root.pos], def = d.halves[1 - root.pos];
     const a = off && off.action;
-    const offTxt = !off ? 'no call in time (the default)' : off.timeout ? 'a timeout' : off.two ? 'going for two' : a && a.call ? (CALL[a.call] || {}).label || 'a play'
-      : a && a.play ? specialLabel(a.play) : a && a.pat ? (a.pat === 'two' ? 'going for two' : 'the extra point') : 'a play';
-    const defTxt = root.phase !== SNAP ? null : !def ? 'no call in time (the default)' : def.dc ? vdefText(def.dc) : 'a defense';
+    const coach = 'the coach’s call (out of time)';
+    const offTxt = !off ? coach : off.timeout ? 'a timeout' : off.two ? 'going for two' : a && a.kick ? { return: 'kick to the returner', touchback: 'kick it through the end zone', onside: 'onside kick', deep: 'kick deep' }[a.kick]
+      : a && a.call ? `${(CALL[a.call] || {}).label || 'a play'}${a.tempo === 'milk' ? ', milking the clock' : a.tempo === 'urgent' || a.tempo === 'hurry' ? ', no-huddle' : ''}`
+        : a && a.play ? specialLabel(a.play) : a && a.pat ? (a.pat === 'two' ? 'going for two' : 'the extra point') : 'a play';
+    const defTxt = root.phase !== SNAP ? null : !def ? coach : def.dc ? `${vdefText(def.dc)}${def.to_def ? ', timeout first' : ''}` : def.to_def ? 'timeout first' : 'a defense';
     const me = root.pos === G.me;
     return `${me ? 'You' : 'They'}: ${offTxt}${defTxt ? ` · ${me ? 'They' : 'You'}: ${defTxt}` : ''}`;
   }
@@ -12441,15 +12635,35 @@
     drawAll();
     const d = $('dock');
     d.textContent = '';
-    const res = x.res, main = res.log.find((e) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(e.ev));
-    const lines = (main ? narrate([main], res.action) : narrate(res.log, res.action).reverse());
-    const wrap = el('div', 'result'), top = el('div', 'res-top'), txt = el('div', 'res-play');
-    txt.append(el('span', 'yd', x.head || headline(main, res.log)), document.createTextNode(lines.length ? lines[0][0] : ''));
-    top.append(txt);
-    wrap.append(top, el('div', 'vscalls', vsCalls(x.d, before)));
-    const mu = main ? defenseLine(main, before.pos !== G.me) : null;
-    if (mu) wrap.append(el('div', `mline ${mu.good ? 'won' : 'lost'}`, mu.text));
-    say(`${txt.firstChild.textContent}. ${lines.length ? lines[0][0] : ''}`);          // (said once: showResult)
+    const wrap = el('div', 'result');
+    let wait = Math.max(4000, vs.deadline - VS_DECIDE_MS - vsNow());
+    if (x.toss) {                 // the coin toss: the coin in the air, then who won it
+      const t = x.toss, coin = el('div', `coin flip ${t.coin}`);
+      coin.append(el('span', 'h', 'H'), el('span', 't', 'T'));
+      const won = t.winner === G.me;
+      const txt = el('div', 'res-play');
+      txt.append(el('span', 'yd', `${t.coin === 'heads' ? 'Heads' : 'Tails'}!`), document.createTextNode(`${t.team === G.me ? 'You' : teamName(code(t.team))} called ${t.call}${t.auto ? ' (out of time)' : ''}. ${won ? 'You win the toss.' : `${teamName(code(t.winner))} wins the toss.`}`));
+      wrap.append(coin, txt);
+      say(`${t.coin}. ${won ? 'You win the toss' : 'They win the toss'}`);
+      wait = 2800;
+    } else {
+      const res = x.res, main = res.log.find((e) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(e.ev));
+      const lines = (main ? narrate([main], res.action) : narrate(res.log, res.action).reverse());
+      const top = el('div', 'res-top'), txt = el('div', 'res-play');
+      txt.append(el('span', 'yd', x.head || headline(main, res.log)), document.createTextNode(lines.length ? lines[0][0] : ''));
+      top.append(txt);
+      wrap.append(top, el('div', 'vscalls', vsCalls(x.d, before)));
+      const mu = main ? defenseLine(main, before.pos !== G.me) : null;
+      if (mu) wrap.append(el('div', `mline ${mu.good ? 'won' : 'lost'}`, mu.text));
+      say(`${txt.firstChild.textContent}. ${lines.length ? lines[0][0] : ''}`);          // (said once: showResult)
+      // the replay, on this phone (the daily's)
+      if (G.lastPlay && G.lastPlay.res === res && res.animated) {
+        const rp = el('button', 'chip replay', '↻ Replay');
+        rp.type = 'button';
+        rp.addEventListener('click', () => { clearTimeout(vs.cardTimer); replay(); });
+        wrap.append(rp);
+      }
+    }
     const btn = el('button', 'btn', G.root.phase === DONE || vs.result ? 'Final' : 'Next play');
     btn.type = 'button';
     let went = false;
@@ -12461,7 +12675,7 @@
     vsDrawBar();
     // the play clock runs whether or not Next is tapped: the card gives way when the clock would start anyway (WATCH_MS after the snap)
     clearTimeout(vs.cardTimer);
-    vs.cardTimer = setTimeout(go, vs.result ? 8000 : Math.max(4000, vs.deadline - VS_DECIDE_MS - vsNow()));     // the last play: then the final
+    vs.cardTimer = setTimeout(go, vs.result ? 8000 : wait);     // the last play: then the final
   }
   // the next decision of the match: one the room already played, yours (a prompt, on the play clock) or theirs (wait)
   async function vsAdvance(r) {
@@ -12483,33 +12697,73 @@
     const role = VSCore.role(vs.ms, vs.seat);
     if (!role) {
       vs.ui = 'idle';
-      if (G.cot && G.cot.pick) vsWaitPick();
-      else status(r.phase === PAT ? `${teamName(code(r.pos))} lines up for the try…` : 'Waiting for your opponent…');
+      const tossUp = G.reg && !G.cot && G.reg.call != null && !G.reg.toss;
+      if (tossUp) vsWaitToss();
+      else if ((G.cot && G.cot.pick) || (G.reg && !G.cot && G.reg.pick)) vsWaitPick();
+      else status(r.phase === PAT ? `${teamName(code(r.pos))} lines up for the try…` : r.phase === KICKOFF ? `${teamName(code(r.pos))} kicks off…` : `Waiting for ${vsOpp()}…`);
       vsDrawBar();
       return 'stop';
     }
-    if (vs.waiting === G.vsN) { vs.ui = 'idle'; status('Locked in. Waiting for your opponent…'); vsDrawBar(); return 'stop'; }
-    if (vsNow() >= vsMyDl()) { vs.ui = 'idle'; status('Out of time: your default call is in'); return 'stop'; }
+    if (vs.waiting === G.vsN) { vs.ui = 'idle'; vsWaitLine(); vsDrawBar(); return 'stop'; }
+    if (vsNow() >= vsMyDl()) { vs.ui = 'idle'; status('Out of time: the coach called it for you'); return 'stop'; }
     vsClockStart();
-    if (role === 'pick') vsPromptPick();
+    if (role === 'toss') vsPromptToss();
+    else if (role === 'pick') vsPromptPick();
+    else if (role === 'kick') promptChoice(r.free_kick ? 'freekick' : 'kick');
     else if (role === 'offense') promptOffense();
     else if (role === 'defense') promptDefense();
     else promptChoice('pat');
     return 'stop';
   }
-  // the overtime choice: offense, defense or the end of the field (the end: they pick offense or defense)
-  function vsPromptPick() {
-    const c = G.cot, d = $('dock');
+  // the coin toss (the Five-Minute Drill): seat 0 calls it in the air
+  function vsPromptToss() {
+    const d = $('dock');
     drawAll();
     d.textContent = '';
     takeBanner(d);
     const head = el('div', 'ask');
-    const why = c.pick.end ? 'They took the end of the field' : c.round === 1 ? 'You won the toss' : `${ordinal(c.round)} overtime: your choice`;
-    head.append(el('h2', '', why), el('span', 'sub', c.pick.end ? 'Offense or defense?' : 'Offense, defense or the end of the field?'));
+    head.append(el('h2', '', 'Coin toss'), el('span', 'sub', 'Call it in the air: the winner picks receive, kick or the end of the field'));
     d.append(head);
-    const keys = el('div', 'keys'), opts = c.pick.end ? ['offense', 'defense'] : ['offense', 'defense', 'end'];
-    const label = { offense: 'Offense', defense: 'Defense', end: 'End of the field' };
-    const subs = { offense: 'You have the ball first', defense: 'They go first; you know what you need', end: 'Pick the end zone; they choose offense or defense' };
+    const keys = el('div', 'keys');
+    keys.style.setProperty('--cols', 2);
+    VSCore.COIN.forEach((o, i) => {
+      const b = key(o === 'heads' ? 'Heads' : 'Tails', null, 'big def', i);
+      b.addEventListener('click', () => { if (busy) return; track('vs_toss', { call: o }); vsSubmit({ call: o }); });
+      keys.append(b);
+    });
+    d.append(keys);
+  }
+  function vsWaitToss() {
+    const d = $('dock');
+    d.textContent = '';
+    takeBanner(d);
+    const head = el('div', 'ask');
+    head.append(el('h2', '', 'Coin toss'), el('span', 'sub', `${teamName(code(G.reg.call))} calls it in the air…`));
+    const st = el('div', 'status');
+    st.append(el('span', 'spin'), el('span', '', `Waiting for ${vsOpp()}`));
+    d.append(head, st);
+  }
+  // the choice after a toss: the Five-Minute Drill's receive, kick or the end; overtime's offense, defense or the end
+  // (the end: the other side picks the rest)
+  function vsPickOf() {
+    if (G.cot && G.cot.pick) return { ...G.cot.pick, reg: false, round: G.cot.round };
+    return { ...G.reg.pick, reg: true, round: 0 };
+  }
+  function vsPromptPick() {
+    const c = vsPickOf(), d = $('dock');
+    drawAll();
+    d.textContent = '';
+    takeBanner(d);
+    const head = el('div', 'ask');
+    const why = c.end ? 'They took the end of the field' : c.reg || c.round === 1 ? 'You won the toss' : `${ordinal(c.round)} overtime: your choice`;
+    const ask = c.reg ? (c.end ? 'Receive or kick?' : 'Receive, kick or the end of the field?') : (c.end ? 'Offense or defense?' : 'Offense, defense or the end of the field?');
+    head.append(el('h2', '', why), el('span', 'sub', ask));
+    d.append(head);
+    const keys = el('div', 'keys');
+    const opts = c.reg ? (c.end ? ['receive', 'kick'] : ['receive', 'kick', 'end']) : (c.end ? ['offense', 'defense'] : ['offense', 'defense', 'end']);
+    const label = { offense: 'Offense', defense: 'Defense', end: 'End of the field', receive: 'Receive', kick: 'Kick off' };
+    const subs = { offense: 'You have the ball first', defense: 'They go first; you know what you need', end: c.reg ? 'Pick the end; they choose to receive or kick' : 'Pick the end zone; they choose offense or defense',
+      receive: 'Your ball first, 5:00 left', kick: 'Your defense first; you get it back later' };
     keys.style.setProperty('--cols', opts.length);
     opts.forEach((o, i) => {
       const b = key(label[o], subs[o], 'big def', i);
@@ -12519,40 +12773,56 @@
     d.append(keys);
   }
   function vsWaitPick() {
-    const c = G.cot, d = $('dock'), nm = teamName(code(c.pick.team));
+    const c = vsPickOf(), d = $('dock'), nm = teamName(code(c.team));
     d.textContent = '';
     takeBanner(d);
     const head = el('div', 'ask');
-    head.append(el('h2', '', c.pick.end ? 'You took the end of the field' : c.round === 1 ? `${nm} won the toss` : `${ordinal(c.round)} overtime`),
-      el('span', 'sub', `${nm} chooses ${c.pick.end ? 'offense or defense' : 'offense, defense or the end of the field'}…`));
+    head.append(el('h2', '', c.end ? 'You took the end of the field' : c.reg || c.round === 1 ? `${nm} won the toss` : `${ordinal(c.round)} overtime`),
+      el('span', 'sub', `${nm} chooses ${c.reg ? (c.end ? 'to receive or kick' : 'receive, kick or the end of the field') : (c.end ? 'offense or defense' : 'offense, defense or the end of the field')}…`));
     const st = el('div', 'status');
     st.append(el('span', 'spin'), el('span', '', 'Waiting for their choice'));
     d.append(head, st);
   }
+  // the match in one line: how it was won (the last score, and when)
+  function vsStory(res, won) {
+    const calls = G.vsCalls || [];
+    let last = null;
+    for (let i = calls.length - 1; i >= 0; i--) {
+      const prev = i ? calls[i - 1].score : [0, 0];
+      if (calls[i].score[0] !== prev[0] || calls[i].score[1] !== prev[1]) { last = calls[i]; break; }
+    }
+    if (res.by !== 'score' || !last) return null;
+    const what = String(last.head || 'a score').replace(/\.$/, '');
+    const when = last.round ? (last.round > 1 ? ` in the ${ordinal(last.round)} overtime` : ' in overtime') : last.t != null ? ` with ${clockOf(Math.max(0, last.t)).text} left` : '';
+    const theirs = calls.length && last.poss !== G.me && !/safety|intercept|fumble|return|blocked/i.test(what);
+    return `${won ? (theirs ? 'Held on after' : 'Won it on') : (theirs ? 'Lost it on' : 'Their answer never came after')} ${what.charAt(0).toLowerCase()}${what.slice(1)}${when}.`;
+  }
   function vsEndCard() {
-    clearInterval(vs.timer); clearTimeout(vs.cardTimer); clearInterval(vs.peerTimer);
+    clearInterval(vs.timer); clearTimeout(vs.cardTimer); clearInterval(vs.peerTimer); vsTitle(false);
     vs.ui = 'end';
     const res = vs.result || { by: 'score', winner: G.root.score[0] > G.root.score[1] ? 0 : 1 };
-    const r = G.root, mine = r.score[G.me], theirs = r.score[1 - G.me], rounds = G.cot ? G.cot.round : 1, won = res.winner === vs.seat, d = $('dock');
+    const r = G.root, mine = r.score[G.me], theirs = r.score[1 - G.me], rounds = G.cot ? G.cot.round : 0, won = res.winner === vs.seat, d = $('dock');
     if (!G.result) {
       G.result = { mine, theirs, half: 2, v: 2, vs: true, by: res.by, won }; G.over = true; persist();
-      track('vs_finish', { mode: vs.mode, result: res.winner < 0 ? 'none' : won ? 'win' : 'loss', by: res.by, rounds });
+      track('vs_finish', { mode: vs.mode, game: vs.game, result: res.winner < 0 ? 'none' : won ? 'win' : 'loss', by: res.by, rounds, snaps: (G.vsCalls || []).length });
     }
     drawAll();
     d.textContent = '';
     vsBanner('');
     takeBanner(d);
     const card = el('div', 'endcard vsend');
-    const ot = rounds > 1 ? ` in ${ordinal(rounds)} overtime` : ' in overtime';
+    const ot = rounds > 1 ? ` in ${ordinal(rounds)} overtime` : rounds === 1 ? ' in overtime' : '';
     const h2 = el('h2', '');
     if (res.by === 'score') h2.append(won ? 'You win ' : 'You lose ', el('span', 'nw', `${mine}–${theirs}`), ot);      // (the score never broken over two lines)
     else h2.textContent = res.by === 'forfeit' ? (won ? 'You win: they forfeited' : 'You forfeited') : res.by === 'abandoned' ? 'No result: both sides left' : 'No result';
     card.append(h2);
-    if (res.by === 'forfeit') card.append(el('p', 'note', won ? (res.why === 'afk' ? 'They let the play clock run out on two calls in a row.' : 'They left the match for more than a minute.')
-      : (res.why === 'afk' ? 'The play clock ran out on two of your calls in a row.' : `You were away from the match for more than ${VS_FORFEIT} seconds.`)));
+    const story = vsStory(res, won);
+    if (story) card.append(el('p', 'vsstory', story));
+    if (res.by === 'forfeit') card.append(el('p', 'note', won ? (res.why === 'afk' ? `They let the play clock run out on ${VS_AFK} calls in a row.` : `They left the match for more than ${VS_FORFEIT} seconds.`)
+      : (res.why === 'afk' ? `The play clock ran out on ${VS_AFK} of your calls in a row.` : `You were away from the match for more than ${VS_FORFEIT} seconds.`)));
     if (res.by === 'error') card.append(el('p', 'note', 'Something went wrong in the match. Nobody’s rating changed.'));
     const oppName = vs.names[1 - vs.seat];
-    card.append(el('p', 'note', `Your ${teamName(code(G.me))} vs ${oppName ? `${oppName}’s` : 'their'} ${teamName(code(1 - G.me))} · ${VS_MODES[vs.mode] || 'Versus'}`));
+    card.append(el('p', 'note', `Your ${teamName(code(G.me))} vs ${oppName ? `${oppName}’s` : 'their'} ${teamName(code(1 - G.me))} · ${VS_MODES[vs.mode] || 'Versus'} · ${VS_GAMES[vs.game] || ''}`));
     card.append(el('p', 'vsrating', ''));
     // every snap of the match, both sides' calls (kept with the match: vsApply)
     const calls = G.vsCalls || [];
@@ -12563,10 +12833,10 @@
       calls.forEach((x) => {
         if (`${x.round}:${x.poss}` !== was) {           // a heading for each possession
           was = `${x.round}:${x.poss}`;
-          ol.append(el('li', 'poss', `${ordinal(x.round)} overtime · ${x.poss === G.me ? `your ball (${teamName(code(G.me))})` : `their ball (${teamName(code(1 - G.me))})`}`));
+          ol.append(el('li', 'poss', `${x.round ? `${ordinal(x.round)} overtime · ` : ''}${x.poss === G.me ? `your ball (${teamName(code(G.me))})` : `their ball (${teamName(code(1 - G.me))})`}`));
         }
-        const li = el('li', '');
-        li.append(el('b', '', `${x.at}: ${x.head}`), el('span', '', x.calls));
+        const li = el('li', x.good ? 'good' : 'bad');
+        li.append(el('b', '', `${x.t != null ? `${clockOf(Math.max(0, x.t)).text} · ` : ''}${x.at}: ${x.head}`), el('span', '', x.calls));
         ol.append(li);
       });
       det.append(ol);
@@ -12582,26 +12852,32 @@
     if (res.by === 'score' || res.by === 'forfeit') {
       const again = el('button', `btn${vs.mode === 'ranked' ? ' ghostbtn' : ''}`, vs.mode === 'ranked' ? 'Rematch (casual)' : 'Rematch');
       again.type = 'button'; again.id = 'vsAgain';
-      again.addEventListener('click', () => { again.disabled = true; again.textContent = 'Waiting for your opponent…'; vsSend({ t: 'rematch' }); });
+      again.addEventListener('click', () => { again.disabled = true; again.textContent = vs.mode === 'cpu' ? 'Setting it up…' : 'Waiting for your opponent…'; vsSend({ t: 'rematch' }); });
       row.append(again);
     }
     const next = el('a', 'btn ghostbtn', 'New match');
     next.href = '#vs';
     row.append(next);
     card.append(row);
-    // share: the result, and the way in for whoever reads it (Versus, a team, a friend's link)
+    // share: the result, the snaps as squares, and the way in (the text, and a picture of it where the phone can share one)
     if (res.by === 'score' || res.by === 'forfeit') {
-      const line = res.by === 'score'
-        ? `${won ? 'Won' : 'Lost'} ${mine}–${theirs}${ot} on Two-Minute Drill Versus: my ${teamName(code(G.me))} vs ${oppName || 'a'}${oppName ? '’s' : ''} ${teamName(code(1 - G.me))}.`
-        : `${won ? 'Won' : 'Lost'} by forfeit on Two-Minute Drill Versus: my ${teamName(code(G.me))} vs ${oppName || 'a'}${oppName ? '’s' : ''} ${teamName(code(1 - G.me))}.`;
-      const x = vs.rated && vs.rated.rated && vs.rated.ratings && vs.rated.ratings[vs.seat];
-      const pre = el('pre', 'vsshare', `${line}${x ? ` Rating ${x.after}${x.rank ? `, #${x.rank}` : ''}.` : ''}\nCall the plays against me: ${location.origin}${location.pathname}#vs`);
+      const sq = calls.filter((x) => x.at !== 'Kickoff').slice(-30).map((x) => (x.good ? '🟩' : '🟥')).join('');
+      const line = () => {
+        const y = vsRatingOf();
+        const head = res.by === 'score' ? `${won ? 'Won' : 'Lost'} ${mine}–${theirs}${ot}` : `${won ? 'Won' : 'Lost'} by forfeit`;
+        return `${head} on Two-Minute Drill Versus (${VS_GAMES[vs.game]}): my ${teamName(code(G.me))} vs ${oppName || 'a'}${oppName ? '’s' : ''} ${teamName(code(1 - G.me))}.${story ? ` ${story}` : ''}${y && y.after ? ` Rating ${y.after} (${vsTier(y.after)}).` : ''}\n${sq}\nBeat me: ${location.origin}${location.pathname}#vs`;
+      };
+      const pre = el('pre', 'vsshare', line());
       pre.hidden = true;
       const sh = el('button', 'btn ghostbtn', 'Share');
       sh.type = 'button';
-      sh.addEventListener('click', () => {
-        const y = vs.rated && vs.rated.rated && vs.rated.ratings && vs.rated.ratings[vs.seat];          // (the rating may have come in since)
-        pre.textContent = `${line}${y ? ` Rating ${y.after}${y.rank ? `, #${y.rank}` : ''}.` : ''}\nCall the plays against me: ${location.origin}${location.pathname}#vs`;
+      sh.addEventListener('click', async () => {
+        pre.textContent = line();
+        try {
+          const blob = await vsShareImage({ mine, theirs, won, ot, story, calls });
+          const file = blob && new File([blob], 'versus.png', { type: 'image/png' });
+          if (file && navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], text: pre.textContent }); track('share', { what: 'versus', method: 'image' }); return; }
+        } catch (e) { if (e && e.name === 'AbortError') return; }
         shareText(pre.textContent, pre, 'versus');
       });
       row.append(sh);
@@ -12611,15 +12887,50 @@
     drawTiles();
     vsShowRating();
   }
+  // this seat's rating change: the ladder's word, else the room's own reckoning (at once, the ladder confirms)
+  function vsRatingOf() {
+    if (vs.rated && vs.rated.rated && vs.rated.ratings) return vs.rated.ratings[vs.seat];
+    const e = vs.result && vs.result.est;
+    return e && e.rated && e.ratings ? e.ratings[vs.seat] : null;
+  }
   function vsShowRating() {
     const p = document.querySelector('.endcard .vsrating');
-    if (!p || vs.mode !== 'ranked') return;
+    if (!p) return;
+    if (vs.mode !== 'ranked') { p.textContent = vs.mode === 'cpu' ? 'Against the computer: no rating change.' : ''; return; }
     const res = vs.result || {};
+    p.textContent = '';
     if (res.winner < 0) { p.textContent = 'Not rated.'; return; }
-    if (!vs.rated) { p.textContent = 'Ranked: updating your rating…'; return; }
-    if (!vs.rated.rated) { p.textContent = vs.rated.reason === 'network' ? 'Not rated: you’re both on the same network.' : 'Not rated: you’ve played each other three times today.'; return; }
-    const x = vs.rated.ratings[vs.seat];
-    p.textContent = `Rating ${x.before} → ${x.after} (${x.delta >= 0 ? '+' : '−'}${Math.abs(x.delta)})${x.rank ? ` · #${x.rank}` : ''}${x.provisional ? ` · placement ${x.games} of 10` : ''}`;
+    const why = (vs.rated && !vs.rated.rated && vs.rated.reason) || (res.est && !res.est.rated && res.est.reason);
+    if (why) { p.textContent = why === 'network' ? 'Not rated: you’re both on the same network.' : why === 'ladder' ? 'The ladder is busy: your rating will update shortly.' : 'Not rated: you’ve played each other three times today.'; return; }
+    const x = vsRatingOf();
+    if (!x) { p.textContent = 'Ranked: updating your rating…'; return; }
+    p.append(`Rating ${x.before} → ${x.after} (${x.delta >= 0 ? '+' : '−'}${Math.abs(x.delta)})${x.rank ? ` · #${x.rank}` : ''}${x.provisional ? ` · placement ${x.games} of 10` : ''} `, tierBadge(x.after));
+  }
+  // the share's picture: the teams, the score, how it was won, the snaps as squares, the way in
+  async function vsShareImage({ mine, theirs, won, ot, story, calls }) {
+    const W = 1080, H = 1080, cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const c = cv.getContext('2d');
+    if (!c) return null;
+    c.fillStyle = '#123524'; c.fillRect(0, 0, W, H);
+    for (let i = 0; i < 10; i++) { c.fillStyle = i % 2 ? '#15402b' : '#123524'; c.fillRect(0, i * 108, W, 108); }
+    const font = (w, s) => `${w} ${s}px ${getComputedStyle(document.body).fontFamily || 'sans-serif'}`;
+    c.fillStyle = '#f2f4ef'; c.textAlign = 'center';
+    c.font = font(800, 40); c.fillText('TWO-MINUTE DRILL · VERSUS', W / 2, 110);
+    const me = code(G.me), op = code(1 - G.me);
+    [[me, 270, mine], [op, 810, theirs]].forEach(([t, x, s]) => {
+      c.fillStyle = color(t); c.fillRect(x - 200, 190, 400, 16);
+      c.fillStyle = '#f2f4ef'; c.font = font(800, 46); c.fillText(teamName(t).toUpperCase(), x, 270);
+      c.font = font(900, 200); c.fillText(String(s), x, 480);
+    });
+    c.font = font(800, 54); c.fillStyle = won ? '#8fe3a8' : '#ff9a8f';
+    c.fillText(`${won ? 'WON' : 'LOST'}${ot ? ot.toUpperCase() : ''}`, W / 2, 580);
+    c.fillStyle = '#f2f4ef'; c.font = font(600, 34);
+    if (story) { const words = story.split(' '); let ln = '', y = 650; words.forEach((w) => { if (c.measureText(`${ln} ${w}`).width > 920) { c.fillText(ln.trim(), W / 2, y); y += 44; ln = ''; } ln += ` ${w}`; }); c.fillText(ln.trim(), W / 2, y); }
+    const sq = calls.filter((x) => x.at !== 'Kickoff').slice(-30), n = sq.length, size = 40, gap = 8, per = Math.min(15, n || 1);
+    sq.forEach((x, i) => { const row = Math.floor(i / per), col = i % per, w0 = per * (size + gap) - gap; c.fillStyle = x.good ? '#3bb36a' : '#e5534b'; c.fillRect((W - w0) / 2 + col * (size + gap), 780 + row * (size + gap), size, size); });
+    c.fillStyle = '#f2f4ef'; c.font = font(700, 36); c.fillText(`Beat me: ${location.host}/#vs`, W / 2, 1010);
+    return new Promise((resolve) => cv.toBlob((b) => resolve(b), 'image/png'));
   }
 
   // ----------------------------------------------------------------- boot ---

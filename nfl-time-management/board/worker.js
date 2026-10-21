@@ -1939,7 +1939,7 @@ async function versus(req, env, url) {
   if (!ROOM_RE.test(room)) return json({ error: 'room' }, 400, h);
   if (vsLimited(req, env, 'r')) return vsBusy(req, h);
   // (off: a match going on plays on; a new one is never made: the room says so when it is empty)
-  if (off) req = new Request(req.url.replace(/([?&])room=/, '$1off=1&room='), req);
+  if (off && url.searchParams.get('mode') !== 'cpu') req = new Request(req.url.replace(/([?&])room=/, '$1off=1&room='), req);
   return env.MATCH.get(env.MATCH.idFromName(`room:${room}`)).fetch(req);
 }
 // busy: a WebSocket that says so and closes (the page can read a message; it can't read an HTTP status on a socket)
