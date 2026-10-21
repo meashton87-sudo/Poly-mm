@@ -356,6 +356,31 @@ for (let k = 0; k < 100; k++) {
   assert.ok(n > 3500 && frac === 0, `punts land on whole yard lines: ${frac} of ${n} not`);
   console.log(`punts: ${n} played, every one on a whole yard line`);
 }
+// (6) blocked kicks: every field goal and extra point can be blocked, at the NFL's rate (2016-25: 0.5% under 30 yards,
+// 1.6% at 30-44, 2.8% at 45-59, 10% from 60; extra points 0.9%), the make chance still the kick model's, and a blocked
+// one plays out as one (the defense's ball behind the line, or a touchdown now and then)
+{
+  const at = (yl) => ({ ...root, t: 1500, phase: 0, score: [10, 10], pos: 0, down: 4, ytg: 5, yl, to: [3, 3], clock_running: false });
+  const rows = [];
+  for (const [yl, lo, hi] of [[10, 0.002, 0.009], [25, 0.011, 0.02], [36, 0.021, 0.034], [45, 0.075, 0.125]]) {
+    let n = 0, made = 0, p = 0, blk = 0, td = 0;
+    for (let k = 0; k < 6000; k++) {
+      const r = sim.step(at(yl), { action: { to_off: false, play: 'fg' }, seed: 30000 + k }), e = r.log.find((x) => x.ev === 'fg');
+      n++; p += e.p; if (e.made) made++;
+      if (e.blocked) {
+        blk++;
+        assert.ok(!e.made && (e.retTd ? r.root.phase === 1 && r.root.pos === 1 && r.root.score[1] === 16 : r.root.pos === 1 && r.root.yl === Math.max(1, 100 - (yl + 12))), `a blocked kick plays out: ${JSON.stringify(e)} ${JSON.stringify(r.root)}`);
+        if (e.retTd) td++;
+      }
+    }
+    assert.ok(blk / n >= lo && blk / n <= hi && Math.abs(made - p) <= 4 * Math.sqrt(p), `${yl + 17}-yard field goals: ${(100 * blk / n).toFixed(2)}% blocked, made ${made} of ${n} (the model ${p.toFixed(0)})`);
+    rows.push(`${yl + 17} yd ${(100 * blk / n).toFixed(1)}% (${td} run back)`);
+  }
+  let n = 0, blk = 0;
+  for (let k = 0; k < 8000; k++) { const e = sim.step({ ...root, t: 1500, phase: 1, score: [16, 10], pos: 0, down: 1, ytg: 2, yl: 2, clock_running: false }, { action: { pat: 'xp' }, seed: 40000 + k }).log.find((x) => x.ev === 'pat'); n++; if (e.blocked) { blk++; assert.ok(!e.good, 'a blocked extra point is no good'); } }
+  assert.ok(blk / n > 0.004 && blk / n < 0.014, `extra points blocked: ${(100 * blk / n).toFixed(2)}%`);
+  console.log(`blocked kicks: field goals ${rows.join(', ')}; extra points ${(100 * blk / n).toFixed(2)}% (real 0.86%)`);
+}
 // Build a scenario (Pro, web/scenario.js, web/rosters: nflclock.scenario): every team-season the builder offers is a
 // full team; random valid scenarios of every era, regular season and playoffs, overtime and kickoffs included, play to
 // the end in the engine as game.js plays them (its startRoot, a second half from a first-half one, overtime started as
