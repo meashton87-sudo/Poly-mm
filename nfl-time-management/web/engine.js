@@ -43,6 +43,11 @@
   // 60-61 yd 46%, 64-65 27%, 66+ 23% (the fit said 59/47/40% for a typical kicker indoors)
   const FG_LONG = [52.0, 0.045, 60.0, 0.05];
   const XP_LOGIT = 0.35;               // an extra point beats a 33-yard field goal (snapped from the middle): 2023-25 ~95.7%
+  // blocked kicks, every kick (NFL 2016-25: 192 of 10,731 field goals, 110 of 12,818 extra points): by distance, the
+  // most yards first; a block is one of the misses (the make chance is the kick model's, which counts blocks as
+  // misses), returned for a touchdown 11 times in 192, otherwise the defense's ball 12 yards behind the line on average
+  const FG_BLOCK = [[29, 0.005], [44, 0.0155], [59, 0.0275], [Infinity, 0.10]], XP_BLOCK = 0.0086;
+  const FG_BLOCK_TD = 0.057, FG_BLOCK_BACK = 12;
   const FIRE_WINDOW = 25.0;            // seconds left in the half below which a kick with the clock running is a fire drill
   const CLOCK_EPS = 1e-6;              // a clock left this close to the end of the half has run out (the tenths summed drift by 1e-14: a snap at 0:00)
   // Clock-aware play calls when the offense needs the clock stopped and has no timeouts (2020-25 data):
@@ -287,6 +292,7 @@
   }
 
   const clip = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
+  const fgBlockP = (dist) => FG_BLOCK.find(([d]) => dist <= d)[1];
   const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 
   function countBelow(edges, v) { // numpy searchsorted(edges, v, 'left')
@@ -1556,7 +1562,10 @@
         }
       }
       if (good) S.s[o] += go2 ? 2 : 1;
-      if (S.log) S.log.push({ ev: 'pat', team: o, two: go2, good, call: callIdx, row, ...(why ? { why } : {}) });
+      // an extra point blocked: the top of the misses' draw (no points either way; the defense's return of one for two
+      // is not played: nflverse marks none in 2016-25)
+      const blocked = !go2 && !good && u[3] >= Math.max(p, 1 - XP_BLOCK);
+      if (S.log) S.log.push({ ev: 'pat', team: o, two: go2, good, call: callIdx, row, ...(why ? { why } : {}), ...(blocked ? { blocked } : {}) });
       S.phase = S.t <= g.halfEnd ? DONE : KICKOFF;
       S.freeKick = false;
     }
@@ -2018,11 +2027,15 @@
         p = sigmoid(z);
       }
       if (st === 'block' && this._stRush(S, g, u, o, 'fg', yl0 + FG_SNAP_YARDS, p)) return;
-      const made = u[3] < p, rc = this._rc(S, g) && !made;
-      if (S.log) S.log.push({ ev: 'fg', team: o, dist: yl0 + FG_SNAP_YARDS, made, p, fire: !!fire });
-      this._clockAfterPlay(S, g, 5.0, !rc, 0);
+      // (blocked: the top of the misses' draw, so the make chance is untouched)
+      const d = 1 - o, dist = yl0 + FG_SNAP_YARDS, made = u[3] < p, blocked = !made && u[3] >= Math.max(p, 1 - fgBlockP(dist));
+      const retTd = blocked && u[6] < FG_BLOCK_TD, rc = this._rc(S, g) && !made && !retTd;
+      if (S.log) S.log.push({ ev: 'fg', team: o, dist, made, p, fire: !!fire, ...(blocked ? { blocked, retTd } : {}) });
+      this._clockAfterPlay(S, g, retTd ? 8.0 : 5.0, !rc, 0);
       const run1 = S.running;
-      if (made) { S.s[o] += 3; S.phase = KICKOFF; } else { this._flip(S, this._missYl(yl0)); if (rc) S.running = run1; }
+      if (made) { S.s[o] += 3; S.phase = KICKOFF; }
+      else if (retTd) { S.s[d] += 6; S.pos = d; S.phase = PAT; }
+      else { this._flip(S, blocked ? clip(100 - (yl0 + FG_BLOCK_BACK), 1, 99) : this._missYl(yl0)); if (rc) S.running = run1; }
       this._endHalfCheck(S, g);
     }
 

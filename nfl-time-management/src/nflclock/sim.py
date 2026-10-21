@@ -40,6 +40,12 @@ KNEEL_RUNOFF = (38.0, 40.0)  # seconds run off between kneels (40 s play clock, 
 FIRE_DRILL_LOGIT = -0.3      # rushed kicks are a little less accurate
 FG_LONG = (52.0, 0.045, 60.0, 0.05)  # taper past 52 yd to the NFL's 2016-26 makes (60-61 46%, 64-65 27%, 66+ 23%)
 XP_LOGIT = 0.35              # an extra point beats a 33-yard field goal (snapped from the middle): 2023-25 ~95.7%
+# blocked field goals (NFL 2016-25: 192 of 10,731): by distance (up to and including), the top of the misses' draw (the
+# kick model counts blocks as misses), returned for a touchdown 11 times in 192, otherwise the defense's ball 12 yards
+# behind the line on average (an extra point's block, 110 of 12,818, scores nothing either way: the browser only says it)
+FG_BLOCK = ((29, 0.005), (44, 0.0155), (59, 0.0275), (np.inf, 0.10))
+FG_BLOCK_TD = 0.057
+FG_BLOCK_BACK = 12.0
 FIRE_WINDOW = 25.0           # seconds left in the half below which a kick with the clock running is a fire drill
 CLOCK_EPS = 1e-6             # a clock left this close to the end of the half has run out (the tenths summed drift by 1e-14: a snap at 0:00)
 # Clock-aware play calls when the offense needs the clock stopped and has no timeouts (2020-25 data):
@@ -871,15 +877,24 @@ class Simulator:
             z = np.log(np.clip(p, 1e-9, 1 - 1e-9) / np.clip(1 - p, 1e-9, 1)) + FIRE_DRILL_LOGIT
             p = np.where(fire, np.where(p > 0, 1 / (1 + np.exp(-z)), 0.0), p)
         made = u[ix, 3] < p
-        rc = self._rc(S, ix) & ~made
-        self._clock_after_play(S, ix, np.full(ix.size, 5.0), ~rc, 0.0)
+        dist = yl0 + FG_SNAP_YARDS
+        pb = np.select([dist <= d_ for d_, _ in FG_BLOCK], [b for _, b in FG_BLOCK])
+        blocked = ~made & (u[ix, 3] >= np.maximum(p, 1 - pb))
+        ret_td = blocked & (u[ix, 6] < FG_BLOCK_TD)
+        rc = self._rc(S, ix) & ~made & ~ret_td
+        self._clock_after_play(S, ix, np.where(ret_td, 8.0, 5.0), ~rc, 0.0)
         run1 = S.running[ix].copy()
         if made.any():
             S.score[ix[made], o[made]] += 3
             S.phase[ix[made]] = KICKOFF
-        miss = ~made
+        miss = ~made & ~ret_td
         if miss.any():
-            self._flip(S, ix[miss], self._miss_yl(yl0[miss]))
+            self._flip(S, ix[miss], np.where(blocked[miss], np.clip(100 - (yl0[miss] + FG_BLOCK_BACK), 1, 99), self._miss_yl(yl0[miss])))
+        if ret_td.any():
+            r = ix[ret_td]
+            S.score[r, d[ret_td]] += 6
+            S.pos[r] = d[ret_td]
+            S.phase[r] = PAT
         if rc.any():
             S.running[ix[rc]] = run1[rc]
         self._end_half_check(S, ix)

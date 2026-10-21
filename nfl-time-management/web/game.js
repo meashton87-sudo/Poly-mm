@@ -4317,8 +4317,9 @@
       const good = e.ev === 'fg' ? e.made : e.good;
       const miss = good ? 0 : (R() < 0.5 ? -1 : 1);
       const tK = T0 + 1.3, t1 = tK + 0.25 + Math.abs(Ly - hL) / 24;
-      // your all-out rush: a block (picked up, and now and then run back), or a roughing flag
-      if (e.ev === 'fg' && (e.blocked || e.foul)) {
+      // a block (any kick now and then, an extra point too; more often against your all-out rush: picked up, and now
+      // and then run back), or a roughing flag
+      if ((e.ev === 'fg' || e.ev === 'pat') && (e.blocked || e.foul)) {
         const rusher = nearest(front, [yx(bx), hL]) || front[0];
         line.forEach((a) => leg(a, T0 + 0.1, 'go', { x: a.b.x, y: fwd(L0, -1.1), eff: 0.7 }));
         front.forEach((a) => { if (a !== rusher) leg(a, T0 + 0.15, 'go', { x: a.b.x + jit(0.6), y: fwd(L0, -0.6), eff: 0.9 }); });
@@ -5058,7 +5059,7 @@
         case 'punt': text = e.foul ? `Roughing the punter on ${teamName(code(1 - e.team))}: 15 yards and a first down` : e.blocked ? `${teamName(code(e.team))} punt blocked${e.retTd ? ', returned for a touchdown' : ''}` : e.retTd ? `${teamName(code(e.team))} punt returned for a touchdown` :
           `${teamName(code(e.team))} punt${e.touchback ? ', touchback' : `, net ${Math.round(e.net)} yards`}`; t = null; break;
         case 'pat': text = e.two ? `Two-point try${e.philly ? ' (Philly Special)' : e.call >= 0 && idx.calls[e.call] ? ` (${idx.calls[e.call].label})` : ''} ${e.good ? 'good' : 'fails'}`
-          : `Extra point ${e.good ? 'good' : 'no good'}`; break;
+          : `Extra point ${e.good ? 'good' : e.blocked ? 'blocked' : 'no good'}`; break;
         // a touchdown on the last play that decides it: no try (NFL since 2018)
         case 'notry': text = 'No try: time has run out and it cannot change the result'; break;
         case 'kickoff': text = e.onside ? `Onside kick, recovered by ${teamName(code(e.recovered ? e.team : 1 - e.team))}` :
@@ -5075,7 +5076,7 @@
     if (!e) return (log || []).some((x) => x.ev === 'end') ? 'Time ran out' : 'Timeout';
     if (e.ev === 'fg') return e.foul ? 'Roughing the kicker' : e.made ? `${Math.round(e.dist)}-yard field goal is good` : e.blocked ? (e.retTd ? 'Blocked and returned for a TD' : 'Field goal blocked') : 'Field goal: no good';
     if (e.ev === 'punt') return e.foul ? 'Roughing the punter' : e.blocked ? (e.retTd ? 'Blocked and returned for a TD' : 'Punt blocked') : e.retTd ? 'Punt return touchdown' : `Punt, net ${Math.round(e.net || 0)}`;
-    if (e.ev === 'pat') return e.two ? (e.good ? 'Two-point try good' : 'Two-point try fails') : (e.good ? 'Extra point good' : 'Extra point missed');
+    if (e.ev === 'pat') return e.two ? (e.good ? 'Two-point try good' : 'Two-point try fails') : (e.good ? 'Extra point good' : e.blocked ? 'Extra point blocked' : 'Extra point missed');
     if (e.ev === 'kickoff') return e.onside ? (e.recovered ? 'Onside kick recovered' : 'Onside kick: they recover') : e.retTd ? 'Returned for a touchdown'
       : e.tb ? (Math.round(e.yl) === 60 ? 'Short kick: ball at the 40' : 'Touchback') : 'Kickoff';
     if (e.kind === SPIKE) return 'Spiked';
