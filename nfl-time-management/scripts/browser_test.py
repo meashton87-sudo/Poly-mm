@@ -899,6 +899,13 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     picked = None                    # a day of two sides: the one taken (asked once: a reload or a restart keeps it)
     pick_gone = False                # ... and the pick screen gone since (it takes the side's own file first: a moment)
     first_call = first               # the first call shows on the spot's own facts (game.js firstInfo), not the simulator's
+    speeds_kept: list = []           # the sweeps' plays timed (game.js speedLog), taken off the page before it reloads
+
+    async def keep_speeds():
+        try:
+            speeds_kept.extend(await page.evaluate("() => { const l = window.__speedLog || []; window.__speedLog = []; return l; }"))
+        except Exception:
+            pass
     asked = False                    # the bot opened the modal on screen itself (else it came up in the way)
     welcomed = False                 # the first visit's welcome seen (a second one, storage on, is in the way)
     t_reload = None                  # when the bot reloaded mid-drive (to time the way back to a call)
@@ -1129,6 +1136,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     for yl in (20, 10, 5, 3, 1, 95, 97, 99):     # (one spot at a time: a page drawing them all at once ran out of memory)
                         sf = await page.evaluate(SHORT_FIELD, yl)
                         plays += sf["plays"]; off += sf["bad"] if sf["n"] else []
+                    await keep_speeds()
                     since = time.time()
                     print(f"{name}: short fields, {plays} plays drawn, {len(off)} off the ground")
                     if off:
@@ -1139,6 +1147,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     for k in range(4):                    # (in batches: a page drawing them all at once ran out of memory)
                         pl = await page.evaluate(PASS_LOOK, [150, seed * 17 + k])
                         rows += pl["rows"]; off += pl["off"]; edge = [a + b for a, b in zip(edge, pl["edge"])]
+                    await keep_speeds()
                     since = time.time()
                     t_start += since - t_pl
                     mix = {}
@@ -1159,6 +1168,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     for k in range(3):
                         rp = await page.evaluate(REAL_PLAYS, [100, seed * 13 + k])
                         n_rp += rp["plays"]; errs_rp += rp["errs"]
+                    await keep_speeds()
                     since = time.time()
                     t_start += since - t_rp
                     print(f"{name}: real plays, {n_rp} run by the simulator and drawn" + (f", {len(errs_rp)} not run: {errs_rp[:2]}" if errs_rp else ""))
@@ -1172,6 +1182,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         n_gl += gl["plays"]; wrong += gl["bad"]
                         for k, v in gl["tally"].items():
                             tally[k] = tally.get(k, 0) + v
+                    await keep_speeds()
                     since = time.time()
                     t_start += since - t_gl
                     print(f"{name}: goal line, {n_gl} plays drawn, {sum(tally.values())} not as they went {tally or ''}")
@@ -1366,7 +1377,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             fps = await page.evaluate("() => window.__fpLog || []")
             offs = await page.evaluate("() => window.__offLog || []")
             oobs = await page.evaluate("() => window.__oobLog || []")
-            speeds = await page.evaluate("() => window.__speedLog || []")
+            speeds = speeds_kept + await page.evaluate("() => window.__speedLog || []")
             goals = await page.evaluate("() => window.__goalLog || []")
             kept = await page.evaluate("() => (window.__drawLog || []).length")
             snaps = await page.evaluate("() => window.__drawSnaps || []")
