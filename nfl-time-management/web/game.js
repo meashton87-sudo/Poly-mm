@@ -2604,8 +2604,7 @@
       const holder = qb || K.off[0], kicker = K.rb || K.off.find((a) => a !== holder);
       const rest_ = K.off.filter((a) => a !== holder && a !== kicker);
       const snapper = K.ol[Math.floor(K.ol.length / 2)] || rest_[0], others = rest_.filter((a) => a !== snapper);
-      // (inside the end lines the world keeps everyone in: a kick from the 1 has its deep man short of the end line)
-      const at_ = (a, xy, Ly) => { a.x0 = clampX(bx + xy * XYD); a.L0 = clip(Ly, FULL.lo + 1, FULL.hi - 1); a.x = a.x0; a.L = a.L0; };
+      const at_ = (a, xy, Ly) => { a.x0 = clampX(bx + xy * XYD); a.L0 = Ly; a.x = a.x0; a.L = a.L0; };
       const tag = (a, t) => { if (!a) return; let j = a.g.querySelector('text.jn'); if (!j) { j = S('text', { class: 'jn', y: 2.6 }); a.g.append(j); } j.textContent = t; a.g.querySelectorAll('text.nm').forEach((n) => n.remove()); };
       if (snapper) { at_(snapper, 0, fwd(L0, -0.4)); tag(snapper, 'LS'); }
       const slots = [-1.1, 1.1, -2.2, 2.2, -3.3, 3.3];
