@@ -228,6 +228,15 @@
     cross: 'a crosser', hitch: 'a hitch', screen: 'a screen', flat: 'a route to the flat', wheel: 'a wheel route', angle: 'an angle route' };
   const routeName = (lab, rt) => (lab === 'TE' && rt === 'go' ? 'Seam' : ROUTE_NAME[rt]);
   const routeSay = (lab, rt) => (lab === 'TE' && rt === 'go' ? 'a seam route' : ROUTE_SAY[rt]);
+  // Run blocking (the Blocking chips under Run): how the line blocks a back's run, drawn on the field (lineplay: the
+  // pullers, the down blocks, the double teams) and a small edge against the look the defense shows (engine.js
+  // SCHEME_M: football logic, as the trick plays' matchups: no charting says which scheme a real run used)
+  const SCHEMES = [['zone', 'Zone', 'Everyone steps the way of the run and the back picks his hole.'],
+    ['power', 'Power', 'The backside guard pulls and leads through the hole: an extra blocker for a loaded box. A blitz can get in before him.'],
+    ['counter', 'Counter', 'The back steps the other way, then the guard and tackle pull back across: misdirection that works on a light box, slow against a blitz.'],
+    ['duo', 'Duo', 'Double teams driving straight ahead, downhill: built for a loaded box, less to gain against a light one.'],
+    ['trap', 'Trap', 'A defensive lineman is let in, then a pulling guard traps him: punishes a blitz, struggles against a loaded box.']];
+  const schemeOn = () => !VS && G.scheme && G.scheme !== 'zone' ? G.scheme : null;
   const DEEP_ROUTES = new Set(['go', 'post', 'corner', 'wheel']);
   const YAC_IN = new Set(['slant', 'in', 'cross', 'post', 'angle', 'drag']), YAC_OUT = new Set(['out', 'deep_out', 'corner', 'flat', 'wheel']);
   const DEEP = new Set(['deep_strong', 'deep_weak', 'deep_middle', 'pa_deep', 'hail_mary']);
@@ -2738,17 +2747,34 @@
     const blockerOf = new Map();
     function lineplay(kind, side, rushers, o) {
       if (kind === 'pass' && K.ol.length) { pocket(rushers, o || {}); return; }
-      const ol = K.ol.slice();
+      o = o || {};
+      const ol = K.ol.slice(), sch = kind === 'run' ? o.scheme || 'zone' : 'zone', sg = side || 1;
+      // a run's blocking: zone, everyone stepping the way of the play; power, counter and trap pull the backside guard
+      // (counter the backside tackle too) behind the line to the hole and up through it, the rest blocking down
+      // (toward the backside); duo, double teams driving straight ahead. The rushers take the men who stay
+      const back = ol.slice().sort((a, b) => sg * (a.b.x - b.b.x));          // from the backside across to the play side
+      const pullers = ol.length >= 5 ? (sch === 'counter' ? [back[1], back[0]] : sch === 'power' || sch === 'trap' ? [back[1]] : []) : [];
+      const hx = o.hole ? o.hole[0] : BX + sg * 3;
+      pullers.forEach((a, k) => {
+        const p0 = here(a), hxk = sch === 'trap' ? BX + sg * 1.6 : hx;
+        // (the first puller kicks out at the hole; the second wraps up through it, a step behind)
+        const pts = [p0, [p0[0] - sg * 0.2, fwd(L0, -1.4)], [hxk - sg * (k ? 1.4 : 0.6), fwd(L0, -1.2)], [hxk + sg * (k ? 0 : 0.7), fwd(L0, k ? 2.4 : 1.2)]];
+        follow(a, REACT_OFF, plan(a, pts, { eff: 0.82, v1: 1.2 }));
+      });
       ol.forEach((a) => {
+        if (pullers.includes(a)) return;
         const x0 = a.b.x, y0 = a.b.y, tackle = a.label === 'LT' || a.label === 'RT';
-        const lat = kind === 'run' ? side * (1.1 + jit(0.3)) : tackle ? Math.sign(x0 - BX) * 0.9 : jit(0.3);
+        const lat = kind !== 'run' ? (tackle ? Math.sign(x0 - BX) * 0.9 : jit(0.3))
+          : sch === 'zone' ? side * (1.1 + jit(0.3)) : sch === 'duo' ? jit(0.2) : -sg * (0.8 + jit(0.2));
+        const push = sch === 'duo' ? 1.35 : sch === 'zone' ? 1 : 1.15;
         leg(a, REACT_OFF, 'track', { gain: 3, eff: 0.9, fn: (t) => {
           const u = clip((t - REACT_OFF) / 1.6, 0, 1);
-          return [x0 + lat * u, y0 + dir * Motion.curveShift(kind, 'OL', t)];
+          return [x0 + lat * u, y0 + dir * Motion.curveShift(kind, 'OL', t) * push];
         } });
       });
+      const stay = ol.filter((a) => !pullers.includes(a));
       rushers.forEach((d) => {
-        const blk = nearest(ol, here(d)) || nearest(K.off.filter((a) => a !== qb), here(d));
+        const blk = nearest(stay, here(d)) || nearest(K.off.filter((a) => a !== qb), here(d));
         if (!blk) return;
         blockerOf.set(d, blk);
         const sx = d.b.x, sy = d.b.y, dx = clip(sx - blk.b.x, -1.2, 1.2) * 0.5;
@@ -3193,7 +3219,8 @@
           busy.add(rec);
           // he has it when he gets to it, and never before it is down (a man there first: the ball lay on the turf
           // while he ran the return without it)
-          t = Math.max(tEnd + 0.6, tEnd + 0.12 + runFrom(rec, tEnd + 0.1, [f], { T: 0.6, v1: 0 }).T);
+          // (out of bounds: he goes out to it, over the sideline: kept on the turf he picked it up short of it, in bounds)
+          t = Math.max(tEnd + 0.6, tEnd + 0.12 + runFrom(rec, tEnd + 0.1, [f], { T: 0.6, v1: 0, past: outB }).T);
           hold(t, rec);
           if (lost && e.tdDef) t = returnTd(rec, t, f, 'Scoop and score!');
           else {
@@ -4324,6 +4351,8 @@
         : (K.rb || qb);
       const direct = id === 'trick_direct' && carrier !== qb, reverse = id === 'trick_reverse' && carrier !== K.rb;
       if (!carrier) return;
+      // your blocking (act.scheme: the Blocking chips), a back's run only
+      const scheme = mine && act && act.scheme && /^rb_/.test(id || '') && carrier === K.rb ? act.scheme : 'zone';
       const gap = RUN_GAP[c ? c.base : ''] ?? 26;
       const sg = sign || (id === 'qb_run' ? sc.s * dir : 0) || 0;
       // forward progress: he never has the ball past where it is spotted; on a loss he is met in the backfield
@@ -4375,7 +4404,9 @@
         const start = carrier.label === 'WR' ? 0.35 : REACT_OFF;
         // (at speed into the hole whatever the result: the contact, if it comes there, is runDown's; slowing into it
         // left a back jogging at the edge with nobody there)
-        const pl = follow(carrier, start, plan(carrier, [c0, ...(dBehind.length ? dBehind : [meshPt]), hole], { eff: carrier.label === 'WR' ? 0.95 : 0.9 }));
+        // (a counter: a jab step away from the play first, then back across)
+        const jab = scheme === 'counter' && !dBehind.length && carrier.label !== 'WR' ? [[c0[0] - (sg || 1) * 1.1, fwd(L0, md - 0.2)]] : [];
+        const pl = follow(carrier, start, plan(carrier, [c0, ...jab, ...(dBehind.length ? dBehind : [meshPt]), hole], { eff: carrier.label === 'WR' ? 0.95 : 0.9 }));
         let best = 9, bt = 0.7;
         for (let s = 0; s <= pl.T; s += 0.05) { const p = pl.at(s), d = dist([p[0], p[1]], meshPt); if (d < best) { best = d; bt = s; } }
         tMesh = Math.max(T_SNAP + 0.35, start + bt);
@@ -4393,7 +4424,7 @@
         leg(K.rb, REACT_OFF, 'go', { x: inX(BX - (sg || 1) * 6), y: fwd(L0, -1), eff: 0.85 });
         say(tMesh, 'End-around!', 'info', { follow: carrier });
       }
-      lineplay('run', sg, K.rush);
+      lineplay('run', sg, K.rush, { scheme, hole });
       // the second level: linebackers read, then fill toward the hole; safeties come down; corners hold, then come up
       K.def.forEach((d) => {
         if (K.rush.includes(d)) return;
@@ -6038,6 +6069,19 @@
     back.addEventListener('click', () => { ui.step = 'family'; drawField(); drawDock(); });
     head.append(back);
     const drawable = ui.fam === 'run' || ui.fam === 'rpo';
+    if (ui.fam === 'run' && !VS) {
+      // the blocking (SCHEMES): one tap, kept for the drive's next runs
+      const cur = G.scheme || 'zone', row = el('div', 'opts-row schemes');
+      row.append(el('span', 'lab', 'Blocking'));
+      SCHEMES.forEach(([k, label, tip]) => {
+        const b = el('button', `chip opt${cur === k ? ' on' : ''}`, label);
+        b.type = 'button'; b.title = tip; b.dataset.scheme = k;
+        b.setAttribute('aria-pressed', String(cur === k));
+        b.addEventListener('click', () => { if (busy) return; G.scheme = k; track('run_scheme', { scheme: k }); drawDock(); });
+        row.append(b);
+      });
+      d.append(row, el('p', 'phint schemehint', SCHEMES.find(([k]) => k === cur)[2]));
+    }
     if (drawable) {
       sketchChips(head, ui.fam);
       // the drawn call: graded and played exactly as the key for it (decideCall), the drawing going with it to the field
@@ -6861,7 +6905,8 @@
     // (the formation too, when it is one the plays are charted by: the quarterback in the shotgun, under center or in
     // the pistol; an empty set and the receivers' look are the lineup drawn only)
     const b = G.form && FORM_ENGINE[G.form.qb] && G.root.pos === G.me ? { ...b0, form: G.form.qb } : b0;
-    const rp = repOf(b), c = rp ? { ...b, rep: rp } : b;
+    const rp = repOf(b), c0 = rp ? { ...b, rep: rp } : b;
+    const c = schemeOn() && G.root.pos === G.me && c0.play === 'run' && /^rb_/.test(c0.call || '') ? { ...c0, scheme: G.scheme } : c0;
     return G.root.clock_running && ui && ui.tempo ? { ...c, tempo: engineTempo(ui.tempo, G.root) } : c;
   };
   function callAction(id, oob) {

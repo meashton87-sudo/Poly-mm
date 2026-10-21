@@ -98,6 +98,14 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   _ball: FTN catchable and contested, a pass defensed; describe() hands them to the animation), fitted to where everyone
   is (the world run on and back) and out of the receiver's reach until it is down. browser_test.py PASS_LOOK draws every
   kind of result and pass_look_problems checks each as drawn, on the real plays too: keep both passing.
+- A pass to a picked receiver (route/who): sacks, scrambles and throwaways have no target charted, so they are drawn
+  first, as often as in the situation's own plays (engine.js _noTarget, NO_TARGET_EV); game_smoke.js checks the rate.
+  A pass you keep calling (game.js repOf, act.rep: the same route or call in the last 4 snaps) is drawn worse from the
+  third time on (engine.js REPEAT_S). A back's run carries the Blocking chips' scheme (act.scheme: zone, power,
+  counter, duo, trap; game.js SCHEMES, lineplay draws it) and a small matchup against the defense's call (engine.js
+  SCHEME_M, football logic: change both). A foul during the play (not before the snap) can be declined: the engine
+  draws the play under it (_livePlay) and the offended team takes the better one, or your pick (act.penAs, game.js
+  penaltyAsk: the same seed stepped again). Versus sends none of these (cleanAction).
 - Pro data (src/nflclock/pro.py build: pro_drives.json, pro_runs.json -> web/pro/drives.json, runs.json, d*.json, r*.json;
   generated, never committed; the site workflow builds it and deploys it to the worker's assets). Each spot's teams come
   from history.History.teams with drive=True: the lineup of the real drive from the spot on, everyone who touched the

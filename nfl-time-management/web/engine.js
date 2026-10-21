@@ -106,7 +106,15 @@
   // repOf) is one the defense sits on: from the third time on, each repeat moves the matchup by this much (a full
   // matchup moves the mean by MATCH_SD of the call's spread). The defense's habit, not the real plays: they stay real
   const REPEAT_S = 0.4;
-  const repeatS = (act) => -REPEAT_S * Math.max(0, Math.min(act.rep | 0, 4) - 1);          // when you call their defense, the offense checks into calls that beat it
+  const repeatS = (act) => -REPEAT_S * Math.max(0, Math.min(act.rep | 0, 4) - 1);
+  // daily game: a back's run blocked your way (act.scheme, game.js SCHEMES) against the defense's call: football logic,
+  // as the trick plays' (no charting says which scheme a real run used), a few tenths of a matchup at most. Power and
+  // duo bring an extra hat to a loaded box; a blitz gets in before a puller; a trap punishes the penetration;
+  // counter's misdirection works on a light box
+  const SCHEME_M = { power: { soft: 0, load: 0.3, blitz: -0.2 }, counter: { soft: 0.2, load: 0.1, blitz: -0.3 },
+    duo: { soft: -0.2, load: 0.3, blitz: 0 }, trap: { soft: 0, load: -0.3, blitz: 0.4 } };
+  const schemeS = (act, id, def) => (act.scheme && SCHEME_M[act.scheme] && def && /^rb_/.test(id || '') ? SCHEME_M[act.scheme][def] || 0 : 0);
+  const dcDef = (dc) => (dc.front === 'loaded' ? 'load' : +dc.rush >= 5 ? 'blitz' : 'soft');          // when you call their defense, the offense checks into calls that beat it
   const RUN_M = { blitz: 0, load: -1, soft: 1 }, DEEP_M = { blitz: -1, load: 0.5, soft: 0 };
   const MATCH = {
     rb_out_strong: RUN_M, rb_out_weak: RUN_M, rb_tackle_strong: RUN_M, rb_tackle_weak: RUN_M, rb_inside_strong: RUN_M,
@@ -195,6 +203,8 @@
   // nor across short yardage (2 yards or less to go: a 2-yard gain there is a first down, not a failed play)
   const dcShort = (f) => Math.floor(f / N_ZONE) % N_YTG === 0;
   const DC_NEAR = [[1, 0, false], [1, 1, false], [0, null, false], [2, 1, false], [null, 0, false], [1, null, true], [null, 1, false], [null, null, false]];
+  // a dropback that was never thrown to anyone (a picked receiver's route says nothing about it: _noTarget)
+  const NO_TARGET_EV = new Set(['sack', 'strip_sack', 'sack_fumble', 'scramble', 'throwaway']);
   const DROPBACK_EV = new Set(['sack', 'strip_sack', 'sack_fumble', 'scramble', 'throwaway', 'interception', 'pick_six', 'near_pick', 'drop']);
   // daily game: your special-teams defense (act.st) when they kick. 'block' (field goal) or 'rush' (punt) sends
   // everyone: more blocks, but now and then a roughing flag (15 yards and a first down, an untimed down if time ran
@@ -1080,7 +1090,7 @@
           if (lk && P.lookB && !(P.lookB[r] < 4 && (lk >> P.lookB[r]) & 1)) continue;
           const w = cdf[i] - (i > lo ? cdf[i - 1] : pool);
           all += w; n++;
-          if ((P.flags[r] & 1) || P.ngs.route[r] !== 0 || !DROPBACK_EV.has(P.eventNames[P.event[r]] || '')) continue;
+          if ((P.flags[r] & 1) || P.ngs.route[r] !== 0 || !NO_TARGET_EV.has(P.eventNames[P.event[r]] || '')) continue;
           tot += w; items.push(r); cum.push(tot);
         }
         return (n >= PB_LOOK_MIN || !lk) && all > 0 ? { items, cum, tot, share: tot / all } : null;
@@ -1847,10 +1857,10 @@
           fkP = fk;
           if (dcValid(act.dc)) {
             const m = dcEffect(this.e.pb.dcEff, act.call, act.dc, act.pers, act.seen);
-            match = m.s + repeatS(act); why = m.why.slice(0, 3);
+            match = m.s + repeatS(act) + schemeS(act, act.call, dcDef(act.dc)); why = m.why.slice(0, 3);
             pbRow = this.sampleVsDefense(o, callIdx, fk, u[2], mineOob, act.dc, match, route, who, persForm(act));
           } else {
-            match = this.matchOf(callIdx, this.defOfLooks(act.looks)) + repeatS(act);
+            match = this.matchOf(callIdx, this.defOfLooks(act.looks)) + repeatS(act) + schemeS(act, act.call, this.defOfLooks(act.looks));
             pbRow = this.samplePlaybook(o, callIdx, fk, u[2], mineOob, act.looks, match, route, who, persForm(act));
           }
         } else if (act && dcValid(act.dc) && this.pbCdf && (kind === RUN || kind === PASS)) {

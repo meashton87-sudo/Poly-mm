@@ -631,6 +631,10 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .hint { margin: 0; font-size: 13px; color: var(--muted); }
 /* simpler screens: the pass options as small toggles on one line; the result's extras on one line */
 .opts-row { display: flex; flex-wrap: wrap; gap: 6px; }
+/* the run's blocking (game.js SCHEMES): a label, then one chip a scheme */
+.opts-row.schemes { align-items: center; margin: 2px 0 4px; }
+.opts-row.schemes .lab { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-right: 2px; }
+.schemehint { margin-top: 0; }
 .chip.opt[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 .res-acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
 .res-acts details.more { flex: 1 1 auto; min-width: 0; }
