@@ -273,6 +273,53 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 /* Pro grades: a letter in its color, green (A) is a pass */
 .grade { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; font: 900 17px/1 var(--display); color: var(--sq-ink); background: var(--muted); }
 .grade.g { background: var(--sq-g); } .grade.y { background: var(--sq-y); } .grade.o { background: var(--sq-o); } .grade.r { background: var(--sq-r); }
+/* the Pro hub (game.js proHub): your rank and streak, then a card a mode, each with its own coloured icon */
+.phub { display: grid; gap: 14px; padding: 16px; border-radius: 16px; background: var(--card); border: 1px solid var(--line); }
+.prank { display: grid; gap: 3px; }
+.prank b { font: 900 30px/1 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.pk { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.ps { font-size: 13.5px; color: var(--muted); }
+.pbar { display: block; height: 7px; border-radius: 4px; background: var(--line); overflow: hidden; margin-top: 6px; }
+.pbar i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #e2b93b, #f08a24); }
+.ptiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.pcard { display: flex; flex-direction: column; justify-content: space-between; gap: 12px; aspect-ratio: 1; padding: 14px; box-sizing: border-box; border-radius: 16px;
+  border: 1px solid var(--line); background: var(--card); color: var(--ink); text-decoration: none; font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.pcard:hover { border-color: var(--ink); }
+.pcard .ptx { display: grid; gap: 2px; min-width: 0; }
+.pcard b { font: 900 22px/1.02 var(--display); text-transform: uppercase; letter-spacing: .02em; overflow-wrap: anywhere; }
+.pcard .ps { font-size: 12.5px; }
+.pico { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; background: linear-gradient(140deg, var(--c1), var(--c2)); box-shadow: 0 6px 16px -6px var(--c2); }
+.pico svg { width: 28px; height: 28px; fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.pcard.build { --c1: #ff9a3c; --c2: #e0482d; } .pcard.comm { --c1: #3ddc84; --c2: #1d8f5a; } .pcard.drives { --c1: #ffd54a; --c2: #c98a00; }
+.pcard.runs { --c1: #5ab8ff; --c2: #2c5fd6; } .pcard.dailies { --c1: #c18cff; --c2: #7a3fe0; }
+/* Build a scenario: the big tile, two rows tall, in its own colour */
+.pcard.big { grid-row: span 2; aspect-ratio: auto; background: linear-gradient(160deg, #ff9a3c, #e0482d 75%); color: #fff; border: 0; }
+.pcard.big .pk, .pcard.big .ps { color: rgba(255, 255, 255, .9); }
+.pcard.big b { font-size: 34px; }
+.pcard.big .pico { width: 60px; height: 60px; background: rgba(255, 255, 255, .22); box-shadow: none; }
+.pcard.big .pico svg { width: 34px; height: 34px; }
+.pback { margin-bottom: 8px; }
+/* the streak's flame (game.js flameEl): bigger and hotter tier by tier */
+.flame { display: inline-grid; place-items: center; width: var(--fs, 30px); height: var(--fs, 30px); flex: none; vertical-align: middle; }
+.flame svg { width: 100%; height: 100%; overflow: visible; }
+.flame .fo { fill: var(--f1); } .flame .fi { fill: var(--f2); }
+.flame.t0 { --f1: var(--line); --f2: var(--muted); }
+.flame.t1 { --f1: #f6a13a; --f2: #ffd36b; }
+.flame.t2 { --f1: #ef4b2a; --f2: #ffb13b; --fs: 34px; animation: flick 1.6s ease-in-out infinite; }
+.flame.t3 { --f1: #2f8cff; --f2: #9fe3ff; --fs: 38px; filter: drop-shadow(0 0 6px rgba(80, 170, 255, .7)); animation: flick 1.3s ease-in-out infinite; }
+.flame.t4 { --f1: #9b4dff; --f2: #ff8bf0; --fs: 42px; filter: drop-shadow(0 0 8px rgba(170, 90, 255, .8)); animation: flick 1.1s ease-in-out infinite; }
+.flame.t5 { --f1: #ffcc33; --f2: #fff6c8; --fs: 46px; filter: drop-shadow(0 0 10px rgba(255, 200, 60, .9)); animation: flick 1s ease-in-out infinite, hue 4s linear infinite; }
+@keyframes flick { 0%, 100% { transform: scale(1) rotate(0); } 50% { transform: scale(1.07, 1.12) rotate(-2deg); } }
+@keyframes hue { to { filter: drop-shadow(0 0 10px rgba(255, 200, 60, .9)) hue-rotate(360deg); } }
+.streak { display: flex; align-items: center; gap: 12px; }
+.streak .flame { --fs: 44px; }
+.streak.t3 .flame { --fs: 50px; } .streak.t4 .flame { --fs: 56px; } .streak.t5 .flame { --fs: 62px; }
+.streak .stx { display: grid; gap: 2px; min-width: 0; }
+.streak b { font: 900 24px/1 var(--display); text-transform: uppercase; }
+.streak span { font-size: 13px; color: var(--muted); }
+.hfoot .flame { --fs: 28px; margin-right: 6px; }
+.hfoot .flame.t2 { --fs: 32px; } .hfoot .flame.t3 { --fs: 36px; } .hfoot .flame.t4 { --fs: 40px; } .hfoot .flame.t5 { --fs: 44px; }
+@media (prefers-reduced-motion: reduce) { .flame { animation: none !important; } }
 .prohead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; padding: 14px; border: 2px solid var(--ink); border-radius: 12px; }
 .prohead .phl { display: grid; gap: 2px; }
 .prohead .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }

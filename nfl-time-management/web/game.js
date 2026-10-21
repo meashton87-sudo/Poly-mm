@@ -10468,7 +10468,8 @@
     go.dataset.to = `daily_${status}`;
     if (!(pick && !done)) card.append(go);
     const foot = el('div', 'hfoot');
-    const streak = sk.n >= 2 ? `🔥 ${sk.n}-day streak` : sk.n === 1 ? '🔥 1-day streak' : '';
+    const streak = sk.n >= 1 ? `${sk.n}-day streak` : '';
+    if (sk.n >= 1) foot.append(flameEl(sk.n));
     if (done) {
       foot.append(countdown(streak ? `${streak} · next drive in ` : 'Next drive in '));
     } else {
@@ -10541,8 +10542,85 @@
     try { sessionStorage.setItem(`${STORE}:badlink`, `${m[1] === 'run' ? 'playoff run' : 'historic drive'} ${m[2]}`); } catch (e) { /* storage off */ }
     location.replace(location.pathname + location.search + '#archive');
   }
-  async function renderArchive(now) {
-    track('archive_open', { pro: isPro() });
+  // the streak's flame: bigger and hotter as the streak grows (game.html .flame.t0-t5): out, orange (1), red (3), blue
+  // (7: a week, a freeze earned), purple (14), and at 30 days a gold flame that shifts colour
+  const FLAME_TIERS = [[30, 5], [14, 4], [7, 3], [3, 2], [1, 1], [0, 0]];
+  const flameTier = (n) => FLAME_TIERS.find(([k]) => n >= k)[1];
+  function flameEl(n) {
+    const w = el('span', `flame t${flameTier(n)}`), svg = S('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' });
+    svg.append(S('path', { class: 'fo', d: 'M12 1.5c.8 3.6 5.6 6.2 5.6 11.6a5.6 5.6 0 0 1-11.2 0c0-2.6 1.3-4.4 2.6-5.6 0 2.1.9 3.3 2.1 3.6-.9-3.6.2-6.9.9-9.6z' }),
+      S('path', { class: 'fi', d: 'M12 11.2c.4 1.8 2.8 3 2.8 5.4a2.8 2.8 0 0 1-5.6 0c0-1.3.6-2.2 1.3-2.8.1 1 .5 1.6 1 1.7-.3-1.6 0-3 .5-4.3z' }));
+    w.append(svg);
+    return w;
+  }
+  // your streak, big: the flame, the days, and how far to the next flame
+  function streakEl(sk) {
+    const row = el('div', `streak t${flameTier(sk.n)}`), next = FLAME_TIERS.slice().reverse().find(([k]) => k > sk.n);
+    const txt = el('div', 'stx');
+    txt.append(el('b', '', sk.n ? `${sk.n}-day streak` : 'No streak yet'),
+      el('span', '', sk.pending.length ? 'Play today’s drive to keep it (a freeze ❄️ covers the day you missed)'
+        : next ? `${next[0] - sk.n} more day${next[0] - sk.n === 1 ? '' : 's'} of the daily for a hotter flame` : 'The hottest flame there is'));
+    row.append(flameEl(sk.n), txt);
+    return row;
+  }
+  // a mode's card on the Pro hub: its icon, name, a line about you in it, a bar when it has one
+  const PICON = {
+    comm: ['M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM16.5 11.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM2.5 19c0-3.2 2.5-5.4 5.5-5.4s5.5 2.2 5.5 5.4M14 14.2c3.4-.6 7 1.2 7 4.8'],
+    drives: ['M6 3.5h12v5a6 6 0 0 1-12 0zM6 5H3.5v1.5A3.5 3.5 0 0 0 6.3 10M18 5h2.5v1.5a3.5 3.5 0 0 1-2.8 3.5M9 20.5h6M12 14.5v6'],
+    runs: ['M3.5 4.5h5v5h5v5h5M3.5 19.5h5v-5M20.5 14.5h-2'],
+    build: ['M4 20l1.2-4.4L16 4.8a2.1 2.1 0 0 1 3 3L8.2 18.6zM14.5 6.3l3 3'],
+    dailies: ['M4 6.5h16v14H4zM4 10.5h16M8.5 3.5v4M15.5 3.5v4M8 14h2M14 14h2M8 17h2'],
+  };
+  function proCard(kind, title, sub, go, o = {}) {
+    const a = el(typeof go === 'string' ? 'a' : 'button', `pcard ${kind}${o.big ? ' big' : ''}`);
+    if (typeof go === 'string') a.href = go; else { a.type = 'button'; a.addEventListener('click', go); }
+    const ic = el('span', 'pico'), svg = S('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' });
+    PICON[kind].forEach((d) => svg.append(S('path', { d })));
+    ic.append(svg);
+    const tx = el('span', 'ptx');
+    if (o.k) tx.append(el('span', 'pk', o.k));
+    tx.append(el('b', '', title), el('span', 'ps', sub));
+    if (o.bar != null) { const bar = el('span', 'pbar'), f = el('i'); f.style.width = `${Math.round(o.bar * 100)}%`; bar.append(f); tx.append(bar); }
+    a.append(ic, tx);
+    return a;
+  }
+  async function proHub(box, now, todayN) {
+    gauntletFresh();
+    const [pro, runs] = await Promise.all([loadPro(), loadRuns()]);
+    const ds = load(`${STORE}:drives`, {}), rs = load(`${STORE}:runs`, {}), n = pro && pro.drives ? pro.drives.length : 0;
+    const passed = n ? pro.drives.filter((_, k) => ds[k + 1] && Math.round(ds[k + 1].p * 100) >= PASS_AT).length : 0;
+    const sk = streakOf(load(`${STORE}:stats`, { days: {} }), todayN);
+    const head = el('section', 'phub');
+    if (n) {
+      const rk = proRank(passed, n), rt = el('div', 'prank'), bar = el('span', 'pbar'), f = el('i');
+      f.style.width = `${Math.round((100 * passed) / n)}%`;
+      bar.append(f);
+      rt.append(el('span', 'pk', 'Your rank'), el('b', '', rk.title),
+        el('span', 'ps', `${passed} of ${n} drives passed${rk.next ? ` · ${rk.next.at - passed} more to ${rk.next.title}` : ' · every one'}`), bar);
+      head.append(rt);
+    }
+    head.append(streakEl(sk));
+    box.append(head);
+    const open = (sec) => () => { track('pro_tap', { to: sec }); renderArchive(now, sec); scrollTo(0, 0); };
+    // option A, a grid of square tiles: Build a scenario the big one (two rows tall), Community beside it, then the
+    // drives under Community, the runs and the past dailies
+    const tiles = el('div', 'ptiles');
+    if (SCN) {
+      const mine = Object.values(scenList()).filter((e) => e && !e.gone).length;
+      tiles.append(proCard('build', 'Build a scenario', `Any two teams from 2001 on, any situation${mine ? ` · ${mine} played` : ''}`, '#custom', { k: 'Your game', big: true }),
+        proCard('comm', 'Community', 'What others built', '#community', { k: 'New' }));
+    }
+    if (n) tiles.append(proCard('drives', 'Historic drives', `${passed} of ${n} passed`, open('drives'), { bar: passed / n }));
+    const nr = runs && runs.runs ? runs.runs.length : 0, played = Object.keys(rs).length, titles = Object.values(rs).filter((r) => r && r.w === r.n).length;
+    if (nr) tiles.append(proCard('runs', 'Playoff runs', played ? `${played} of ${nr} played${titles ? ` · ${titles} 🏆` : ''}` : 'Every game of a real run', open('runs')));
+    if (todayN > 1) tiles.append(proCard('dailies', 'Past dailies', `${todayN - 1} so far`, open('dailies')));
+    box.append(tiles);
+    box.append(proCodeCard(false), authNodes());
+  }
+  // the Pro screen: with Pro, a hub of cards (your rank and streak, then Community, Historic drives, Playoff runs, Build
+  // and Past dailies); a card opens its section here (sec), with a way back
+  async function renderArchive(now, sec) {
+    if (!sec) track('archive_open', { pro: isPro() });
     show('arch');
     const box = $('arch'), todayN = dayOf(now);
     box.textContent = '';
@@ -10550,7 +10628,7 @@
     let bad = null;
     try { bad = sessionStorage.getItem(`${STORE}:badlink`); sessionStorage.removeItem(`${STORE}:badlink`); } catch (e) { /* storage off */ }
     if (bad) box.append(el('p', 'note badlink', `There is no ${bad}${isPro() ? ': here are the ones there are.' : '.'}`));
-    if (SCN) box.append(scenEntry(), commEntry());        // Build a scenario first on the Pro screen, with Pro or without (building is free to try), then what others built
+    if (SCN && !isPro()) box.append(scenEntry(), commEntry());        // Build a scenario first on the Pro screen, with Pro or without (building is free to try), then what others built
     if (!isPro()) {
       box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''}, the historic drives and the playoff runs: play any of them, graded like the day it ran.`));
       if (PRO_LIVE === null && (proCode() || authSession())) {     // a code (or a session) is kept here but the board could not confirm it
@@ -10560,10 +10638,14 @@
       } else box.append(...proNodes(), authNodes());
       return;
     }
-    box.append(proCodeCard(false));
-    box.append(authNodes());        // Pro by code: keep it on an account; signed in: who, and Sign out
+    if (!sec) { await proHub(box, now, todayN); return; }
+    const back = el('button', 'chip pback', '‹ Pro');
+    back.type = 'button';
+    back.addEventListener('click', () => { renderArchive(now); scrollTo(0, 0); });
+    box.firstChild.before(back);
     gauntletFresh();
     const pro = await loadPro(), ds = load(`${STORE}:drives`, {});
+    if (sec === 'drives') {
     if (pro && pro.drives.length) {
       // your record across them: passed (an A), the rank it earns, the next rank, every drive's best grade
       const n = pro.drives.length, rec = (k) => ds[k + 1], scoreOf = (k) => Math.round(rec(k).p * 100);
@@ -10594,6 +10676,8 @@
       });
       box.append(dl);
     } else box.append(el('h3', '', 'Historic drives'), el('p', 'note', 'The historic drives land here with the next build.'));
+    }
+    if (sec === 'runs') {
     box.append(el('h3', '', 'Playoff runs'));
     const runs = await loadRuns(), rs = load(`${STORE}:runs`, {});
     if (runs && runs.runs.length) {
@@ -10607,6 +10691,8 @@
       });
       box.append(rl, el('p', 'note', 'Every game of the run in order, each from its spot with the most at stake, the game still in doubt. Lose one and the season is over, as it was for real; win them all.'));
     } else box.append(el('p', 'note', 'The playoff runs land here with the next build.'));
+    }
+    if (sec !== 'dailies') return;
     box.append(el('h3', '', 'Past dailies'));
     if (todayN <= 1) { box.append(el('p', '', 'The archive fills from tomorrow: today’s drive is on the Daily tab.')); return; }
     const st = load(`${STORE}:stats`, { days: {} }), list = el('div', 'days');
