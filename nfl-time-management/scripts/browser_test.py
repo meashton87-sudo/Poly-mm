@@ -84,8 +84,8 @@ SESSION = "ab" * 32
 ACCT: dict = {"stats": None}
 # the social stub (board/worker.js /challenge*, /calls, /fans, /daily): the challenges by id (each { day, name, score,
 # rows }), what the page made and played, its /daily posts, the crowd's counts (a situation key -> { n, c }) and the
-# day's fanbases it answers with
-SOCIAL: dict = {"chal": {}, "made": [], "plays": [], "daily": [], "calls": {}, "fans": None}
+# day's fanbases it answers with, and the /tally posts' kinds (a finished Survivor game, Pro drive, run game or scenario)
+SOCIAL: dict = {"chal": {}, "made": [], "plays": [], "daily": [], "calls": {}, "fans": None, "tally": []}
 TRACE_HALF = False          # what else the pages asked the stub (printed at the end)
 # the game's page under the base address (daily_check.py --live: "", the site's front door, as players open it)
 PAGE = "index.html"
@@ -163,6 +163,9 @@ async def board_stub(route, path: str, comm: bool = False, headers: dict | None 
         await ok({"n": 1, "hist": hist, "nr": 0, "spots": [{"n": 1, "avg": w, "hist": [0] * 101} for w in body.get("spots") or [0]], "top": [],
                   "counted": len(SOCIAL["daily"]) == 1, "you": {"p": body.get("p"), "spots": body.get("spots")},
                   "week": {"from": "2026-10-15", "to": "2026-10-21", "best": 5, "n": 0, "top": []}})
+    elif path == "/tally" and route.request.method == "POST":
+        SOCIAL["tally"].append(body.get("kind"))
+        await ok({"ok": True})
     else:                     # (accounts off: no way to sign in; nothing else is asked of it on these pages)
         STUB_ASKED.add(path)
         await ok({})

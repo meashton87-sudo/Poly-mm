@@ -185,7 +185,27 @@ async function days(storage, h) {
     out.push({ date: k.slice(4), n: d.n, avg: a.avg, best: a.best, ...(f ? { n2: d.f.n, avg2: f.avg, best2: f.best } : {}) });
   }
   out.sort((a, b) => a.date.localeCompare(b.date));
-  return json({ days: out }, 200, h);
+  // the other games finished each day (tally, below): beside the daily's players, never in its numbers
+  const tally = {};
+  for (const [k, t] of await storage.list({ prefix: 'tally:' })) if (t) tally[k.slice(6)] = Object.fromEntries(TALLY_KINDS.map((x) => [x, t[x] || 0]));
+  return json({ days: out, tally }, 200, h);
+}
+
+// A finished Survivor game, Pro historic drive, playoff-run game or scenario (game.js tally): one count on its UTC
+// day, tally:<date> = { survivor, drive, run, scenario }, for the stats page's all-time total. The kind is all that is
+// sent and all that is kept (no key, no name, no score); the day is the board's own clock, never the phone's
+const TALLY_KINDS = ['survivor', 'drive', 'run', 'scenario'];
+async function tally(req, storage, hits, h) {
+  if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
+  if (limited(req, hits)) return json({ error: 'slow down' }, 429, h);
+  let body;
+  try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
+  const kind = body && body.kind;
+  if (!TALLY_KINDS.includes(kind)) return json({ error: `kind (${TALLY_KINDS.join(', ')}) wanted` }, 400, h);
+  const k = `tally:${new Date().toISOString().slice(0, 10)}`, t = (await storage.get(k)) || {};
+  t[kind] = (t[kind] || 0) + 1;
+  await storage.put(k, t);
+  return json({ ok: true }, 200, h);
 }
 
 // The day's list and the week's (the end card's "Today's top 10" and "This week"). A named result goes on both
@@ -1604,6 +1624,7 @@ export async function handle(req, env, storage, hits) {
   if (isSocial(url.pathname)) return social(req, env, storage, hits, h, url);
   if (url.pathname === '/week') return week(req, env, storage, h, url);
   if (url.pathname === '/days') return req.method === 'GET' ? days(storage, h) : json({ error: 'method' }, 405, h);
+  if (url.pathname === '/tally') return tally(req, storage, hits, h);
   if (url.pathname !== '/board') return json({ error: 'not found' }, 404, h);
   const readAll = async () => { const all = await storage.get('runs'); return Array.isArray(all) ? all : []; };
   // the week's board: Monday to Sunday (UTC), each name's best run of the week, a fresh board every Monday
@@ -1927,7 +1948,7 @@ export default {
   fetch(req, env) {
     const url = new URL(req.url);
     if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me'].includes(url.pathname)) return versus(req, env, url);
-    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, ...COMM_PATHS, '/board', '/daily', '/week', '/days'].includes(url.pathname) && !isSocial(url.pathname)) return handle(req, env, null, null);
+    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, ...COMM_PATHS, '/board', '/daily', '/week', '/days', '/tally'].includes(url.pathname) && !isSocial(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },
   // the cron trigger (wrangler.toml): the day's reminder emails, sent by the Board (its storage); the day is the run's

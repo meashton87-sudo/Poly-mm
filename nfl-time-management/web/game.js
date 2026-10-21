@@ -7959,9 +7959,11 @@
       res.badges = badgeAward(stt, ev);
       if (res.badges.length) { save(`${STORE}:stats`, stt); statsSync(true); newBadge = true; }
       liveDrive.on = false;
+      tally('survivor');
     track('survivor_game', { result: w ? 'win' : tie ? 'tie' : 'loss', overtime: inOT, streak: state.won });
       persist();
     }
+    if (RUN_N && res.half !== 1 && !res.tallied) { res.tallied = true; persist(); tally('run'); }   // (each game of a run, once: a reload draws the card again)
     d.textContent = '';
     takeBanner(d);
     const card = el('div', 'endcard');
@@ -8126,6 +8128,9 @@
   // posts go as text/plain, a "simple" cross-origin request: no OPTIONS preflight, half the backend requests (the
   // backend reads the body as JSON whatever its type)
   const POST_JSON = (body) => ({ method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(body) });
+  // a finished Survivor game, historic drive, run game or scenario: one count for the stats page's all-time total
+  // (worker.js /tally: the kind only); the caller's own flag on the saved state makes it once a game, fire and forget
+  const tally = (kind) => { (BOARD.ready || Promise.resolve()).then(() => { if (BOARD.mode === 'api') return fetch(`${BOARD.api}/tally`, POST_JSON({ kind })); }).catch(() => {}); };
   async function apiBoard(method, body) {
     const r = await fetch(`${BOARD.api}/board`, method === 'POST' ? POST_JSON(body) : {});
     if (r.status === 409) return { taken: true, ...(await r.json()) };
@@ -8731,6 +8736,7 @@
     }
     saveState();
     if (firstFinish) statsSync(true);              // signed in: the record goes to the account (another phone sees it)
+    if (firstFinish && (DRIVE || CUSTOM)) tally(DRIVE ? 'drive' : 'scenario');     // (a run's games each counted at their end: finishSpot)
     drawTiles();
     const box = $('done');
     box.textContent = '';
