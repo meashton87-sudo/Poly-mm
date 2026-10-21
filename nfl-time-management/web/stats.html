@@ -74,6 +74,7 @@ ol.top li:last-child { border-bottom: 0; }
 ol.top .n { color: var(--muted); } ol.top .nm { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 ol.top b { font: 900 18px var(--display); }
 .note { color: var(--muted); font-size: 13px; margin: 0; }
+.split { margin-top: 6px; }
 .intro { margin: 2px 0 10px; max-width: 65ch; }
 .intro a { color: var(--turf); }
 .note a { color: inherit; }
@@ -95,6 +96,7 @@ ol.top b { font: 900 18px var(--display); }
     played it: how many finished each day, how their scores spread out, and the best scores of the day. Tap a day to see
     it. Scores are percentiles against NFL play-callers; <a href="how-it-works">how the score works</a>.</p>
   <div class="tiles" id="tiles" aria-live="polite"></div>
+  <p class="note split" id="split" hidden></p>
   <section>
     <p class="k">Players per day</p>
     <div class="card">
@@ -122,7 +124,7 @@ ol.top b { font: 900 18px var(--display); }
   const short = (s) => dateOf(s).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   const long = (s) => dateOf(s).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
   const localToday = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-  let days = [], pick = -1;
+  let days = [], tally = {}, pick = -1;
   // a day that offered two sides of one game: each side by its team (the codes the worker keeps, game.js TEAMS)
   const SIDE_NAME = { ARI: ['Arizona', '#97233F'], ATL: ['Atlanta', '#A71930'], BAL: ['Baltimore', '#241773'], BUF: ['Buffalo', '#00338D'],
     CAR: ['Carolina', '#0085CA'], CHI: ['Chicago', '#0B162A'], CIN: ['Cincinnati', '#FB4F14'], CLE: ['Cleveland', '#FF3C00'], DAL: ['Dallas', '#003594'],
@@ -139,13 +141,19 @@ ol.top b { font: 900 18px var(--display); }
   }
   function tiles() {
     const t = $('tiles'), today = days.find((d) => d.date === localToday());
-    const total = days.reduce((a, d) => a + d.n, 0), best = days.reduce((a, d) => Math.max(a, d.n), 0);
+    const daily = days.reduce((a, d) => a + d.n, 0), best = days.reduce((a, d) => Math.max(a, d.n), 0);
+    // all time: the daily's players and every other finished game (worker.js /tally: Survivor games, Pro drives, run
+    // games, scenarios); today, the most and the average stay the daily's own (its players, its local day)
+    const sum = (ks) => Object.values(tally).reduce((a, x) => a + ks.reduce((b, k) => b + (Number(x[k]) || 0), 0), 0);
+    const surv = sum(['survivor']), pro = sum(['drive', 'run', 'scenario']), total = daily + surv + pro;
     t.textContent = '';
     // (a day with fair-scored results, n2: their average, the old way's ran high on the day it changed)
     [[today ? fmt(today.n) : '0', 'played today'], [today ? Math.round((today.n2 ? today.avg2 : today.avg) * 100) : '–', 'average score today'],
       [fmt(total), 'drives played, all time'], [fmt(best), 'most in one day']].forEach(([v, l]) => {
       const c = el('div', 'tile'); c.append(el('b', '', String(v)), el('span', '', l)); t.append(c);
     });
+    $('split').textContent = `All time: Daily ${fmt(daily)} · Survivor ${fmt(surv)} · Pro ${fmt(pro)}`;
+    $('split').hidden = !(surv + pro);
   }
   function bars() {
     const box = $('days'), shown = days.slice(-60), mx = Math.max(1, ...shown.map((d) => d.n));
@@ -238,7 +246,7 @@ ol.top b { font: 900 18px var(--display); }
   }
   async function boot() {
     if (!API) { $('day').textContent = ''; $('day').append(el('p', 'empty', 'Stats show on the website (nfl2mindrill.com/stats).')); return; }
-    try { days = (await get('/days')).days || []; } catch (e) {
+    try { const x = await get('/days'); days = x.days || []; tally = x.tally || {}; } catch (e) {
       // the backend busy or briefly down: say so, and offer another go rather than a dead page
       $('day').textContent = '';
       const again = el('button', 'again', 'Try again');
