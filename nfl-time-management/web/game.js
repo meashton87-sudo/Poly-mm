@@ -6025,21 +6025,26 @@
   function toButton() {
     const b = $('toBtn'), r = G && G.root;
     if (!b) return;
-    // (on a phone it is the only timeout control, so it shows whenever a timeout can be called, late or not)
-    const off = !!(r && toOnField() && ui.step === 'family' && r.phase === SNAP && r.pos === G.me && r.clock_running && !G.over && clockOptions(r).includes('timeout'));
+    // (on a phone it is the only timeout control, so it shows whenever a timeout can be called, late or not, on every
+    // step of your call: players looked for it after picking Pass. When it can't be called, it says why, greyed out:
+    // "I don't see the timeout option always")
+    const mine = !!(r && toOnField() && ['family', 'pass', 'detail'].includes(ui.step) && r.phase === SNAP && r.pos === G.me && !G.over);
+    const off = mine && r.clock_running && clockOptions(r).includes('timeout');
+    const why = mine && !off ? (!r.to[G.me] ? 'none left' : !r.clock_running ? 'clock stopped' : 'you lead: let it run') : null;
     const def = !!(r && toOnField() && !VS && (ui.step === 'vdef' || ui.step === 'defense') && defTimeoutOk(r));
-    b.hidden = !(off || def) || busy;
+    b.hidden = !(off || def || why) || busy;
     if (b.hidden) return;
+    b.disabled = !!why;
     b.classList.toggle('on', def && !!ui.to);
-    b.textContent = off ? '⏱ Timeout' : `⏱ Timeout first${ui.to ? ' ✓' : ''}`;
-    b.append(el('small', '', `${r.to[G.me]} left`));
+    b.textContent = off || why ? '⏱ Timeout' : `⏱ Timeout first${ui.to ? ' ✓' : ''}`;
+    b.append(el('small', '', why || `${r.to[G.me]} left`));
     b.setAttribute('aria-pressed', String(def && !!ui.to));
     // (the broadcast view: just under the chips on the field, however many rows they wrap to; again once the sheet
     // and the field have settled, where the players end up)
     placeTo();
     clearTimeout(toButton.h); toButton.h = setTimeout(placeTo, 450);
     b.onclick = () => {
-      if (busy) return;
+      if (busy || b.disabled) return;
       if (off) { b.hidden = true; decideTimeout(); return; }
       ui.to = !ui.to;
       const sw = $('toSwitch');
