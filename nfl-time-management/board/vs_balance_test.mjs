@@ -8,6 +8,8 @@
 //     somewhere: none is a trap to leave alone
 //   - reading the defense matters: the offense's best call is not the same against every defense everywhere
 //   - the zero-sum game solves, and its value is what the offense's best calls are worth there
+//   - ranked plays even (vs_core.js evenPool): every team's strength as the engine sees it is the same, so no team is
+//     an edge; and a sample of matches with both sides on the engine's own calls splits about 50-50 for every team
 //   node board/vs_balance_test.mjs   (needs board/assets/vs)
 import assert from 'node:assert';
 import fs from 'node:fs';
@@ -54,6 +56,53 @@ function solve(M) {
   const vx = Math.min(...M[0].map((_, j) => M.reduce((a, row, i) => a + row[j] * ax[i], 0)));   // what the offense mix guarantees
   const vy = Math.max(...M.map((row) => row.reduce((a, v, j) => a + v * ay[j], 0)));              // what the defense mix allows
   return { x: ax, y: ay, lo: vx, hi: vy };
+}
+
+// ---- ranked, even: the engine sees every team the same (its deltas, kicker, punter, call ratings); only the style stays
+{
+  const even = VSCore.evenPool(pool), T = Object.keys(pool.teams).sort();
+  const ref = eng.makeContext(VSCore.buildGame(even, T[0], T[1]), { receive2h: T[0] });
+  for (const h of T) for (const a of T.slice(0, 6)) {
+    if (h === a) continue;
+    const c = eng.makeContext(VSCore.buildGame(even, h, a), { receive2h: h });
+    assert.deepStrictEqual(c.delta, ref.delta, `${h}-${a}: the same run and pass strength both ways`);
+    assert.deepStrictEqual([c.kickerShift, c.punterShift, c.twoPt], [ref.kickerShift, ref.punterShift, ref.twoPt], `${h}-${a}: the same kicker, punter and two-point odds`);
+    assert.ok(!c.pbDelta || c.pbDelta.every((row) => row.every((v) => v === 0)), `${h}-${a}: no call ratings`);
+  }
+  // the real pool is not even (so the check means something)
+  const real = eng.makeContext(VSCore.buildGame(pool, 'KC', 'CAR'), { receive2h: 'KC' });
+  assert.ok(Math.abs(real.delta[0][1] - real.delta[1][1]) > 0.01, 'as the teams are, Kansas City and Carolina differ');
+  // strength, as the pick shows it: 80 the league's average, the best teams in the 90s
+  const s = T.map((t) => VSCore.strength(pool, t));
+  assert.ok(Math.abs(s.reduce((x, y) => x + y, 0) / s.length - 80) < 1 && Math.max(...s) <= 99 && Math.min(...s) >= 60, `strengths around 80: ${s}`);
+  // a sample of even matches (the Five-Minute Drill, the engine's own calls on both sides, the lazy simulator as the
+  // room has it): every team about 50-50, home and away alike
+  const { lazySimulator } = await import('./lazy_sim.js');
+  const R = VSCore.rng(2024), wins = {}, games = {}, N = 24;
+  const bump = (o, k) => { o[k] = (o[k] || 0) + 1; };
+  let homeWins = 0, n = 0;
+  for (let g = 0; g < N; g++) {
+    const order = [...T].sort(() => R() - 0.5);
+    for (let i = 0; i < order.length; i += 2) {
+      const [h, a] = g % 2 ? [order[i], order[i + 1]] : [order[i + 1], order[i]];
+      const step = VSCore.stepper(eng, pool, h, a, lazySimulator, true);
+      let ms = VSCore.startFive(), k = 0;
+      while (!ms.over && ++k < 600) ms = VSCore.apply(ms, {}, step, (R() * 4294967296) >>> 0).ms;
+      assert.ok(ms.over, `${h}-${a} ends`);
+      const W = ms.winner === 0 ? h : a;
+      bump(wins, W); bump(games, h); bump(games, a);
+      if (ms.winner === 0) homeWins++;
+      n++;
+    }
+  }
+  const rates = T.map((t) => [t, Math.round(100 * (wins[t] || 0) / games[t])]);
+  const worst = rates.reduce((m, [, r]) => Math.max(m, Math.abs(r - 50)), 0);
+  // no team's record says anything a coin would not: the spread of the 32 records is a coin's (chi-square about 32)
+  const chi = T.reduce((s, t) => s + ((wins[t] || 0) - games[t] / 2) ** 2 / (games[t] / 4), 0);
+  console.log(`even strength: ${n} matches, home wins ${Math.round(100 * homeWins / n)}%, the records' spread chi2 ${chi.toFixed(0)} (a coin's: 32 ± 8), each team's win rate ${rates.map(([t, r]) => `${t} ${r}`).join(', ')}`);
+  assert.ok(chi < 64, `the records are a coin's (chi2 ${chi.toFixed(0)}, ${N} matches each)`);
+  assert.ok(worst <= 35, `no team far from 50% (the worst is ${worst} off)`);
+  assert.ok(Math.abs(homeWins / n - 0.5) < 0.12, `no home edge (${homeWins}/${n})`);
 }
 
 const regret = {};

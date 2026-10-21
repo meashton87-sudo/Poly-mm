@@ -33,6 +33,7 @@ node board/vs_pairs_test.mjs          # Versus: every one of the 992 matchups (3
 node board/vs_balance_test.mjs        # Versus: the defense's effects as the game plays them; every defensive option is the answer to something
 node web/defense_calibration.js       # the full defense against real NFL plays: pressure, sacks, time to throw, yards... by rush, coverage, box
 node board/vs_stress.mjs 2000         # Versus: thousands of whole matches, real engine, misbehaving phones; every match replayed and checked
+node board/vs_load.mjs --url https://<worker> --players 300   # Versus against a real worker (never the live board); .github/workflows/vs_load.yml for 10,000
 python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser chromium --minutes 5   # the daily bot check (daily-check.yml) on a build you serve; engine, report likewise
 ```
 
@@ -71,10 +72,17 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   off every request to another host than the site's own and hands the page a stub board in place of its
   `<meta name="board-api">`, so the page's board address must keep coming only from that meta (its selftest fails on a
   page that still names the real board). Findings go in its report; only the harness breaking turns the run red.
-- Versus (board/match.js): the room plays the football (web/vs_core.js holds the college-overtime rules, shared with the
-  page); phones only send calls. Each snap's seed is drawn fresh by the room and never sent to a phone (a phone that
-  knew it could see what a call does before making it). lazy_sim_test.mjs and vs_stress.mjs need board/assets/vs (the
-  engine packs and teams.json; the site workflow copies them there before deploying the worker).
+- Versus (board/match.js; the runbook and risk register in board/VS_LAUNCH.md): the room plays the football
+  (web/vs_core.js holds the rules, shared with the page: the Five-Minute Drill, startFive/applyReg, 5:00 of the fourth
+  under the NFL clock with a coin toss seat 0 calls, and college overtime, start/apply, the shootout and the tiebreak);
+  phones only send calls. Each snap's seed is drawn fresh by the room and never sent to a phone (a phone that knew it
+  could see what a call does before making it); the toss's coin is a decision's seed too. A call not in by its play
+  clock is the engine's own. Ranked plays both teams at even strength (evenPool: the engine's strengths, kicker, punter
+  and call ratings at the league's average; the lineups and style stay) so no team is an edge; the lobby says so. The
+  lobby is one object per game and mode (lobbyName; casual sharded by VS_LOBBY_SHARDS), pairing in memory; the room's
+  result carries its own Elo reckoning (est) so the end card never waits on the ladder. Mode cpu is the computer (seat 1,
+  the engine's calls, never rated). lazy_sim_test.mjs, vs_pairs_test.mjs, vs_balance_test.mjs and vs_stress.mjs need
+  board/assets/vs (the engine packs and teams.json; the site workflow copies them there before deploying the worker).
 - The defense (every mode): the defense calls personnel, front, coverage and rush (engine.js DC). The offense's play is a
   real NFL play run against that defense, as charted (sampleVsDefense: the pass rush, then the shell, then man or zone;
   a run's box, then the blitz), widening the situation before letting a filter go, never across the goal line, the

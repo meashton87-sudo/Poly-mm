@@ -1,0 +1,169 @@
+name: Versus load test
+
+# Fake players against a real worker (board/vs_load.mjs): N join the matchmaking queue over the ramp, play every
+# match out at a human pace, and what players would feel is measured (the time to pair, each call's round trip, how
+# far apart the two phones get each snap, errors, dropped lines). Run by hand (Actions > Versus load test > Run
+# workflow). Never against the real board by default: with no `url`, the run deploys a throwaway worker from this
+# branch (its own lobby, rooms and ladder; VS_NET_CHECK off, since every player is on the runners' addresses), loads
+# it, and deletes it after (the per-address limits off too: a runner is one address). The runners fan out: `runners` jobs of `players` each (10 x 1000 = the 10,000-player day),
+# all ramping over `ramp` seconds together; a last job adds the numbers up and passes or fails on the bars
+# (pair p95 < 15 s, snap round trip p95 < 1.5 s, errors < 0.5%).
+#
+# Cost of a 10,000-player run, roughly (Cloudflare's Durable Objects billing): about 150k matches' worth of requests
+# is not reached; 5,000 matches x ~30 decisions x (2 messages in + 2 out) = 600k DO requests (~$0.10) and the rooms'
+# duration, 5,000 rooms x ~15 minutes of wall time with a socket open: hibernation keeps idle rooms unbilled, so on
+# the order of 1,000-2,000 GB-s (~$0.03). The GitHub runners: 10 x 25 minutes.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "The worker to load (https://...workers.dev). Empty: deploy a throwaway worker from this branch and delete it after. NEVER the real board."
+        required: false
+        default: ""
+      runners:
+        description: "Runner jobs in parallel (each holds `players` sockets)"
+        required: false
+        default: "10"
+      players:
+        description: "Players per runner (max 1000)"
+        required: false
+        default: "1000"
+      ramp:
+        description: "Seconds to ramp everyone in (every runner together)"
+        required: false
+        default: "300"
+      mode:
+        description: "casual, ranked or mix"
+        required: false
+        default: "mix"
+      minutes:
+        description: "The most minutes a runner waits for its matches to end"
+        required: false
+        default: "25"
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+      url: ${{ steps.u.outputs.url }}
+      name: ${{ steps.u.outputs.name }}
+    steps:
+      - id: m
+        run: |
+          n="${{ inputs.runners }}"; n=$(( n < 1 ? 1 : n > 20 ? 20 : n ))
+          echo "matrix=$(seq -s, 1 $n | sed 's/^/[/; s/$/]/')" >> "$GITHUB_OUTPUT"
+      - id: u
+        run: |
+          u="${{ inputs.url }}"
+          if [ -n "$u" ]; then echo "url=${u%/}" >> "$GITHUB_OUTPUT"; echo "name=" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "url=" >> "$GITHUB_OUTPUT"
+          echo "name=tmd-board-loadtest-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+  # the throwaway worker: the engine data the rooms play with (as site.yml builds it), deployed under its own name
+  deploy:
+    needs: plan
+    if: needs.plan.outputs.url == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      url: ${{ steps.dep.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: nfl-time-management/pyproject.toml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install
+        working-directory: nfl-time-management
+        run: pip install -e ".[dev]"
+      - id: week
+        run: echo "w=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - name: Cache nflverse downloads (the site workflow's, refreshed weekly)
+        uses: actions/cache@v4
+        with:
+          path: nfl-time-management/data/raw
+          key: site-nflverse-${{ steps.week.outputs.w }}
+      - name: Build the engine data
+        working-directory: nfl-time-management
+        run: |
+          python -m nflclock.cli build
+          python -c "from nflclock import webexport as w; w.export_engine()"
+          python -c "from nflclock import dailygame as G; print(G.build())"
+          python scripts/site.py _site_test
+      - name: Deploy the throwaway worker
+        id: dep
+        working-directory: nfl-time-management/board
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "::error::no Cloudflare token: pass a url instead"; exit 1; fi
+          rm -rf assets/pro && mkdir -p assets/pro && echo '{}' > assets/pro/none.json
+          rm -rf assets/vs && mkdir -p assets/vs && cp ../_site_test/engine_data.pack ../_site_test/playbook.pack ../web/teams.json assets/vs/
+          node match_test.mjs && node lazy_sim_test.mjs
+          # its own name and its own Durable Objects; no crons, no secrets; every origin, the network check off
+          sed -i '/^\[triggers\]/,/^$/d' wrangler.toml
+          out=$(npx --yes wrangler@4.144.0 deploy --name "${{ needs.plan.outputs.name }}" --var ALLOWED_ORIGINS:* --var VS_NET_CHECK:off --var VS_MAX_QUEUE:30000 --var VS_LOBBY_SHARDS:4 --var VS_JOIN_MAX:1000000 --var VS_ROOM_MAX:1000000 2>&1 | tee /dev/stderr)
+          url=$(echo "$out" | grep -oE 'https://[a-z0-9.-]+\.workers\.dev' | head -1)
+          [ -n "$url" ] || { echo "::error::no workers.dev address in wrangler's output"; exit 1; }
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+  load:
+    needs: [plan, deploy]
+    if: always() && needs.plan.result == 'success' && (needs.plan.outputs.url != '' || needs.deploy.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Play
+        working-directory: nfl-time-management/board
+        env:
+          URL: ${{ needs.plan.outputs.url || needs.deploy.outputs.url }}
+        run: |
+          ulimit -n 65536 || true
+          n="${{ inputs.players }}"; n=$(( n > 1000 ? 1000 : n ))
+          node vs_load.mjs --url "$URL" --players "$n" --ramp "${{ inputs.ramp }}" --mode "${{ inputs.mode }}" --minutes "${{ inputs.minutes }}" --json "load-${{ matrix.runner }}.json" --bars none || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vs-load-${{ matrix.runner }}
+          path: nfl-time-management/board/load-${{ matrix.runner }}.json
+
+  report:
+    needs: [plan, deploy, load]
+    if: always() && needs.load.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: vs-load-*
+          path: loads
+          merge-multiple: true
+      - name: Add it up
+        working-directory: nfl-time-management/board
+        run: node vs_load_sum.mjs ../../loads/*.json
+      - name: Delete the throwaway worker
+        if: always() && needs.plan.outputs.name != ''
+        working-directory: nfl-time-management/board
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4.144.0 delete --name "${{ needs.plan.outputs.name }}" --force || true

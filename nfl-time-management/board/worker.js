@@ -1894,12 +1894,13 @@ async function raceAdmin(req, env, storage, h, url) {
 // Worker vars, no deploy needed: VS_ON "off" turns new matches off (a match already going plays on; the page says
 // Versus is busy and offers the computer), VS_MAX_QUEUE caps the players waiting in one lobby, VS_LOBBY_SHARDS spreads
 // casual matchmaking over that many objects. Per address (this isolate's count, a minute at a time): VS_JOIN_MAX queue
-// joins and VS_ROOM_MAX room connections
+// joins (120) and VS_ROOM_MAX room connections (400): a household never reaches them, a bot does; a campus behind one
+// address is the risk, so they are generous
 const VS_RATE = new Map();
 function vsLimited(req, env, what) {
   const ip = req.headers.get('CF-Connecting-IP') || '', now = Date.now();
   if (!ip) return false;
-  const max = +(what === 'q' ? env.VS_JOIN_MAX || 30 : env.VS_ROOM_MAX || 90), k = `${what}:${ip}`;
+  const max = +(what === 'q' ? env.VS_JOIN_MAX || 120 : env.VS_ROOM_MAX || 400), k = `${what}:${ip}`;
   let x = VS_RATE.get(k);
   if (!x || now - x.at > 60_000) { x = { at: now, n: 0 }; VS_RATE.set(k, x); }
   if (VS_RATE.size > 20000) VS_RATE.clear();

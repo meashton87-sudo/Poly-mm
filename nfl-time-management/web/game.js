@@ -12558,8 +12558,11 @@
     vsSend(vs.last);
     vs.ui = 'idle';
     vsWaitLine();
+    vsNoTo();
     vsDrawBar();
   }
+  // the timeout button on the field: only while your call is up (it stayed up, greyed, on the result and the final)
+  function vsNoTo() { const b = $('toBtn'); if (b) b.hidden = true; }
   // the room sent something: play it now, unless a play is running or its result is up (Next play, or the clock)
   function vsWake() {
     if (!G || !vs.started || busy) return;
@@ -12592,6 +12595,7 @@
         G.vsCalls = [...(G.vsCalls || []), { n: d.n, at: before.phase === SNAP ? (before.try2 ? 'Two-point try' : `${ddText(before)} · ${spotText(before)}`) : before.phase === KICKOFF ? 'Kickoff' : 'The try',
           poss: before.pos, round: G.cot ? G.cot.round : 0, t: G.cot ? null : before.t, calls: vsCalls(d, before), head: headline(main, res.log), score: sc.slice(), good }];
       }
+      vsNoTo();
       res.animated = await animatePlay(before, res, side, false, look);
       out = { res, d };
     } else if (d.kind === 'timeout') out = { res: { log: [], action: { to_off: true } }, head: 'Timeout', d };
@@ -12672,6 +12676,7 @@
     wrap.append(btn);
     d.append(wrap);
     vs.ui = 'card';
+    vsNoTo();
     vsDrawBar();
     // the play clock runs whether or not Next is tapped: the card gives way when the clock would start anyway (WATCH_MS after the snap)
     clearTimeout(vs.cardTimer);
@@ -12785,17 +12790,23 @@
   }
   // the match in one line: how it was won (the last score, and when)
   function vsStory(res, won) {
-    const calls = G.vsCalls || [];
-    let last = null;
+    const calls = G.vsCalls || [], W = res.winner;
+    if (res.by !== 'score' || !(W >= 0) || !calls.length) return null;
+    // the go-ahead score: the winner's last score made with the lead not yet theirs
+    let go = null, after = false;
     for (let i = calls.length - 1; i >= 0; i--) {
-      const prev = i ? calls[i - 1].score : [0, 0];
-      if (calls[i].score[0] !== prev[0] || calls[i].score[1] !== prev[1]) { last = calls[i]; break; }
+      const x = calls[i], prev = i ? calls[i - 1].score : [0, 0];
+      if (x.score[W] > prev[W] && prev[W] <= prev[1 - W]) { go = x; break; }
+      if (x.score[1 - W] > prev[1 - W]) after = true;        // (the loser scored again after it: a hold)
     }
-    if (res.by !== 'score' || !last) return null;
-    const what = String(last.head || 'a score').replace(/\.$/, '');
-    const when = last.round ? (last.round > 1 ? ` in the ${ordinal(last.round)} overtime` : ' in overtime') : last.t != null ? ` with ${clockOf(Math.max(0, last.t)).text} left` : '';
-    const theirs = calls.length && last.poss !== G.me && !/safety|intercept|fumble|return|blocked/i.test(what);
-    return `${won ? (theirs ? 'Held on after' : 'Won it on') : (theirs ? 'Lost it on' : 'Their answer never came after')} ${what.charAt(0).toLowerCase()}${what.slice(1)}${when}.`;
+    if (!go) return null;
+    // ("20-yard field goal is good" -> "a 20-yard field goal"; "Touchdown" -> "a touchdown")
+    let what = String(go.head || 'a score').replace(/\.$/, '').replace(/ is good$/, '').replace(/^Two-point try/i, 'two-point try');
+    what = `${what.charAt(0).toLowerCase()}${what.slice(1)}`;
+    if (!/^(a|an|the) /.test(what)) what = `${/^[aeiou]/.test(what) ? 'an' : 'a'} ${what}`;
+    const when = go.round ? (go.round > 1 ? ` in the ${ordinal(go.round)} overtime` : ' in overtime') : go.t != null ? ` with ${clockOf(Math.max(0, go.t)).text} left` : '';
+    const w = `${what}${when}`;
+    return won ? `Won it on ${w}${after ? ', then held on' : ''}.` : `Lost it on their ${w}${after ? ': the answer came up short' : ''}.`;
   }
   function vsEndCard() {
     clearInterval(vs.timer); clearTimeout(vs.cardTimer); clearInterval(vs.peerTimer); vsTitle(false);
@@ -12807,6 +12818,7 @@
       track('vs_finish', { mode: vs.mode, game: vs.game, result: res.winner < 0 ? 'none' : won ? 'win' : 'loss', by: res.by, rounds, snaps: (G.vsCalls || []).length });
     }
     drawAll();
+    vsNoTo();
     d.textContent = '';
     vsBanner('');
     takeBanner(d);

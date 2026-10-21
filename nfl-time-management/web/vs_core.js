@@ -136,7 +136,7 @@
     return o;
   }
   const TEMPOS = new Set(['hurry', 'normal', 'milk', 'urgent']);             // engine.js TEMPO
-  const FG_MAX_YL = 45;                                                       // a 62-yard try (the snap 7 back, 10 of end zone)
+  const FG_MAX_YL = 60;                                                       // a 77-yard try at most (game.js never offers one so long; further, the engine's kick put the ball past the goal line)
   const KICKS = new Set(['deep', 'return', 'touchback', 'onside']);          // engine.js _kickoff
   // the defense's call, cleaned: every part known, or nothing (the default)
   function cleanDef(d) {

@@ -5,8 +5,9 @@
 // under the rush. Prints a table (and the GitHub step summary when there is one); exits 1 on more than 1% of
 // players hitting an error, or a median time to pair over 10 seconds.
 //
-//   node board/vs_load.mjs --url https://<worker> [--players 300] [--ramp 60] [--mode casual|ranked|mix]
-//                          [--origin https://<an allowed site origin>] [--fast] [--minutes 25] [--json out.json]
+//   node board/vs_load.mjs --url https://<worker> [--players 300] [--ramp 60] [--mode casual|ranked|mix] [--game five|ot|mix]
+//                          [--origin https://<an allowed site origin>] [--fast] [--minutes 25] [--json out.json] [--bars none]
+// (--json keeps every sample too, for vs_load_sum.mjs to add runners up; --bars none: no verdict of its own)
 //
 // The calls are the room's own rules (web/vs_core.js: whose decision it is, the defense's parts, the toss); the
 // players' device keys start loadtest- and their names zz-loadtest-N, so they are obvious anywhere they show up.
@@ -23,6 +24,7 @@ const ORIGIN = String(arg('origin', '') || '');
 const FAST = !!arg('fast', false);
 const LIMIT = Math.max(1, +arg('minutes', 25) || 25) * 60_000;
 const JSON_OUT = arg('json', '');
+const GAME = String(arg('game', 'five')), BARS = String(arg('bars', 'solo'));
 const RUN = String(Date.now().toString(36));
 const WS0 = URL0.replace(/^http/, 'ws');
 const HDR = ORIGIN ? { headers: { Origin: ORIGIN } } : undefined;
@@ -39,7 +41,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const T0 = Date.now();
 const t = () => ((Date.now() - T0) / 1000).toFixed(1);
 
-const M = { pair: [], firstAck: [], rtt: [], skew: [], ladder: [], me: [], queueMax: 0, errors: [], reconnects: 0, by: {}, rounds: {}, snaps: 0, matches: new Set(), finished: new Set() };
+const M = { pair: [], firstAck: [], rtt: [], skew: [], ladder: [], me: [], queueMax: 0, errors: [], reconnects: 0, by: {}, rounds: {}, snaps: 0, matches: new Set(), finished: new Set(), cf: {} };
+const cfNote = (k) => { M.cf[k] = (M.cf[k] || 0) + 1; };
 const stepAt = new Map();           // room:n -> [seat0 time, seat1 time]
 const fail = (bot, what) => { if (!bot.err) { bot.err = what; M.errors.push(`${bot.name}: ${what}`); } };
 
@@ -47,34 +50,37 @@ class Bot {
   constructor(i) {
     this.i = i; this.key = `loadtest-${RUN}-${String(i).padStart(5, '0')}`; this.name = `zz-loadtest-${i}`;
     this.team = pick(TEAMS); this.mode = MODE === 'mix' ? (i % 2 ? 'ranked' : 'casual') : MODE;
+    this.game = GAME === 'mix' ? (i % 3 ? 'five' : 'ot') : GAME;
     this.ms = null; this.n = 0; this.seat = -1; this.done = false; this.err = null; this.sent = new Map(); this.answered = -1;
   }
   queue() {
     return new Promise((resolve) => {
-      const q = new URLSearchParams({ key: this.key, mode: this.mode, team: this.team, name: this.name });
+      const q = new URLSearchParams({ key: this.key, mode: this.mode, game: this.game, team: this.team, name: this.name });
       const t0 = Date.now();
       let ws, acked = false;
       try { ws = new WebSocket(`${WS0}/vs/queue?${q}`, HDR); } catch (e) { fail(this, `queue: ${e.message}`); return resolve(null); }
       ws.onmessage = (ev) => {
         let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
         if (m.t === 'queued') { if (!acked) { acked = true; M.firstAck.push(Date.now() - t0); } M.queueMax = Math.max(M.queueMax, m.size || 0); }
+        if (m.t === 'busy') { fail(this, 'the lobby said busy'); try { ws.close(); } catch (e) { /* gone */ } resolve(null); }
         if (m.t === 'match') { M.pair.push(Date.now() - t0); this.matched = true; resolve(m); }
       };
       ws.onerror = () => {};
-      ws.onclose = (ev) => { if (!this.matched) { fail(this, `queue closed ${ev.code} before a match`); resolve(null); } };
+      ws.onclose = (ev) => { if ([1006, 1011, 1012, 1013].includes(ev.code)) cfNote(`queue ${ev.code}`); if (!this.matched && !this.err) { fail(this, `queue closed ${ev.code} before a match`); resolve(null); } };
       setTimeout(() => { if (!this.matched) { fail(this, 'no match in 5 minutes'); try { ws.close(); } catch (e) { /* gone */ } resolve(null); } }, 300_000);
     });
   }
   open(room, mode, since = 0) {
     return new Promise((resolve) => {
       let ws;
-      try { ws = new WebSocket(`${WS0}/vs/ws?room=${room}&key=${this.key}&mode=${mode}&since=${since}`, HDR); } catch (e) { fail(this, `room: ${e.message}`); return resolve(false); }
+      try { ws = new WebSocket(`${WS0}/vs/ws?room=${room}&key=${this.key}&mode=${mode}&game=${this.game}&since=${since}`, HDR); } catch (e) { fail(this, `room: ${e.message}`); return resolve(false); }
       this.ws = ws; this.room = room; this.roomMode = mode;
       let opened = false;
       ws.onopen = () => { opened = true; resolve(true); };
       ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch (e) { return; } this.on(m); };
       ws.onerror = () => {};
       ws.onclose = (ev) => {
+        if ([1006, 1011, 1012, 1013].includes(ev.code)) cfNote(`room ${ev.code}`);
         if (!opened) { resolve(false); return; }
         if (this.done || this.ws !== ws) return;
         // a dropped line: back in, as a phone does (counted; an error only if that fails too)
@@ -86,6 +92,7 @@ class Bot {
   send(m) { try { this.ws.send(JSON.stringify(m)); } catch (e) { /* reconnects */ } }
   on(m) {
     if (JSON.stringify(m).includes('"seed"')) fail(this, `a seed reached a phone (${m.t})`);
+    if (m.t === 'busy') { fail(this, 'the room said busy'); return; }
     if (m.t === 'hello') {
       this.seat = m.seat;
       if (m.phase === 'over') return this.finish(m.result);
@@ -128,12 +135,17 @@ class Bot {
     if (this.done || this.n !== n || !this.ms) return;
     const ms = this.ms, role = VSCore.role(ms, this.seat);
     let half;
-    if (role === 'pick') half = { pick: pick(ms.cot.pick.end ? ['offense', 'defense'] : VSCore.PICKS) };
+    if (role === 'toss') half = { call: pick(VSCore.COIN) };
+    else if (role === 'pick' && !ms.cot) half = { pick: pick(ms.reg.pick.end ? ['receive', 'kick'] : VSCore.REG_PICKS) };
+    else if (role === 'pick') half = { pick: pick(ms.cot.pick.end ? ['offense', 'defense'] : VSCore.PICKS) };
+    else if (role === 'kick') half = { action: { kick: pick(['deep', 'return', 'touchback']) } };
     else if (role === 'defense') half = { dc: { pers: pick(VSCore.DC.pers), front: pick(VSCore.DC.front), cover: pick(VSCore.DC.cover), rush: pick(VSCore.DC.rush) } };
     else if (role === 'pat') half = Math.random() < 0.4 ? { two: true } : { action: { pat: 'xp' } };
     else if (role === 'offense') {
-      const c = pick(CALLS);
-      half = { action: { call: c, ...(ms.root.try2 ? { pat: 'two' } : {}) } };
+      const c = pick(CALLS), r = ms.root;
+      if (!ms.cot && r.clock_running && r.to[this.seat] > 0 && Math.random() < 0.05) half = { timeout: true };
+      else if (r.down === 4 && Math.random() < 0.4) half = { action: { play: r.yl <= 40 ? 'fg' : 'punt' } };
+      else half = { action: { call: c, ...(ms.cot ? {} : { tempo: pick(['hurry', 'normal', 'milk']) }), ...(ms.root.try2 ? { pat: 'two' } : {}) } };
     } else return;
     this.sent.set(n, Date.now());
     this.send({ t: 'half', n, half });
@@ -158,6 +170,7 @@ class Bot {
       const t0 = Date.now();
       try {
         const r = await fetch(`${URL0}${path}`, { ...(init || {}), headers: { 'Content-Type': 'application/json', ...(ORIGIN ? { Origin: ORIGIN } : {}) } });
+        if (r.status >= 500) cfNote(`http ${r.status}`);
         if (!r.ok) throw new Error(`${r.status}`);
         await r.json();
         into.push(Date.now() - t0);
@@ -174,7 +187,7 @@ class Bot {
 const q = (a, p) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
 const ms = (v) => (v == null ? '-' : v >= 10_000 ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v)} ms`);
 
-console.log(`versus load: ${N} players over ${RAMP / 1000} s against ${URL0} (${MODE}${FAST ? ', fast' : ''})`);
+console.log(`versus load: ${N} players over ${RAMP / 1000} s against ${URL0} (${MODE}, ${GAME}${FAST ? ', fast' : ''})`);
 const bots = Array.from({ length: N }, (_, i) => new Bot(i));
 const runs = bots.map((b) => sleep(Math.random() * RAMP).then(() => b.run()));
 const tick = setInterval(() => console.log(`… ${t()} s: ${M.pair.length} paired, ${M.matches.size} matches started, ${M.finished.size} over, ${M.snaps} snaps, ${M.errors.length} errors, ${M.reconnects} reconnects, the queue at most ${M.queueMax}`), 15_000);
@@ -198,18 +211,24 @@ const rows = [
   ['the two phones apart each snap: median / p95 / max', `${ms(q(M.skew, 0.5))} / ${ms(q(M.skew, 0.95))} / ${ms(q(M.skew, 1))}`],
   ['/vs/ladder: median / p95 (n)', `${ms(q(M.ladder, 0.5))} / ${ms(q(M.ladder, 0.95))} (${M.ladder.length})`],
   ['/vs/me: median / p95 (n)', `${ms(q(M.me, 0.5))} / ${ms(q(M.me, 0.95))} (${M.me.length})`],
-  ['dropped connections (back in)', M.reconnects], ['players with an error', `${bad} (${(100 * errRate).toFixed(2)}%)`], ['seconds', t()],
+  ['dropped connections (back in)', M.reconnects], ['Cloudflare errors (1006/1011/1012/1013, 5xx)', JSON.stringify(M.cf)], ['players with an error', `${bad} (${(100 * errRate).toFixed(2)}%)`], ['seconds', t()],
 ];
 const w0 = Math.max(...rows.map((r) => r[0].length));
 console.log('\n' + rows.map(([k, v]) => `${k.padEnd(w0)}  ${v}`).join('\n'));
 if (M.errors.length) console.log('\nfirst errors:\n  ' + M.errors.slice(0, 15).join('\n  '));
 const verdict = [];
-if (errRate > 0.01) verdict.push(`${(100 * errRate).toFixed(2)}% of players hit an error (more than 1%)`);
-if (medPair == null || medPair > 10_000) verdict.push(`the median time to pair was ${ms(medPair)} (more than 10 s)`);
+if (BARS !== 'none') {
+  if (errRate > 0.01) verdict.push(`${(100 * errRate).toFixed(2)}% of players hit an error (more than 1%)`);
+  if (medPair == null || medPair > 10_000) verdict.push(`the median time to pair was ${ms(medPair)} (more than 10 s)`);
+}
 console.log(verdict.length ? `\nFAIL: ${verdict.join('; ')}` : '\nversus load ok');
 if (process.env.GITHUB_STEP_SUMMARY) {
   const fs = await import('node:fs');
   fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Versus load: ${N} players\n\n| | |\n|---|---|\n${rows.map(([k, v]) => `| ${k} | ${String(v).replace(/\|/g, '/')} |`).join('\n')}\n\n${verdict.length ? `**FAIL**: ${verdict.join('; ')}` : '**ok**'}\n${M.errors.length ? `\n<details><summary>first errors</summary>\n\n${M.errors.slice(0, 30).map((e) => `- ${e}`).join('\n')}\n</details>\n` : ''}`);
 }
-if (JSON_OUT) { const fs = await import('node:fs'); fs.writeFileSync(JSON_OUT, JSON.stringify({ rows, errors: M.errors, verdict }, null, 1)); }
+if (JSON_OUT) {
+  const fs = await import('node:fs');
+  fs.writeFileSync(JSON_OUT, JSON.stringify({ rows, errors: M.errors, verdict, raw: { players: N, errorPlayers: bad, pair: M.pair, rtt: M.rtt, skew: M.skew, ladder: M.ladder, me: M.me,
+    matches: M.matches.size, finished: M.finished.size, snaps: M.snaps, reconnects: M.reconnects, queueMax: M.queueMax, by: byCount, cf: M.cf } }));
+}
 process.exit(verdict.length ? 1 : 0);
