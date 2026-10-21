@@ -496,18 +496,28 @@ happened, and a running tally against him. Then the end card (snaps you called b
 real drive's end) and a share card (text and a picture: "I out-called Andy Reid on Monday night: 4 of 6 snaps").
 A drill opens before its first snap, as soon as the scoreboard has the ball in a two-minute spot. A player joining
 mid-drive starts from where the drive is now; a reload keeps the drill where it was (`tmd:v3:live:<id>`); a drill that
-is over replays snap by snap at your own pace (Pro). The worker watches the feed: ESPN's public scoreboard once a minute
-while a game is on (once an hour between games) and, for a game in or near a two-minute spot, its plays once a minute.
+is over replays snap by snap at your own pace (Pro). The worker watches the feed: ESPN's public scoreboard (unofficial,
+no key, no published rate limit) once a minute while a game is on (once an hour between games), every 20 s while a
+game is close to a two-minute spot, and, for a game in or near one, its plays every 20 s (the cron wakes the watcher
+each minute, the Live object's own alarm in between while it matters). A failed request is tried once more at once
+(never a 4xx), then backs off (a game in a drill 20 s, 40 s, 80 s ... 10 minutes; the scoreboard 1, 2, 4 ... 30
+minutes; a 429 at least its Retry-After); one look at a time; each drill is one id (its game and the play that gave the
+offense the ball), so a drill is opened, posted and archived once.
 Each drive becomes a drill: every call with the real situation before the snap (timeouts worked out from the
 scoreboard's, the clock stopped by whatever stops it), the call the real play maps to in the playbook (the feed says
 left or right, taken as the weak or strong side; a sack or a scramble has no call, and that snap is not counted), what
 happened, how the drive ended. The defense's timeouts are notes before a snap; the offense's own timeout is a call of
 its own. The feed's shape is known to `live_espn.js` only: a payload that is not as expected is rejected, counted and
 logged, and no drill is opened or changed on it (swap the source by writing another module with the same exports).
-Latency: the feed runs 20 to 60 s behind TV, the worker reads it each minute, the page asks every 12 s while a drill is
-open; a real play reached the worker 37 to 88 s after it happened (57 s on average) in the replay of a recorded game,
-so it shows on the page about a minute after TV. A drill not read for 3 minutes is never shown as live (the page waits
-on the next play, the field dimmed), and the page stops asking after 10 minutes without one.
+Latency: the feed runs 20 to 60 s behind TV, the worker reads it every 20 s near a two-minute spot, the page asks every
+12 s while a drill is open; in the replay of a recorded game (the feed 30 s behind) a real play reached the worker 30 to
+48 s after it happened (41 s on average), so it shows on the page within about a minute of TV, and a drill opens on
+the Home banner within a minute of the feed having the spot. Graceful states: no game in a spot (what live drills are,
+the drills played, a look each minute); the feed delayed (a drill not read for 3 minutes is never shown as live: the
+page waits on the next play, the field dimmed, and stops asking after 10 minutes without one); the board not answering
+(the page says so, keeps your call and asks at 12, 24, 48 s, then each minute); the feed down for 20 minutes (the drill
+is closed as far as it went, your calls graded); live drills paused or switched off mid-drive (the drive ends there,
+said so, your calls graded).
 
 *Turning it on.* Once: set `LIVE_ON: "on"` in `.github/workflows/site.yml` and merge (the page then may ask the worker;
 the Pro preview always has it). Each game night, in the Cloudflare dashboard: Workers & Pages, two-minute-drill-board,

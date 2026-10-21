@@ -221,7 +221,11 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   counted (GET /live/admin) and logged, and no drill is opened or changed on it (no drill rather than a wrong one).
   The switch is the worker's LIVE_ON variable (the Cloudflare dashboard: instant) and POST /live/admin (pause and
   resume); the site's <meta name="live"> (site.py --live, site.yml LIVE_ON) only lets the page ask. Off, the cron does
-  no work and the page asks once. Never show a drill as live when the worker has not read it for 3 minutes (board
+  no work and the page asks once. The watcher looks each minute (the cron) and every FAST_S (20 s) while a game is close
+  to a two-minute spot or a drill is open (the Live object's alarm; Live.look: one look at a time); a failure is tried
+  once more at once (never a 4xx), then backs off (a 429 at least its Retry-After): worker_test.mjs checks the pace, the
+  feed down mid-drill and back, and live_replay.mjs steps 20 s. Paused, open drills close at once; LIVE_ON off, an open
+  drill is answered as over. Never show a drill as live when the worker has not read it for 3 minutes (board
   STALE_MS = game.js LIVE_STALE; POLL_S = LIVE_POLL: change both). The bots never reach the feed: the page only talks to
   the worker, which the stub answers (browser_test.py LIVE: the recorded game, board/live_replay.mjs on
   board/live_replay.json, made by scripts/live_fixture.py from nflverse; daily_check.py answers /live with nothing).

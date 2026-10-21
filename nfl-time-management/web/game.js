@@ -5776,6 +5776,7 @@
     const r = G.root, d = $('dock'), me = G.me;
     d.textContent = '';
     takeBanner(d);
+    if (LIVE && live.d && live.sit && live.view === 'call') d.append(liveCallStrip());      // ("LIVE  Kansas City ball at the Buffalo 38, down 3, 1:47 left. Call it")
     const head = el('div', 'ask');
     d.append(head);
     if (ui.step === 'family') {
@@ -12603,7 +12604,7 @@
   const LIVE_STALE = 3 * 60e3;         // board/live.js STALE_MS
   const LIVE_GIVEUP = 10 * 60e3;
   const LIVE_BEHIND = 2;               // more real snaps than this went by since your last call: on to where the drive is now
-  const live = { d: null, id: '', k: 0, skew: 0, timer: null, since: 0, replay: false, grading: false, others: [], othersAt: 0, gaveUp: false, view: '', coach: null, sit: null, pre: null };
+  const live = { d: null, id: '', k: 0, skew: 0, timer: null, since: 0, replay: false, grading: false, others: [], othersAt: 0, gaveUp: false, view: '', coach: null, sit: null, pre: null, fail: 0 };
   const liveKey = (id) => `${STORE}:live:${id}`;
   // the worker's answers ({} from a stub, null for a 404; anything else thrown)
   async function liveApi(path) {
@@ -12649,7 +12650,7 @@
       if (!v || v.on !== true) { liveBarSet([]); return; }
       const open = (Array.isArray(v.drills) ? v.drills : []).filter((d) => liveFresh(d, v.now));
       liveBarSet(open);
-      setTimeout(check, (open.length ? 60 : Math.max(60, Math.min(900, Number(v.again) || 60))) * 1000);
+      setTimeout(check, (open.length ? 60 : Math.max(20, Math.min(900, Number(v.again) || 60))) * 1000);      // (20 s while a game is close to one)
     };
     check();
   }
@@ -12668,8 +12669,10 @@
     a.href = `#live-${d.id}`;
     a.dataset.n = String(open.length);
     a.textContent = '';
-    a.append(el('span', 'tag', 'Live'), el('span', 'what', `${teamName(d.away)} at ${teamName(d.home)} · ${liveLeft(s)}`), el('span', 'go', 'Call it'));
-    if (open.length > 1) a.append(el('small', 'more', `+${open.length - 1} more`));
+    // "LIVE  Kansas City ball at the Buffalo 38, down 3, 1:47 left  CALL IT" (the game under it, smaller)
+    const what = el('span', 'what');
+    what.append(el('b', '', `${liveSpot(s, d)}, ${liveLeft(s)}`), el('small', '', `${teamName(d.away)} at ${teamName(d.home)}${open.length > 1 ? ` · +${open.length - 1} more live` : ''}`));
+    a.append(el('span', 'tag', 'Live'), what, el('span', 'go', 'Call it'));
     a.setAttribute('aria-label', `Live now: ${liveSpot(s, d)}, ${liveLeft(s)}. Call it`);
   }
   // the Pro screen's way in (the drills open now and the ones played)
@@ -12788,6 +12791,14 @@
     live.pre.p.catch(() => { /* graded again when the real play is in */ });
     liveWait();
   }
+  // over the call keys: where the real drive is, and you against the real coach so far
+  function liveCallStrip() {
+    const s = live.sit, x = el('div', 'livecall'), t = el('div', 't');
+    t.append(el('b', '', `${liveSpot(s, live.d)}, ${liveLeft(s)}.`), el('span', '', live.replay ? ` Call it, then see ${liveWho()}’s real call.` : ` Call it before ${liveWho()} does.`));
+    x.append(el('span', 'tag', live.replay ? 'Replay' : 'Live'), t);
+    if (Object.keys(state.res || {}).length) x.append(el('span', 'tally', liveTally()));
+    return x;
+  }
   function liveOthers(box) {
     const o = live.others.filter((x) => x.id !== live.id && liveFresh(x, liveNow()));
     if (!o.length) return;
@@ -12807,8 +12818,10 @@
     const box = el('div', 'result livewait');
     box.append(el('div', 'lw-k', mine ? 'Your call is in' : 'Waiting on the next play'));
     if (mine) box.append(el('div', 'lw-call', mine.label));
-    const quiet = Math.round((liveNow() - d.polled) / 60e3);
-    const st = el('p', `lw-st${fresh ? '' : ' stale'}`, live.gaveUp ? 'No real play for 10 minutes: the live feed may have stalled.'
+    const quiet = Math.round((liveNow() - d.polled) / 60e3), down = live.fail >= 2;
+    if (down) $('field').classList.add('livestale');
+    const st = el('p', `lw-st${fresh && !down ? '' : ' stale'}`, live.gaveUp ? 'No real play for 10 minutes: the live feed may have stalled.'
+      : down ? `The game’s server isn’t answering. Trying again every ${Math.round(livePollMs() / 1000)} seconds${mine ? ': your call is kept' : ''}.`
       : !fresh ? `Waiting on the next play: the live feed has sent nothing for ${quiet > 1 ? `${quiet} minutes` : 'a while'}.`
         : mine ? `Waiting for ${teamName(d.player)}’s real play. It shows here about a minute after it happens on TV.`
           : `${teamName(d.player)} is between plays. The next call opens as soon as the real game moves on.`);
@@ -12822,16 +12835,20 @@
     dk.append(box);
     say(st.textContent, `livewait${k}${fresh}${live.gaveUp}`);
   }
+  // the poll's pace: LIVE_POLL, and while the board does not answer 12, 24, 48 s, then each minute (never a burst)
+  const livePollMs = () => LIVE_POLL * Math.min(5, 2 ** Math.max(0, (live.fail || 0) - 1));
   function liveTick() {
     clearTimeout(live.timer);
     if (live.replay || live.gaveUp || !live.d || live.d.status !== 'open') return;
-    live.timer = setTimeout(() => livePoll(false), LIVE_POLL);
+    live.timer = setTimeout(() => livePoll(false), livePollMs());
   }
   async function livePoll(now) {
     if (document.hidden && !now) { document.addEventListener('visibilitychange', () => livePoll(true), { once: true }); return; }
     let got;
     try { got = await liveApi(`/live/drill?id=${encodeURIComponent(live.id)}`); } catch (e) { got = undefined; }
-    if (got && got.drill && Array.isArray(got.drill.snaps)) {
+    const ok = !!(got && got.drill && Array.isArray(got.drill.snaps));
+    live.fail = ok ? 0 : (live.fail || 0) + 1;
+    if (ok) {
       if (Number.isFinite(got.now)) live.skew = Date.now() - got.now;
       const was = live.d;
       live.d = got.drill;
@@ -12851,6 +12868,7 @@
     if (state.calls[k] && d.snaps[k]) { if (!live.grading && live.view !== 'cmp') liveCompare(k); return; }
     if (live.view === 'wait') return !state.calls[k] && (d.snaps[k] || liveFresh(d, liveNow())) ? liveAdvance() : d.status !== 'open' && !d.snaps[k] ? liveEnd() : liveWait();
     if (live.view === 'call' && !state.calls[k] && !busy) {
+      if (!d.snaps[k] && d.status !== 'open') return liveEnd();          // (the drive ended, or live drills stopped, before this call)
       if (!d.snaps[k] && !liveFresh(d, liveNow())) return liveWait();     // (gone quiet: never a stale spot shown as live)
       if (d.snaps[k] && !was.snaps[k]) toast('The real play is in: call yours to see it');
       // the spot changed before your call (their timeout, a flag): the keys again on the new one, unless you are into a call
@@ -13045,39 +13063,66 @@
         sq.append(r);
       });
       box.append(sq);
-      // the key moment: where the two calls were furthest apart
+    }
+    // how the real drive ended (or that the feed, or live drills, stopped first: the calls up to then are graded)
+    const cut = d.end && ['feed', 'off', 'paused'].includes(d.end.how);
+    if (d.end) box.append(el('p', 'real', cut ? `${d.end.text} ${d.snaps.length} snap${d.snaps.length === 1 ? '' : 's'} into this drive${rs.length ? ': your calls up to then are graded' : ''}. ${teamName(d.away)} ${d.end.score[0]}, ${teamName(d.home)} ${d.end.score[1]}.`
+      : `The real drive: ${d.end.text || d.end.how}. ${teamName(d.away)} ${d.end.score[0]}, ${teamName(d.home)} ${d.end.score[1]}.`));
+    // the drive, snap by snap (under "See the drive, snap by snap", the way the day's end card keeps its breakdown):
+    // the key moment, each call of yours beside the real one and what happened, the share text
+    const more = el('details', 'endmore'), inn = el('div', 'in');
+    more.append(el('summary', '', 'See the drive, snap by snap'), inn);
+    if (rs.length) {
       const km = counted.slice().sort((a, b) => Math.abs(b.him.c - b.you.c) - Math.abs(a.him.c - a.you.c))[0];
       if (km && Math.abs(km.him.c - km.you.c) >= 0.005) {
         const s = d.snaps[km.k], r0 = liveRoot(s.before), gap = (Math.abs(km.him.c - km.you.c) * 100).toFixed(1);
         const kb = el('div', 'livekey');
         kb.append(el('span', 'k', 'The key moment'), el('span', '', `${liveClk(s.before)} ${qLabel(r0)}, ${ddText(r0)} ${onSpot(r0)}. You: ${km.you.label}. ${who}: ${liveCallLabel(km.him.key)} (${s.res}). ${km.v > 0 ? `Your call was ${gap} points of win chance better` : `His call was ${gap} points of win chance better`}.`));
-        box.append(kb);
+        inn.append(kb);
       }
+      const list = el('ol', 'livesnaps');
+      rs.forEach((x) => {
+        const s = d.snaps[x.k];
+        if (!s) return;
+        const r0 = liveRoot(s.before), li = el('li', `lsnap${x.v > 0 ? ' won' : x.v < 0 ? ' lost' : ''}`);
+        const line = (w, name, call, tail) => {
+          const m = w ? markOf(w.c) : null, r = el('div', 'r'), q = el('span', `sq ${m || 'n'}`, m ? GLYPH[m] : '·');
+          q.setAttribute('aria-hidden', 'true');
+          r.append(q, el('span', '', `${name}: `), el('b', '', call), ...(tail ? [el('span', 'res', ` → ${tail}`)] : []));
+          return r;
+        };
+        li.append(el('div', 'h', `Snap ${x.k + 1} · ${liveClk(s.before)} ${qLabel(r0)} · ${ddText(r0)} ${onSpot(r0)}`),
+          line(x.you, 'You', x.you.label, ''),
+          line(x.him, who, x.him ? liveCallLabel(x.him.key) : s.what === 'sack' ? 'a pass play (sacked)' : 'a pass play', s.res));
+        list.append(li);
+      });
+      inn.append(list);
     }
-    if (d.end) box.append(el('p', 'real', `The real drive: ${d.end.text || d.end.how}. ${teamName(d.away)} ${d.end.score[0]}, ${teamName(d.home)} ${d.end.score[1]}.`));
     const line = !counted.length ? `I called a live NFL drive${liveWhen(d)}` : better > worse ? `I out-called ${coach}${liveWhen(d)}: ${better} of ${counted.length} snaps`
       : worse > better ? `${coach} out-called me${liveWhen(d)}: ${worse} of ${counted.length} snaps his` : `I matched ${coach}${liveWhen(d)}, call for call`;
     const marks = (k) => rs.map((x) => (x[k] ? SQ[markOf(x[k].c)] : '⬜')).join('');
     const text = `Two-Minute Drill · Live\n${line}\n${teamName(d.away)} at ${teamName(d.home)}${rs.length ? `\nYou ${marks('you')}\n${who} ${marks('him')}` : ''}\nCall it live: ${SITE}/#live`;
-    const pre = el('div', 'grid-share', text), share = el('button', 'btn', 'Share');
+    const pre = el('div', 'grid-share', text), share = el('button', 'btn sharebtn', 'Share');
     share.type = 'button';
     share.addEventListener('click', () => shareText(text, pre, 'live'));
-    box.append(pre, share);
+    inn.append(pre);
+    box.append(share);
     if (rs.length) {
       const img = el('button', 'btn ghostbtn', 'Share as a picture');
       img.type = 'button';
       img.addEventListener('click', () => liveImage({ d, rs, better, worse, n: counted.length, coach, who, line }));
       box.append(img);
     }
+    box.append(more);
     if (d.status !== 'open' && isPro()) {
       const again = el('button', 'btn ghostbtn', 'Replay it from the first snap');
       again.type = 'button';
       again.addEventListener('click', () => { save(liveKey(d.id), { spots: [], id: d.id, k: 0, calls: {}, res: {}, done: false, replay: true, at: Date.now() }); location.reload(); });
       box.append(again);
     }
-    const more = el('a', 'btn ghostbtn', 'Live drills');
-    more.href = '#live';
-    box.append(more, homeBtn());
+    const all = el('a', 'btn ghostbtn', 'Live drills');
+    all.href = '#live';
+    box.append(all, homeBtn());
     liveOthers(box);
     box.append(disclaimer());
   }
@@ -13096,11 +13141,11 @@
     x.textAlign = 'center'; x.fillStyle = '#fff';
     x.font = `900 64px ${DISP}`; x.fillText('TWO-MINUTE DRILL', W / 2, 130);
     x.font = `700 34px ${BODY}`; x.fillStyle = '#ffb547'; x.fillText(`LIVE · ${teamName(o.d.away)} AT ${teamName(o.d.home)}`.toUpperCase(), W / 2, 185, W - 80);
-    x.fillStyle = '#fff'; x.font = `900 280px ${DISP}`; x.fillText(`${o.better}/${o.n}`, W / 2, 460);
-    x.font = `600 38px ${BODY}`; x.fillText(`snaps called better than ${o.coach}`, W / 2, 530, W - 80);
+    x.fillStyle = '#fff'; x.font = `900 280px ${DISP}`; x.fillText(`${o.better}/${o.n}`, W / 2, 450);       // (the slash runs below the line: the words under it clear it)
+    x.font = `600 38px ${BODY}`; x.fillText(`snaps called better than ${o.coach}`, W / 2, 580, W - 80);
     x.font = `900 66px ${DISP}`; x.fillStyle = o.better > o.worse ? MK.g : o.worse > o.better ? MK.r : '#fff';
-    x.fillText((o.better > o.worse ? `I out-called ${o.who}` : o.worse > o.better ? `${o.who} out-called me` : `Even with ${o.who}`).toUpperCase(), W / 2, 640, W - 80);
-    let y = 720;
+    x.fillText((o.better > o.worse ? `I out-called ${o.who}` : o.worse > o.better ? `${o.who} out-called me` : `Even with ${o.who}`).toUpperCase(), W / 2, 690, W - 80);
+    let y = 770;
     [['YOU', 'you'], [o.who.toUpperCase(), 'him']].forEach(([lab, k]) => {
       const n = Math.max(1, o.rs.length), GAP = 12, SQ = Math.min(64, Math.floor((W - 380 - (n - 1) * GAP) / n)), w = n * SQ + (n - 1) * GAP, x0 = (W - w) / 2 + 80;
       x.font = `800 40px ${DISP}`; x.textAlign = 'right'; x.fillStyle = '#fff'; x.fillText(lab, x0 - 24, y + SQ * 0.7);
