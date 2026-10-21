@@ -1048,6 +1048,12 @@
     _sampleLook(cdf, pool, u, looks, s, ri, who, need, pers, noPre) {
       return this._pickT(this._lookT(cdf, pool, looks, s, ri, who, need, pers, noPre), u);
     }
+    // the coverage a motion showed (this._cov, from act.cov while a play is drawn: 1 man, 2 zone): a play charted in
+    // it (NGS: the cover byte's high bits), or one nothing was charted on (a flag; most sacks, scrambles)
+    _covOk(r, cv) {
+      const N = this.e.pb.ngs, m = N && N.cover ? N.cover[r] >> 4 : 0;
+      return !m || m === cv;
+    }
     // a foul before the snap, or another flag nothing was charted for (no look: what a pick filters on says nothing
     // about it); and a pool's such plays, by its weights, with their share of the pool (null: none)
     _isPreSnap(r) { const P = this.e.pb; return (P.flags[r] & 1) !== 0 && P.lookB[r] === 255; }
@@ -1109,7 +1115,8 @@
     }
     // (noPre: without the fouls before the snap, drawn on their own: samplePlaybook)
     _lookT(cdf, pool, looks, s, ri, who, need, pers, noPre) {
-      const key = `${pool}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${pers || 0}|${need ? 1 : 0}${noPre ? '|x' : ''}`;
+      const cv = this._cov || 0;
+      const key = `${pool}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${pers || 0}|${need ? 1 : 0}${noPre ? '|x' : ''}${cv ? `|c${cv}` : ''}`;
       this._pick = this._pick || new WeakMap();
       let byKey = this._pick.get(cdf);
       if (!byKey) { byKey = new Map(); this._pick.set(cdf, byKey); }
@@ -1125,6 +1132,7 @@
           if (ri && !this._rOk(r, ri)) continue;
           if (who && (P.carry[r] & 7) !== who) continue;
           if (pers && !pfOk(P, r, pers, false)) continue;
+          if (cv && !this._covOk(r, cv)) continue;
           let w = cdf[i] - (i > lo ? cdf[i - 1] : pool);
           if (k) { const e = P.epa[r]; if (Number.isFinite(e)) w *= Math.exp(k * clip(e, -MATCH_EPA_CAP, MATCH_EPA_CAP)); }
           tot += w; sq += w * w; items.push(r); cum.push(tot);
@@ -1467,7 +1475,8 @@
     }
     _setT(set, looks, s, ri, who, c, oob) {
       const om = c >= 0 ? oobMode(oob) : 0, P0 = this.e.pb;
-      const key = `${set.id}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${om ? `${P0.oobKey[c]}:${om}` : ''}`;
+      const cv = this._cov || 0;
+      const key = `${set.id}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${om ? `${P0.oobKey[c]}:${om}` : ''}${cv ? `|c${cv}` : ''}`;
       this._setPick = this._setPick || new Map();
       let T = this._setPick.get(key);
       if (T === undefined) {
@@ -1476,6 +1485,7 @@
           if (looks) { const b = P.lookB[r]; if (!(b < 8 && (looks >> b) & 1)) continue; }
           if (ri && !this._rOk(r, ri)) continue;
           if (who && (P.carry[r] & 7) !== who) continue;
+          if (cv && !this._covOk(r, cv)) continue;
           rows.push(r);
         }
         let k = 0;
@@ -1855,6 +1865,8 @@
           callIdx = this.e.pb.callIndex[act.call];
           const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl), who = act.route ? (WHO_CODE[act.who] || 0) : undefined, route = routeOfAct(act);
           fkP = fk;
+          // a motion's read (act.cov, game.js motion): the pass is a real play run against that coverage
+          this._cov = kind === PASS && (act.cov === 'man' || act.cov === 'zone') ? (act.cov === 'man' ? 1 : 2) : 0;
           if (dcValid(act.dc)) {
             const m = dcEffect(this.e.pb.dcEff, act.call, act.dc, act.pers, act.seen);
             match = m.s + repeatS(act) + schemeS(act, act.call, dcDef(act.dc)); why = m.why.slice(0, 3);
@@ -1885,6 +1897,7 @@
           match = this.matchOf(callIdx, act.def);
           if (callIdx >= 0) pbRow = this.samplePlaybook(o, callIdx, fk, u[2], half === 2 && tHalf <= 300 && margin > 0 ? -1 : 0, DEF_LOOKS[act.def], match);
         }
+        this._cov = 0;
         // a foul during the play (not before the snap): the play under it, as it would have gone (a real play of the
         // same call here with no flag), for the offended team to take instead (_scrimmage: accept or decline)
         let alt = -1;

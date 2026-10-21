@@ -105,7 +105,11 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   counter, duo, trap; game.js SCHEMES, lineplay draws it) and a small matchup against the defense's call (engine.js
   SCHEME_M, football logic: change both). A foul during the play (not before the snap) can be declined: the engine
   draws the play under it (_livePlay) and the offended team takes the better one, or your pick (act.penAs, game.js
-  penaltyAsk: the same seed stepped again). Versus sends none of these (cleanAction).
+  penaltyAsk: the same seed stepped again). Pre-snap motion (game.js readMotion/setMotion: a receiver, tight end or
+  back swiped sideways behind the line): the coverage is decided then (the snap's draw at MAN_SHARE, the man share real
+  defenses play against the look shown), shown on the field (in man his man goes with him; in zone the linebackers and
+  safeties slide), and a pass is a real play charted in it (act.cov, engine.js _covOk; game_smoke.js checks). Versus
+  sends none of these (cleanAction).
 - Pro data (src/nflclock/pro.py build: pro_drives.json, pro_runs.json -> web/pro/drives.json, runs.json, d*.json, r*.json;
   generated, never committed; the site workflow builds it and deploys it to the worker's assets). Each spot's teams come
   from history.History.teams with drive=True: the lineup of the real drive from the spot on, everyone who touched the

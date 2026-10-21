@@ -1156,7 +1156,7 @@
   const camY = (sc) => { const { lo, hi } = sc.cam, k = (sc.H - 6) / (hi - lo); return (L) => sc.H - 3 - (L - lo) * k; };
 
   // the field and the 22 for state r (side: the strong side of this snap); place() draws them for the camera
-  function makeScene(r, side, look = r.pos === G.me ? G.look : null) {
+  function makeScene(r, side, look = r.pos === G.me ? G.look : null, mo) {
     const svg = $('field'), H = fieldHeight();
     svg.setAttribute('viewBox', `0 0 360 ${H}`);
     svg.textContent = '';
@@ -1264,12 +1264,13 @@
         g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); if (!passTap(a)) open(); } });
         sc.layer.append(g);
         const a = { g, p: o.p, label: o.label, team, teamI, off, x0: sx(o.x), L0: L + (off ? -dir : dir) * o.d, side: off ? dir : -dir };
-        Object.assign(a, { x: a.x0, L: a.L0, w: 1 });
+        Object.assign(a, { x: a.x0, L: a.L0, w: 1, xf: a.x0 });
         sc.actors.push(a);
       };
       f.def.forEach((o) => add(o, 1 - offI, false));
       f.off.forEach((o) => add(o, offI, true));
       sc.named = true;
+      if (mode === 'snap') applyMotion(sc, mo === undefined ? curMotion(r) : mo);
     }
     if (mode === 'kick') kickoffUnits(sc, r, L, dir);
     const ball = S('g', {}), inner = S('g', { class: 'ballmove' }), lift = S('g', {});
@@ -1281,6 +1282,8 @@
     sc.ball = { g: ball, inner, lift, shadow, x: sc.bx, L, z: 0, up: 0, show: true };
     sc.callLayer = put(S('g', {}));
     if (mode === 'kick') showCall(sc, { text: r.free_kick ? 'Free kick' : 'Kickoff', kind: 'info', slot: 0, x: 180, L: L + dir * 7 });
+    // (a motion's read, over the man in motion until the snap)
+    if (sc.mo) showCall(sc, { text: sc.mo.cov === 'man' ? `Man: ${sc.mo.d && sc.mo.d.p ? shortName(sc.mo.d.p.name) : 'he'} follows` : 'Zone: nobody follows', kind: 'info', slot: 0, follow: sc.mo.a });
     place(sc);
     if (sc.named) nameTags(sc);
     return sc;
@@ -1330,6 +1333,79 @@
     add(1 - kt, 222, goal - dir * 9, 'KR');
   }
 
+  // Pre-snap motion you call: swipe a receiver, tight end or back sideways behind the line (readMotion) and he goes in
+  // motion to that spot; the play runs from there. The defense shows its hand: in man, the man on him goes with him
+  // across the formation; in zone, nobody follows and the linebackers and safeties slide a step or two over. The
+  // coverage is decided right then (the snap's own draw, at the man share real defenses play against the look shown:
+  // MAN_SHARE, NGS charting) and the snap is a real play run in it (act.cov: engine.js _covOk), so the read is real
+  const MAN_SHARE = [0.31, 0.54, 0.32, 0.55];     // light box, light + blitz, loaded, loaded + blitz (charted passes)
+  const MOTION_MIN = 2.5;                          // yards across it takes to be a motion
+  const rootKey = (r) => `${r.t}|${r.yl}|${r.down}|${r.pos}|${r.score}`;
+  const actorKey = (a) => `${a.label}:${Math.round(a.xf ?? a.x0)}`;
+  const curMotion = (r) => (G && G.mo && !VS && G.mo.rk === rootKey(r) ? G.mo : null);
+  function motionMoves(sc, mo) {
+    const a = mo && sc.actors.find((x) => x.off && actorKey(x) === mo.key);
+    if (!a) return [];
+    const dx = mo.x - a.xf, out = [[a, mo.x]];
+    if (mo.cov === 'man') {
+      const d = sc.actors.find((x) => !x.off && actorKey(x) === mo.dk);
+      if (d) out.push([d, clampX(d.xf + dx)]);
+    } else {
+      const sl = clip(dx * 0.3, -2 * XYD, 2 * XYD);
+      sc.actors.filter((x) => !x.off && (x.label === 'S' || x.label === 'LB')).forEach((d) => out.push([d, clampX(d.xf + sl)]));
+    }
+    return out;
+  }
+  function applyMotion(sc, mo) {
+    const mv = motionMoves(sc, mo);
+    if (!mv.length) return;
+    mv.forEach(([a, x]) => { a.x0 = a.x = x; });
+    // (the man in motion: a yard off the line, as the rules have him, clear of his own men)
+    const a = mv[0][0];
+    if (Math.abs(a.L0 - sc.losL) < 1.6) a.L0 = a.L = sc.losL - sc.dir * 1.6;
+    sc.mo = { a, d: mo.cov === 'man' && mv[1] ? mv[1][0] : null, cov: mo.cov };
+  }
+  // a line from a receiver, tight end or back that stays behind the line and goes across: the spot he motions to
+  // ([across] yards), or null (a route, a run, a tap)
+  function readMotion(sc, a, field) {
+    if (!['WR', 'TE', 'RB', 'FB'].includes(a.label)) return null;
+    const { pts, run } = lineOf(sc, a, field);
+    if (run < MOTION_MIN) return null;
+    const p0 = pts[0], end = pts[pts.length - 1], across = Math.abs(end[0] - p0[0]);
+    if (Math.max(...pts.map((p) => p[1])) > Math.max(0.4, p0[1] + 0.6)) return null;      // (past the line: a route or a run)
+    if (Math.max(...pts.map((p) => Math.abs(p[1] - p0[1]))) > 2.2 || across < MOTION_MIN || across < run * 0.75) return null;
+    return { x: end[0] };
+  }
+  function setMotion(a, xYd) {
+    const sc = scene, r = G.root;
+    let x = clampX(SX0 + xYd * XYD);
+    // (never on top of another man of his: stopped a step short, the side he came from)
+    const back = Math.sign(a.xf - x) || 1;
+    for (let k = 0; k < 8 && sc.actors.some((o) => o.off && o !== a && Math.abs(o.xf - x) < 1.4 * XYD && Math.abs(o.L0 - sc.losL) < 2.4); k++) x = clampX(x + back * 0.7 * XYD);
+    if (Math.abs(x - a.xf) < MOTION_MIN * XYD * 0.8) return;
+    const pMan = G.look != null ? MAN_SHARE[G.look] : 0.35;
+    const cov = (hash('cov', seedKey(), G.si, G.seq) % 1000) / 1000 < pMan ? 'man' : 'zone';
+    // (in man, his man: the defensive back or linebacker nearest where he lined up)
+    const d = cov === 'man' ? sc.actors.filter((o) => !o.off && ['CB', 'S', 'LB'].includes(o.label))
+      .sort((p, q) => Math.hypot(p.xf - a.xf, (p.L0 - a.L0) * XYD) - Math.hypot(q.xf - a.xf, (q.L0 - a.L0) * XYD))[0] : null;
+    G.mo = { rk: rootKey(r), key: actorKey(a), x, cov, dk: d ? actorKey(d) : null };
+    track('motion', { mode: modeName(), cov, pos: a.label });
+    const who = a.p ? shortName(a.p.name) : a.label, dn = d && d.p ? shortName(d.p.name) : 'a defender';
+    const text = cov === 'man' ? `Man: ${dn} goes with him` : 'Zone: nobody follows';
+    // (he jogs over, the defense with him; then the field is drawn again with everyone there)
+    const moves = motionMoves(sc, G.mo).map(([m, x1]) => [m, m.x, x1]), T = reduced() ? 0 : 900;
+    let t0 = null;
+    const step = (now) => {
+      if (scene !== sc) return;
+      if (t0 === null) t0 = now;
+      const u = T ? EASE.io(clip((now - t0) / T, 0, 1)) : 1;
+      moves.forEach(([m, xa, xb]) => { m.x = xa + (xb - xa) * u; });
+      place(sc);
+      if (u < 1) requestAnimationFrame(step);
+      else { drawField(); drawDock(); toast(`${who} in motion. ${text}.`, true); }
+    };
+    requestAnimationFrame(step);
+  }
   function place(sc) {
     const Y = camY(sc);
     sc.parts.forEach((f) => f(Y));
@@ -2114,6 +2190,11 @@
     const refuse = (kind, why, text) => { sk.bad = text || SKETCH_FAULT[why]; toast(`${sk.bad}. Try again.`); track('draw_refused', { kind, why }); sketchRedraw(); };
     const toPass = (fn) => { openPass(); fn(); };
     const at = [(a.x0 - SX0) / XYD, a.L0];
+    // (sideways behind the line: a man in motion, whatever the call: setMotion)
+    if (['pass', 'play', 'run', 'rpo'].includes(ctx) && a.off && !VS) {
+      const mv = readMotion(sc, a, field);
+      if (mv) { setMotion(a, mv.x); return; }
+    }
     if (ctx === 'pass' || ctx === 'play') {
       // (the first call: a back or the quarterback through the line is a run, a receiver back across it the end-around;
       // a receiver, a back's route that never gets there, or the quarterback's drop, a pass)
@@ -5113,7 +5194,7 @@
     const pre = k0 < 0 ? res.log : res.log.slice(0, k0), ro = pre.find((x) => x.ev === 'runoff');
     const tos = pre.filter((x) => x.ev === 'timeout'), snapT = ro ? ro.t : tos.length ? tos[tos.length - 1].t : before.t;
     const clk = { t0: before.t, snap: snapT, end: Math.min(res.root.t, snapT) };
-    P.motion = two ? null : motionOf(sc, e, before, before.t - snapT);
+    P.motion = two || curMotion(before) ? null : motionOf(sc, e, before, before.t - snapT);
     await runPlan(sc, P, PLAY_SPEED * (playSpeed() || 1), clk);
     fadeNext = true;
     lastBall = null;
@@ -6906,7 +6987,8 @@
     // the pistol; an empty set and the receivers' look are the lineup drawn only)
     const b = G.form && FORM_ENGINE[G.form.qb] && G.root.pos === G.me ? { ...b0, form: G.form.qb } : b0;
     const rp = repOf(b), c0 = rp ? { ...b, rep: rp } : b;
-    const c = schemeOn() && G.root.pos === G.me && c0.play === 'run' && /^rb_/.test(c0.call || '') ? { ...c0, scheme: G.scheme } : c0;
+    const c1 = schemeOn() && G.root.pos === G.me && c0.play === 'run' && /^rb_/.test(c0.call || '') ? { ...c0, scheme: G.scheme } : c0;
+    const mo = G.root.pos === G.me ? curMotion(G.root) : null, c = mo && c1.play === 'pass' ? { ...c1, cov: mo.cov } : c1;
     return G.root.clock_running && ui && ui.tempo ? { ...c, tempo: engineTempo(ui.tempo, G.root) } : c;
   };
   function callAction(id, oob) {

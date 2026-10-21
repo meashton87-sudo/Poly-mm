@@ -191,6 +191,23 @@ for (let k = 0; k < 100; k++) {
   const sk0 = dropOnly(false), sk1 = dropOnly(true);
   assert.ok(sk1 > sk0 * 0.75 && sk1 < sk0 * 1.25, `sacks with a receiver picked: ${sk1.toFixed(3)} against ${sk0.toFixed(3)}`);
   console.log(`sacks: ${(100 * sk0).toFixed(1)}% of the calls' real plays, ${(100 * sk1).toFixed(1)}% with a receiver and route picked`);
+  // a motion's read (game.js setMotion, act.cov): the pass is a real play run in the coverage the defense showed
+  {
+    const N = P.ngs, inCov = (cv) => {
+      let ok = 0, n = 0;
+      for (let fk = 0; fk < P.nFine; fk += 5) for (let k = 0; k < 40; k++) {
+        S._cov = cv;
+        const r = S.samplePlaybook(0, P.callIndex.quick_strong, fk, (k + 0.5) / 40, false, 0, 0, 'slant', 3);
+        S._cov = 0;
+        const m = r >= 0 ? N.cover[r] >> 4 : 0;
+        if (m) { n++; ok += m === cv ? 1 : 0; }
+      }
+      return ok / n;
+    };
+    const cm = inCov(1), cz = inCov(2);
+    assert.ok(cm > 0.9 && cz > 0.9, `motion's read: man ${cm.toFixed(2)}, zone ${cz.toFixed(2)}`);
+    console.log(`a motion's read: ${(100 * cm).toFixed(0)}% of passes after a man read run in man, ${(100 * cz).toFixed(0)}% after a zone read in zone`);
+  }
   console.log(`the hitch called again and again: ${hs.map((x) => x.toFixed(2)).join(' / ')} EPA (first or second time, third, fourth, fifth)`);
 }
 // personnel: a call with 12 (or 21, 13) personnel draws only real plays run with it, where there are enough (PB_LOOK_MIN
