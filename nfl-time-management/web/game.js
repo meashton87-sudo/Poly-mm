@@ -9476,6 +9476,28 @@
     setTimeout(() => ezq((z) => { if (!ph.isConnected) return; if (again) z.destroyPlaceholders(id); z.showAds(id); }), 0);
     return box;
   }
+  // An ad bar pinned to the bottom of the screen (an anchor ad, any network's: it comes outside the game, on the body)
+  // never covers the calls: its height is measured and the playing screen ends above it (--adb, game.html). Players
+  // saw the anchor over the play buttons. Checked every second and a half, and on a resize
+  const AD_FLOOR_MAX = 200;
+  function adFloor() {
+    let h = 0;
+    if (!noAds()) {
+      const vh = innerHeight, vw = innerWidth;
+      for (const el of document.body.children) {
+        if (el.id === 'play' || el.closest('#app, .modal, .deep, .toast, #modal')) continue;
+        const cs = getComputedStyle(el);
+        if (cs.position !== 'fixed' || cs.display === 'none' || cs.visibility === 'hidden') continue;
+        const r = el.getBoundingClientRect();
+        if (r.height < 20 || r.height > AD_FLOOR_MAX || r.width < vw * 0.5 || Math.abs(r.bottom - vh) > 3) continue;
+        h = Math.max(h, Math.ceil(r.height));
+      }
+    }
+    const v = `${h}px`;
+    if (document.documentElement.style.getPropertyValue('--adb') !== v) document.documentElement.style.setProperty('--adb', v);
+  }
+  setInterval(adFloor, 1500);
+  addEventListener('resize', adFloor);
   function adBox(kind) {
     if (noAds()) return null;
     if (EZ && EZ_KINDS.includes(kind)) ezBreak();
