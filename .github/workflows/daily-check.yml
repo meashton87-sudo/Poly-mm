@@ -14,7 +14,7 @@ name: Daily bot check
 # the board's own, from the page and BOARD_API, is cut off and reported), a purchase, a sign-in or an email.
 on:
   schedule:
-    - cron: "0 10 * * *"
+    - cron: "23 10 * * *"
   workflow_dispatch:
     inputs:
       minutes:

@@ -1646,6 +1646,9 @@ async def qb_swap(browser, base: str, shots: str = "") -> list[str]:
                 out.append("Who plays: the first snap never came up")
                 return out
             before = await page.evaluate(QB_NOW)
+            # (the moment after a play takes no tap on the field's buttons: game.js AFTER_PLAY_MS; the kickoff's or
+            # their drive's last play may just have ended)
+            await page.wait_for_timeout(700)
             await page.click("#persBtn", timeout=3000)
             await page.wait_for_selector("#mBody .pslot select", timeout=5000)
             rows = await page.evaluate(PERS_ROWS)
@@ -1701,6 +1704,7 @@ async def qb_swap(browser, base: str, shots: str = "") -> list[str]:
                     break
             else:
                 return out + errs        # (the drive moved on to their ball: the swap back is checked elsewhere)
+            await page.wait_for_timeout(700)         # (AFTER_PLAY_MS: the play just ended)
             await page.click("#persBtn", timeout=3000)
             await page.wait_for_selector("#mBody .pslot select", timeout=5000)
             rows = await page.evaluate(PERS_ROWS)

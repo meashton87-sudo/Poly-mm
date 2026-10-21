@@ -3659,7 +3659,7 @@
       const graded = !thrownAway && kind !== 'hail' && e.evt !== 'throwaway';
       // how it falls incomplete (missOf: the real play's charting), and the coverage to fit: a ball broken up or
       // contested (FTN) had a man right there, one nobody contested a man a step or two off
-      const miss = !intc && (e.incomplete || thrownAway) ? missOf() : null;
+      let miss = !intc && (e.incomplete || thrownAway) ? missOf() : null;
       const yacD = Math.max(0, (e.yards || 0) - air);
       const sepd = !graded ? null : intc ? { sep: 0.4 + R() * 0.5, bucket: 0 } : miss === 'pick' ? { sep: 0.4 + R() * 0.6, bucket: 0 }
         : miss === 'break' ? { sep: 0.4 + R() * 1, bucket: 1 } : miss && e.contested ? { sep: 0.5 + R() * 1.3, bucket: 1 }
@@ -4121,11 +4121,12 @@
         else runFrom(broke, tB, [to], { T: tCatch - tB + 0.02 });
       }
       // the miss: what he does as the ball comes and where it goes (missPlan, worked out on the world run on and back)
-      const M = miss ? missPlan() : null;
+      const legsT = tgt.b.legs.slice();
+      let M = miss ? missPlan() : null;
       if (M && M.late) broke = null;
       // an off-target ball from a clean pocket: a defender is in the window as it comes (the nearest one who can get
       // there, to a step or two off him as he goes for it), never a man left wide open with the ball sailing past him
-      const offT = M && ['over', 'under', 'behind', 'ahead', 'wide'].includes(M.kind);
+      let offT = M && ['over', 'under', 'behind', 'ahead', 'wide'].includes(M.kind);
       if (offT && (!e.pressure || pocketD() > 2.4)) {
         const t0 = Wd.t, sent = new Set();
         // (the nearest who can get there in time, from a moment before the throw; then sooner, another man)
@@ -4152,6 +4153,13 @@
         Wd.rewind(t1);
         if (clear > 2.8 && pocketD() > 2.4) rushHome(1.2, false);
         if (Wd.t > t1) Wd.rewind(t1);
+        // (a quick throw: nobody could get to either in time. A ball to a man that open, thrown from a clean pocket,
+        // got there: he dropped it. The test holds the drawing to it: never an off-target ball to a man 3 yards clear
+        // with nobody within 3 of the passer)
+        if (clear > 2.8 && pocketD() > 2.9) {
+          tgt.b.legs = legsT.slice();
+          miss = 'drop'; M = missPlan(); offT = false;
+        }
       }
       // (an off-target ball says why: under pressure, or into a tight window)
       // (as drawn: the rush on him, charted or closing as he throws; else the man on the receiver)
