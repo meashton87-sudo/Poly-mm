@@ -837,6 +837,9 @@ def friction_notes(parts: list[dict]) -> list[str]:
                 top = sorted({w: over.count(w) for w in over}.items(), key=lambda kv: -kv[1])[:2]
                 bits.append(f"{miss} taps taken by something over what was tapped, in {sum(1 for f in F if f['covered'])} episodes ("
                             + "; ".join(f"{w[:80]} {n}x" for w, n in top) + ")")
+            down = sum(f.get("sheet_down", 0) for f in F)
+            if down:              # (a phone: a bot's drag or tap on its grip between plays; it brings it back up as a player does)
+                bits.append(f"the calls' sheet found down at a call {down} times, in {sum(1 for f in F if f.get('sheet_down'))} episodes")
             if bits:
                 notes.append(line + "; ".join(bits))
         g = b.get("guard") or {}

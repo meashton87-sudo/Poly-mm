@@ -498,19 +498,60 @@ DRAW_FUZZ = """async ([kind, n, seed]) => {
   return out;
 }"""
 # the snap in reach: a call's go key (a pass's Snap, a drawn call's, Call it, the kicks) wholly on the screen, nothing over
-# it, with nobody having scrolled; on a tall phone every receiver's row too, clear of the Snap key
+# it, with nobody having scrolled; on a tall phone every receiver's row too, clear of the Snap key. The Snap key's first
+# line one line, the name in it whole (a long name wrapped it, the key growing at the foot of the screen). Said with it:
+# the calls' sheet down (a phone: dragged or tapped down, the keys under the screen's edge till it comes back up)
 REACH = """(sel) => {
   const es = [...document.querySelectorAll(sel)];
   if (!es.length) return [`${sel}: not on the screen`];
+  const down = document.querySelector('#sheet.down') ? " (the calls' sheet down)" : '';
+  const oneLine = (k) => {
+    const n = k.firstChild, rg = document.createRange();
+    if (!n) return 'no label';
+    rg.selectNodeContents(n);
+    const tops = new Set([...rg.getClientRects()].filter((q) => q.width > 0.5).map((q) => Math.round(q.top)));
+    if (tops.size > 1) return `its label on ${tops.size} lines`;
+    if (n.nodeType === 1 && n.scrollWidth > n.clientWidth + 0.5) return `its label cut short (${n.scrollWidth} px in ${n.clientWidth})`;
+    return k.scrollWidth > k.clientWidth + 0.5 ? 'its label wider than the key' : '';
+  };
   return es.map((e) => {
-    const r = e.getBoundingClientRect();
+    const r = e.getBoundingClientRect(), what = `${sel} (${e.innerText.replace(/\\s+/g, ' ').slice(0, 40)})`;
     if (!r.height || r.top < -0.5 || r.left < -0.5 || r.bottom > innerHeight + 0.5 || r.right > innerWidth + 0.5)
-      return `${sel} (${e.innerText.replace(/\\s+/g, ' ').slice(0, 40)}): out of view at ${Math.round(r.top)}-${Math.round(r.bottom)} of ${innerHeight}`;
+      return `${what}: out of view at ${Math.round(r.top)}-${Math.round(r.bottom)} of ${innerHeight}${down}`;
     const snap = document.getElementById('snapGo'), s = snap && snap !== e && !snap.contains(e) && snap.getBoundingClientRect();
-    if (s && r.bottom > s.top - 6 + 0.5) return `${sel} (${e.innerText.replace(/\\s+/g, ' ').slice(0, 40)}): under the Snap key`;
+    if (s && r.bottom > s.top - 6 + 0.5) return `${what}: under the Snap key`;
+    const line = e.id === 'snapGo' ? oneLine(e) : '';
+    if (line) return `${what}: ${line}`;
     const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
     return h && e.contains(h) ? '' : `${sel}: covered by ${h ? h.outerHTML.slice(0, 80) : 'nothing'}`;
   }).filter(Boolean);
+}"""
+# ... and from the first frame it is up (its pop): watched every frame for a moment from just before the tap that brings
+# it, the furthest past the screen's edges it went (a key popping up from below at the foot of the screen started out
+# under its edge: the daily check, measuring it as it came, found it there)
+REACH_WATCH = """(sel) => {
+  const t0 = performance.now(), W = window.__reachWatch = { worst: 0, at: '' };
+  const f = () => {
+    document.querySelectorAll(sel).forEach((e) => {
+      const r = e.getBoundingClientRect(), o = Math.max(r.bottom - innerHeight, -r.top, r.right - innerWidth, -r.left);
+      if (r.height && o > W.worst) Object.assign(W, { worst: o, at: `${Math.round(r.top)}-${Math.round(r.bottom)} of ${innerHeight}, ${Math.round(performance.now() - t0)} ms in` });
+    });
+    if (performance.now() - t0 < 1500 && window.__reachWatch === W) requestAnimationFrame(f);
+  };
+  requestAnimationFrame(f);
+}"""
+# a receiver given a long name (the longest the rosters have, as the Snap key shortens them: "J. Michael Sturdivant",
+# "M. Valdes-Scantling") and the longest-named route his position runs (game.js ROUTES); the pick odds on (the Snap
+# key's longest second line). He is picked after, by a tap on his row
+LONG_NAMES = ["J. Michael Sturdivant", "Marquez Valdes-Scantling", "Nick Westbrook-Ikhine", "Austin Seferian-Jenkins", "T.J. Houshmandzadeh"]
+LONG = """([i, name]) => {
+  const D = window.__draw, { G, ui, scene } = D.get(), E = D.eligibles(scene), a = E[i];
+  if (!a) return null;
+  if (a.p) a.p.name = name;
+  const rs = D.ROUTES && D.routeName && (D.ROUTES[a.label] || D.ROUTES.WR);      // (a build from before they were here: his route)
+  if (rs) ui.pass.routes[i] = rs.reduce((x, y) => (D.routeName(a.label, y).length > D.routeName(a.label, x).length ? y : x));
+  if (G.odds) Object.values(G.odds).forEach((o) => { if (o) o.picks = Math.max(o.picks || 0, 0.12); });
+  return { n: E.length, target: ui.pass.target };
 }"""
 # the defense's screens and the kicks, put up in place on a phone's first call (the test page is thrown away after)
 SHOW = """async (what) => {
@@ -695,7 +736,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
         first = False                     # (a scenario's file carries no first-call facts: the simulator answers)
     timing: dict = {}                # ms: the front door, the drive's page, its intro and first call, a reload's way back
     friction = {"taps_to_first_call": 0, "modals": [], "snap": 0, "snap_out": 0, "snap_why": [], "covered": 0, "covered_by": [],
-                "races": 0, "wait_s": 0.0, "wait_max_s": 0.0, "loading_s": 0.0, "loading_max_s": 0.0, "turned": 0, "timeouts": {}}
+                "races": 0, "wait_s": 0.0, "wait_max_s": 0.0, "loading_s": 0.0, "loading_max_s": 0.0, "turned": 0, "timeouts": {}, "sheet_down": 0}
     if mode not in ("survivor", "scenario"):
         # the bare address is the front door: Home, with today's drive on it
         await page.goto(f"{base}/{PAGE}")
@@ -725,6 +766,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     pick_gone = False                # ... and the pick screen gone since (it takes the side's own file first: a moment)
     first_call = first               # the first call shows on the spot's own facts (game.js firstInfo), not the simulator's
     asked = False                    # the bot opened the modal on screen itself (else it came up in the way)
+    welcomed = False                 # the first visit's welcome seen (a second one, storage on, is in the way)
     t_reload = None                  # when the bot reloaded mid-drive (to time the way back to a call)
     turned = False                   # (rapid, on a phone: held sideways)
 
@@ -777,14 +819,25 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 timing.setdefault("reload", []).append(round((time.time() - t_reload) * 1000))
                 t_reload = None
             try:
-                if st == "errbar":
+                if st in ("choose", "result", "end") and await page.locator("#sheet.down").count():
+                    # the calls' sheet down (a phone: a drag on its grip, or a tap there, put it down to see the whole
+                    # field): a player taps its bar to bring the calls back; the bot too (else it taps keys under the
+                    # screen's edge for good). Counted: the bot's own drags and taps put it there
+                    friction["sheet_down"] += 1
+                    act("bring the calls back up"); await page.click("#grip", timeout=3000)
+                elif st == "errbar":
                     problems.append("the page's error bar: " + await page.evaluate("() => document.getElementById('errBar').innerText.slice(0, 300)"))
                 elif st == "error":
                     problems.append(f"error shown to the player: {key[1][:300]!r}")
                 elif st in ("modal", "deep"):
-                    if not asked:                # (something came up over the game that the bot never asked for)
+                    # (something came up over the game that the bot never asked for. Not the first visit's welcome
+                    # (game.js openHelp, where the first drive's tour is not: a scenario, a Pro drive): a new player
+                    # gets it once, and every time with storage off, private browsing)
+                    welcome = st == "modal" and await page.evaluate("() => !!document.querySelector('#modal ol.quick')")
+                    if not asked and not (welcome and (not welcomed or quirk == "nostore")):
                         friction["modals"].append(await page.evaluate("() => document.getElementById('modal').innerText.replace(/\\s+/g, ' ').slice(0, 80)")
                                                   if st == "modal" else "deep")
+                    welcomed = welcomed or welcome
                     asked = False
                     await page.wait_for_timeout(rnd.choice([100, 400]))
                     act("close " + st); await page.click("#mClose" if st == "modal" else "#deepClose", timeout=3000)
@@ -812,9 +865,13 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         if await page.evaluate("() => !document.getElementById('modal').hidden"):
                             problems.append("Start over asked in the middle of a play"); continue
                     if rapid:                    # (impatient: taps all over the field while it plays)
-                        box = await page.locator("#field").bounding_box()
-                        for _ in range(rnd.randint(1, 3)):
-                            await page.mouse.click(box["x"] + rnd.random() * box["width"], box["y"] + rnd.random() * box["height"])
+                        # (where it shows: a finger never lands past the screen's edge, where the bot's taps found the
+                        # calls' sheet slid away for the play, its grip, and sent it down)
+                        box, v = await page.locator("#field").bounding_box(), page.viewport_size
+                        x0, y0 = max(box["x"], 0), max(box["y"], 0)
+                        x1, y1 = min(box["x"] + box["width"], v["width"]), min(box["y"] + box["height"], v["height"])
+                        for _ in range(rnd.randint(1, 3) if x1 > x0 and y1 > y0 else 0):
+                            await page.mouse.click(x0 + rnd.random() * (x1 - x0), y0 + rnd.random() * (y1 - y0))
                     elif rnd.random() < 0.6:
                         await page.click("#field", timeout=1500)
                 elif st == "result":
@@ -907,6 +964,9 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 elif st == "choose" and restart_ep and "restart" not in chaos_done and (await page.evaluate(rstate) or {}).get("calls", 0) >= 1:
                     # Start over, a call in: asked first (the leaderboard note), then a new try the page reloads into
                     chaos_done.add("restart"); act("START OVER")
+                    # (a deliberate tap, past the moment after a play when nothing on the field takes one: game.js
+                    # AFTER_PLAY_MS)
+                    await page.wait_for_timeout(600)
                     if mobile:
                         await page.click("#menuBtn", timeout=3000)
                         item = page.locator("#bmenu [data-restart]")
@@ -1129,7 +1189,9 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         friction["covered_by"].append(over.group(1))
                 else:
                     friction["races"] += 1
-            await page.wait_for_timeout(rnd.choice([0, 10, 20] if rapid else [30, 60, 120]))
+            # (rapid: no pause between taps; while the page thinks or loads there is nothing to tap, and it looks as
+            # often as any player. Looking every few ms there, two whole survivor games ran past the steps allowed)
+            await page.wait_for_timeout(rnd.choice([0, 10, 20] if rapid and st not in ("wait", "loading") else [30, 60, 120]))
         else:
             problems.append(f"never finished: {finished} of {target} games after {steps} steps")
         if not problems and finished < (1 if mode == "daily" else target):
@@ -1627,13 +1689,17 @@ async def scenario_lineup(browser, base: str, shots: str = "") -> list[str]:
     return out
 
 
-SIZES = ((390, 844, True), (375, 667, True), (1280, 900, False))
+# the phones: a tall one, the smallest in use, and the daily check's (its Pixel 7, 412x839, and iPhone 13, 390x664: the
+# screen under the browser's bars); a desktop
+SIZES = ((390, 844, True), (375, 667, True), (412, 839, True), (390, 664, True), (1280, 900, False))
 
 
 async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
-    """The snap needs no scrolling: on a phone (390x844, 375x667) and a desktop, a pass's Snap key, the run keys and a
+    """The snap needs no scrolling: on a phone (every size in SIZES) and a desktop, a pass's Snap key, the run keys and a
     drawn run's Run it, the defense's Call it (the full call and the three keys) and the kicks' keys are all on the screen
-    as each comes up. (daily_check.py: the phone it plays as, and a desktop)"""
+    as each comes up. On a phone the go keys from their first frame (REACH_WATCH: their pop), and the Snap key for every
+    receiver with the longest names the rosters have, and with drawing on, its first line one line with the name whole.
+    (daily_check.py: the phone it plays as, and a desktop)"""
     out: list[str] = []
     for w, h, mob in sizes:
         ctx = await browser.new_context(viewport={"width": w, "height": h}, is_mobile=mob, has_touch=mob)
@@ -1643,12 +1709,21 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
         page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
         at = f"{w}x{h}"
 
-        async def check(screen, sel):
-            await page.wait_for_timeout(900)          # (the keys' pop and the sheet's slide)
+        async def watch(sel):
+            if mob:
+                await page.evaluate(REACH_WATCH, sel)
+
+        async def check(screen, sel, wait=900):
+            await page.wait_for_timeout(wait)          # (the keys' pop and the sheet's slide)
             if await page.locator(".tipskip:visible").count():      # (the first drive's tour: its tips are not calls)
                 await page.click(".tipskip", timeout=3000)
                 await page.wait_for_timeout(300)
-            out.extend(f"{at} {screen}: {x}" for x in await page.evaluate(REACH, sel))
+            found = [f"{at} {screen}: {x}" for x in await page.evaluate(REACH, sel)]
+            seen = await page.evaluate("() => { const W = window.__reachWatch; window.__reachWatch = null; return W; }")
+            if seen and seen["worst"] > 0.5:
+                found.append(f"{at} {screen}: {sel} past the screen's edge as it came up, at {seen['at']}")
+            out.extend(found)
+            return found
 
         async def tap(label):
             big = page.locator("#dock .key.big:visible")
@@ -1670,10 +1745,28 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
             else:
                 out.append(f"{at}: the first call never came up")
                 continue
+            await watch("#snapGo")
             if await tap("PASS"):
                 await check("pass", "#snapGo")
                 if mob and h >= 800:
                     await check("pass", "#dock .rcv")
+                # every receiver with a long name, on the longest-named route he runs: picked (a tap on his row), the
+                # Snap key drawn again for him (another picked first when he already is)
+                rows = page.locator("#dock .rcv")
+                for i in range(6):
+                    got = await page.evaluate(LONG, [i, LONG_NAMES[i % len(LONG_NAMES)]])
+                    if not got:
+                        break
+                    if got["target"] == i:
+                        await rows.nth((i + 1) % got["n"]).click(timeout=3000)
+                    await watch("#snapGo")
+                    await rows.nth(i).click(timeout=3000)
+                    await check(f"pass, receiver {i + 1} (a long name)", "#snapGo", 600)
+                # drawing the routes: its own hint over the receivers
+                await watch("#snapGo")
+                await page.click("#drawBtn", timeout=3000)
+                await check("pass, drawing routes", "#snapGo", 600)
+                await page.click("#drawBtn", timeout=3000)
                 await page.click("#dock .ask .chip", timeout=3000)          # Back
                 await page.wait_for_timeout(400)
             if await tap("RUN"):
@@ -1684,6 +1777,7 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                     x, y = rb[0][:2]
                     ly, up, ppy = sk["los"][1], sk["up"], sk["ppy"]
                     pts = [(x + (k - 1.5) * 3 * ppy, ly), (x + (k - 1.5) * 4 * ppy, ly + up * 8 * ppy)]
+                    await watch("#drawGo")
                     await page.mouse.move(x, y); await page.mouse.down()
                     for nx, ny in pts:
                         for t in range(1, 7):
@@ -1697,10 +1791,222 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                 else:
                     out.append(f"{at}: no run drawn to check its key")
             for what in ("vdef", "defense", "kick", "fgdef", "puntdef", "pat"):
+                await watch("#dock .snapbar .key")
                 await page.evaluate(SHOW, what)
                 await check(what, "#dock .snapbar .key")
         except Exception as e:
             out.append(f"{at}: {e}")
+        finally:
+            out.extend(f"{at}: {x}" for x in errs)
+            await ctx.close()
+    return out
+
+
+# the play's taps (game.js AFTER_PLAY_MS, dotTap, sheetSetup, the scoreboard's tap): the play's start and end, where the
+# sheet's grip was as it started (a phone's sheet slides away from where it is then; a slow phone leaves it there a
+# while), what the first tap after that landed on, and how long after the play's end the last tap was made
+PLAY_TAPS = """() => {
+  const W = window.__playTaps = { start: false, grip: null, ended: false, endT: 0, hit: null, after: null };
+  const mo = new MutationObserver(() => {
+    const on = document.getElementById('field').classList.contains('playing');
+    if (on && !W.start) {
+      const g = document.getElementById('grip').getBoundingClientRect();
+      Object.assign(W, { start: true, grip: g.height ? [g.left + g.width / 2, g.top + g.height / 2] : null });
+    }
+    if (!on && W.start && !W.ended) { Object.assign(W, { ended: true, endT: performance.now() }); mo.disconnect(); }
+  });
+  mo.observe(document.getElementById('field'), { attributes: true, attributeFilter: ['class'] });
+  addEventListener('pointerdown', (ev) => { if (W.start && !W.hit) W.hit = ev.target.closest('#grip') ? 'the grip' : ev.target.tagName; }, true);
+  addEventListener('click', (ev) => { if (W.ended) W.after = ev.timeStamp - W.endT; }, true);
+}"""
+# a player's dot on the screen (one of theirs first; not one of your receivers, whose tap on a pass is his next route),
+# clear of everything over the field and of the other dots (a tap on it is a tap on him), above where the calls' sheet
+# comes back up on a phone
+CLEAR_DOT = """() => {
+  const why = [], rcv = /Wide receiver|Tight end|Running back/;
+  for (const g of [...document.querySelectorAll('#field g.dot.them'), ...[...document.querySelectorAll('#field g.dot.me')].filter((e) => !rcv.test(e.getAttribute('aria-label') || ''))]) {
+    const r = g.querySelector('circle.c').getBoundingClientRect(), x = (r.left + r.right) / 2, y = (r.top + r.bottom) / 2, h = document.elementFromPoint(x, y);
+    const d = h && h.closest('g.dot');      // (him, or him again in the field as drawn anew over it)
+    if (d && d.getAttribute('aria-label') === g.getAttribute('aria-label') && (y < innerHeight * 0.4 || !document.body.classList.contains('bcast'))) return { dot: [x, y], who: g.getAttribute('aria-label') };
+    why.push(`${Math.round(x)},${Math.round(y)} ${h ? (h.closest('g.dot') ? 'another dot' : h.id || h.tagName) : 'off the screen'}`);
+  }
+  return { dot: null, why: why.length ? why.slice(0, 4).join('; ') : 'none on the field' };
+}"""
+# the play's end, waited on: then at once where a player's dot and the scoreboard are
+AT_END = """async () => {
+  while (!window.__playTaps.ended) await new Promise((r) => requestAnimationFrame(r));
+  const b = document.getElementById('bar').getBoundingClientRect();
+  return { dot: (CLEAR_DOT_FN)(), bar: [b.left + b.width / 2, b.top + b.height / 2], t: performance.now() };
+}""".replace("CLEAR_DOT_FN", CLEAR_DOT)
+# the sheet's grip back on the screen after a play (a phone): where it is, and how long after the play's end
+GRIP_BACK = """async (t0) => {
+  for (;;) {
+    const r = document.getElementById('grip').getBoundingClientRect();
+    if (r.height && r.bottom <= innerHeight) return { at: [r.left + r.width / 2, r.top + r.height / 2], after: performance.now() - t0 };
+    if (performance.now() - t0 > 1500) return null;
+    await new Promise((res) => requestAnimationFrame(res));
+  }
+}"""
+OVER = """() => [!document.getElementById('modal').hidden && document.getElementById('modal').innerText.replace(/\\s+/g, ' ').slice(0, 60),
+  !document.getElementById('deep').hidden && 'the ratings', !!document.querySelector('#sheet.down') && "the calls' sheet down"].filter(Boolean)"""
+# the scoreboard's middle, and whether the field is under it there
+BAR_AT = """() => {
+  const b = document.getElementById('bar').getBoundingClientRect(), f = document.getElementById('field').getBoundingClientRect();
+  const x = b.left + b.width / 2, y = b.top + b.height / 2;
+  return { at: [x, y], over: y >= f.top && y <= f.bottom && x >= f.left && x <= f.right };
+}"""
+
+
+async def play_taps(browser, base: str) -> list[str]:
+    """Taps meant for the play take nothing else (players tap a play to its end, often twice): on a phone a tap on the
+    calls' sheet's grip as the play starts (a slow phone leaves the sheet in place a moment) does not send the sheet
+    down, the next call's keys with it; a tap on the scoreboard where it sits over the field during a play (a phone's,
+    a desktop page scrolled down) skips the play, and opens nothing over it; and in the moment after a play a tap on a
+    player's dot, the scoreboard or the sheet's grip opens nothing and sends nothing down (the double tap's second). A
+    moment later a tap on a dot opens his card, but a drag that ends on it does not; a tap on the scoreboard away from
+    the field opens the game's details, play or no play. (A phone, 390x664, and a desktop.)"""
+    out: list[str] = []
+    for w, h, mob in ((390, 664, True), (1280, 900, False)):
+        ctx = await browser.new_context(viewport={"width": w, "height": h}, is_mobile=mob, has_touch=mob)
+        # (a player back for more: no welcome, no first drive's tour with its tips over the field)
+        await ctx.add_init_script("""try { localStorage.setItem('tmd:v3:seen', 'true');
+          localStorage.setItem('tmd:v3:tour', JSON.stringify({ seen: [], shown: [], done: true })); } catch (e) {}""")
+        page = await ctx.new_page()
+        errs: list[str] = []
+        page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+        at = f"{w}x{h}"
+
+        async def to_call():
+            # (your next pass call; their ball after a turnover: the defense's first call, their plays skipped, till
+            # the ball is back; a game over: the next game)
+            for _ in range(600):
+                await page.wait_for_timeout(100)
+                if await page.locator(".tipskip:visible").count():
+                    await page.click(".tipskip", timeout=3000)
+                elif await page.locator("#intro .btn:visible").count():
+                    await page.click("#intro .btn", timeout=3000)
+                elif await page.locator("#modal:not([hidden]) #mClose").count():
+                    await page.click("#mClose", timeout=3000)
+                elif await page.locator("#dock .result .btn:visible").count():
+                    await page.click("#dock .result .btn", timeout=3000)
+                elif await page.locator("#dock .endcard .btn:visible").count():      # (a game over: the next one)
+                    await page.click("#dock .endcard .btn", timeout=3000)
+                elif await page.locator("#done:not([hidden])").count():                # (the run over: a new one)
+                    await page.get_by_role("button", name="New run").click(timeout=3000)
+                elif await page.locator("#dock .key.big:visible", has_text="Pass").count():
+                    return True
+                elif await page.locator("#field.playing").count():
+                    await page.click("#field", timeout=3000)
+                elif await page.locator("#dock .key.big:visible").count():
+                    await page.locator("#dock .key.big:visible").first.click(timeout=3000)
+            out.append(f"{at}: no call to make came up ({(await page.evaluate(STATE))}: "
+                       + repr((await page.evaluate("() => document.getElementById('dock').innerText"))[:120]) + ")")
+            return False
+
+        async def snap(slow=False):
+            await page.locator("#dock .key.big:visible", has_text="Pass").first.click(timeout=3000)
+            await page.wait_for_timeout(900)
+            await page.evaluate(PLAY_TAPS)
+            if slow:                     # (a slow phone: the sheet in place a moment as the play starts)
+                await page.evaluate("() => { document.getElementById('sheet').style.transition = 'transform 3s ease'; }")
+            await page.click("#snapGo", timeout=3000)
+            await page.wait_for_function("() => window.__playTaps.start", timeout=30000)
+
+        async def ended(wait=600):
+            await page.wait_for_timeout(wait)
+            return await page.evaluate("() => window.__playTaps.ended")
+        try:
+            await page.goto(f"{base}/{PAGE}#survivor")
+            if not await to_call():
+                continue
+            await snap(slow=mob)
+            if mob:
+                # a tap on the grip, where it was as the play started
+                grip = await page.evaluate("() => window.__playTaps.grip")
+                if grip:
+                    await page.mouse.click(*grip)
+                await page.evaluate("() => { document.getElementById('sheet').style.transition = ''; }")
+                hit = await page.evaluate("() => window.__playTaps.hit")
+                if hit != "the grip":
+                    out.append(f"{at}: the tap on the sheet's grip as the play started landed on {hit} (the test's slow sheet was not there)")
+                await page.wait_for_timeout(300)          # (the sheet away: the next tap is on the field)
+            # tapped to its end, and at once again on what is there then: a dot, the scoreboard, the grip coming back
+            box = await page.locator("#field").bounding_box()
+            await page.mouse.click(box["x"] + box["width"] / 2, (max(box["y"], 0) + min(box["y"] + box["height"], h)) / 2)
+            end = await page.evaluate(AT_END)
+            if mob and await page.locator("#sheet.down").count():
+                out.append(f"{at}: a tap on the calls' sheet's grip as the play started sent it down (the next call's keys under the screen's edge)")
+            taps = [("a dot", (end["dot"] or {}).get("dot")), ("the scoreboard", end["bar"])] + ([("the sheet's grip", None)] if mob else [])
+            for what, xy in taps:
+                if what == "the sheet's grip":
+                    back = await page.evaluate(GRIP_BACK, end["t"])
+                    if not back or back["after"] > 400:       # (too late to tell: the moment after a play has gone)
+                        continue
+                    xy = back["at"]
+                if xy is None:
+                    continue
+                await page.mouse.click(*xy)
+                over, after = await page.evaluate(OVER), await page.evaluate("() => window.__playTaps.after")
+                if over and after is not None and after < 450:
+                    out.append(f"{at}: a tap on {what} {round(after)} ms after the play ended (a double tap's second) brought up {over}")
+                if over or after is None or after >= 450:       # (a busy page: the moment after the play had gone)
+                    break
+            # at the next call (the players set, apart): his card from a tap on his dot, not from a drag that ends on it
+            await page.wait_for_timeout(800)
+            if await page.evaluate(OVER):
+                await page.keyboard.press("Escape")
+                await page.wait_for_timeout(300)
+            if not await to_call():
+                continue
+            await page.wait_for_timeout(600)          # (the field framed again for the sheet as it now is)
+            dot = await page.evaluate(CLEAR_DOT)
+            if dot["dot"]:
+                x, y = dot["dot"]
+                await page.mouse.move(x, y); await page.mouse.down()
+                for t in [*range(1, 7), *range(5, -1, -1)]:
+                    await page.mouse.move(x + t * 6, y)
+                await page.mouse.up()
+                await page.wait_for_timeout(200)
+                if await page.evaluate("() => !document.getElementById('modal').hidden"):
+                    out.append(f"{at}: a drag on {dot['who']}'s dot, back to it, opened his card")
+                    await page.keyboard.press("Escape")
+                await page.wait_for_timeout(700)          # (a drawing's end keeps the dot under it shut a moment)
+                await page.mouse.click(x, y)
+                await page.wait_for_timeout(200)
+                if await page.evaluate("() => document.getElementById('modal').hidden"):
+                    out.append(f"{at}: a tap on {dot['who']}'s dot did not open his card")
+                else:
+                    await page.keyboard.press("Escape")
+                    await page.wait_for_timeout(300)
+            else:
+                out.append(f"{at}: no player's dot clear to tap at a call ({dot['why']})")
+            # the scoreboard during a play: over the field it skips the play (a desktop page scrolled down, the
+            # scoreboard stuck over the field's top); away from it (a desktop page at its top) it opens the details
+            for scrolled in ([False] if mob else [False, True]):
+                if not await to_call():
+                    break
+                if not mob:
+                    await page.evaluate("""(down) => { scrollTo(0, 0); if (!down) return;
+                      const b = document.getElementById('bar').getBoundingClientRect(), f = document.getElementById('field').getBoundingClientRect();
+                      scrollBy(0, f.top - b.bottom + 60); }""", scrolled)
+                    await page.wait_for_timeout(200)
+                await snap()
+                bar = await page.evaluate(BAR_AT)
+                await page.mouse.click(*bar["at"])
+                await page.wait_for_timeout(150)
+                over = await page.evaluate(OVER)
+                if bar["over"]:
+                    if over:
+                        out.append(f"{at}: a tap on the scoreboard over the field during a play brought up {over}")
+                    elif not await ended():
+                        out.append(f"{at}: a tap on the scoreboard over the field during a play did not skip it")
+                elif not over:
+                    out.append(f"{at}: a tap on the scoreboard away from the field during a play did not open the game's details")
+                if over:
+                    await page.keyboard.press("Escape")
+                    await page.wait_for_timeout(300)
+        except Exception as e:
+            out.append(f"{at}: {str(e).splitlines()[0][:200]}")
         finally:
             out.extend(f"{at}: {x}" for x in errs)
             await ctx.close()
@@ -1960,8 +2266,13 @@ async def main(a) -> int:
         kw = {"executable_path": a.chromium} if a.chromium else {}
         browser = await p.chromium.launch(**kw)
         reach = await snap_reach(browser, base)
-        print("snap in reach (pass, run, defense, kicks at 390x844, 375x667, 1280x900): " + ("ok" if not reach else "FAIL")
+        print("snap in reach (pass, every receiver with a long name, drawing on; run, defense, kicks at " + ", ".join(f"{w}x{h}" for w, h, _ in SIZES)
+              + "; the go keys from their first frame on a phone): " + ("ok" if not reach else "FAIL")
               + "".join(f"\n      {x}" for x in reach), flush=True)
+        taps = await play_taps(browser, base)
+        print("taps meant for the play (the sheet as it starts, the scoreboard during it, a double tap's second, a drag on a dot): "
+              + ("ok" if not taps else "FAIL") + "".join(f"\n      {x}" for x in taps), flush=True)
+        reach += taps
         qb = await qb_swap(browser, base, a.shots)
         print("Who plays, the quarterback (the sheet's first row, a backup put in plays and is graded on his simulator, back to the real lineup): "
               + ("ok" if not qb else "FAIL") + "".join(f"\n      {x}" for x in qb), flush=True)

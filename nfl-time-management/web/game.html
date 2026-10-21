@@ -600,7 +600,17 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
    rest scrolling above it, never under the fold (game.js drawPassDock, sketchPanel) */
 .dock > .snapbar { order: 1; position: sticky; bottom: env(safe-area-inset-bottom, 0px); z-index: 2; background: var(--paper); padding-block: 6px; }
 .dock > .snapbar .key.big { min-height: 56px; }
+/* it comes up where it stays (the other keys' pop rises from below: at the foot of the screen that started it past the
+   bottom edge, out of reach, for its first moments) */
+.dock > .snapbar .pop { animation-name: popfoot; animation-timing-function: ease-out; }
+@keyframes popfoot { 0% { opacity: 0; transform: scale(.94); } 100% { opacity: 1; transform: none; } }
 .key.big.snap { font-size: clamp(19px, 5.4vw, 24px); }
+/* its first line always one line, the name never cut (game.js snapFit: a step smaller, then the name alone, then
+   smaller still); the route and the odds under it are cut at their end */
+.key.big.snap .go { display: block; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding-inline: 4px; }
+.key.big.snap .go b { font: inherit; }
+.key.big.snap.tight .go { font-size: .84em; }
+.key.big.snap.bare .go .sn { display: none; }
 .key.big.snap small { color: var(--paper); opacity: .78; font-size: 11.5px; letter-spacing: .02em; line-height: 1.2; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-inline: 6px; }
 /* the survivor leaderboard */
 .board { display: grid; gap: 8px; text-align: left; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--card); }
@@ -1065,6 +1075,7 @@ details.pbp summary { cursor: pointer; font-weight: 700; font-size: 12px; color:
 #pbp li { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 8px; }
 #pbp .t { color: var(--muted); font-variant-numeric: tabular-nums; }
 #pbp .me { font-weight: 600; }
+#pbp .reel { font: inherit; font-weight: 700; color: var(--ink); background: none; border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; min-height: 24px; cursor: pointer; }
 
 /* overlays: tap-to-open boxes, and the full player ratings view */
 .modal { position: fixed; inset: 0; z-index: 20; background: var(--shade); display: grid; place-items: center; padding: 16px; }
@@ -1155,7 +1166,7 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
 .siteinfo h3 { font: 800 17px/1.2 var(--display); text-transform: uppercase; letter-spacing: .03em; margin: 18px 0 4px; }
 .siteinfo p { margin: 0 0 8px; max-width: 65ch; color: var(--ink); }
 .siteinfo a { color: var(--ink); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
-@media (prefers-reduced-motion: reduce) { .flip, .spin, .pop, .result, .movefade, .modal .box, #field .call .in { animation: none; } .ballmove { transition: none; } .sw2::after { transition: none; }
+@media (prefers-reduced-motion: reduce) { .flip, .spin, .pop, .dock > .snapbar .pop, .result, .movefade, .modal .box, #field .call .in { animation: none; } .ballmove { transition: none; } .sw2::after { transition: none; }
   body.bcast .sheet { transition: none; } }
 /* very narrow: a phone's page zoomed (text zoom on a phone zooms the page: a 390 phone at 200% is 195 wide), the
    smallest phones zoomed a little. Two keys a row, a play's name over its keys, the tempos stacked, the scoreboard on

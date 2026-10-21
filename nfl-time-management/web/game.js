@@ -1214,7 +1214,7 @@
           'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${num ? `#${num} ` : ''}${o.p.name}, rated ${o.p.ovr}` });
         g.append(S('circle', { class: 'hit', r: 11 }), S('circle', { class: 'c', r: 7.2, fill: rate(o.p.ovr) }));
         if (num) { const t = S('text', { class: 'jn', y: 2.6 }); t.textContent = num; g.append(t); }
-        const open = () => { if (Date.now() - routeTapAt < 600 || (passing() && off && (o.label === 'WR' || o.label === 'TE' || o.label === 'RB'))) return; playerInfo(o.p, o.label, team); };
+        const open = (ev) => { if (!dotTap(ev) || (passing() && off && (o.label === 'WR' || o.label === 'TE' || o.label === 'RB'))) return; playerInfo(o.p, o.label, team); };
         g.addEventListener('click', open);
         g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); if (!passTap(a)) open(); } });
         sc.layer.append(g);
@@ -1448,6 +1448,16 @@
   // the field takes the tap itself (phones do not always send taps on small SVG shapes): a quick touch, not a scroll,
   // anywhere near a receiver's dot or along his route changes that route
   let routeTapAt = 0;                 // when the field last used a tap for a route (the dot under it then stays shut)
+  // A tap meant for the play (tapping it to its end, or the second tap of a double tap as it ends) lands on whatever
+  // the screen shows once it is over: a player's dot, the scoreboard, the buttons on the field, the calls' sheet's grip
+  // as the sheet slides back up. For a moment after a play none of those take a tap (a player's card or the game's
+  // details came up over the result, the sheet went down with the next call's keys on it); the calls themselves always
+  // do (a call cuts a replay short), and so does a keyboard
+  const AFTER_PLAY_MS = 500;
+  let playEnd = -1e9;                 // when the last play's animation ended (performance.now)
+  let fieldPress = null;              // the last press on the field: where it went down, how far it went (px)
+  // a player's card from his dot: a tap of its own, not the end of a drag or a drawing, not during a play
+  const dotTap = (ev) => !(Date.now() - routeTapAt < 600 || $('field').classList.contains('playing') || (ev && ev.detail && fieldPress && fieldPress.far > 10));
   // a phone: the call's keys (Run, Pass, RPO, Trick, or the defense's) in sight under the thumbs, no scrolling. When the
   // last result, the stop note, the defense's look and the tempo push them past the sheet's edge, those fold a step at
   // a time (game.html .fit1-3; a tap on the result shows it all); past that the sheet scrolls to them. The sheet's
@@ -1474,7 +1484,11 @@
   function sheetSetup() {
     const sh = $('sheet'), grip = $('grip');
     let drag = null, moved = false;
-    grip.addEventListener('pointerdown', (ev) => { drag = { y0: ev.clientY, dy: 0 }; moved = false; sh.classList.add('dragging'); try { grip.setPointerCapture(ev.pointerId); } catch (e) { /* the drag still works */ } });
+    // (not while a play runs: the sheet is on its way off the screen and a tap on its grip was meant for the play. A
+    // slow phone's first moments of a play left it in place, the tap sent it down, and the next call came up with its
+    // keys under the screen's edge)
+    const playing = () => $('field').classList.contains('playing');
+    grip.addEventListener('pointerdown', (ev) => { if (playing()) return; drag = { y0: ev.clientY, dy: 0 }; moved = false; sh.classList.add('dragging'); try { grip.setPointerCapture(ev.pointerId); } catch (e) { /* the drag still works */ } });
     grip.addEventListener('pointermove', (ev) => {
       if (!drag) return;
       const down = sh.classList.contains('down'), dy = ev.clientY - drag.y0;
@@ -1491,7 +1505,7 @@
     };
     grip.addEventListener('pointerup', end);
     grip.addEventListener('pointercancel', end);
-    grip.addEventListener('click', () => { if (moved) { moved = false; return; } sheetDown(!sh.classList.contains('down')); });
+    grip.addEventListener('click', () => { if (moved) { moved = false; return; } if (!playing()) sheetDown(!sh.classList.contains('down')); });
     // down, a tap anywhere on its bar brings it back up (not a call made by accident)
     sh.addEventListener('click', (ev) => { if (sh.classList.contains('down') && !grip.contains(ev.target)) { ev.preventDefault(); ev.stopPropagation(); sheetDown(false); } }, true);
     // a new size (another step's calls, up or down): the play framed again in what shows, between plays
@@ -1519,6 +1533,15 @@
   function fieldTaps() {
     const svg = $('field');
     let down = null;
+    // (each press on the field, for the dot it may end on: dotTap)
+    svg.addEventListener('pointerdown', (ev) => { fieldPress = { x: ev.clientX, y: ev.clientY, far: 0 }; }, true);
+    svg.addEventListener('pointermove', (ev) => { if (fieldPress && ev.buttons) fieldPress.far = Math.max(fieldPress.far, Math.hypot(ev.clientX - fieldPress.x, ev.clientY - fieldPress.y)); }, true);
+    // (the moment after a play: AFTER_PLAY_MS from its end to when the tap was made, a tap made before it too, waiting
+    // on a busy phone; not once the next play runs, their drive's next snap: a tap then is that play's. A click from
+    // the keyboard, or one the page makes, has no detail)
+    $('play').addEventListener('click', (ev) => {
+      if (ev.detail && ev.timeStamp - playEnd < AFTER_PLAY_MS && !svg.classList.contains('playing') && !$('dock').contains(ev.target)) { ev.stopPropagation(); ev.preventDefault(); }
+    }, true);
     svg.addEventListener('pointerdown', (ev) => { down = { x: ev.clientX, y: ev.clientY, t: Date.now() }; });
     svg.addEventListener('pointerup', (ev) => {
       const d0 = down; down = null;
@@ -2211,7 +2234,7 @@
   // (browser tests only, window.__sepLog: the drawing and the play, for bots that draw thousands of lines and plays)
   if (window.__sepLog) {
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
-      DRAWN_RANGE, CALL, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, get: () => ({ G, ui, scene, busy }),
+      DRAWN_RANGE, CALL, ROUTES, routeName, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, get: () => ({ G, ui, scene, busy }),
       readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
       promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k),
       drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock() };
@@ -4612,9 +4635,26 @@
 
   // clk: the game clock before the step (t0), at the snap and after the play; the time that runs off before
   // the snap ticks away first (fast, while the players set), then the play's own time as it is run
+  // Pre-snap motion (presentation only, like the rest of the drawing): on about four snaps in ten an NFL offense has a
+  // man in motion. Here the outside receiver jogs in toward the ball and back out (return motion), the snap coming as he
+  // gets back to his spot, so the play runs from where it was charted; the man across from him slides along. Not when a
+  // team hurries to the line with the clock running, nor on a kneel, a spike or a flag before the snap. The same play
+  // (its row) has the same motion, on a replay too
+  function motionOf(sc, e, before, runoff) {
+    if (e.ev !== 'play' || (e.kind !== RUN && e.kind !== PASS) || !(e.row >= 0) || (e.penalty && !(e.dur > 0))) return null;
+    if (before.clock_running && runoff < 12) return null;
+    if ((e.row * 0.6180339887) % 1 >= 0.4) return null;
+    const wr = sc.actors.filter((a) => a.off && a.label === 'WR').sort((a, b) => Math.abs(b.x0 - sc.bx) - Math.abs(a.x0 - sc.bx))[0];
+    if (!wr) return null;
+    const room = Math.abs(wr.x0 - sc.bx) / XYD - 3;
+    if (room < 2) return null;
+    const dx = Math.sign(sc.bx - wr.x0) * Math.min(5, room) * XYD;
+    const cb = sc.actors.filter((a) => !a.off).sort((a, b) => Math.hypot(a.x0 - wr.x0, (a.L0 - wr.L0) * XYD) - Math.hypot(b.x0 - wr.x0, (b.L0 - wr.L0) * XYD))[0];
+    return { a: wr, d: cb && Math.abs(cb.x0 - wr.x0) < 6 * XYD ? cb : null, dx };
+  }
   function runPlan(sc, P, speed, clk) {
     const runoff = clk ? Math.max(0, clk.t0 - clk.snap) : 0;
-    const PRE = runoff >= 1 ? clip(0.4 + runoff / 30, 0.55, 1.5) : 0;
+    const PRE = Math.max(runoff >= 1 ? clip(0.4 + runoff / 30, 0.55, 1.5) : 0, P.motion ? 1.2 : 0);
     const ZI = 0.6, ZO = 0.5, total = PRE + ZI + P.T + P.hold + ZO;
     const ck = clk ? document.querySelector('#bar .clk') : null;
     return new Promise((resolve) => {
@@ -4638,6 +4678,11 @@
           ck.classList.toggle('tick', t < PRE);
         }
         sc.actors.forEach((a) => { const p = at(a, tp); a.x = p.x; a.L = p.L; a.w = p.w; });
+        if (P.motion && t < PRE + ZI) {                 // (in and back out before the snap: motionOf)
+          const m = P.motion, u = Math.sin(Math.PI * EASE.io(clip(t / (PRE + ZI), 0, 1)));
+          m.a.x += m.dx * u;
+          if (m.d) m.d.x += m.dx * 0.6 * u;
+        }
         Object.assign(sc.ball, ballAt(sc, P, tp));
         P.calls.forEach((c) => { if (!c.shown && tp >= c.t) { c.shown = true; showCall(sc, c); } });
         P.fx.forEach((f) => { if (!f.done && tp >= f.t) { f.done = true; f.f(); } });
@@ -4646,6 +4691,7 @@
           if (cutAnim === onTap) cutAnim = null;
           sc.svg.removeEventListener('click', onTap);
           sc.svg.classList.remove('playing');
+          playEnd = performance.now();         // (the taps meant for the play, a moment longer: AFTER_PLAY_MS)
           if (ck) ck.classList.remove('tick');
           resolve();
         } else requestAnimationFrame(frame);
@@ -4697,6 +4743,7 @@
     const pre = k0 < 0 ? res.log : res.log.slice(0, k0), ro = pre.find((x) => x.ev === 'runoff');
     const tos = pre.filter((x) => x.ev === 'timeout'), snapT = ro ? ro.t : tos.length ? tos[tos.length - 1].t : before.t;
     const clk = { t0: before.t, snap: snapT, end: Math.min(res.root.t, snapT) };
+    P.motion = two ? null : motionOf(sc, e, before, before.t - snapT);
     await runPlan(sc, P, PLAY_SPEED * playSpeed(), clk);
     fadeNext = true;
     lastBall = null;
@@ -4868,6 +4915,15 @@
     li.append(el('span', 't', t == null ? '' : clockOf(t).text), el('span', mine ? 'me' : '', text));
     $('pbp').prepend(li);
     G.log.push([text, t, !!mine]);
+    return li;
+  }
+  // any play of the drive again, from its line in the play-by-play (this visit only: the plays are not saved)
+  function reelKey(li, lp) {
+    const b = el('button', 'reel', '↻');
+    b.type = 'button';
+    b.setAttribute('aria-label', 'Watch this play again');
+    b.addEventListener('click', () => replay(lp));
+    li.lastChild.append(' ', b);
   }
   function restoreLog() {
     $('pbp').textContent = '';
@@ -5370,7 +5426,9 @@
     const res = (await send({ type: 'step', scen: simScen(), root: G.root.try2 || G.root, action, seed }, true)).res;
     res.action = action;
     if (action && action.philly) res.log.forEach((x) => { if (x.ev === 'pat') x.philly = true; });
-    narrate(res.log, action).forEach(([text, t, mine]) => addLog(text, t, mine));
+    const pe0 = res.log.find((x) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(x.ev));
+    let reelLi = null;
+    narrate(res.log, action).forEach(([text, t, mine]) => { const li = addLog(text, t, mine); if (!reelLi && pe0 && t === pe0.t) reelLi = li; });
     G.root = res.root;
     if (res.done) G.root.phase = DONE;
     // a half that ends on the play itself (a kneel, a last snap, a kick) says so, as one run out between snaps does
@@ -5381,14 +5439,14 @@
     const look = before.pos === G.me ? G.look : action && (action.def || action.dc) && pe && pe.look && pe.look.box ? (pe.look.box >= 7 ? 2 : 0) + (pe.look.blitz ? 1 : 0) : null;
     G.lastPlay = { before, res, side, look };
     res.animated = await animatePlay(before, res, side, false, look);
+    if (res.animated && reelLi && reelLi.isConnected) reelKey(reelLi, G.lastPlay);
     G.look = null;
     return res;
   }
   // a replay never holds up the game: a call, Next play or Next game tapped during it cuts it short (cutReplay)
   let replaying = null, cutAnim = null;
-  function replay() {
+  function replay(lp = G.lastPlay) {
     track('replay');
-    const lp = G.lastPlay;
     if (busy || replaying || !lp) return;
     const g = G;
     replaying = (async () => {
@@ -5776,13 +5834,17 @@
     // as his row would have made it (decideCall: snap first, graded while the play runs)
     const t = E[P.target] ? P.target : 0, ta = E[t], foot = el('div', 'keys snapbar');
     foot.style.setProperty('--cols', 1);
-    const go = key(`Snap · ${shortName(ta.p ? ta.p.name : '') || ta.label}`, ' ', 'big snap', 0);
+    const go = key('', ' ', 'big snap', 0), line = el('span', 'go');
+    line.append(el('span', 'sn', 'Snap · '), el('b', '', shortName(ta.p ? ta.p.name : '') || ta.label));
+    go.firstChild.replaceWith(line);
     go.id = 'snapGo';
     go.setAttribute('aria-label', `Snap: throw it to ${ta.p ? ta.p.name : ta.label}, ${routeName(ta.label, P.routes[t])}`);
     go.addEventListener('click', () => { if (!busy && passing()) decideCall({ pass: t }); });
     foot.append(go);
     d.append(foot);
     snapLine();
+    snapFit();
+    if (document.fonts && document.fonts.status === 'loading') document.fonts.ready.then(snapFit, () => {});     // (fitted in its own type)
     fetchOdds();
     // only on the way in: after that the page stays put while you change routes
     if (P.fresh) {
@@ -5799,6 +5861,27 @@
     if (!a) return;
     const od = G.odds && G.odds[pickKey(passOption(scene, P.target, false).action)];
     g.querySelector('small').textContent = `${P.drawn && P.drawn[P.target] ? '✏️ ' : ''}${routeName(a.label, P.routes[P.target])}${od ? ` · ${oddsText(od)}` : ''}`;
+  }
+  // The Snap key's first line stays one line with the name whole (a long name wrapped it, the key growing at the foot
+  // of the sheet: in the wider type a phone shows before the game's own comes in, on a page zoomed narrow): the type a
+  // step smaller first, then "Snap ·" goes and the name stands alone (game.html .snap.tight, .bare), and past that
+  // the name in type as small as it takes. Its second line, the route and the odds, is cut at its end instead
+  function snapFit() {
+    const g = $('snapGo'), line = g && g.querySelector('.go');
+    if (!line) return;
+    g.classList.remove('tight', 'bare');
+    line.style.fontSize = '';
+    if (!line.clientWidth) return;                      // (not shown: a resize, or the fonts coming in, fits it again)
+    const over = () => line.scrollWidth > line.clientWidth + 0.5;
+    for (const c of ['tight', 'bare']) {
+      if (!over()) return;
+      g.classList.add(c);
+    }
+    // (in steps: the letter spacing, set on the key, stays as it is)
+    for (let k = 0; k < 4 && over(); k++) {
+      const cs = getComputedStyle(line), pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+      line.style.fontSize = `${Math.floor(parseFloat(cs.fontSize) * ((line.clientWidth - pad) / (line.scrollWidth - pad)) * 10) / 10}px`;
+    }
   }
 
   // how fast to get to the next snap while the clock runs: no-huddle, huddle or milk it
@@ -6887,7 +6970,7 @@
     if (G.lastPlay && res.animated) {
       const again = el('button', 'chip replay', '↻ Replay');
       again.type = 'button';
-      again.addEventListener('click', replay);
+      again.addEventListener('click', () => replay());
       acts.append(again);
     }
     acts.append(det);
@@ -7480,7 +7563,7 @@
     return r.json();
   }
   async function apiRefresh() {
-    try { BOARD.rows = (await apiBoard('GET')).rows || []; redrawBoards(); } catch (e) { /* keep what we have */ }
+    try { const r = await apiBoard('GET'); BOARD.rows = r.rows || []; BOARD.week = r.week || null; redrawBoards(); } catch (e) { /* keep what we have */ }
   }
   function boardInit() {
     BOARD.ready = (async () => {
@@ -7506,14 +7589,16 @@
     return BOARD.ready;
   }
   // a player's best run: kept only when it beats what the board has
-  async function boardPost(name, best, life) {
+  // (run: the run just ended, for the week's board; a name's best run of the week goes there)
+  async function boardPost(name, best, life, run) {
     name = String(name || '').trim().slice(0, 24);
     best = Math.round(Number(best));
     if (!BOARD.mode || !BOARD.canWrite || !name || !(best >= 0 && best < 1000)) return false;
     if (BOARD.mode === 'api') {
       try {
-        const res = await apiBoard('POST', { name, best, key: deviceKey(), ...(life ? { life: true } : {}), ...withSession() });
+        const res = await apiBoard('POST', { name, best, key: deviceKey(), ...(life ? { life: true } : {}), ...(Number.isInteger(run) && run >= 0 && run <= best ? { run } : {}), ...withSession() });
         BOARD.rows = res.rows || BOARD.rows;
+        if (res.week) BOARD.week = res.week;
         BOARD.taken = res.taken ? name : '';
         BOARD.refused = res.refused ? name : '';
         redrawBoards();
@@ -7540,7 +7625,23 @@
     b.textContent = '';
     b.hidden = !BOARD.mode;
     if (!BOARD.mode) return;
-    b.append(el('div', 'k', 'Survivor leaderboard'));
+    // this week's board first (Monday to Sunday, a new one every Monday), then the best runs of all time
+    const wk = BOARD.mode === 'api' && BOARD.week;
+    if (wk) {
+      const day = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+      b.append(el('div', 'k', `This week · ${day(wk.from)} to ${day(wk.to)}`));
+      if (!wk.rows.length) b.append(el('p', 'note', 'No runs this week yet. The first one tops the board.'));
+      else {
+        const ol = el('ol', 'brows'), me = myName().toLowerCase();
+        wk.rows.slice(0, 10).forEach((r, i) => {
+          const li = el('li', String(r.name).toLowerCase() === me ? 'me' : '');
+          li.append(el('span', 'n', String(i + 1)), el('span', 'nm', `${String(r.name)}${r.life ? ' ❤️' : ''}`), el('b', '', String(r.best)));
+          ol.append(li);
+        });
+        b.append(ol);
+      }
+    }
+    b.append(el('div', 'k', wk ? 'All time' : 'Survivor leaderboard'));
     if (!BOARD.rows.length) b.append(el('p', 'note', 'No runs on the board yet.'));
     else {
       const ol = el('ol', 'brows'), me = myName().toLowerCase();
@@ -7668,7 +7769,7 @@
     save(`${STORE}:survstats`, st);
     if (JSON.stringify(st) !== was) statsSync(true);          // signed in: the best run follows the account (another phone sees it)
     // the board keeps your best (when you can write it and have a name on it), marked when it used the extra life
-    if (BOARD.ready && myName()) BOARD.ready.then(() => boardPost(myName(), st.best, !!st.bestLife));
+    if (BOARD.ready && myName()) BOARD.ready.then(() => boardPost(myName(), st.best, !!st.bestLife, state.won));
     $('dayLabel').textContent = survLabel();
     drawTiles();
     const box = $('done');
@@ -11805,7 +11906,15 @@
     $('modeVs').hidden = !VS_ON;
     if (VS || VS_LOBBY) { $('modeDaily').removeAttribute('aria-current'); $('modeVs').setAttribute('aria-current', 'page'); }
     $('statsBtn').addEventListener('click', openStats);
-    $('bar').addEventListener('click', () => { if (G) spotInfo(); });
+    // (a tap on the scoreboard where it sits over the field while a play runs is a tap on the play: a phone's, or one
+    // stuck to the top of a page scrolled down; it skips it as a tap anywhere there does. The game's details came up
+    // over the play)
+    $('bar').addEventListener('click', (ev) => {
+      if (!G) return;
+      const f = $('field').getBoundingClientRect();
+      if (ev.detail && cutAnim && $('field').classList.contains('playing') && ev.clientY >= f.top && ev.clientY <= f.bottom) { cutAnim(); return; }
+      spotInfo();
+    });
     $('restartBtn').addEventListener('click', restartAsk);
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
     $('persBtn').addEventListener('click', openPers);
@@ -11842,7 +11951,7 @@
     dockKeys();
     let rz = null;
     // (not while a play runs: the redraw would wipe the animation; the next draw picks up the new size)
-    window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); fitDock(fitKeys); }, 150); });
+    window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); fitDock(fitKeys); snapFit(); }, 150); });
     show('boot');
     if (!(VS || VS_LOBBY || ARCH || ARCH_DAY || DRIVE || RUN_N || CUSTOM || CUSTOM_BUILD || COMMUNITY || HOME_PG)) fetchData();      // the daily, survivor, practice
     try {
