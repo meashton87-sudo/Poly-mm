@@ -190,6 +190,19 @@ for (let k = 0; k < 100; k++) {
   console.log('personnel: plays drawn with the grouping picked', Object.entries(share).map(([k, v]) => `${k} ${(100 * v).toFixed(0)}%`).join('  '));
   // and through a whole snap
   const at = { ...root, t: 600, phase: 0, score: [10, 10], pos: 0, down: 1, ytg: 10, yl: 60, to: [3, 3], clock_running: false };
+  // a formation picked (engine.js FORM_CODE, pfOk: the play's look bits 0-1): most plays drawn ran from it, where its
+  // plays are many (the shotgun on a quick pass, under center on a run); the pistol, 5% of snaps, when there are enough
+  const FORM = { gun: 1, under: 2, pistol: 3 };
+  for (const [form, id, want] of [['gun', 'quick_strong', 0.9], ['under', 'rb_inside_strong', 0.85], ['pistol', 'rb_middle', 0.5]]) {
+    let n = 0, hit = 0;
+    for (let k = 0; k < 60; k++) {
+      const e = sim.step(at, { action: { to_off: false, play: P.calls[P.callIndex[id]].kind, call: id, form }, seed: 4300 + k }).log.find((x) => x.ev === 'play');
+      if (!e || !(e.row >= 0) || e.penalty) continue;
+      n++; if ((P.look[e.row] & 3) === FORM[form]) hit++;
+    }
+    console.log(`  formation ${form} on ${id}: ${hit} of ${n} plays drawn ran from it`);
+    assert.ok(n && hit / n >= want, `formation ${form}: ${hit} of ${n}`);
+  }
   const r = sim.step(at, { action: { to_off: false, play: 'run', call: 'rb_inside_strong', looks: 0, pers: 21 }, seed: 777 });
   const pe = r.log.find((e) => e.ev === 'play');
   assert.ok(pe && pe.row >= 0 && P.ngs.pers[pe.row] === 21, 'a 21-personnel run is a real 21-personnel run');
@@ -513,7 +526,7 @@ if (fs.existsSync(path.join(dir, 'rosters', 'index.json'))) {
     const of = (c, pers) => {
       const n = {}, rows = new Set();
       for (let k = 0; k < N; k++) {
-        const e = sim.step(at, { action: { to_off: false, play: c.kind, call: c.id, ...(pers ? { pers } : {}) }, seed: 6100 + k }).log.find((x) => x.ev === 'play');
+        const e = sim.step(at, { action: { to_off: false, play: c.kind, call: c.id, ...(pers || {}) }, seed: 6100 + k }).log.find((x) => x.ev === 'play');
         if (!e) continue;
         if (e.row >= 0) rows.add(e.row);
         if (e.incomplete) continue;
@@ -524,14 +537,15 @@ if (fs.existsSync(path.join(dir, 'rosters', 'index.json'))) {
     };
     for (const c of calls) {
       const base = of(c, 0);
-      for (const pers of [11, 12, 21, 13]) {
-        const g = of(c, pers);
+      // (and the formations the plays are charted by, engine.js FORM_CODE, alone and with a grouping: the same guard)
+      for (const pick of [{ pers: 11 }, { pers: 12 }, { pers: 21 }, { pers: 13 }, { form: 'gun' }, { form: 'under' }, { form: 'pistol' }, { pers: 11, form: 'pistol' }, { pers: 12, form: 'under' }]) {
+        const g = of(c, pick);
         checked += 1;
-        if (g.rows < 8 || g.top > Math.max(0.35, base.top + 0.2)) worst.push(`${sp.id} ${c.id} ${pers}: ${g.rows} real plays in ${N} snaps (${base.rows}), the most common result ${g.top} (${base.top})`);
+        if (g.rows < 8 || g.top > Math.max(0.35, base.top + 0.2)) worst.push(`${sp.id} ${c.id} ${JSON.stringify(pick)}: ${g.rows} real plays in ${N} snaps (${base.rows}), the most common result ${g.top} (${base.top})`);
       }
     }
   }
-  console.log(`personnel: ${checked} calls and groups on ${picks.length} spots, ${worst.length} narrowed to a few plays`);
-  assert.ok(!worst.length, `personnel narrows a call to a few real plays: ${worst.slice(0, 6).join('; ')}`);
+  console.log(`personnel and formations: ${checked} calls and picks on ${picks.length} spots, ${worst.length} narrowed to a few plays`);
+  assert.ok(!worst.length, `a personnel group or a formation narrows a call to a few real plays: ${worst.slice(0, 6).join('; ')}`);
 }
 console.log('smoke ok');

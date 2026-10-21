@@ -852,7 +852,12 @@
   const SX0 = 8, SX1 = 352, XYD = (SX1 - SX0) / 53.333;
   const HASH_L = SX0 + 23.58 * XYD, HASH_R = SX1 - 23.58 * XYD;
   const clampX = (x) => clip(x, SX0 + 12, SX1 - 12);
-  function formation(offL, defL, s, bx) {
+  // form (your offense: G.form): how it lines up. qb: 'gun' (the default), 'under' center (the back seven deep behind
+  // him, a fullback between: the I), 'pistol' (the quarterback four deep, the back behind him) or 'empty' (the backs
+  // split out, nobody in the backfield); look: where the receivers go, 'trips' (three to the strong side, the default),
+  // 'spread' (two and two), 'bunch' (three in a cluster off the tackle) or 'tight' (everyone in close). Where they
+  // stand only: the engine draws its plays by the quarterback's formation (FORM_CODE), never by the look
+  function formation(offL, defL, s, bx, form) {
     const by = {};
     offL.forEach((p) => { (by[p.pos] = by[p.pos] || []).push(p); });
     const take = (pos) => (by[pos] && by[pos].length ? by[pos].shift() : null);
@@ -861,16 +866,24 @@
     const olX = { LT: -52, LG: -26, C: 0, RG: 26, RT: 52 };
     OL.forEach((lab) => put(off, take(lab), bx + olX[lab], 1.0, lab));
     ['T', 'G'].forEach((lab) => { let p; while ((p = take(lab))) put(off, p, bx, 1.0, lab); });
+    const fq = (form && form.qb) || 'gun', fl = (form && form.look) || 'trips';
     const teX = bx + s * 78;
-    const xX = s > 0 ? SX0 + 22 : SX1 - 22, zX = s > 0 ? SX1 - 26 : SX0 + 26, slotX = (teX + zX) / 2;
-    put(off, take('TE'), teX, 1.15, 'TE');
-    put(off, take('WR'), xX, 1.0, 'WR');
-    put(off, take('WR'), zX, 1.5, 'WR');
-    put(off, take('WR'), slotX, 1.7, 'WR');
-    put(off, take('QB'), bx, 5.0, 'QB');
-    put(off, take('RB'), bx - s * 25, 5.2, 'RB');
-    put(off, take('FB'), bx, 3.0, 'FB');
-    const spare = [[bx - s * 78, 1.15], [bx + s * 25, 5.2], [(xX + bx - s * 52) / 2, 1.7]];
+    const xX = s > 0 ? SX0 + 22 : SX1 - 22, zX = s > 0 ? SX1 - 26 : SX0 + 26, slotX = (teX + zX) / 2, wslotX = (xX + bx - s * 52) / 2;
+    // the receivers' spots by the look, in the order the men are taken: the tight end, then X, Z and the slot
+    const W = { trips: [[teX, 1.15], [xX, 1.0], [zX, 1.5], [slotX, 1.7]],
+      spread: [[teX, 1.15], [xX, 1.0], [zX, 1.5], [wslotX, 1.7]],
+      bunch: [[teX, 1.15], [xX, 1.0], [teX + s * 24, 1.0], [teX + s * 12, 1.9]],
+      tight: [[teX, 1.15], [bx - s * 68, 1.0], [bx + s * 108, 1.0], [bx + s * 93, 1.8]] }[fl] || [[teX, 1.15], [xX, 1.0], [zX, 1.5], [slotX, 1.7]];
+    put(off, take('TE'), W[0][0], W[0][1], 'TE');
+    put(off, take('WR'), W[1][0], W[1][1], 'WR');
+    put(off, take('WR'), W[2][0], W[2][1], 'WR');
+    put(off, take('WR'), W[3][0], W[3][1], 'WR');
+    const B = { gun: { qb: [bx, 5.0], rb: [bx - s * 25, 5.2], fb: [bx, 3.0] }, under: { qb: [bx, 1.6], rb: [bx, 7.0], fb: [bx, 4.3] },
+      pistol: { qb: [bx, 4.0], rb: [bx, 7.0], fb: [bx - s * 25, 4.6] }, empty: { qb: [bx, 5.0], rb: [wslotX, 1.5], fb: [slotX - s * 10, 1.9] } }[fq];
+    put(off, take('QB'), B.qb[0], B.qb[1], 'QB');
+    put(off, take('RB'), B.rb[0], B.rb[1], 'RB');
+    put(off, take('FB'), B.fb[0], B.fb[1], 'FB');
+    const spare = [[bx - s * 78, 1.15], [bx + s * 25, 5.2], [wslotX, 1.7]];
     Object.values(by).flat().forEach((p, i) => { const sp = spare[i % spare.length]; put(off, p, sp[0], sp[1]); });
     const g = { EDGE: [], DL: [], LB: [], CB: [], S: [], X: [] };
     defL.forEach((p) => (g[p.pos] || g.X).push(p));
@@ -1197,7 +1210,7 @@
     Object.assign(sc, { s, bx: sx(fxBall) });
     sc.layer = put(S('g', {}));
     if (mode === 'snap' || mode === 'pat') {
-      const offI = r.pos, f = formation(offLineup(offI).slice(), lineup(1 - offI).def.slice(), s, fxBall);
+      const offI = r.pos, f = formation(offLineup(offI).slice(), lineup(1 - offI).def.slice(), s, fxBall, offI === G.me ? G.form : null);
       if (mode === 'snap' && look != null) showLook(f.def, LOOKS[look], s, fxBall);
       else if (mode === 'snap' && r.pos !== G.me && ui.step === 'vdef' && ui.dc) showDc(f.def, ui.dc, s, fxBall);
       // a short field: the defense lines up inside its end zone, the offense inside its own (the dots are drawn a step
@@ -1367,12 +1380,15 @@
   }
   // toward his own sideline; the same on the field and in the animation
   const outOf = (sc, a) => Math.sign(a.x0 - sc.bx) || sc.s * sc.dir || 1;
+  // ... but the back's route on a rollout goes the way the quarterback rolls (players saw the flat run away from him,
+  // the throw back across the field): the side drawn for him, else the back's own
+  const routeOut = (sc, a) => (a.label === 'RB' && ui.pass && ui.pass.roll && ui.pass.rollSide ? (ui.pass.rollSide === 'strong' ? 1 : -1) * sc.s * sc.dir : outOf(sc, a));
   function drawRoutes(sc) {
     const P = ui.pass, E = eligibles(sc), Y = camY(sc), g = S('g', { class: 'routes' });
     sc.routePts = [];
     E.forEach((a, i) => {
       const rt = P.routes[i], dr = P.drawn && P.drawn[i];
-      const r = Motion.routeOnField(dr || rt, ROUTE_DEPTH[rt], (a.x0 - SX0) / XYD, outOf(sc, a), sc.dir, sc.losL, Math.abs(a.L0 - sc.losL), 0.5);
+      const r = Motion.routeOnField(dr || rt, ROUTE_DEPTH[rt], (a.x0 - SX0) / XYD, routeOut(sc, a), sc.dir, sc.losL, Math.abs(a.L0 - sc.losL), 0.5);
       const pts = r.pts.map((q) => [clip(SX0 + q[0] * XYD, SX0 + 2, SX1 - 2), Y(clip(q[1], -9, 109))]);
       sc.routePts[i] = [[a.x0, Y(a.L0)], ...pts];
       const tgt = P.target === i, d = pts.map((q, k) => `${k ? 'L' : 'M'}${q[0].toFixed(1)} ${q[1].toFixed(1)}`).join('');
@@ -2234,7 +2250,7 @@
   // (browser tests only, window.__sepLog: the drawing and the play, for bots that draw thousands of lines and plays)
   if (window.__sepLog) {
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
-      DRAWN_RANGE, CALL, ROUTES, routeName, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, goalCheck, get: () => ({ G, ui, scene, busy }),
+      DRAWN_RANGE, CALL, ROUTES, routeName, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, goalCheck, speedLog, get: () => ({ G, ui, scene, busy }),
       readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
       promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k),
       drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock(), crowdKey: (r, k) => crowdKey(r, k) };
@@ -2347,6 +2363,7 @@
   // the ball flies about 24 yards a second (deep balls are lofted, a little slower); handoffs at 0.8-1.2 s.
   const T_SNAP = 0.25;
   const RELEASE = { quick: 2.3, screen: 1.6, deep: 2.8, pa: 3.0, roll: 3.0, hail: 4.3, rpo: 1.35, flea: 3.7, tpass: 3.3 };
+  const ROLL_FLAT = 2.6;       // seconds: a sprint-out's throw to the flat, on the run (pass: the charted time is held to it)
   // The ball's average speed over its flight, yards a second, by how far downfield it goes: a quarterback lets it go
   // at 50 to 60 mph (24 to 29 yards a second) and drag slows it. Short and intermediate throws are on a line (25-26
   // yd/s on average), deep balls are lofted and hang (a 50-yard throw is in the air about 2.7 s, 19 yd/s), and a
@@ -2362,20 +2379,28 @@
   const flight = (air, arm) => (Math.abs(air) + 7) / ballSpeed(air, arm);              // seconds the ball is in the air
   const PLAY_SPEED = 1;        // real time, your snaps and theirs
   // the player's own speed-up (1x, 1.5x, 2x: the button on the field), kept on the device; a tap on the field skips
-  const SPEEDS = [1, 1.5, 2], SPEED_KEY = `${STORE}:speed`;
+  // 0: plays off (the result straight away), the player's own choice on the same button. A device set to reduce
+  // motion still sees the plays (players on a computer with it on saw none and asked why), with the camera held
+  // still instead of zooming in and out
+  const SPEEDS = [1, 1.5, 2, 0], SPEED_KEY = `${STORE}:speed`;
   const playSpeed = () => { const v = Number(load(SPEED_KEY, 1)); return SPEEDS.includes(v) ? v : 1; };
+  const playsOn = () => playSpeed() > 0;
   let speedOn = false;
   function speedBtn() {
     const b = $('speedBtn');
     if (!b) return;
     speedOn = true;
-    const show = () => { b.textContent = `${playSpeed()}\u00d7`; b.setAttribute('aria-label', `Play speed ${playSpeed()} times. Tap to change`); };
+    const show = () => {
+      const v = playSpeed();
+      b.textContent = v ? `${v}\u00d7` : 'Off';
+      b.setAttribute('aria-label', v ? `Play speed ${v} times. Tap to change` : 'Plays off: results only. Tap to turn them on');
+    };
     show();
     b.hidden = false;
     b.addEventListener('click', () => {
       const v = SPEEDS[(SPEEDS.indexOf(playSpeed()) + 1) % SPEEDS.length];
       save(SPEED_KEY, v); show();
-      toast(v === 1 ? 'Plays at real speed' : `Plays at ${v}\u00d7 speed. Tap the field to skip one`);
+      toast(v === 1 ? 'Plays at real speed' : v ? `Plays at ${v}\u00d7 speed. Tap the field to skip one` : 'Plays off: you see each result straight away');
       track('play_speed', { speed: v });
     });
   }
@@ -2419,6 +2444,29 @@
       if (!kick && b.show && out(b.x, b.L)) bad.push({ who: 'ball', t: +t.toFixed(1), x: +b.x.toFixed(1), L: +b.L.toFixed(2) });
     }
     return bad;
+  }
+  // (browser tests) how fast anyone runs on a play as drawn: every man's track frame by frame (1/20 s) to the play's
+  // end, in yards: his top speed from one frame to the next (v1) and over a fifth of a second (v4: what the eye sees),
+  // and his longest jump between two frames (a teleport). The fastest man of the play and the worst jump
+  function speedCheck(sc, P) {
+    const top1 = { v: 0, who: '', t: 0 }, top4 = { v: 0, who: '', t: 0 }, jump = { v: 0, who: '', t: 0 };
+    const up = (m, v, a, t) => { if (v > m.v) { m.v = v; m.who = a.label + (a.off ? '' : ' (D)'); m.t = t; } };
+    sc.actors.forEach((a) => {
+      const k = a.trk;
+      if (!k || k.hold) return;
+      const n = Math.min(k.n, Math.ceil(P.T / k.dt) + 1), X = (j) => k.x[j] / XYD, Y = (j) => k.L[j];
+      for (let j = 1; j < n; j++) {
+        const d = Math.hypot(X(j) - X(j - 1), Y(j) - Y(j - 1));
+        up(jump, d, a, j * k.dt); up(top1, d / k.dt, a, j * k.dt);
+        if (j >= 4) up(top4, Math.hypot(X(j) - X(j - 4), Y(j) - Y(j - 4)) / (4 * k.dt), a, j * k.dt);
+      }
+    });
+    const r = (x) => +x.toFixed(2);
+    return { v1: r(top1.v), who1: top1.who, t1: r(top1.t), v4: r(top4.v), who4: top4.who, t4: r(top4.t), jump: r(jump.v), jwho: jump.who, jt: r(jump.t) };
+  }
+  function speedLog(sc, P, e, x) {
+    (window.__speedLog = window.__speedLog || []).push({ ev: e.ev, call: e.call, evt: e.evt || '', yards: e.yards, td: !!(e.td || e.tdDef || e.retTd), air: e.air,
+      ...(x || {}), ...speedCheck(sc, P) });
   }
   // (browser tests) where the man with the ball was against the goal lines and the sidelines while he had it (P's
   // holds, every 0.05 s to the end of the play): a touchdown is the ball carried (or caught) over the scoring team's
@@ -2808,7 +2856,7 @@
       busy.add(car);
       // the tackler comes from the defenders still free; when every one is busy (in coverage, on the ball), from all of
       // them: a carrier never stops in the open with nobody there (players saw it)
-      const free = foes(car).filter((d) => !busy.has(d));
+      const free = foes(car).filter((d) => !busy.has(d) || (o.also && o.also.includes(d)));
       const start = here(car), defs = free.length ? free : foes(car);
       const tackled = !o.td && !o.oob && !o.free;
       // going out (o.out: the sideline he goes for, -1 or 1): the spot is never back toward the middle from where he
@@ -2896,9 +2944,13 @@
       // (a stuff is penetration, not a back waiting in the backfield for someone to come)
       // The same on a short catch-and-run with nobody near (players saw backs at the sideline turn back to the hash to
       // find a tackler): the nearest man breaks on the ball before it arrives and meets him where he is
+      // A breakaway run or catch nobody could reach from where the pursuit is now (players saw the carrier ease up in
+      // the open for a tackler to arrive): the man with the best angle commits from the moment the carrier got the
+      // ball, so he is there when the run ends; the carrier never waits for him
       const stuff = fd * (contact[1] - L0) < 1.5 && o.from < t0 - 0.1, closeIn = !stuff && dist(start, contact) < 8;
-      if (tackled && o.from != null && (stuff || closeIn) && reach.length && reach[0].T > tC - t0 + 0.1) {
-        const tf = stuff ? Math.max(o.from, REACT_DEF + 0.2) : Math.max(REACT_DEF + 0.2, t0 - 0.8);
+      const far = !stuff && !closeIn && reach.length && reach[0].T > tC - t0 + 0.4;
+      if (tackled && o.from != null && (stuff || closeIn || far) && reach.length && reach[0].T > tC - t0 + 0.1) {
+        const tf = stuff || far ? Math.max(o.from, REACT_DEF + 0.2) : Math.max(REACT_DEF + 0.2, t0 - 0.8);
         Wd.rewind(tf);
         const pick = defs.filter((d) => !stuff || d.b.g !== 'CB').map((d) => ({ d, T: Motion.minTime([here(d), contact], d.b.g, { v0: vel(d), spd: d.b.spd }) }))
           .sort((x, y) => x.T - y.T)[0];
@@ -2939,7 +2991,7 @@
         if (!done) A = runFrom(car, t0, route, runO);                              // (back to his own run)
       }
       car.endAt = endPt;
-      let tackler = null, tEnd = tC, tGo = t0, B = null;
+      let tackler = null, tEnd = tC, tGo = t0, B = null, slowed = 0;
       // a man whose way in runs with the carrier, at his side within reach long before he is down, reads as one who
       // could have made the tackle then: he keeps a couple of yards off instead (one in front gives ground and turns
       // as the carrier goes by on the other side), and closes at the end, to `off` from him at tA
@@ -2962,6 +3014,7 @@
       if (tackled && reach.length) {
         tackler = reach[0].d;
         if (reach[0].T > tC - t0 + 0.1) {            // still nobody (the field ran out): he slows in traffic
+          slowed = reach[0].T - (tC - t0);
           A = runFrom(car, t0, route, { T: reach[0].T + 0.1, v1: 3.4, lim });
           tC = t0 + A.T;
         }
@@ -3056,7 +3109,7 @@
         (window.__fpLog = window.__fpLog || []).push({ over: +(mx - Math.max(0, fp(t1))).toFixed(2), car: car.label, off: !!car.off, oob: !!o.oob, yds: e.yards, ev: e.evt || '', call: e.call });
       }
       // (tests: how close the nearest defender is when a tackled carrier goes down)
-      if (tackled && window.__sepLog) (window.__tackleLog = window.__tackleLog || []).push({ nd: Math.min(...foes(car).map((d) => dist(here(d), here(car)))), free: free.length, tackler: !!tackler,
+      if (tackled && window.__sepLog) (window.__tackleLog = window.__tackleLog || []).push({ nd: Math.min(...foes(car).map((d) => dist(here(d), here(car)))), free: free.length, tackler: !!tackler, slowed: +slowed.toFixed(2), ev: e.evt || '', yds: e.yards, call: e.call, from: o.from,
         td: dist(tackler ? here(tackler) : [0, 0], here(car)), car: car.label, mine: !!car.off === !!(car.off && G.root.pos === G.me), span: dist(start, endPt), tC: tC - t0, reach: reach.length ? reach[0].T : null });
       if (tackled) leg(car, tEnd, 'stand');
       // (past the whistle: into the end zone on a touchdown; out of bounds, along the sideline no further than the spot)
@@ -3185,7 +3238,7 @@
         const ei = mine && act && act.routes ? eligibles(sc).indexOf(a) : -1;
         const name = ei >= 0 && act.routes[ei] ? act.routes[ei] : kind === 'hail' ? 'go' : pickOf(kind === 'deep' || kind === 'pa' ? OTHER_ROUTES.deep : OTHER_ROUTES.short);
         const D = (ROUTE_DEPTH[name] ?? 6) + (name === 'go' ? 2 : name === 'post' || name === 'corner' ? 1 : 0) + jit(2);
-        const out = ei >= 0 ? outOf(sc, a) : Math.sign(a.b.x - BX) || side || 1, dr = ei >= 0 && act.drawn ? act.drawn[ei] : null;
+        const out = ei >= 0 ? (act.roll && a === K.rb ? side : outOf(sc, a)) : Math.sign(a.b.x - BX) || side || 1, dr = ei >= 0 && act.drawn ? act.drawn[ei] : null;
         const r = Motion.routeOnField(dr || name, D, a.b.x, out, dir, L0, Math.abs(a.b.y - L0), R());
         const rp = r.pts.map((p) => [inX(p[0]), inL(p[1])]);
         const pl = follow(a, REACT_OFF, plan(a, rp, { eff: 0.86 + R() * 0.1, ...edgeStop(rp) }));
@@ -3518,7 +3571,11 @@
       busy.add(tgt);
       const routeName = thrownAway ? 'out' : tgt === qb ? 'flat' : pick && act.route ? (ti === act.target ? act.route : (act.routes && act.routes[ti]) || act.route) : (e.route && Motion.route(e.route, air, 1, 0.5) ? e.route
         : tgt === K.rb ? (kind === 'screen' ? 'screen' : pickOf(['flat', 'angle', 'flat'])) : pickOf(CALL_ROUTE[id === 'quick_middle' ? 'quick_middle' : id === 'deep_middle' ? 'deep_middle' : kind] || ['hitch']));
-      const out = pick ? outOf(sc, tgt) : tgt === K.rb || tgt === qb ? side : (Math.sign(tgt.b.x - BX) || side);
+      const out = pick ? (act.roll && tgt === K.rb ? side : outOf(sc, tgt)) : tgt === K.rb || tgt === qb ? side : (Math.sign(tgt.b.x - BX) || side);
+      // a rollout to the flat (the back, or a route to the flat) is thrown on the run, as a sprint-out is designed: the
+      // charted time to throw on the real rollout (a median of 4.1 s on a flat: the pool is mostly broken plays, the
+      // passer flushed and dumping it off) had him jogging in the flat for seconds (players asked for the flat in time)
+      if (kind === 'roll' && !thrownAway && (tgt === K.rb || routeName === 'flat') && tThrow > ROLL_FLAT + 0.3) tThrow = ROLL_FLAT + jit(0.25);
       // forward progress: a completion is caught no deeper than where it is spotted (he is not carried back after it)
       const held = !e.incomplete && e.evt !== 'interception' && e.evt !== 'pick_six' && !e.td;
       const deep = held ? Math.min(air, e.yards ?? air) : air;
@@ -3560,6 +3617,9 @@
           if (arr >= ball - 0.05 || k >= legL) break;
         }
         rpts = [rpts[0], top, catchPt];
+        // (he gets to the end of his break after the ball would: the passer holds it until he is there, and it flies
+        // at its own speed; the flight stretched to meet him hung the ball in the air for seconds on a deep hitch)
+        if (tCatch > tThrow + flightTo(catchPt) + 0.05) tThrow = tCatch - flightTo(catchPt);
         // a hitch on time comes back to the ball; early, he settles facing the passer, and it comes to him
         if (routeName === 'hitch') {
           const sit = plan(tgt, rpts, { v1: 0 });
@@ -3568,7 +3628,10 @@
         }
       }
       const tp = plan(tgt, rpts, { T: timed ? tCatch - tStart : undefined, v1 });
-      if (tp.late > 0.02) tCatch += tp.late;
+      // he can't be there when the ball would be (a route drawn deeper than the call's release allows: a hitch drawn
+      // on an RPO, thrown at 1.3 s): the quarterback holds it until he can, and the ball flies at its own speed. Before,
+      // the flight stretched to wait for him: the ball hung in the air at the line ("it just gets floated")
+      if (tp.late > 0.02) { tThrow += tp.late; tCatch += tp.late; }
       follow(tgt, tStart, tp);
       if (act && act.open && mine && !thrownAway && tgt === pick) P.openAt = { tThrow, flight: tCatch - tThrow };
       // the rush and the line
@@ -4030,7 +4093,7 @@
       breakers.forEach((d, i) => {
         if (d === picker || d === broke || d === shadow) return;
         const near_ = dist(here(d), catchPt);
-        const yac = Math.abs(e.yards - air);
+        const yac = Math.abs((e.yards || 0) - air);
         // the closer the coverage, the shorter the run after the catch: trail by more when he got loose
         const lag = clip(yac * 0.07, 0, 1.2);
         if (caught && !e.incomplete) {
@@ -4069,7 +4132,8 @@
         // (the nearest who can get there in time, from a moment before the throw; then sooner, another man)
         for (const tW of [tThrow - 0.8, tThrow - 1.6, REACT_DEF + 0.3].map((t) => Math.max(REACT_DEF + 0.3, t))) {
           Wd.run(tCatch);
-          const Rc = here(tgt), near = K.def.filter((d) => d !== wP && !rushers.includes(d)).sort((a, b) => dist(here(a), Rc) - dist(here(b), Rc));
+          // (a ball to a man behind the line, a screen: a rusher who reads it peels off to him; the coverage is too far)
+          const Rc = here(tgt), near = K.def.filter((d) => d !== wP && (air <= 2 || !rushers.includes(d))).sort((a, b) => dist(here(a), Rc) - dist(here(b), Rc));
           const far = near.length && dist(here(near[0]), Rc) > 2.2;
           Wd.rewind(t0);
           if (!far) break;
@@ -4144,8 +4208,10 @@
           return;
         }
         const end = e.tdDef ? [inX(catchPt[0] + jit(10)), defTdL()] : [inX(catchPt[0] + jit(8)), inL(losOf(res.root))];
-        // he runs it back the other way: the offense becomes the chasers
-        const tEnd = runDown(picker, tCatch + 0.05, end, { td: e.tdDef, after: 0.6 });
+        // he runs it back the other way: the offense becomes the chasers (the man it was thrown to first of all: he is
+        // right there, and makes the tackle on a short return as real receivers do; the picker never waits in the
+        // open for a lineman to jog over)
+        const tEnd = runDown(picker, tCatch + 0.05, end, { td: e.tdDef, after: 0.6, from: tCatch + 0.05, also: [tgt] });
         if (e.tdDef) say(tEnd, 'Pick-six!', 'hit', { follow: picker });
         else down(tEnd + 0.05, picker);
         lastEnd(tEnd + 1.0);
@@ -4858,7 +4924,7 @@
   function runPlan(sc, P, speed, clk) {
     const runoff = clk ? Math.max(0, clk.t0 - clk.snap) : 0;
     const PRE = Math.max(runoff >= 1 ? clip(0.4 + runoff / 30, 0.55, 1.5) : 0, P.motion ? 1.2 : 0);
-    const ZI = 0.6, ZO = 0.5, total = PRE + ZI + P.T + P.hold + ZO;
+    const ZI = 0.6, ZO = 0.5, total = PRE + ZI + P.T + P.hold + ZO, still = reduced();
     const ck = clk ? document.querySelector('#bar .clk') : null;
     return new Promise((resolve) => {
       let start = null, skip = false;
@@ -4871,7 +4937,8 @@
       const frame = (now) => {
         if (start === null) start = now;
         const t = skip ? total : ((now - start) / 1000) * speed, tt = t - PRE;
-        const k = EASE.io(clip(tt / ZI, 0, 1)) * (P.stay ? 1 : 1 - EASE.io(clip((tt - ZI - P.T - P.hold) / ZO, 0, 1)));
+        // (reduced motion: the play's frame from the start, held still; no zoom in or out)
+        const k = still ? 1 : EASE.io(clip(tt / ZI, 0, 1)) * (P.stay ? 1 : 1 - EASE.io(clip((tt - ZI - P.T - P.hold) / ZO, 0, 1)));
         const c0 = sc.cam0 || FULL;            // from the pre-snap frame into the play's, and back
         sc.cam = { lo: lerp(c0.lo, P.cam.lo, k), hi: lerp(c0.hi, P.cam.hi, k) };
         const tp = clip(tt - ZI, 0, P.T);
@@ -4906,7 +4973,7 @@
   // play one snap on the field: `before` is the state it was snapped from, `side` its strong side
   async function animatePlay(before, res, side, replay, look) {
     if (!replay) await cutReplay();
-    if (reduced() || (G.fast && !replay) || $('play').hidden) return false;
+    if ((!playsOn() && !replay) || (G.fast && !replay) || $('play').hidden) return false;
     const e = res.log.find((x) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(x.ev));
     if (!e) return false;
     const two = e.ev === 'pat' && e.two;
@@ -4941,6 +5008,17 @@
         (window.__oobLog = window.__oobLog || []).push({ oob: !!e.oob, shown: x < SX0 || x > SX1, mine: e.team === G.me, call: e.call, evt: e.evt || '', yards: e.yards, x: +x.toFixed(1), running: !!res.root.clock_running });
       }
     }
+    // (and nobody on the field runs faster than an NFL player: every man's top speed over the play, frame to frame and
+    // over a fifth of a second, and his longest single-frame jump; speedCheck)
+    if (window.__sepLog && P) speedLog(sc, P, drawnE, { yl: two ? 2 : before.yl, mine: e.team === G.me, two: !!two });
+    // (and every pass in the air flies at a pass's speed: one that hangs, slower than a soft toss, is drawn wrong)
+    if (window.__sepLog && P) {
+      const pass = P.segs.find((s) => s.kind === 'fly' && s.lift);
+      if (pass) {
+        const yd = Math.hypot((pass.x1 - pass.x0) / XYD, pass.L1 - pass.L0), dur = pass.t1 - pass.t0;
+        if (dur > 0.45 && yd / dur < 10) (window.__floatLog = window.__floatLog || []).push({ call: e.call, yl: before.yl, yd: +yd.toFixed(1), s: +dur.toFixed(2), route: e.route || null });
+      }
+    }
     scene = sc;
     if (!P) return false;
     sc.svg.querySelectorAll('.nm').forEach((t) => t.classList.add('gone'));     // the names drop at the snap
@@ -4950,7 +5028,7 @@
     const tos = pre.filter((x) => x.ev === 'timeout'), snapT = ro ? ro.t : tos.length ? tos[tos.length - 1].t : before.t;
     const clk = { t0: before.t, snap: snapT, end: Math.min(res.root.t, snapT) };
     P.motion = two ? null : motionOf(sc, e, before, before.t - snapT);
-    await runPlan(sc, P, PLAY_SPEED * playSpeed(), clk);
+    await runPlan(sc, P, PLAY_SPEED * (playSpeed() || 1), clk);
     fadeNext = true;
     lastBall = null;
     return true;
@@ -4981,7 +5059,7 @@
       const y = LOS_Y - r.ytg * PPY;
       if (y > 4) svg.append(S('line', { x1: SX0, y1: y, x2: SX1, y2: y, stroke: 'var(--chain)', 'stroke-width': 3 }));
     }
-    const f = formation(offLineup(offI).slice(), lineup(1 - offI).def.slice(), s, bx);
+    const f = formation(offLineup(offI).slice(), lineup(1 - offI).def.slice(), s, bx, offI === G.me ? G.form : null);
     const put = (o, isOff, team, mine) => {
       const y = isOff ? LOS_Y + o.d * PPY : LOS_Y - o.d * PPY;
       const g = S('g', { class: `pl${mine ? ' me' : ''}`, transform: `translate(${o.x.toFixed(1)},${y.toFixed(1)})`, tabindex: 0, role: 'button',
@@ -5373,7 +5451,7 @@
   function persist() {
     state.spots[G.si] = { id: G.scen.id, root: G.root, decisions: G.decisions, log: G.log, seq: G.seq, snapN: G.snapN, over: G.over,
       result: G.result, started: G.started, pending: G.pending || null, regrade: G.regrade && G.regrade.length ? G.regrade : null,
-      pers: G.pers || null, persWho: G.persWho || null, qb: G.qb || null, vsN: G.vsN || 0, cot: G.cot || null };
+      pers: G.pers || null, persWho: G.persWho || null, form: G.form || null, qb: G.qb || null, vsN: G.vsN || 0, cot: G.cot || null };
     saveState();
   }
   function resumeSpot(i) {
@@ -5381,7 +5459,7 @@
     let s = state.spots[i];
     if (s && s.id && s.id !== G.scen.id) s = state.spots[i] = null;   // saved on another game (a changed schedule): start fresh
     if (s) Object.assign(G, { root: s.root, decisions: s.decisions || [], log: s.log || [], seq: s.seq || 0, snapN: s.snapN || 0,
-      over: s.over, result: s.result, started: !!s.started, pers: s.pers || null, persWho: s.persWho || null, qb: (!VS && s.qb) || null, vsN: s.vsN || 0, cot: s.cot || G.cot || null,
+      over: s.over, result: s.result, started: !!s.started, pers: s.pers || null, persWho: s.persWho || null, form: (!VS && s.form) || null, qb: (!VS && s.qb) || null, vsN: s.vsN || 0, cot: s.cot || G.cot || null,
       // a snap left mid-play by a reload: its grading is redone in the background (regradeBg), with any still waiting
       regrade: (s.regrade || []).concat(s.pending ? [s.pending] : []), pending: null });
     G.side = sideFor(G.seq);
@@ -6270,7 +6348,71 @@
   // (the chips first, then the timeout under them: placed before the personnel chip showed, it sat over Ratings when
   // the chips wrapped to a second row on a 375-wide phone)
   function persButton() { persChip(); toButton(); ezClear(scene); }
+  // the formation (game.js formation): the quarterback's spot, charted by FTN and what the plays are drawn by (engine.js
+  // FORM_CODE), and the receivers' look, drawn only (no charting tells a bunch from a spread; the plays are the same)
+  const FORM_QB = [['gun', 'Shotgun', 'The quarterback five yards back, the back beside him. About 6 snaps in 10.'],
+    ['under', 'Under center', 'The back seven deep (a fullback in front of him: the I). About 3 in 10.'],
+    ['pistol', 'Pistol', 'The quarterback four back, the back behind him. About 1 in 20.'],
+    ['empty', 'Empty', 'Nobody in the backfield: the back split out. The lineup only; no charting marks it, so the plays are drawn as from any set.']];
+  const FORM_LOOK = [['trips', 'Trips', 'Three receivers to the strong side.'], ['spread', 'Spread', 'Two and two.'],
+    ['bunch', 'Bunch', 'Three in a cluster off the tackle.'], ['tight', 'Tight', 'Everyone in close to the line.']];
+  const FORM_ENGINE = { gun: 1, under: 2, pistol: 3 };         // (engine.js FORM_CODE: the formations the plays are drawn by)
+  const formName = (f) => (!f || (!f.qb && !f.look) ? 'as lined up' : [f.qb && f.qb !== 'gun' ? FORM_QB.find((x) => x[0] === f.qb)[1] : '', f.look && f.look !== 'trips' ? FORM_LOOK.find((x) => x[0] === f.look)[1] : ''].filter(Boolean).join(' · ') || 'Shotgun trips');
+  function formChip() {
+    const b = $('formBtn'), r = G && G.root;
+    if (!b) return;
+    const show = !!(r && r.phase === SNAP && r.pos === G.me && !r.try2 && !G.over);
+    b.hidden = !show;
+    if (!show) return;
+    b.textContent = '';
+    b.append(document.createTextNode(`Formation · ${formName(G.form)}`));
+    const pen = S('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'aria-hidden': 'true' });
+    pen.append(S('path', { d: 'M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4' }));
+    b.append(pen);
+  }
+  function openForm() {
+    if (busy || !G || G.root.pos !== G.me) return;
+    const before = persSnap();
+    let dirty = false;
+    const MARK = { gun: 'SG', under: 'UC', pistol: 'P', empty: '0', trips: '3×1', spread: '2×2', bunch: 'B', tight: 'T' };
+    const set = (key, k) => {
+      const nf = { ...(G.form || {}), [key]: k };
+      G.form = (!nf.qb || nf.qb === 'gun') && (!nf.look || nf.look === 'trips') ? null : nf;
+      track('formation', { qb: nf.qb || 'gun', look: nf.look || 'trips' });
+      persist(); dirty = true; persButton(); render();
+    };
+    const group = (list, key, cur) => {
+      const g = el('div', 'pgroups');
+      list.forEach(([k, t, sub]) => {
+        const on = cur === k, b = el('button', `pgroup${on ? ' on' : ''}`);
+        b.type = 'button';
+        b.setAttribute('aria-pressed', String(on));
+        const txt = el('div');
+        txt.append(el('div', 't', t), el('div', 's', sub));
+        b.append(el('b', '', MARK[k]), txt);
+        b.addEventListener('click', () => set(key, k));
+        g.append(b);
+      });
+      return g;
+    };
+    const render = () => {
+      const f = G.form || {};
+      const hint = el('p', 'phint', 'Optional. Where the quarterback stands is charted on the real plays: pick the shotgun, under center or the pistol and the play is drawn from real plays run from it (never from a handful: too few, and every play counts). The receivers’ look is the lineup on the field only.');
+      const done = el('button', 'btn pdone', 'Done');
+      done.type = 'button';
+      done.addEventListener('click', closeModal);
+      const reset = el('button', 'ghost', 'Back to the real lineup');
+      reset.type = 'button';
+      reset.addEventListener('click', () => { G.form = null; persist(); dirty = true; persButton(); render(); });
+      const b = $('mBody'); b.textContent = '';
+      [hint, group(FORM_QB, 'qb', f.qb || 'gun'), el('h3', '', 'Receivers'), group(FORM_LOOK, 'look', f.look || 'trips'), reset, done].forEach((n) => b.append(n));
+    };
+    onModalClose = () => { if (dirty) { drawField(); persMove(before); if (passing()) drawDock(); } };
+    openModal('Formation', []);
+    render();
+  }
   function persChip() {
+    formChip();
     const b = $('persBtn'), r = G && G.root;
     if (!b) return;
     const show = !!(r && r.phase === SNAP && r.pos === G.me && !r.try2 && !G.over);
@@ -6592,7 +6734,10 @@
   // run with it there: a player who swapped one receiver had every snap drawn from a handful of real plays, the same
   // loss of 2 or 3 on run after run)
   const withTempo = (a) => {
-    const b = G.pers && G.root.pos === G.me && G.pers !== persOf(lineup(G.me).off) ? { ...a, pers: G.pers } : a;
+    const b0 = G.pers && G.root.pos === G.me && G.pers !== persOf(lineup(G.me).off) ? { ...a, pers: G.pers } : a;
+    // (the formation too, when it is one the plays are charted by: the quarterback in the shotgun, under center or in
+    // the pistol; an empty set and the receivers' look are the lineup drawn only)
+    const b = G.form && FORM_ENGINE[G.form.qb] && G.root.pos === G.me ? { ...b0, form: G.form.qb } : b0;
     return G.root.clock_running && ui && ui.tempo ? { ...b, tempo: engineTempo(ui.tempo, G.root) } : b;
   };
   function callAction(id, oob) {
@@ -12620,6 +12765,7 @@
     $('restartBtn').addEventListener('click', restartAsk);
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
     $('persBtn').addEventListener('click', openPers);
+    $('formBtn').addEventListener('click', openForm);
     speedBtn();
     $('deepClose').addEventListener('click', closeDeep);
     $('mClose').addEventListener('click', closeModal);

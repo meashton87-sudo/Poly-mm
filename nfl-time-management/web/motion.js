@@ -213,7 +213,9 @@
     return b;
   };
   World.prototype.leg = function (b, t0, kind, o) {
-    if (!b) return;
+    // (a job with no time, NaN from a missing number upstream, is no job: it would have thrown every job he had away,
+    // and the world rewound and run again then had him somewhere else when a planned path started from where he was)
+    if (!b || !Number.isFinite(t0)) return;
     b.legs = b.legs.filter((l) => l.t0 < t0 - 1e-9);
     b.legs.push({ t0, kind, ...(o || {}) });
   };
@@ -275,8 +277,13 @@
       if (spent && L.plan.stop) { b.vx = 0; b.vy = 0; b.nx = b.x; b.ny = b.y; continue; }    // (a stop path: down where it ends)
       if (L && L.kind === 'path' && !spent) {
         const p = L.plan.at(t + dt - L.t0);
-        b.vx = (p[0] - b.x) / dt; b.vy = (p[1] - b.y) / dt;
-        b.nx = p[0]; b.ny = p[1];
+        // a planned path begins where he was when it was planned; should he be anywhere else now (the world rewound and
+        // run again differently since), he runs to it flat out and no faster: nobody ever jumps across the field in a
+        // frame (a safety 3 yards off his plan's start was drawn there in 1/20 s: 70 yards a second)
+        const gx = p[0] - b.x, gy = p[1] - b.y, gl = hyp(gx, gy), gm = envOf(b.g, b.spd, 1).top * dt;
+        const k = gl > gm ? gm / gl : 1;
+        b.vx = (gx * k) / dt; b.vy = (gy * k) / dt;
+        b.nx = b.x + gx * k; b.ny = b.y + gy * k;
         continue;
       }
       const eff = L && L.eff != null ? L.eff : 1, en = envOf(b.g, b.spd, eff);

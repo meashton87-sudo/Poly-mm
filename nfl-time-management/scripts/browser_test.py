@@ -300,6 +300,7 @@ SHORT_FIELD = """(yl) => {
             const sc = D.makeScene(r, side), P = D.choreograph(sc, e, { action: null, log: [e], root: { ...r, yl: Math.max(1, yl - (o.yards || 0)) } }, false);
             if (!P) return;
             plays++;
+            D.speedLog(sc, P, e, { sweep: 'short', yl, mine, side, shell, id });
             D.offField(sc, P, e.ev === 'fg' && !e.blocked).slice(0, 2).forEach((b) => bad.push({ yl, mine, side, shell, id, ev: e.ev, ...o, ...b }));
           });
         });
@@ -354,6 +355,7 @@ GOAL_LINE = """([yl, full]) => {
           const sc = D.makeScene(r, side), P = D.choreograph(sc, e, { action: null, log: [e], root }, false);
           if (!P) return;
           plays++;
+          D.speedLog(sc, P, e, { sweep: 'goal', yl, mine, side, id: c.id });
           const g = D.goalCheck(sc, P, e, false);
           g.bad.forEach((b) => { tally[b] = (tally[b] || 0) + 1; if (tally[b] <= 8) bad.push({ yl, mine, side, id: c.id, ...o, why: b, cross: g.cross, out: g.out, deepest: g.deepest }); });
         });
@@ -405,6 +407,7 @@ PASS_LOOK = """([n, seed]) => {
     }
     const P = D.choreograph(sc, e, { action, log: [e], root: { ...r, yl: Math.max(1, yl - (e.yards || 0)) } }, false);
     if (!P) continue;
+    D.speedLog(sc, P, e, { sweep: 'pass', yl, id, k, route: e.route || '', to: action ? action.route : '' });
     D.offField(sc, P, false).slice(0, 2).forEach((b) => { if (off.length < 10) off.push({ id, k, yl, to: action ? action.route : '', ...b }); });
     const xe = (D.ballAt(sc, P, P.T).x - D.SX0) / D.XYD;
     if (xe < 2) edge[0]++; else if (xe > 160 / 3 - 2) edge[1]++;
@@ -413,6 +416,43 @@ PASS_LOOK = """([n, seed]) => {
   logs.forEach((k, i) => { if (window[k]) window[k].length = kept[i]; });
   D.drawField();
   return { rows, off, edge };
+}"""
+
+
+# Real plays, as the game draws them (game.js speedCheck): n snaps from spots all over the field, every kind of call (a
+# run, a quick pass, a deep shot, a screen, play action, a rollout, an RPO, a Hail Mary), run by the simulator and
+# drawn with everything the real play's charting gives the animation (the route, the time to throw, the rush, the
+# pressure, the yards, where it ended); nobody on the field ever runs faster than an NFL player or jumps across it
+REAL_PLAYS = """async ([n, seed]) => {
+  const D = window.__draw, { G, ui } = D.get(), calls = Object.values(D.CALL);
+  let s = seed >>> 0;
+  const R = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const pick = (a) => a[Math.floor(R() * a.length)];
+  const logs = ['__sepLog', '__tackleLog', '__fpLog', '__offLog', '__goalLog'], kept = logs.map((k) => (window[k] || []).length);
+  const ids = ['rb_out_strong', 'rb_inside_weak', 'rb_middle', 'qb_run', 'rpo_strong', 'quick_strong', 'quick_weak', 'quick_middle', 'screen', 'deep_strong', 'deep_weak',
+    'deep_middle', 'pa_short', 'pa_deep', 'roll_strong', 'roll_weak', 'hail_mary'];
+  const look0 = G.look, step0 = ui.step;
+  const out = { plays: 0, errs: [] };
+  for (let i = 0; i < n; i++) {
+    const id = pick(ids), ci = calls.findIndex((c) => c.id === id), yl = pick([1, 3, 8, 15, 25, 40, 55, 70, 85, 95, 99]), mine = R() < 0.7;
+    const r = { ...G.root, phase: 0, down: 1 + Math.floor(R() * 3), ytg: Math.min(yl, pick([1, 3, 7, 10, 15])), yl, pos: mine ? G.me : 1 - G.me, try2: false,
+      clock_running: false, t: id === 'hail_mary' ? 6 : pick([3500, 1830, 600, 90, 25]) };
+    G.look = mine && R() < 0.5 ? Math.floor(R() * 4) : null;
+    ui.step = 'x';
+    const act = { to_off: false, play: calls[ci].kind, call: id, oob: R() < 0.2, looks: G.look != null ? 1 << G.look : 0 };
+    let res;
+    try { res = (await D.send({ type: 'step', scen: D.simScen(), root: r, action: act, seed: (seed * 7919 + i) >>> 0 }, true)).res; } catch (err) { out.errs.push(String(err)); continue; }
+    const e = res && res.log && res.log.find((y) => y.ev === 'play');
+    if (!e) continue;
+    const side = R() < 0.5 ? 1 : -1, sc = D.makeScene(r, side), P = D.choreograph(sc, e, res, false);
+    if (!P) continue;
+    out.plays++;
+    D.speedLog(sc, P, e, { sweep: 'real', yl, mine, side, id, row: e.row, route: e.route || '', ttt: e.ttt });
+  }
+  G.look = look0; ui.step = step0;
+  logs.forEach((k, i) => { if (window[k]) window[k].length = kept[i]; });
+  D.drawField();
+  return out;
 }"""
 
 
@@ -859,6 +899,13 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     picked = None                    # a day of two sides: the one taken (asked once: a reload or a restart keeps it)
     pick_gone = False                # ... and the pick screen gone since (it takes the side's own file first: a moment)
     first_call = first               # the first call shows on the spot's own facts (game.js firstInfo), not the simulator's
+    speeds_kept: list = []           # the sweeps' plays timed (game.js speedLog), taken off the page before it reloads
+
+    async def keep_speeds():
+        try:
+            speeds_kept.extend(await page.evaluate("() => { const l = window.__speedLog || []; window.__speedLog = []; return l; }"))
+        except Exception:
+            pass
     asked = False                    # the bot opened the modal on screen itself (else it came up in the way)
     welcomed = False                 # the first visit's welcome seen (a second one, storage on, is in the way)
     t_reload = None                  # when the bot reloaded mid-drive (to time the way back to a call)
@@ -1089,6 +1136,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     for yl in (20, 10, 5, 3, 1, 95, 97, 99):     # (one spot at a time: a page drawing them all at once ran out of memory)
                         sf = await page.evaluate(SHORT_FIELD, yl)
                         plays += sf["plays"]; off += sf["bad"] if sf["n"] else []
+                    await keep_speeds()
                     since = time.time()
                     print(f"{name}: short fields, {plays} plays drawn, {len(off)} off the ground")
                     if off:
@@ -1099,6 +1147,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     for k in range(4):                    # (in batches: a page drawing them all at once ran out of memory)
                         pl = await page.evaluate(PASS_LOOK, [150, seed * 17 + k])
                         rows += pl["rows"]; off += pl["off"]; edge = [a + b for a, b in zip(edge, pl["edge"])]
+                    await keep_speeds()
                     since = time.time()
                     t_start += since - t_pl
                     mix = {}
@@ -1113,6 +1162,18 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         problems.append(f"a pass not drawn as it went: {wrong[:4]}")
                     if off:
                         problems.append(f"off the field on a pass: {off[:4]}")
+                elif st == "choose" and sweep and "real_plays" not in chaos_done:
+                    chaos_done.add("real_plays"); act("real plays sweep")
+                    t_rp, n_rp, errs_rp = time.time(), 0, []
+                    for k in range(3):
+                        rp = await page.evaluate(REAL_PLAYS, [100, seed * 13 + k])
+                        n_rp += rp["plays"]; errs_rp += rp["errs"]
+                    await keep_speeds()
+                    since = time.time()
+                    t_start += since - t_rp
+                    print(f"{name}: real plays, {n_rp} run by the simulator and drawn" + (f", {len(errs_rp)} not run: {errs_rp[:2]}" if errs_rp else ""))
+                    if errs_rp:
+                        problems.append(f"real plays not run: {errs_rp[:3]}")
                 elif st == "choose" and sweep and "goal_line" not in chaos_done:
                     chaos_done.add("goal_line"); act("goal-line sweep")
                     t_gl, n_gl, tally, wrong = time.time(), 0, {}, []
@@ -1121,6 +1182,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         n_gl += gl["plays"]; wrong += gl["bad"]
                         for k, v in gl["tally"].items():
                             tally[k] = tally.get(k, 0) + v
+                    await keep_speeds()
                     since = time.time()
                     t_start += since - t_gl
                     print(f"{name}: goal line, {n_gl} plays drawn, {sum(tally.values())} not as they went {tally or ''}")
@@ -1303,6 +1365,11 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             problems.append(f"never finished: {finished} of {target} games after {steps} steps")
         if not problems and finished < (1 if mode == "daily" else target):
             problems.append(f"stopped after {finished} of {target} games")
+        # every pass in the air at a pass's speed: none hanging over the line waiting for its receiver (game.js logs
+        # one slower than 10 yards a second over more than 0.45 s)
+        floats = await page.evaluate("() => window.__floatLog || []")
+        if floats:
+            problems.append(f"{len(floats)} passes hung in the air: {floats[:3]}")
     finally:
         try:
             seps = await page.evaluate("() => window.__sepLog || []")
@@ -1310,12 +1377,13 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             fps = await page.evaluate("() => window.__fpLog || []")
             offs = await page.evaluate("() => window.__offLog || []")
             oobs = await page.evaluate("() => window.__oobLog || []")
+            speeds = speeds_kept + await page.evaluate("() => window.__speedLog || []")
             goals = await page.evaluate("() => window.__goalLog || []")
             kept = await page.evaluate("() => (window.__drawLog || []).length")
             snaps = await page.evaluate("() => window.__drawSnaps || []")
             jank = await page.evaluate("() => window.__jank || null")
         except Exception:
-            seps, tackles, fps, offs, oobs, goals, kept, snaps, jank = [], [], [], [], [], [], 0, [], None
+            seps, tackles, fps, offs, oobs, speeds, goals, kept, snaps, jank = [], [], [], [], [], [], [], 0, [], None
         shot = None
         if problems:
             status = "fail"
@@ -1326,7 +1394,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 shot = None
         await ctx.close()
     return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
-            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "oobs": oobs, "goals": goals, "trail": trail if problems else [],
+            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "oobs": oobs, "speeds": speeds, "goals": goals, "trail": trail if problems else [],
             "day": day, "side": picked, "timing": timing, "friction": friction, "jank": jank, "shot": shot.name if shot else None}
 
 
@@ -1530,7 +1598,7 @@ WORKER_SPY = """(() => {
   const pm = Worker.prototype.postMessage;
   Worker.prototype.postMessage = function (m, t) {
     try { if (m && m.scen && m.type !== 'init') (window.__scenIds = window.__scenIds || []).push(`${m.type}|${m.scen.id}`); } catch (e) { /* not the game's */ }
-    try { if (m && m.type === 'step' && m.action && m.action.call != null) (window.__stepActs = window.__stepActs || []).push({ call: m.action.call, pers: m.action.pers ?? null }); } catch (e) { /* not the game's */ }
+    try { if (m && m.type === 'step' && m.action && m.action.call != null) (window.__stepActs = window.__stepActs || []).push({ call: m.action.call, pers: m.action.pers ?? null, form: m.action.form ?? null }); } catch (e) { /* not the game's */ }
     return pm.call(this, m, t);
   };
 })();"""
@@ -1659,6 +1727,115 @@ async def qb_swap(browser, base: str, shots: str = "") -> list[str]:
 
 # your grouping as the page has it, the men swapped in, and the calls snapped so far (WORKER_SPY)
 PERS_NOW = """() => { const { G } = window.__draw.get(); return { pers: G.pers || null, who: G.persWho || null, acts: window.__stepActs || [] }; }"""
+
+
+# the formation as the page has it, and your quarterback's and your back's dots on the field (page x, y: down the screen)
+FORM_NOW = """() => { const { G } = window.__draw.get(), M = document.getElementById('field').getScreenCTM();
+  const at = (re) => { const g = [...document.querySelectorAll('#field g.dot.me')].find((x) => re.test(x.getAttribute('aria-label') || '')); if (!g) return null;
+    const m = /translate\\(([-\\d.]+),([-\\d.]+)\\)/.exec(g.getAttribute('transform') || ''); const p = new DOMPoint(+m[1], +m[2]).matrixTransform(M); return [p.x, p.y]; };
+  return { form: G.form || null, qb: at(/Quarterback/), rb: at(/Running back/), chip: (document.getElementById('formBtn') || {}).textContent || '', acts: window.__stepActs || [] }; }"""
+
+
+async def formation_pick(browser, base: str, shots: str = "") -> list[str]:
+    """The formation (game.js openForm, formation; engine.js FORM_CODE), on a phone: the chip beside Personnel opens a
+    sheet of the quarterback's spots and the receivers' looks; Pistol moves the quarterback up and the back behind him,
+    the chip says so, and the pass snapped goes to the simulator with form 'pistol'; Empty takes the back out of the
+    backfield and goes to the simulator with no formation (the lineup only); Back to the real lineup clears it."""
+    out: list[str] = []
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    await ctx.add_init_script("window.__sepLog = []; try { localStorage.setItem('tmd:v3:seen', 'true'); } catch (e) {}")
+    await ctx.add_init_script(WORKER_SPY)
+    page = await ctx.new_page()
+    errs: list[str] = []
+    page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+
+    async def pick(label):
+        await page.click("#formBtn", timeout=3000)
+        await page.wait_for_selector("#mBody .pgroup", timeout=5000)
+        if shots:
+            await page.screenshot(path=str(Path(shots) / f"formation-sheet-{label.lower()}.png"))
+        await page.locator("#mBody .pgroup", has_text=label).first.click(timeout=3000)
+        await page.wait_for_timeout(200)
+        await page.click("#mBody .pdone", timeout=3000)
+        await page.wait_for_timeout(1500)        # (the men jog to their new spots)
+        return await page.evaluate(FORM_NOW)
+
+    async def snap_pass():
+        n0 = len((await page.evaluate(FORM_NOW))["acts"])
+        await page.locator("#dock .key.big:visible", has_text="Pass").first.click(timeout=3000)
+        await page.wait_for_selector("#snapGo", timeout=10000)
+        await page.click("#snapGo", timeout=5000)
+        for _ in range(100):
+            await page.wait_for_timeout(100)
+            acts = (await page.evaluate(FORM_NOW))["acts"]
+            if len(acts) > n0:
+                return acts[n0]
+        return None
+
+    async def next_snap():
+        for _ in range(300):
+            await page.wait_for_timeout(100)
+            if await page.locator("#field.playing").count():
+                await page.click("#field", timeout=2000)
+            elif await page.locator("#dock .result .btn:visible").count():
+                await page.locator("#dock .result .btn").first.click(timeout=2000)
+            elif await page.locator("#formBtn:visible").count() and await page.locator("#dock .key.big:visible", has_text="Pass").count():
+                return True
+        return False
+    try:
+        if not await to_offense(page, base):
+            return ["the formation: the first snap never came up"]
+        if not await page.locator("#formBtn:visible").count():
+            return ["the formation: no Formation chip beside Personnel"]
+        before = await page.evaluate(FORM_NOW)
+        if "as lined up" not in before["chip"]:
+            out.append(f"the formation: the chip does not say as lined up at first: {before['chip']!r}")
+        now = await pick("Pistol")
+        if not now["form"] or now["form"].get("qb") != "pistol":
+            out.append(f"the formation: Pistol picked, but the page has {now['form']!r}")
+        if "Pistol" not in now["chip"]:
+            out.append(f"the formation: Pistol picked, but the chip says {now['chip']!r}")
+        # (the quarterback a yard nearer the line than in the shotgun, the back behind him: the same column, deeper)
+        if before["qb"] and now["qb"] and now["rb"] and not (abs(now["qb"][1] - before["qb"][1]) > 2 and abs(now["rb"][0] - now["qb"][0]) < 6):
+            out.append(f"the formation: Pistol picked, but the dots did not line up in it: qb {before['qb']} -> {now['qb']}, rb {now['rb']}")
+        if shots:
+            await page.screenshot(path=str(Path(shots) / "formation-pistol.png"))
+        a = await snap_pass()
+        if a is None or a["form"] != "pistol":
+            out.append(f"the formation: Pistol picked, but the snap went with {a and a['form']!r}")
+        if not await next_snap():
+            return out + errs
+        now = await pick("Empty")
+        if not now["form"] or now["form"].get("qb") != "empty":
+            out.append(f"the formation: Empty picked, but the page has {now['form']!r}")
+        if now["qb"] and now["rb"] and not (abs(now["rb"][0] - now["qb"][0]) > 40):
+            out.append(f"the formation: Empty picked, but the back is still in the backfield: qb {now['qb']}, rb {now['rb']}")
+        if shots:
+            await page.screenshot(path=str(Path(shots) / "formation-empty.png"))
+        a = await snap_pass()
+        if a is None or a["form"] is not None:
+            out.append(f"the formation: Empty (the lineup only) picked, but the snap went with {a and a['form']!r}")
+        if not await next_snap():
+            return out + errs
+        now = await pick("Bunch")
+        if not now["form"] or now["form"].get("look") != "bunch":
+            out.append(f"the formation: Bunch picked, but the page has {now['form']!r}")
+        if shots:
+            await page.screenshot(path=str(Path(shots) / "formation-bunch.png"))
+        await page.click("#formBtn", timeout=3000)
+        await page.wait_for_selector("#mBody .pgroup", timeout=5000)
+        await page.locator("#mBody .ghost", has_text="Back to the real lineup").first.click(timeout=3000)
+        await page.wait_for_timeout(200)
+        await page.click("#mBody .pdone", timeout=3000)
+        await page.wait_for_timeout(400)
+        now = await page.evaluate(FORM_NOW)
+        if now["form"] or "as lined up" not in now["chip"]:
+            out.append(f"the formation: Back to the real lineup, but the page has {now['form']!r}, the chip {now['chip']!r}")
+    except Exception as e:
+        out.append(f"the formation: {e}")
+    finally:
+        await ctx.close()
+    return out + errs
 
 
 async def pers_group(browser, base: str) -> list[str]:
@@ -2156,6 +2333,10 @@ def binom_tail(n: int, k: int, p: float) -> float:
     return min(1.0, sum(math.exp(math.lgamma(n + 1) - math.lgamma(j + 1) - math.lgamma(n - j + 1) + j * lp + (n - j) * lq) for j in range(k, n + 1)))
 
 
+SPEED_MAX = 11.5        # yd/s: the fastest NFL ball carriers top out near 23 mph (11.2 yd/s)
+JUMP_MAX = 1.5          # yards between two frames (1/20 s): 30 yd/s, a teleport
+
+
 def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     """What the plays on the field showed over every episode's logs (seps, tackles, fps, offs): the lines to print, in
     order, and the checks that failed, each with its line (daily_check.py reports them from the live site)."""
@@ -2181,6 +2362,13 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     tail_tk = binom_tail(n_tk, len(alone), 0.02)
     if alone and tail_tk < 0.01:
         fail("tackles", f"FAIL: tackled with nobody near {alone[:5]}")
+    # a breakaway is drawn as one: a carrier never eases up in the open waiting for a tackler to arrive (game.js runDown
+    # sends the man with the angle from the moment he got the ball; on a short interception return the receiver it was
+    # thrown to makes the tackle). `slowed` is how long the carrier had to wait at the spot, in seconds
+    waited = [x for x in tk if x.get("slowed", 0) > 0.6]
+    say(f"carriers slowed for the tackler: {sum(1 for x in tk if x.get('slowed', 0) > 0)} (over 0.6 s: {len(waited)})")
+    if waited:
+        fail("breakaway", f"FAIL: a carrier waited in the open for his tackler {waited[:5]}")
     # forward progress: a carrier never has the ball past where it is spotted (beyond where he got it), so he is
     # never shown driven back from it
     fp = [x for r in results for x in r.get("fps", [])]
@@ -2202,6 +2390,17 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
         f"shown otherwise than played: {len(odd)}")
     if odd:
         fail("out-of-bounds", f"FAIL: out of bounds on the field but not in the play, or the other way: {odd[:5]}")
+    # nobody runs faster than an NFL player on any play shown (game.js speedCheck): about 23 mph, 11.2 yards a second, at
+    # the very top (a breakaway is drawn as one: the man who catches him had the angle), and nobody jumps across the
+    # field between two frames
+    sp = [x for r in results for x in r.get("speeds", [])]
+    fast = [x for x in sp if x.get("v1", 0) > SPEED_MAX]
+    jumps = [x for x in sp if x.get("jump", 0) > JUMP_MAX]
+    say(f"plays timed: {len(sp)}, anyone over {SPEED_MAX} yd/s: {len(fast)} (over a fifth of a second: "
+        f"{sum(1 for x in sp if x.get('v4', 0) > SPEED_MAX)}), a jump over {JUMP_MAX} yd between frames: {len(jumps)}"
+        + (f"; fastest {max(x['v1'] for x in sp):.1f} yd/s" if sp else ""))
+    if fast or jumps:
+        fail("speed", f"FAIL: faster than an NFL player, or a jump across the field {sorted(fast + jumps, key=lambda x: -x.get('v1', 0))[:5]}")
     # the ball against the goal line and the sidelines on every play shown (game.js goalCheck): a touchdown carried or
     # caught over the goal line in bounds, before he is ever out of bounds with it; nothing else over that line with the
     # ball; out of bounds at the spot; a safety down in his own end zone
@@ -2602,6 +2801,10 @@ async def main(a) -> int:
         print("Who plays, the quarterback (the sheet's first row, a backup put in plays and is graded on his simulator, back to the real lineup): "
               + ("ok" if not qb else "FAIL") + "".join(f"\n      {x}" for x in qb), flush=True)
         reach += qb
+        fp = await formation_pick(browser, base, a.shots)
+        print("the formation (the chip beside Personnel, Pistol lines up and snaps as pistol, Empty is the lineup only, a look, back to the real lineup): "
+              + ("ok" if not fp else "FAIL") + "".join(f"\n      {x}" for x in fp), flush=True)
+        reach += fp
         pg = await pers_group(browser, base)
         print("Who plays, the grouping (a receiver swapped: the snap goes without one, the grouping lined up in; another picked goes with it): "
               + ("ok" if not pg else "FAIL") + "".join(f"\n      {x}" for x in pg), flush=True)
@@ -2659,6 +2862,7 @@ async def main(a) -> int:
         (out / "seps.json").write_text(_json.dumps([x for r in results for x in r.get("seps", [])]))
         (out / "tackles.json").write_text(_json.dumps([x for r in results for x in r.get("tackles", [])]))
         (out / "fps.json").write_text(_json.dumps([x for r in results for x in r.get("fps", [])]))
+        (out / "speeds.json").write_text(_json.dumps([x for r in results for x in r.get("speeds", [])]))
     except Exception:
         pass
     lines, failed = field_checks(results)
