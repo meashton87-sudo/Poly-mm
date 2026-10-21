@@ -171,6 +171,11 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .endcard > .row .btn { flex: 1 1 140px; text-align: center; }
 #mBody .restartacts { display: flex; gap: 8px; margin-top: 14px; }
 #mBody .restartacts .btn { flex: 1 1 0; }
+/* a flag on the other team: accept or decline (game.js penaltyAsk), each with where it leaves the ball */
+#mBody .penacts { display: grid; gap: 8px; margin-top: 12px; }
+#mBody .penpick { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; white-space: normal; height: auto; padding: 12px 14px; }
+#mBody .penpick b { font-size: 1.05em; }
+#mBody .penpick .note { margin: 0; }
 #mBody > a.btn { display: flex; align-items: center; justify-content: center; text-decoration: none; margin-top: 12px; }
 .endcard > .row a.btn, .endcard > a.btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 #vsAgain.ask { outline: 3px solid #e0a526; outline-offset: 2px; }

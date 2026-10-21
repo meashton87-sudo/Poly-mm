@@ -4641,6 +4641,8 @@
         if (e.kind === PASS && (thrown || !['rpo_strong', 'rpo_weak'].includes(id))) pass(c, id, sign);
         else run(c, id, sign);
       }
+      // a foul during the play that the other team turned down: the flag flies, the play stands
+      if (e.penOpt && e.penOpt.declined) flag(clip(P.T * 0.45, 0.8, 2.2), `Flag: ${e.penOpt.pen}, declined`);
       bake(P.T + 0.2);
     } else if (e.ev === 'fg' || (e.ev === 'pat' && !two)) {
       specialKick();
@@ -5433,6 +5435,8 @@
     // and 2 is a first down by the yardage, as any gain is)
     if (e.fd && !e.td) extra.push(e.penalty && e.yards < e.ytg ? 'automatic first down' : 'first down');
     if (e.onDowns) extra.push('turnover on downs');
+    // a foul during the play: taken or turned down by the team it was against (yours to pick: penaltyAsk)
+    if (e.penOpt) extra.unshift(e.penOpt.declined ? `flag, ${e.penOpt.pen}: declined` : 'penalty accepted');
     if (e.safety) extra.push('safety');
     if (e.runoff10) extra.push('10-second runoff (a foul stopped the clock inside the last minute)');
     if (e.untimed) extra.push('no time left, but a half cannot end on a defensive foul: an untimed down');
@@ -5762,7 +5766,17 @@
     const seed = hash('step', seedKey(), G.si, G.seq++);
     const before = G.root, side = G.side;
     // a two-point try you call is shown as a snap from the 2 (root.try2 holds the real try the engine plays)
-    const res = (await send({ type: 'step', scen: simScen(), root: G.root.try2 || G.root, action, seed }, true)).res;
+    let res = (await send({ type: 'step', scen: simScen(), root: G.root.try2 || G.root, action, seed }, true)).res;
+    // a flag on them during the play: yours to accept or decline (the same snap again, the same draws, with your pick)
+    const fl = !VS && res.log.find((x) => x.ev === 'play' && x.penOpt && x.penOpt.offended === G.me);
+    if (fl) {
+      const pick = await penaltyAsk(fl, G.root.try2 || G.root);
+      if ((pick === 'decline') !== fl.penOpt.declined) {
+        action = { ...action, penAs: pick };
+        res = (await send({ type: 'step', scen: simScen(), root: G.root.try2 || G.root, action, seed }, true)).res;
+      }
+      track('penalty_choice', { mode: modeName(), pick, auto: fl.penOpt.declined ? 'decline' : 'accept' });
+    }
     res.action = action;
     if (action && action.philly) res.log.forEach((x) => { if (x.ev === 'pat') x.philly = true; });
     const pe0 = res.log.find((x) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(x.ev));
@@ -5781,6 +5795,41 @@
     if (res.animated && reelLi && reelLi.isConnected) reelKey(reelLi, G.lastPlay);
     G.look = null;
     return res;
+  }
+  // A flag on the other team during the play: accept the yards or decline and keep the play (engine.js _scrimmage
+  // draws the play under the foul). Each option says where it leaves the ball; the better one for you is listed first
+  // and is what Enter or closing the sheet takes
+  function penaltyAsk(e, r) {
+    const o = e.penOpt, mineBall = r.pos === G.me;
+    const at = (y) => Math.min(99, Math.max(1, r.yl - y));
+    const spot = (y) => onSpot({ pos: r.pos, yl: at(y) });
+    const downTxt = (fd, y, sameDown) => {
+      const d = fd ? 1 : sameDown ? r.down : r.down + 1;
+      return d > 4 ? 'turnover on downs' : ddText({ down: d, ytg: fd ? Math.min(10, at(y)) : r.ytg - y, yl: at(y) });
+    };
+    const ay = Math.round(o.accept.yards), dy = Math.round(o.decline.yards);
+    const accTxt = `${Math.abs(ay)} yards ${ay > 0 ? 'for the offense' : 'back'}: ${downTxt(o.accept.fd, ay, true)}${o.accept.fd && ay < r.ytg ? ' (automatic first down)' : ''}, ${spot(ay)}`;
+    const d = o.decline, gain = dy > 0 ? `a gain of ${dy}` : dy < 0 ? `a loss of ${-dy}` : 'no gain';
+    const playTxt = d.td ? 'a touchdown' : d.to ? 'a turnover' : d.inc ? 'an incomplete pass' : /sack/.test(d.evt) ? `a sack, ${gain}` : gain;
+    const decTxt = `The play stands, ${playTxt}${d.td || d.to ? '' : `: ${downTxt(d.fd, dy, false)}, ${spot(dy)}`}`;
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (done) return; done = true; onModalClose = null; if (!$('modal').hidden) closeModal(); resolve(v); };
+      const best = o.declined ? 'decline' : 'accept';
+      const btn = (k, title, txt) => {
+        const b = el('button', `btn penpick${k === best ? '' : ' ghostbtn'}`);
+        b.type = 'button';
+        b.append(el('b', '', title), el('span', 'note', txt));
+        b.addEventListener('click', () => finish(k));
+        return b;
+      };
+      const opts = [btn('accept', 'Accept', accTxt), btn('decline', 'Decline', decTxt)];
+      if (best === 'decline') opts.reverse();
+      const row = el('div', 'penacts');
+      row.append(...opts);
+      openModal(`Flag: ${o.pen}`, [el('p', 'note', `On ${mineBall ? 'the defense' : 'the offense'}. Your call:`), row]);
+      onModalClose = () => finish(best);
+    });
   }
   // a replay never holds up the game: a call, Next play or Next game tapped during it cuts it short (cutReplay)
   let replaying = null, cutAnim = null;

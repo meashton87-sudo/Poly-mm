@@ -970,6 +970,16 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     problems.append("the page's error bar: " + await page.evaluate("() => document.getElementById('errBar').innerText.slice(0, 300)"))
                 elif st == "error":
                     problems.append(f"error shown to the player: {key[1][:300]!r}")
+                elif st == "modal" and await page.evaluate("() => !!document.querySelector('#modal .penacts')"):
+                    # a flag on the other team during the play: accept or decline, either one (game.js penaltyAsk),
+                    # or close it (the better one for the player)
+                    k = rnd.choice(["accept", "decline", "close"])
+                    friction.setdefault("penalties", []).append(k)
+                    act("penalty " + k)
+                    if k == "close":
+                        await page.click("#mClose", timeout=3000)
+                    else:
+                        await page.locator("#modal .penpick").nth(0 if (k == "accept") == await page.evaluate("() => /^Accept/.test(document.querySelector('#modal .penpick b').textContent)") else 1).click(timeout=3000)
                 elif st in ("modal", "deep"):
                     # (something came up over the game that the bot never asked for. Not the first visit's welcome
                     # (game.js openHelp, where the first drive's tour is not: a scenario, a Pro drive): a new player

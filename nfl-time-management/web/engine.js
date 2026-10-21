@@ -1834,7 +1834,7 @@
       if (kind === FG) this._fieldGoal(S, g, u, o, fire, act && act.st);
       else if (kind === PUNT) this._punt(S, g, u, o, act && act.st);
       else {
-        let pbRow = -1, callIdx = -1, match = 0, why = null;
+        let pbRow = -1, callIdx = -1, match = 0, why = null, fkP = -1;
         const oobWant = half === 2 && tHalf <= 300 && margin > 0 ? -1 : 0;
         // your own call without "get out of bounds": the carrier plays to stay in. Real late-game plays are full of
         // carriers stepping out on purpose; a player who didn't ask for it saw his man walk out in open field, and a
@@ -1844,6 +1844,7 @@
           // your call, against the look the defense showed (Versus: the defense's whole call): the matchup tilts the draw
           callIdx = this.e.pb.callIndex[act.call];
           const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl), who = act.route ? (WHO_CODE[act.who] || 0) : undefined, route = routeOfAct(act);
+          fkP = fk;
           if (dcValid(act.dc)) {
             const m = dcEffect(this.e.pb.dcEff, act.call, act.dc, act.pers, act.seen);
             match = m.s + repeatS(act); why = m.why.slice(0, 3);
@@ -1858,6 +1859,7 @@
           // daily game (act.read: the computer's offense reads your defense) checks into calls that beat it
           const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl);
           callIdx = this.pickCall(kind === PASS ? 'pass' : 'run', fk, u[4], null, act.read ? act.dc : null, readOf(act));
+          fkP = fk;
           if (callIdx >= 0) {
             const m = dcEffect(this.e.pb.dcEff, this.e.pb.calls[callIdx].id, act.dc);
             match = m.s; why = m.why.slice(0, 3);
@@ -1869,11 +1871,40 @@
           // of that call against the look you called, tilted by the matchup
           const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl);
           callIdx = this.pickCall(kind === PASS ? 'pass' : 'run', fk, u[4], act.def);
+          fkP = fk;
           match = this.matchOf(callIdx, act.def);
           if (callIdx >= 0) pbRow = this.samplePlaybook(o, callIdx, fk, u[2], half === 2 && tHalf <= 300 && margin > 0 ? -1 : 0, DEF_LOOKS[act.def], match);
         }
-        this._scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match, why, runningAtSnap);
+        // a foul during the play (not before the snap): the play under it, as it would have gone (a real play of the
+        // same call here with no flag), for the offended team to take instead (_scrimmage: accept or decline)
+        let alt = -1;
+        const P = this.e.pb;
+        if (pbRow >= 0 && fkP >= 0 && callIdx >= 0 && (P.flags[pbRow] & 1) && P.lookB && !this._isPreSnap(pbRow)) {
+          alt = this._livePlay(o, callIdx, fkP, (u[2] * 7919.13 + 0.37) % 1);
+        }
+        this._scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match, why, runningAtSnap, alt, act && act.penAs);
       }
+    }
+    // a real play of call callIdx in situation fk with no flag (the weights as drawn: the call's pool), for a foul's
+    // declined option
+    _livePlay(team, callIdx, fk, u) {
+      const P = this.e.pb, cdf = this._cdfOf(team, 0), pool = P.poolOf[callIdx * P.nFine + fk];
+      this._live = this._live || new WeakMap();
+      let byPool = this._live.get(cdf);
+      if (!byPool) { byPool = new Map(); this._live.set(cdf, byPool); }
+      let T = byPool.get(pool);
+      if (T === undefined) {
+        const lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1, items = [], cum = [];
+        let tot = 0;
+        for (let i = lo; i <= hi; i++) {
+          const r = P.items[i];
+          if (P.flags[r] & 1) continue;
+          tot += cdf[i] - (i > lo ? cdf[i - 1] : pool); items.push(r); cum.push(tot);
+        }
+        T = tot > 0 ? { items, cum, tot } : null;
+        byPool.set(pool, T);
+      }
+      return this._pickT(T, u);
     }
 
     _coachChoice(S, g, o, margin, tHalf, pFg, u5, cm) {
@@ -1972,11 +2003,11 @@
       S.credit = S.running ? credit : 0;
     }
 
-    _scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match, why, runningAtSnap) {
+    _scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match, why, runningAtSnap, alt = -1, penAs) {
       const d = 1 - o, L = this.e.lib, R = this.R;
       const yl0 = S.yl, ytg0 = S.ytg, down0 = S.down;
       let yards = 0, penalty = false, autoFd = false, incomplete = false, oob = false, tdOff = false, tdDef = false,
-        turnover = false, toRel = 0, safety = false, dur = 0;
+        turnover = false, toRel = 0, safety = false, dur = 0, penOpt = null;
       if (pbRow >= 0) {   // a specific call from the playbook (daily game)
         const P = this.e.pb, f = P.flags[pbRow];
         yards = P.yards[pbRow]; penalty = !!(f & 1); autoFd = !!(f & 2); incomplete = !!(f & 4); oob = !!(f & 8);
@@ -1984,6 +2015,28 @@
         // of the way (PB_TD_SHARE), a safety only if the loss reaches the end zone (from the spot, below)
         tdOff = !!(f & 16) && yards >= PB_TD_SHARE * yl0; tdDef = !!(f & 32); turnover = !!(f & 64);
         toRel = P.toRel[pbRow]; dur = P.dur10[pbRow] / 10;
+        // a foul during the play: the offended team takes the yards or the play (alt, the play as it would have gone).
+        // penAs: your choice (the daily game asks when the foul is theirs); else the better of the two for them: the
+        // offense keeps a play that scores or gains more than the flag (and its first down when the flag gives none);
+        // the defense keeps a turnover, a stop on third or fourth down, or a loss worse than the flag
+        if (penalty && alt >= 0) {
+          const fa = P.flags[alt], aY = P.yards[alt], aTo = !!(fa & 64), aInc = !!(fa & 4);
+          const pY = yards > 0 ? (yards >= 15 ? Math.min(yards, yl0 - 1) : Math.min(yards, yl0 / 2)) : -Math.min(-yards, (100 - yl0) / 2);
+          const aTd = !aTo && ((!!(fa & 16) && aY >= PB_TD_SHARE * yl0) || yl0 - aY <= 0), aFd = aY >= ytg0 || !!(fa & 2);
+          const pFd = pY >= ytg0 || autoFd, offended = pY > 0 ? o : 1 - o;
+          let dec;
+          if (penAs === 'accept' || penAs === 'decline') dec = penAs === 'decline';
+          else if (offended === o) dec = aTd || (!aTo && aY > pY && (aFd || !pFd));
+          else dec = aTo || (!aTd && ((!aFd && down0 >= 3) || aY <= pY));
+          penOpt = { offended, pen: P.pen ? P.penNames[P.pen[pbRow]] || 'Penalty' : 'Penalty', declined: dec,
+            accept: { yards: pY, fd: pFd }, decline: { yards: aY, fd: aFd && !aTo, inc: aInc, to: aTo, td: aTd, evt: P.eventNames[P.event[alt]] || '' } };
+          if (dec) {
+            pbRow = alt;
+            yards = aY; penalty = false; autoFd = !!(fa & 2); incomplete = aInc; oob = !!(fa & 8);
+            tdOff = !!(fa & 16) && yards >= PB_TD_SHARE * yl0; tdDef = !!(fa & 32); turnover = aTo;
+            toRel = P.toRel[alt]; dur = P.dur10[alt] / 10;
+          }
+        }
       } else if (kind === RUN || kind === PASS) {
         // running the clock down for a kick: the clock-killing play mix
         const fk = fineKey(closing ? MODE_KILL : gameMode(g.half, S.t - g.halfEnd, margin), down0, ytg0, yl0);
@@ -2070,7 +2123,8 @@
         S.log.push({ ev: 'play', team: o, kind, call: callIdx === undefined ? -1 : callIdx, yards, down: down0, ytg: ytg0,
           yl: yl0, oob: oob && !penalty, incomplete, penalty, td: tdOff, tdDef, turnover, safety, fd: fd && !change,
           onDowns, dur, t: untimed ? g.halfEnd : S.t, running: S.running, row: pbRow === undefined ? -1 : pbRow, match: match || 0, ...(why ? { why } : {}),
-          ...(untimed ? { untimed } : {}), ...(fdStop && !oob && !penalty && !rc ? { fdStop: true } : {}), ...(ro10 ? { runoff10: true } : {}) });
+          ...(untimed ? { untimed } : {}), ...(fdStop && !oob && !penalty && !rc ? { fdStop: true } : {}), ...(ro10 ? { runoff10: true } : {}),
+          ...(penOpt ? { penOpt } : {}) });
       }
       this._endHalfCheck(S, g);
     }
