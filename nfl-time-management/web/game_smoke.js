@@ -176,7 +176,21 @@ for (let k = 0; k < 100; k++) {
     return t / n;
   };
   const hs = [0, -0.4, -0.8, -1.2].map(hitch);
-  assert.ok(hs[1] < hs[0] && hs[2] < hs[1] && hs[3] < hs[2] && hs[3] < hs[0] - 0.1, `repeated hitch: ${hs.map((x) => x.toFixed(2))}`);
+  assert.ok(hs[2] < hs[0] && hs[3] < hs[2] && hs[3] < hs[0] - 0.1, `repeated hitch: ${hs.map((x) => x.toFixed(2))}`);
+  // a pass to a receiver you picked is sacked (and scrambles, throws it away) as often as the call's real plays: those
+  // have no target charted, so the route filter alone left every one out (engine.js _noTarget)
+  const dropOnly = (route) => {
+    let n = 0, k0 = 0;
+    for (const id of ['quick_strong', 'deep_strong', 'pa_deep', 'roll_strong']) for (let fk = 0; fk < P.nFine; fk += 5) for (let k = 0; k < 60; k++) {
+      const r = route ? S.samplePlaybook(0, P.callIndex[id], fk, (k + 0.5) / 60, false, 0, 0, 'out', 3) : S.samplePlaybook(0, P.callIndex[id], fk, (k + 0.5) / 60, false, 0, 0);
+      if (r < 0 || P.flags[r] & 1) continue;
+      n++; k0 += /sack/.test(P.eventNames[P.event[r]] || '') ? 1 : 0;
+    }
+    return k0 / n;
+  };
+  const sk0 = dropOnly(false), sk1 = dropOnly(true);
+  assert.ok(sk1 > sk0 * 0.75 && sk1 < sk0 * 1.25, `sacks with a receiver picked: ${sk1.toFixed(3)} against ${sk0.toFixed(3)}`);
+  console.log(`sacks: ${(100 * sk0).toFixed(1)}% of the calls' real plays, ${(100 * sk1).toFixed(1)}% with a receiver and route picked`);
   console.log(`the hitch called again and again: ${hs.map((x) => x.toFixed(2)).join(' / ')} EPA (first or second time, third, fourth, fifth)`);
 }
 // personnel: a call with 12 (or 21, 13) personnel draws only real plays run with it, where there are enough (PB_LOOK_MIN

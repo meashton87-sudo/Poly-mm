@@ -883,6 +883,12 @@
         if (B) { u = (u - B.share) / (1 - B.share); pre = true; }
       }
       if (route && P.ngs) {
+        // a sack, a scramble, a throwaway with nobody charted as the target: no route to filter them by, so a pick left
+        // every one out (a picked pass was never sacked: 0% against the real 5%). They come first, as often as in
+        // the situation's own plays (against the look the defense showed, when there are enough)
+        const N = preDone === 2 ? null : this._noTarget(cdf, pool, looks);
+        if (N && u < N.share) return this._pickT(N, u / N.share);
+        if (N) u = (u - N.share) / (1 - N.share);
         const r = this._pickT(this.routeSet(team, callIdx, fk, oob, looks, s, route, who), u);
         if (r >= 0) return r;
       }
@@ -1052,6 +1058,38 @@
       byPool.set(pool, T);
       return T;
     }
+    // the dropbacks of a pool with no target charted (sacks, scrambles, most throwaways), against the look when
+    // PB_LOOK_MIN plays of the pool were run against it, else the whole pool; share: their weight in its plays after
+    // the snap
+    _noTarget(cdf, pool, looks) {
+      const P = this.e.pb;
+      if (!P.ngs || !P.ngs.route) return null;
+      this._nt = this._nt || new WeakMap();
+      let byPool = this._nt.get(cdf);
+      if (!byPool) { byPool = new Map(); this._nt.set(cdf, byPool); }
+      const key = `${pool}|${looks || 0}`;
+      let T = byPool.get(key);
+      if (T !== undefined) return T;
+      const lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
+      const build = (lk) => {
+        const items = [], cum = [];
+        let tot = 0, all = 0, n = 0;
+        for (let i = lo; i <= hi; i++) {
+          const r = P.items[i];
+          if (this._isPreSnap(r)) continue;
+          if (lk && P.lookB && !(P.lookB[r] < 4 && (lk >> P.lookB[r]) & 1)) continue;
+          const w = cdf[i] - (i > lo ? cdf[i - 1] : pool);
+          all += w; n++;
+          if ((P.flags[r] & 1) || P.ngs.route[r] !== 0 || !DROPBACK_EV.has(P.eventNames[P.event[r]] || '')) continue;
+          tot += w; items.push(r); cum.push(tot);
+        }
+        return (n >= PB_LOOK_MIN || !lk) && all > 0 ? { items, cum, tot, share: tot / all } : null;
+      };
+      T = (looks && build(looks)) || build(0);
+      if (T && !(T.tot > 0 && T.share < 0.9)) T = null;
+      byPool.set(key, T);
+      return T;
+    }
     _pickT(T, u) {
       if (!T) return -1;
       const target = u * T.tot, c = T.cum;
@@ -1110,6 +1148,14 @@
           if (B && u < B.share) return this._pickT(B, u / B.share);
           if (B) u = (u - B.share) / (1 - B.share);
           preDone = true;
+        }
+        // (and a pick's sacks, scrambles and throwaways, samplePlaybook's, as often as in the situation's plays;
+        // preDone 2: samplePlaybook, if it comes to that, has them drawn)
+        if (route && P.calls[callIdx].kind !== 'run') {
+          const N = this._noTarget(cdf, pool, 0);
+          if (N && u < N.share) return this._pickT(N, u / N.share);
+          if (N) u = (u - N.share) / (1 - N.share);
+          preDone = 2;
         }
         if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (!pools.includes(lp)) pools.push(lp); }
         const ri0 = route ? this._ri(route) : 0;
