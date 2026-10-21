@@ -39,7 +39,7 @@ def test_nfl_is_todays_literals():
     assert (R["quarter"], R["tmw"], R["oob"]) == (900, 120, [120, 300])
     assert tuple(R["kneelRunoff"]) == sim.KNEEL_RUNOFF and R["patKick"] == 33 and R["twoYl"] == 2
     assert R["fgMissBack"] == 8 and R["koTouchback"] == 65 and R["onsideBehindOnly"] and R["untimed"] == "def"
-    assert R["fdStop"] is None and R["runoff10"] is None and R["penStop"] is None and R["runClock"] is None
+    assert R["fdStop"] is None and R["runoff10"] == {"window": 60} and R["penStop"] is None and R["runClock"] is None
 
 
 def test_rules_of():

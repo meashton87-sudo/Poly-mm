@@ -5039,6 +5039,7 @@
     if (e.fd && !e.td) extra.push(e.penalty && e.yards < e.ytg ? 'automatic first down' : 'first down');
     if (e.onDowns) extra.push('turnover on downs');
     if (e.safety) extra.push('safety');
+    if (e.runoff10) extra.push('10-second runoff (a foul stopped the clock inside the last minute)');
     if (e.untimed) extra.push('no time left, but a half cannot end on a defensive foul: an untimed down');
     // out of bounds early in a half: the clock starts again once the ball is spotted (a player saw the clock run on
     // after a man went out, and read it as the game ignoring the sideline)
@@ -5053,7 +5054,7 @@
     for (const e of log) {
       let text = null, t = e.t;
       switch (e.ev) {
-        case 'timeout': text = `Timeout, ${teamName(code(e.team))}${e.left != null ? ` (${e.left} left)` : ''}${e.why === 'kick' ? ', to set up the kick' : ''}`; break;
+        case 'timeout': text = `Timeout, ${teamName(code(e.team))}${e.left != null ? ` (${e.left} left)` : ''}${e.why === 'kick' ? ', to set up the kick' : e.why === 'runoff' ? ', to save the 10-second runoff' : ''}`; break;
         case 'runoff':
           if (e.stop === '2mw') text = 'Two-minute warning';
           else if (e.stop === 'quarter') text = 'End of the quarter';
