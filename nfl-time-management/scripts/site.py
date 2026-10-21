@@ -351,7 +351,13 @@ def banner_meta() -> str:
 # data-cfasync="false" ahead of src so Cloudflare leaves their order alone, then sa.min.js, its command queue and analytics
 EZOIC_HEAD = ('<script data-cfasync="false" src="https://cmp.gatekeeperconsent.com/min.js"></script>'
               '<script data-cfasync="false" src="https://the.gatekeeperconsent.com/cmp.min.js"></script>'
-              '<script async src="//www.ezojs.com/ezoic/sa.min.js"></script>'
+              # (Pro is ad-free: a phone marked Pro, game.js NOADS_KEY, never loads the ad script)
+              '<script>(function(){var n;try{n=localStorage.getItem("tmd:v3:noads")}catch(e){}'
+              'if(n){document.documentElement.classList.add("noads");var t=document.createElement("style");'
+              't.textContent=".adslot,.adbox,.ad-native,#ezmobfooter,[id^=ezoic-pub-ad-placeholder]{display:none!important}";'
+              'document.head.appendChild(t);return}'
+              'var s=document.createElement("script");s.async=true;s.src="//www.ezojs.com/ezoic/sa.min.js";'
+              'document.head.appendChild(s)})()</script>'
               '<script>window.ezstandalone = window.ezstandalone || {}; ezstandalone.cmd = ezstandalone.cmd || [];</script>'
               '<script src="//ezoicanalytics.com/analytics.js"></script>')
 EZOIC_ADSTXT = "https://srv.adstxtmanager.com/19390/{domain}"     # Ezoic's ads.txt manager (docs.ezoic.com, ads.txt setup)
