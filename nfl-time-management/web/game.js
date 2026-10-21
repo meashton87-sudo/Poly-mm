@@ -9357,15 +9357,29 @@
       (z.cmd = z.cmd || []).push(() => { try { fn(window.ezstandalone); } catch (e) { /* never in the way */ } });
     } catch (e) { /* no Ezoic */ }
   }
+  // A full-screen ad (interstitial) only at a break: never as the site opens or on the menus (players met a blank or
+  // look-alike "Continue" page over the game), only once a drive or a Survivor game is over (its card, ezBreak), for a
+  // minute and a half or until the next drive, and at most once in EZ_GAP
+  const EZ_GAP = 5 * 60e3, EZ_OPEN = 90e3;
+  let ezLastBreak = -Infinity, ezShut = 0;
+  const ezNoFull = (why) => ezq((z) => z.setInterstitialAllowed(false, { reason: why }));
+  ezNoFull('page-open');
+  function ezBreak() {
+    if (!EZ || Date.now() - ezLastBreak < EZ_GAP) return;
+    ezLastBreak = Date.now();
+    ezq((z) => z.setInterstitialAllowed(true, { reason: 'drive-over' }));
+    clearTimeout(ezShut);
+    ezShut = setTimeout(() => ezNoFull('break-over'), EZ_OPEN);
+  }
   function ezDrive(on) {
     if (!EZ || ezPlay === on) return;
     ezPlay = on;
     const ids = on ? [...ezShown] : [];
     ids.forEach((i) => ezShown.delete(i));
+    if (on) { clearTimeout(ezShut); ezNoFull('drive-on'); }
     ezq((z) => {
       if (ids.length) z.destroyPlaceholders(...ids);       // (the cards' spots went with the cards)
       z.setOutstreamAllowed(!on, { reason: on ? 'drive-on' : 'between-drives' });
-      z.setInterstitialAllowed(!on, { reason: on ? 'drive-on' : 'between-drives' });
     });
   }
   function ezBox(kind) {
@@ -9383,6 +9397,7 @@
     return box;
   }
   function adBox(kind) {
+    if (EZ && EZ_KINDS.includes(kind)) ezBreak();
     if (EZ) return ezBox(kind);
     // another network's banner (site.py: web/ads/banner.html, e.g. Adsterra): in a sandboxed frame of its own, so its
     // script can't touch the game or send the page elsewhere (a tap on the ad still opens it in a new tab)
