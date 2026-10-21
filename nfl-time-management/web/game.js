@@ -6236,7 +6236,8 @@
     // "I don't see the timeout option always")
     const mine = !!(r && toOnField() && ['family', 'pass', 'detail'].includes(ui.step) && r.phase === SNAP && r.pos === G.me && !G.over);
     const off = mine && r.clock_running && clockOptions(r).includes('timeout');
-    const why = mine && !off ? (!r.to[G.me] ? 'none left' : !r.clock_running ? 'clock stopped' : 'you lead: let it run') : null;
+    // (none left: no button; the dock's own note says so, as before)
+    const why = mine && !off && r.to[G.me] > 0 ? (!r.clock_running ? 'clock stopped' : 'you lead: let it run') : null;
     const def = !!(r && toOnField() && !VS && (ui.step === 'vdef' || ui.step === 'defense') && defTimeoutOk(r));
     b.hidden = !(off || def || why) || busy;
     if (b.hidden) return;
