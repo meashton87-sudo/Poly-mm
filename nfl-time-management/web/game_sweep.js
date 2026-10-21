@@ -380,12 +380,12 @@ idx.spots.forEach((sp, si) => {
   otGames++;
 });
 // 4) drawn calls (game.js readRun, readDef, readKick: a drawing is read as a call the keys make): the drawing goes with
-// the call only to the field (a run's path, an RPO's route, the quarterback's drop, your defenders' lines), so every
-// drawn call plays exactly as the tapped one (the same seed, the same result) and is the call run
+// the call only to the field (a run's path, an RPO's route, the quarterback's drop, your defenders' lines, the throw to
+// the open man), so every drawn call plays exactly as the tapped one (the same seed, the same result) and is the call run
 const DRAW_X = (k) => {
   const path = [[26, -5.2], [26 + (k % 7) - 3, -2], [26 + (k % 11) - 5, 0.4], [26 + (k % 13) - 6, 6 + (k % 9)]];
   return { path, carrier: ['RB', 'QB', 'WR', 'FB'][k % 4], shape: ['downhill', 'counter', 'sweep', 'bounce', 'cutback'][k % 5], qbPath: [[26, -5], [26 + (k % 2 ? 6 : -6), -6.5]],
-    target: k % 4, routes: ['go', 'out', 'slant', 'flat'], drawn: [null, { pts: [[0, -1], [0, 8], [4, 10]], at: 'depth' }, null, null], ddraw: [{ k: k % 11, pts: [[20, 6], [22, -2]] }, { k: (k + 3) % 11, pts: [[30, 12], [34, 18]] }] };
+    target: k % 4, open: k % 2 === 0, routes: ['go', 'out', 'slant', 'flat'], drawn: [null, { pts: [[0, -1], [0, 8], [4, 10]], at: 'depth' }, null, null], ddraw: [{ k: k % 11, pts: [[20, 6], [22, -2]] }, { k: (k + 3) % 11, pts: [[30, 12], [34, 18]] }] };
 };
 let drawnN = 0;
 idx.spots.forEach((sp, si) => {
