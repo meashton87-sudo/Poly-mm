@@ -198,6 +198,16 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   replaces it). The weeks kept before that were made fair once (fairWeeks: wn nulls, wk:<D>..<D+6> rebuilt from wn,
   marked fairweek:<D>); the end card's This week says so to its player (the week's old).
 
+- Social (board/worker.js /challenge*, /calls, /fans; game.js challengeOpen/chEnd, crowdKey/crowdLine, fansEl; the
+  browser test's social check against its stub). Challenges: the daily's end card makes one (Challenge a friend; its
+  /?c=<id> link replaces the share text's ?ch=, which keeps working); a link opens today's daily as ever, a past day in
+  the archive with Pro, else its pitch; a finish posts once a device (cplay:<id>), never counted when restarted or the
+  challenger's own; names only out (never a key hash), blocked() refused, 30 days then gone. The crowd's calls: the
+  /daily post's calls ([situation, call], crowdKey's buckets) counted once a device a day, never a restarted try; a
+  share is shown only at 20+ players in the situation; a few days kept. Fanbases: "Your team" (tmd:v3:team, synced as
+  stats team, the newest pick) rides with the /daily post; the day's and week's averages by team, shown at 5+ players.
+  Teams on all of it by city (TEAMS), never a nickname.
+
 ## Moving the site to a new address
 The owner's steps, in order, are in DOMAIN_MOVE.md (nfl2mindrill.com to 2mindrills.com). In the code the address is
 one setting: the GitHub variable `SITE_DOMAIN` (site.py --domain; DEFAULT_DOMAIN when unset), and while the site moves,

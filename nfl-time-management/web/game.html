@@ -1070,6 +1070,32 @@ details.more .in { padding: 0 12px 10px; display: grid; gap: 8px; }
 .h2h-day .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
 .h2h-day b { font: 900 40px/1 var(--display); letter-spacing: .04em; }
 .h2h-day .sub { font-size: 13px; color: var(--muted); }
+/* the crowd's calls: the day's players' share of your call here (the result card), the drive's Uniqueness (the breakdown) */
+.result .crowd { font: 600 13px var(--body); color: var(--muted); }
+.result.banner:not(.open) .crowd { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden; }
+body.bcast #dock:has(> .fit1) .result.banner:not(.open) .crowd { display: none; }
+.crowdsum { margin: 0; font-size: 13.5px; color: var(--muted); text-align: left; }
+.crowdsum b { color: var(--ink); }
+/* a challenge: the button beside Share, its board (the challenger and everyone from the link), a past day's pitch */
+.chslot { display: grid; gap: 8px; }
+.chboard { display: grid; gap: 6px; text-align: left; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: var(--card); }
+.chboard .k, .fans h3 { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.chboard .brows li { grid-template-columns: 22px minmax(0, 1fr) 2.6em; }
+.chboard .brows li b { text-align: right; }
+.arch .chlead { font-weight: 700; font-size: 17px; }
+/* fanbases: the end card's one ask, Your stats' view */
+.fanask { display: grid; gap: 6px; justify-items: center; text-align: center; border: 1px dashed var(--line); border-radius: 12px; padding: 10px 12px; }
+.fanask p { margin: 0; font-size: 13.5px; }
+.fanask .fanpick, .fans .fanpick { width: 100%; max-width: 320px; }
+.fanpick select { font: inherit; font-size: 15px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+.fans { display: grid; gap: 8px; margin-top: 14px; }
+.fans h3 { margin: 0; }
+.fans .fbody { display: grid; gap: 6px; }
+.fans .note { margin: 0; font-size: 12.5px; }
+.fans .brows li { grid-template-columns: 22px minmax(0, 1fr) auto 2.6em; }
+.fans .brows li small.d { grid-column: 3; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.fans .brows li b { grid-column: 4; text-align: right; }
+.fanown { margin: 0; font-weight: 700; font-size: 13.5px; }
 .h2h { border: 2px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 8px; background: var(--card); }
 .h2h.beat { border-color: var(--sq-g); } .h2h.lost { border-color: var(--sq-r); }
 .h2h .k { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }

@@ -249,9 +249,9 @@
   const PRACTICE_KEY = `${STORE}:practice`;
   // the home screen (#home: the title, the Home tab, the menu on the field, the end cards): today's drive, survivor,
   // Pro and your stats. A bare address opens it too (the owner's call: the site's front door is Home, the day's drive
-  // one tap away on it). A friend's challenge (?ch=) opens the day's card
+  // one tap away on it). A friend's challenge (?ch=, ?c=: challengeOpen) opens the day's card
   let HOME_PG = location.hash === '#home';
-  const CH_LINK = new URLSearchParams(location.search).has('ch');
+  const CH_LINK = new URLSearchParams(location.search).has('ch') || new URLSearchParams(location.search).has('c');
   // Pro is off until it is turned on in the site build (scripts/site.py --pro: <meta name="pro">): no tab, no
   // archive, no drives, no purchase
   // ... and, when the build sets a launch time (scripts/site.py --pro-at: <meta name="pro-at">), not before it: a page
@@ -2237,7 +2237,7 @@
       DRAWN_RANGE, CALL, ROUTES, routeName, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, get: () => ({ G, ui, scene, busy }),
       readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
       promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k),
-      drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock() };
+      drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock(), crowdKey: (r, k) => crowdKey(r, k) };
   }
   // who gets the ball, by his place in the list (the field may be redrawn under the buttons: a resize, the phone's
   // address bar)
@@ -5574,6 +5574,7 @@
     const head = el('div', 'ask');
     d.append(head);
     if (ui.step === 'family') {
+      if (crowdOn()) crowdCounts();          // (the crowd's counts, in before this call's result card: crowdLine)
       head.append(el('h2', '', 'Your call'), el('span', 'sub', `${ddText(r)} · ${spotText(r)}`));
       sketchChips(head, 'play');
       if (G.look != null) d.append(readLine(G.look));
@@ -6268,7 +6269,8 @@
       const vals = await evaluateGraded(sp.r, sp.opts, sp.seed, simScen('qb' in pend ? pend.qb : G.qb));      // (with the quarterback of its snap)
       // (ctx: the score and the clock it was made at, for its tip: whyLine)
       const ctx = { lead: sp.r.score[G.me] - sp.r.score[1 - G.me], left: Math.round(halfLeft(sp.r.t)), h2: sp.r.t <= 1800 };
-      out.push({ ...decisionFrom(sp.kind, sp.family, sp.opts, vals, sp.chosen, sp.q, sp.situation, pend.snap), ctx, ...(sp.extra || {}) });
+      out.push({ ...decisionFrom(sp.kind, sp.family, sp.opts, vals, sp.chosen, sp.q, sp.situation, pend.snap), ctx, ...(sp.extra || {}),
+        ...(crowdOn() ? { ck: crowdKey(sp.r, sp.kind) } : {}) });      // (ck: the situation, for the crowd's calls)
     }
     return out;
   }
@@ -6286,6 +6288,7 @@
     G.pending = pend;
     const graded = gradeSpecs(pend);
     graded.catch(() => {});
+    if (crowdOn()) crowdCounts();          // (the crowd's counts on their way while the play runs: crowdLine, under the result)
     status('Snap…', reduced() ? null : TOUCH ? 'Tap the field to skip' : 'Click the field or press Space to skip');
     const res = await stepWith(action);                // saves the spot, the grading job with it
     let done = false;
@@ -6955,6 +6958,7 @@
       if (xm !== 'g' && whyLine(x)) v.append(el('span', 'why', ` ${whyLine(x)}`));
     });
     wrap.append(v);
+    crowdLine(v, decisions);            // (the day's players' share of this call here, when their counts come)
     // said once, with the win chance when it is in (the card itself stays on as the next call's banner)
     const sayResult = (wcs) => say([txt.querySelector('.yd').textContent, txt.querySelector('.pl').textContent, wcs,
       [...v.childNodes].filter((n) => !(n.classList && n.classList.contains('chip-g'))).map((n) => (n.nodeName === 'BR' ? ' ' : n.textContent)).join('')].filter(Boolean).join('. '));
@@ -8263,6 +8267,15 @@
       share.brag = line;
     };
     box.insertBefore(btn, dbox);
+    if (todayDaily()) {                 // a challenge of your own: the link to send (and the share text's, once made)
+      const legacy = chLink(p), chb = el('button', 'btn ghostbtn chbtn', 'Challenge a friend');
+      chb.type = 'button';
+      const chText = (link) => `\ud83c\udfaf I scored ${Math.round(p * 100)} on today’s Two-Minute Drill (#${dayN}). Beat that: ${link}`;
+      chb.addEventListener('click', async () => { const id = await chMine(p); track('challenge_share', { day: dayN, real: !!id }); shareText(chText(id ? cLink(id) : legacy), pre, 'challenge'); });
+      btn.after(chb);
+      chMine(p).then((id) => { if (id && share.text.includes(legacy)) { share.text = share.text.replace(legacy, cLink(id)); pre.textContent = share.text; } });
+    }
+    chEnd(box, p, (box.querySelector(':scope > .chbtn') || btn).nextSibling);
     const img = el('button', 'btn ghostbtn xshare', 'Share as a picture');
     img.type = 'button';
     img.addEventListener('click', () => shareImage({
@@ -8284,6 +8297,13 @@
     if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) { const lg = el('p', 'lglink'); lg.hidden = true; box.insertBefore(lg, dbox); leagueNudge(); }
     badgeShow(box, state.badges || [], firstFinish);
     if (!DRIVE && !RUN_N && !CUSTOM) endSimplify(box);
+    if (todayDaily()) {
+      const inn = box.querySelector(':scope > .endmore > .in');
+      if (inn) inn.append(fanLink());
+      if (load(FAN_KEY, null) == null) dbox.after(fanAsk());     // (asked once: a pick or Not now)
+    }
+    const rEnd = today.length === 1 && state.spots[0] ? state.spots[0].result : null;
+    crowdEnd(box, decs, share, pre, !!(rEnd && rEnd.half !== 1 && rEnd.mine > rEnd.theirs));
     box.append(countdown(streak >= 1 ? 'Keep the streak: next drive in ' : null));
     if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) box.append(a2hsSlotEl(), reminderNodes());     // the habit: an icon on the phone, a reminder
     const ad = adBox('done');
@@ -8419,7 +8439,7 @@
     if (coach) { const nm = coach.querySelector('.name'); if (nm) chip('Coached like', nm.textContent, coach); }
     const top = kid('.streak') || kid('.pct-lab');
     if (chips.childNodes.length && top) top.after(chips);
-    const share = kid('.sharebtn');
+    const share = kid('.chslot') || kid('.chbtn') || kid('.sharebtn');
     if (share) share.after(more); else box.append(more);
   }
   function streakLine(sk) {
@@ -9035,6 +9055,7 @@
       const res = await fetch(`${BOARD.api}/daily`, POST_JSON({ date: driveDate(), key: deviceKey(), p: clip(p, 0, 1), spots: spotW.map((w) => clip(w, -1, 1)),
         ...(fairDay() ? { g: 2 } : {}), ...(state.restarts ? { restarted: true } : {}),       // (restarted: off the lists, restartAsk)
         ...(sidesOf(dayN) ? { side: today[0].player } : {}),          // (a day of two sides: which, for the side's own numbers)
+        ...fanPost(), ...crowdPost(),                                 // (your team: fanbases; the drive's calls: the crowd's)
         ...(myName() ? { name: myName(), ...withSession() } : {}) }));
       if (!res.ok) throw new Error(`daily ${res.status}`);
       return res.json();
@@ -9047,6 +9068,7 @@
       }
     };
     (BOARD.ready || Promise.resolve()).then(() => { if (BOARD.mode === 'api') refresh(false); });
+    box.again = () => refresh(true);          // (a team picked on the end card: posted again, counted for its fans: fanAsk)
     return box;
   }
   function fillDaily(box, d0, p, spotW, again) {
@@ -9532,9 +9554,11 @@
     if (te) nodes.push(te);
     const sv = survStats();
     if (sv.runs) nodes.push(el('p', '', `Survivor: best run ${sv.best} win${sv.best === 1 ? '' : 's'} (${sv.runs} run${sv.runs === 1 ? '' : 's'}).`));
-    nodes.push(boardEl());
+    const fe = fansEl();
+    nodes.push(fe, boardEl());
     openModal('Your stats', nodes);
     if (focus === 'badges') bd.scrollIntoView({ block: 'start' });
+    if (focus === 'fans') fe.scrollIntoView({ block: 'start' });
   }
 
   // one drive a day: the schedule holds three spots a day (a two-minute drill, protecting a lead, a tied game or
@@ -9725,15 +9749,318 @@
   const chName = (c) => c.name || 'Your friend';
   function challengeLine() {
     const c = !SURV && !PRACTICE && !VS && !DRIVE && !RUN_N && !CUSTOM && !G.si && !state.done ? chFor(dayN) : null;
-    return c ? el('div', 'who chal', `\ud83c\udfaf ${chName(c)} scored ${c.s} on this drive. Beat it.`) : null;
+    return c ? el('div', 'who chal', `\ud83c\udfaf ${chName(c)} scored ${c.s} on ${todayDaily() ? 'today’s drive' : 'this drive'} \u2014 beat that`) : null;
   }
   function challengeCard(p) {
     const c = chFor(dayN);
-    if (!c || DRIVE || RUN_N || CUSTOM) return null;
+    if (!c || DRIVE || RUN_N || CUSTOM || cFor(dayN)) return null;          // (a real challenge's card is its board: chEnd)
     const me = Math.round(p * 100), v = el('div', 'h2h-day chal');
     v.append(el('span', 'k', `You vs ${chName(c)}`), el('b', '', me > c.s ? 'You win' : me < c.s ? `${chName(c)} wins` : 'Tied'),
       el('span', 'sub', `${me}\u2013${c.s}. Send it back: your share link challenges them.`));
     return v;
+  }
+  // A real challenge (?c=<id>, board/worker.js /challenge): the daily's end card makes one ("Challenge a friend", and
+  // the share text's link, once made: chMine, mych:<day> { id, s }, one a day reused), and its board holds the
+  // challenger and everyone who played from the link (names and scores only). Opened (challengeOpen), it is kept for
+  // its day (c:<day> { id, name, s }, and ch:<day> as the old link's: the intro's score to beat): today's daily plays as
+  // ever; a past day plays from the archive with Pro (#day-N), and without Pro the link shows the challenger's result
+  // and the Pro pitch (renderChallengePitch). The day's finish goes to the challenge once a device (cplay:<id>; a
+  // restarted try says so and is not counted) and the end card shows its board (chEnd); your own challenge's board
+  // shows there once someone has played it. The old ?ch= link (above) keeps working; nothing about it is checked.
+  const C_RE = /^[a-hjkmnp-z2-9]{7}$/, cLink = (id) => `${SITE}/?c=${id}`;
+  const cFor = (n) => { const c = load(`${STORE}:c:${n}`, null); return c && C_RE.test(c.id || '') ? c : null; };
+  async function challengeOpen(now) {
+    const q = new URLSearchParams(location.search), id = String(q.get('c') || '').trim().toLowerCase();
+    if (!q.has('c')) return null;
+    q.delete('c');
+    history.replaceState(null, '', location.pathname + (q.toString() ? `?${q}` : '') + location.hash);
+    if (!C_RE.test(id)) { toast('That challenge link doesn’t work.'); return null; }
+    await BOARD.ready;
+    if (BOARD.mode !== 'api') return null;
+    let d;
+    try {
+      const r = await fetch(`${BOARD.api}/challenge/${id}`, { cache: 'no-store' });
+      d = await r.json();
+      if (!r.ok) throw new Error(d.error || `challenge ${r.status}`);
+    } catch (e) { toast(e.message || 'That challenge did not load'); return null; }
+    const today = dayOf(now);
+    if (!(Number.isInteger(d.day) && d.day >= 1 && d.day <= today)) return null;      // (a day not out yet: a clock far off)
+    track('challenge_open', { day: d.day, link: 'c', past: d.day < today });
+    const mine = load(`${STORE}:mych:${d.day}`, null);
+    if (!(mine && mine.id === id)) {          // (your own link: no score of yours to beat)
+      save(`${STORE}:c:${d.day}`, { id, name: d.name || '', s: d.score });
+      save(`${STORE}:ch:${d.day}`, { s: d.score, name: d.name || '' });
+    }
+    if (d.day === today) return 'today';
+    if (isPro()) { location.hash = `#day-${d.day}`; return 'stop'; }          // (the hash change reloads into the archive's day)
+    renderChallengePitch(d);
+    return 'stop';
+  }
+  // a past day's challenge without Pro: who scored what, the board so far, and the Pro pitch (today's drive is free)
+  function renderChallengePitch(d) {
+    show('arch');
+    track('challenge_pitch', { day: d.day });
+    const box = $('arch');
+    box.textContent = '';
+    const when = dayDate(d.day).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+    const go = el('a', 'btn', 'Play today’s drive');
+    go.href = '#daily';
+    box.append(el('h2', '', 'A challenge'), el('p', 'lead chlead', `🎯 ${chName({ name: d.name })} scored ${d.score} on the drive of ${when} — beat that.`),
+      chBoardEl(d), el('p', 'note', 'That drive is in the archive: every past daily, part of Pro. Today’s drive is free.'), go, ...proNodes(), authNodes());
+  }
+  // a challenge's board: the challenger (🎯) and everyone who played from the link, best first, names only; you
+  // ({ s, name } your result, or { ch: true }: your own challenge) marked
+  function chBoardEl(d, you) {
+    const w = el('div', 'chboard');
+    w.append(el('div', 'k', `${chName({ name: d.name })}’s challenge · ${d.n ? `${d.n.toLocaleString()} played from the link` : 'nobody else yet'}`));
+    const ol = el('ol', 'brows');
+    let marked = false;
+    (d.rows || []).forEach((r, i) => {
+      const it = !marked && !!you && (you.ch ? !!r.ch : !r.ch && r.score === you.s && (r.name || '') === (you.name || ''));
+      marked = marked || it;
+      const li = el('li', it ? 'me' : '');
+      li.append(el('span', 'n', String(i + 1)), el('span', 'nm', `${r.ch ? '🎯 ' : ''}${r.name || (r.ch ? 'Your friend' : 'Someone')}${it ? ' (you)' : ''}`), el('b', '', String(r.score)));
+      ol.append(li);
+    });
+    w.append(ol);
+    return w;
+  }
+  let chMineQ = null;
+  function chMine(p) {
+    const have = load(`${STORE}:mych:${dayN}`, null);
+    if (have && C_RE.test(have.id || '')) return Promise.resolve(have.id);
+    if (!chMineQ) {
+      chMineQ = (async () => {
+        await BOARD.ready;
+        if (BOARD.mode !== 'api') return null;
+        const s = Math.round(p * 100), r = await fetch(`${BOARD.api}/challenge`, POST_JSON({ day: dayN, score: s, key: deviceKey(), ...(myName() ? { name: myName(), ...withSession() } : {}) }));
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !C_RE.test(d.id || '')) return null;           // (a name refused, a busy minute: the old link)
+        save(`${STORE}:mych:${dayN}`, { id: d.id, s });
+        track('challenge_create', { day: dayN });
+        return d.id;
+      })().catch(() => null).finally(() => { chMineQ = null; });
+    }
+    return chMineQ;
+  }
+  // the end card's challenge (before `at`): a link's gets this finish and shows its board and who won; else your own,
+  // once someone has played it
+  function chEnd(box, p, at) {
+    if (DRIVE || RUN_N || CUSTOM || PRACTICE || SURV) return;
+    const c = cFor(dayN), mine = load(`${STORE}:mych:${dayN}`, null), me = Math.round(p * 100), slot = el('div', 'chslot');
+    if (!c && !mine) return;
+    slot.hidden = true;
+    box.insertBefore(slot, at || null);
+    (BOARD.ready || Promise.resolve()).then(async () => {
+      if (BOARD.mode !== 'api') return;
+      if (c && !(mine && mine.id === c.id)) {
+        const done = load(`${STORE}:cplay:${c.id}`, null);
+        const r = done ? await fetch(`${BOARD.api}/challenge/${c.id}`, { cache: 'no-store' })
+          : await fetch(`${BOARD.api}/challenge/${c.id}/play`, POST_JSON({ score: me, key: deviceKey(), ...(myName() ? { name: myName(), ...withSession() } : {}), ...(state.restarts ? { restarted: true } : {}) }));
+        const d = await r.json();
+        if (!r.ok) return;
+        if (!done) save(`${STORE}:cplay:${c.id}`, { s: me, at: Date.now(), ...(d.counted ? {} : { out: true }) });
+        const s = done ? done.s : me, v = el('div', 'h2h-day chal');
+        v.append(el('span', 'k', `You vs ${chName(c)}`), el('b', '', s > d.score ? 'You win' : s < d.score ? `${chName(c)} wins` : 'Tied'), el('span', 'sub', `${s}–${d.score}`));
+        slot.append(v, chBoardEl(d, (done ? done.out : !d.counted) ? null : { s, name: d.taken ? '' : myName() }));
+        if (done ? done.out : !d.counted) slot.append(el('p', 'note', state.restarts ? 'Restarted: this try isn’t on the challenge’s board.' : 'Your first try from this link is the one on its board.'));
+      } else if (mine) {
+        const r = await fetch(`${BOARD.api}/challenge/${mine.id}`, { cache: 'no-store' }), d = await r.json();
+        if (!r.ok || !d.n) return;
+        slot.append(chBoardEl(d, { ch: true }));
+      } else return;
+      slot.hidden = false;
+    }).catch(() => { /* offline: no board */ });
+  }
+
+  // ---- The crowd's calls (board/worker.js /calls): after each call, the share of the day's players who made the same
+  // call in the same situation, once at least CROWD_MIN of them got there (else nothing). A situation is the day and a
+  // coarse key of the spot (crowdKey, kept with each graded decision as ck), its buckets wide so that players meet:
+  //   the kind of decision (the call, the tempo before the snap, the defense, a timeout, the try, a kick: x.kind)
+  //   the down (0 on a two-point try); the distance: 1, 2-3, 4-6, 7-10, 11+ (a-e)
+  //   the yard line, yards to the goal: 1-5, 6-20, 21-40, 41-60, 61-80, 81-99 (a-f)
+  //   the clock: the half (a the first, b the second, o overtime) and the time left in it: up to 0:30, 1:00, 2:00, 4:00,
+  //   8:00, more (0-5)
+  //   the margin, your lead: -9 or worse, -8 to -4, -3 to -1, tied, 1 to 3, 4 to 8, 9 or more (a-g)
+  // e.g. call.3.d.c.b2.c: a call on 3rd & 7-10 from the 21-40, 1:00-2:00 left in the second half, down 1 to 3. Every
+  // drive of the day starts at the same snap, so the first calls always meet; the buckets keep the later ones meeting.
+  // The day's /daily post carries the drive's [ck, call] (crowdPost; worker.js counts a situation once a device, its
+  // first call there, and never a restarted try). The counts (GET /calls, at most every CROWD_MS) are asked for as a
+  // call comes up and as it is snapped, so they are in by its result card, and never waited on: a call goes as ever (a
+  // card already gone when they land gets no line). The finished drive's
+  // Uniqueness (crowdSum): 100 less the average share of your calls that had counts, a line in the breakdown; in the
+  // share text only when one of them was rare (CROWD_RARE or under: "Won it with a 4% call on 3rd & 7").
+  const CROWD_MIN = 20, CROWD_MS = 3 * 60e3, CROWD_RARE = 0.1;
+  const crowdOn = () => !(SURV || PRACTICE || VS || DRIVE || RUN_N || CUSTOM);
+  const bucketOf = (x, cuts) => 'abcdefg'[cuts.filter((c) => x > c).length];
+  function crowdKey(r, kind) {
+    const th = halfLeft(r.t), lead = r.score[G.me] - r.score[1 - G.me];
+    const clk = r.ot ? 'o0' : `${r.t > 1800 ? 'a' : 'b'}${[30, 60, 120, 240, 480].filter((c) => th > c).length}`;
+    return [String(kind).replace(/[^a-z]/g, '').slice(0, 8).padEnd(2, 'x'), r.try2 ? 0 : clip(Math.round(r.down) || 0, 0, 4), bucketOf(Math.round(r.ytg), [1, 3, 6, 10]),
+      bucketOf(Math.round(r.yl), [5, 20, 40, 60, 80]), clk, bucketOf(lead, [-9, -4, -1, 0, 3, 8])].join('.');
+  }
+  // the call as the crowd counts it: the play called (a pass to any receiver, out of bounds or not: the same call)
+  const crowdCall = (x) => String(x.chosenCall || x.chosen).replace('+oob', '').replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 40);
+  const crowdLabel = (x) => (x.chosenCall && CALL[x.chosenCall] ? CALL[x.chosenCall].label : x.chosenLabel);
+  const crowdPost = () => {
+    const cs = state.restarts ? [] : allDecisions().filter((x) => x.ck).map((x) => [x.ck, crowdCall(x)]);
+    return cs.length ? { calls: cs.slice(0, 80) } : {};
+  };
+  let crowdQ = null;
+  function crowdCounts() {
+    if (!crowdQ || Date.now() - crowdQ.at > CROWD_MS) {
+      const q = { at: Date.now() };
+      q.p = (BOARD.ready || Promise.resolve()).then(async () => {
+        if (BOARD.mode !== 'api') return null;
+        const r = await fetch(`${BOARD.api}/calls?date=${driveDate()}`, { cache: 'no-store' });
+        return r.ok ? (await r.json()).s || {} : null;
+      }).catch(() => { if (crowdQ === q) crowdQ = null; return null; });
+      crowdQ = q;
+    }
+    return crowdQ.p;
+  }
+  // the share of the day's players (s: the counts) who made x's call where x was made, or null (too few got there)
+  function crowdOf(s, x) {
+    const c = x && x.ck && s ? s[x.ck] : null;
+    return c && c.n >= CROWD_MIN && c.c ? { share: (c.c[crowdCall(x)] || 0) / c.n, n: c.n } : null;
+  }
+  const crowdPct = (f) => (f > 0 && f < 0.005 ? '<1' : String(Math.round(f * 100)));
+  const crowdWho = () => (ARCH_DAY ? 'that day’s' : 'today’s');
+  // the result card's line, under the grade (v), when the counts are in
+  function crowdLine(v, decisions) {
+    if (!crowdOn() || !decisions.some((x) => x.ck)) return;
+    crowdCounts().then((s) => {          // (in by the result card, mostly: asked for as the play was snapped)
+      const x = decisions.find((y) => y.kind === 'call' && crowdOf(s, y)) || decisions.find((y) => crowdOf(s, y)), c = x && crowdOf(s, x);
+      if (!c || !v.parentNode) return;          // (a card between docks, a moment off the page: the line goes on it all the same)
+      v.after(el('div', 'crowd', c.share > 0 ? `👥 ${crowdPct(c.share)}% of ${crowdWho()} ${c.n.toLocaleString()} players here called ${crowdLabel(x)}`
+        : `👥 None of ${crowdWho()} ${c.n.toLocaleString()} players here called ${crowdLabel(x)}`));
+      if (v.isConnected) fitDock(fitKeys);
+    });
+  }
+  // the drive's Uniqueness: 100 less the average share of your calls that had counts, and the rarest of them
+  function crowdSum(s, decs) {
+    const had = decs.map((x) => ({ x, c: crowdOf(s, x) })).filter((y) => y.c);
+    if (!had.length) return null;
+    const avg = had.reduce((a, y) => a + y.c.share, 0) / had.length;
+    return { u: Math.round(100 * (1 - avg)), n: had.length, avg, rare: had.reduce((a, y) => (y.c.share < a.c.share ? y : a)) };
+  }
+  function crowdEnd(box, decs, share, pre, won) {
+    if (!crowdOn() || !decs.some((x) => x.ck)) return;
+    crowdCounts().then((s) => {
+      const u = crowdSum(s, decs), inn = box.querySelector(':scope > .endmore > .in');
+      if (!u || !box.isConnected) return;
+      const line = el('p', 'crowdsum');
+      line.append(el('b', '', `👥 Uniqueness ${u.u}`), document.createTextNode(` · ${crowdPct(u.avg)}% of ${crowdWho()} players made your call, on average (${u.n} call${u.n === 1 ? '' : 's'} with ${CROWD_MIN}+ players to compare)`));
+      if (inn) inn.prepend(line); else box.append(line);
+      if (u.rare.c.share > CROWD_RARE || share.crowd) return;
+      const dd = ((u.rare.x.situation || '').match(/\b[1-4](?:st|nd|rd|th) & (?:Goal|\d+)/) || [])[0];
+      share.crowd = `${won ? 'Won it with' : 'Made'} a ${crowdPct(u.rare.c.share)}% call${dd ? ` on ${dd}` : ''}`;
+      share.text = share.text.replace(/\nCan you beat me\?/, `\n${share.crowd}\nCan you beat me?`);
+      pre.textContent = share.text;
+    });
+  }
+
+  // ---- Fanbases (board/worker.js /fans): "Your team" (optional, an NFL team by its city: FAN_KEY { code, at }, code ''
+  // for none, synced with the account like the stats: worker.js stats team, the newest pick standing) rides with the
+  // day's /daily post (team; own when the day's drive is that team's: fanPost), and the board ranks the day's fanbases
+  // by their average score (FAN_MIN players to show) and the week's. Asked once on the end card (fanAsk: a pick or Not
+  // now), changed in Your stats, where the Fanbases view is (fansEl; the end card's breakdown links to it). On a day
+  // featuring a team (the day's drive's, both on a day of two sides) its fans on their own team's drive are called out.
+  const FAN_KEY = `${STORE}:team`, FAN_MIN = 5;
+  const fanTeams = () => Object.keys(TEAMS).filter((c) => !COLLEGE.has(c)).sort((a, b) => teamName(a).localeCompare(teamName(b)));
+  const fanTeam = () => { const t = load(FAN_KEY, null); return t && fanTeams().includes(t.code) ? t.code : ''; };
+  const fanPost = () => { const t = fanTeam(); return t ? { team: t, ...(today[0] && today[0].player === t ? { own: true } : {}) } : {}; };
+  const fanSync = () => { const t = load(FAN_KEY, null); return t && typeof t.at === 'number' && (t.code === '' || fanTeams().includes(t.code)) ? { team: { code: t.code, at: t.at } } : {}; };
+  function fanTake(t) {
+    if (!t || typeof t.at !== 'number' || !(t.code === '' || fanTeams().includes(t.code))) return false;
+    const mine = load(FAN_KEY, null);
+    if (mine && !(t.at > mine.at)) return false;
+    save(FAN_KEY, { code: t.code, at: t.at });
+    return true;
+  }
+  function fanSet(code) {
+    save(FAN_KEY, { code, at: Date.now() });
+    track('team_set', { team: code || 'none' });
+    statsSync(true);
+  }
+  function fanPicker(onSet) {
+    const w = el('label', 'myname fanpick');
+    w.append(el('span', '', 'Your team'));
+    const sel = el('select');
+    sel.append(new Option('No team', ''));
+    fanTeams().forEach((c) => sel.append(new Option(teamName(c), c)));
+    sel.value = fanTeam();
+    sel.addEventListener('change', () => { fanSet(sel.value); if (onSet) onSet(sel.value); });
+    w.append(sel);
+    return w;
+  }
+  // the end card's one ask: your team, and today's result counts for its fans (posted again: the board takes the team
+  // of a result it already has, once)
+  function fanAsk() {
+    const box = el('div', 'fanask');
+    const no = el('button', 'linkbtn', 'Not now');
+    no.type = 'button';
+    no.addEventListener('click', () => { fanSet(''); box.remove(); });
+    box.append(el('p', '', 'Who do you root for? Your score counts for your team’s fans on the Fanbases board.'), fanPicker((code) => {
+      box.replaceChildren(el('p', 'note', code ? `Counted for ${teamName(code)}’s fans. Change your team in Your stats.` : 'No team. You can pick one in Your stats.'), fanLink());
+      const db = document.querySelector('#done .board.daily');
+      if (code && db && db.again) db.again();
+    }), no);
+    return box;
+  }
+  function fanLink() {
+    const b = el('button', 'linkbtn fanlink', 'Fanbases: today’s fans, ranked ›');
+    b.type = 'button';
+    b.addEventListener('click', () => { track('fans_open', { from: 'end' }); openStats('fans'); });
+    return b;
+  }
+  // the date of day n (game.js's day numbers; the board's dates)
+  const dateOfDay = (n) => ymd(dayDate(n));
+  // Your stats' Fanbases: your team, the day's fanbases by average and the week's (two tabs), the day's own team's fans
+  function fansEl() {
+    const sec = el('div', 'fans');
+    sec.id = 'fans';
+    const body = el('div', 'fbody');
+    sec.append(el('h3', '', 'Fanbases'), fanPicker(() => draw()), body);
+    let data = null, tab = 'day';
+    const n = idx ? dayOf(new Date()) : 0;
+    const draw = () => {
+      body.textContent = '';
+      if (!data) { body.append(el('p', 'note', BOARD.mode === 'api' ? 'Loading today’s fanbases…' : 'The Fanbases board is on the website.')); return; }
+      if (data.error) { body.append(el('p', 'note', 'The Fanbases board did not load. Try again in a moment.')); return; }
+      const tabs = el('div', 'lbtabs');
+      [['day', 'Today'], ['week', 'This week']].forEach(([k, label]) => {
+        const b = el('button', 'chip opt', label);
+        b.type = 'button';
+        b.setAttribute('aria-selected', String(k === tab));
+        b.addEventListener('click', () => { tab = k; draw(); });
+        tabs.append(b);
+      });
+      const rows = tab === 'day' ? data.day : data.week.rows, mine = fanTeam();
+      body.append(tabs, el('p', 'note', `${tab === 'day' ? 'Today’s' : 'The last 7 days’'} average score by the fans of each team, ${data.min}+ players to be ranked. Pick your team above to count for it.`));
+      const ol = el('ol', 'brows');
+      rows.forEach((r, i) => {
+        const li = el('li', r.team === mine ? 'me' : '');
+        li.append(el('span', 'n', String(i + 1)), el('span', 'nm', teamName(r.team)), el('small', 'd', `${r.n.toLocaleString()} fan${r.n === 1 ? '' : 's'}`), el('b', '', String(Math.round(r.avg))));
+        ol.append(li);
+      });
+      if (rows.length) body.append(ol);
+      else body.append(el('p', 'note', tab === 'day' ? `No fanbase has ${data.min} players yet today.` : `No fanbase has ${data.min} players yet this week.`));
+      if (mine && !rows.some((r) => r.team === mine)) body.append(el('p', 'note', `${teamName(mine)}’s fans aren’t ranked yet: ${data.min} need to play.`));
+      // the day's own team(s): its fans on their team's drive
+      const feat = !idx || tab !== 'day' ? [] : [...new Set([...dayIds(n).map((i) => idx.spots[i] && idx.spots[i].player), ...(sidesOf(n) || []).map((x) => idx.spots[x.spot] && idx.spots[x.spot].player)].filter((c) => c && !COLLEGE.has(c)))];
+      feat.forEach((t) => {
+        const r = data.day.find((x) => x.team === t), own = r && r.own;
+        body.append(el('p', 'fanown', own ? `Fans of ${teamName(t)} on their own team’s drive: ${Math.round(own.avg)} on average (${own.n.toLocaleString()} fans)`
+          : `Fans of ${teamName(t)} on their own team’s drive: not ${data.min} of them yet today`));
+      });
+    };
+    draw();
+    if (BOARD.mode === 'api' && n) {
+      fetch(`${BOARD.api}/fans?date=${dateOfDay(n)}`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : { error: r.status }))
+        .then((d) => { data = d && Array.isArray(d.day) ? d : { error: 1 }; draw(); }).catch(() => { data = { error: 1 }; draw(); });
+    }
+    return sec;
   }
   async function authLoginFromUrl() {
     const q = new URLSearchParams(location.search), tok = q.get('login');
@@ -10055,6 +10382,7 @@
       if (JSON.stringify(m) !== JSON.stringify(u)) { L[c] = m; lc = true; }
     }
     if (lc) scenSave(L);
+    if (fanTake(acc.team)) changed = true;            // (your team: the newest pick, worker.js statsMerge)
     if (changed) { save(`${STORE}:stats`, st); save(`${STORE}:drives`, here.drives); save(`${STORE}:runs`, here.runs); }
     return changed || lc;
   }
@@ -10066,7 +10394,7 @@
       const st = load(`${STORE}:stats`, { days: {} }), sv = survStats();
       const stats = { days: newest(st.days, SYNC_CAP.days), drives: newest(gauntletDrives(load(`${STORE}:drives`, {})), SYNC_CAP.drives), runs: newest(load(`${STORE}:runs`, {}), SYNC_CAP.runs),
         badges: st.badges || {}, frozen: newest(st.frozen, SYNC_CAP.frozen),
-        surv: { best: sv.best || 0, runs: sv.runs || 0, ...(sv.bestLife ? { life: true } : {}) },
+        surv: { best: sv.best || 0, runs: sv.runs || 0, ...(sv.bestLife ? { life: true } : {}) }, ...fanSync(),
         scen: Object.fromEntries(Object.entries(scenList()).filter(([c, e]) => SCN && SCN.parse(c) && e && typeof e.at === 'number')
           .map(([c, e]) => [c, { at: e.at, ...(typeof e.p === 'number' ? { p: e.p } : {}), tries: e.tries || 0, won: !!e.won, ...(e.gone ? { gone: true } : {}), ...(e.title ? { title: e.title } : {}) }])) };
       let d;
@@ -12087,6 +12415,7 @@
       challengeFromUrl();
       await proClaimFromUrl();
       await proVerify();
+      if (await challengeOpen(now) === 'stop') return;          // (a past day's: the archive for Pro, else its pitch)
       movedNote();
       const acct = acctInit();
       // home: asked for (#home), or a bare address (the front door); drawn again when the account is in (its button,
