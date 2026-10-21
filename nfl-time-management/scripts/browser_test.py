@@ -82,6 +82,10 @@ SESSION = "ab" * 32
 # the account's record on the stub (board/worker.js /auth/stats, roughly: a union of each kind; survivor's best run and
 # its count of runs the higher of each, never down), what a page signed in posts and reads back
 ACCT: dict = {"stats": None}
+# the social stub (board/worker.js /challenge*, /calls, /fans, /daily): the challenges by id (each { day, name, score,
+# rows }), what the page made and played, its /daily posts, the crowd's counts (a situation key -> { n, c }) and the
+# day's fanbases it answers with
+SOCIAL: dict = {"chal": {}, "made": [], "plays": [], "daily": [], "calls": {}, "fans": None}
 TRACE_HALF = False          # what else the pages asked the stub (printed at the end)
 # the game's page under the base address (daily_check.py --live: "", the site's front door, as players open it)
 PAGE = "index.html"
@@ -128,6 +132,37 @@ async def board_stub(route, path: str, comm: bool = False, headers: dict | None 
     elif comm and path == "/scen/play":
         COMM["plays"].append(body)
         await ok({"counted": True})
+    elif path == "/challenge" and route.request.method == "POST":
+        SOCIAL["made"].append(body)
+        cid = "made" + "abcdefghjk"[len(SOCIAL["made"]) % 10] * 3
+        SOCIAL["chal"][cid] = {"day": body.get("day"), "name": body.get("name") or "", "score": body.get("score"), "rows": []}
+        await ok({"id": cid})
+    elif path.startswith("/challenge/"):
+        parts = path.split("/")
+        c = SOCIAL["chal"].get(parts[2])
+        if not c:
+            await route.fulfill(status=404, content_type="application/json", body=json.dumps({"error": "That challenge link doesn’t work."}), headers=headers)
+            return
+        counted = False
+        if len(parts) == 4 and route.request.method == "POST":
+            SOCIAL["plays"].append({"id": parts[2], **body})
+            counted = not body.get("restarted")
+            if counted:
+                c["rows"].append({"name": body.get("name") or "", "score": body.get("score")})
+        rows = sorted([{"name": c["name"], "score": c["score"], "ch": True}] + c["rows"], key=lambda r: -r["score"])[:20]
+        await ok({"id": parts[2], "day": c["day"], "name": c["name"], "score": c["score"], "n": len(c["rows"]), "rows": rows, "counted": counted})
+    elif path == "/calls":
+        await ok({"date": "", "min": 20, "s": SOCIAL["calls"]})
+    elif path == "/fans" and SOCIAL["fans"] is not None:
+        await ok(SOCIAL["fans"])
+    elif path == "/daily" and route.request.method == "POST" and SOCIAL["fans"] is not None:
+        SOCIAL["daily"].append(body)
+        pt = round(float(body.get("p") or 0) * 100)
+        hist = [0] * 101
+        hist[pt] = 1
+        await ok({"n": 1, "hist": hist, "nr": 0, "spots": [{"n": 1, "avg": w, "hist": [0] * 101} for w in body.get("spots") or [0]], "top": [],
+                  "counted": len(SOCIAL["daily"]) == 1, "you": {"p": body.get("p"), "spots": body.get("spots")},
+                  "week": {"from": "2026-10-15", "to": "2026-10-21", "best": 5, "n": 0, "top": []}})
     else:                     # (accounts off: no way to sign in; nothing else is asked of it on these pages)
         STUB_ASKED.add(path)
         await ok({})
@@ -2359,6 +2394,184 @@ async def survivor_best(browser, base: str, seed: int = 3) -> list[str]:
     return out
 
 
+# the first call's situation (game.js crowdKey) for the call and the tempo before it, and every call there is
+CROWD_KEYS = """() => { const D = window.__draw, { G } = D.get(); return { keys: ['call', 'clock', 'defcall', 'deftime'].map((k) => D.crowdKey(G.root, k)), calls: Object.keys(D.CALL), decs: G.decisions.map((x) => x.ck || '') }; }"""
+
+
+async def social(browser, base: str, day: int, shots: str = "") -> list[str]:
+    """Challenges, the crowd's calls and fanbases against the stub (board/worker.js /challenge*, /calls, /fans):
+    a challenge link to today's drive opens it with the score to beat on the intro; a call made where the stub says 40
+    players were shows its share on the result card; the end card posts the result to the challenge and shows its
+    board (the challenger, you), the drive's Uniqueness in the breakdown, Challenge a friend (a challenge made, its link
+    in the share text) and the one ask for your team, whose pick posts the day again with the team; the Fanbases view
+    ranks the stub's fanbases and calls out the day's own team's fans; a past day's link without Pro is its pitch.
+    shots: a folder for 390x844 screenshots."""
+    out: list[str] = []
+    SOCIAL.update(chal={"frnd234": {"day": day, "name": "Eli", "score": 87, "rows": [{"name": "Matt", "score": 64}]},
+                        "past234": {"day": max(1, day - 1), "name": "Eli", "score": 71, "rows": []}},
+                  made=[], plays=[], daily=[], calls={},
+                  fans={"date": "", "min": 5, "day": [{"team": "DAL", "n": 12, "avg": 71.5}, {"team": "NYG", "n": 9, "avg": 64, "own": {"n": 6, "avg": 66}},
+                                                      {"team": "PHI", "n": 5, "avg": 58}], "week": {"from": "", "to": "", "rows": [{"team": "PHI", "n": 40, "avg": 61}]}})
+    rnd = random.Random(11)
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    await pro_context(ctx, base, pro=False)
+    await ctx.add_init_script("""window.__sepLog = []; try { localStorage.setItem('tmd:v3:seen', 'true');
+      localStorage.setItem('tmd:v3:tour', JSON.stringify({ seen: [], shown: [], done: true })); localStorage.setItem('tmd:v3:name', JSON.stringify('Tess')); } catch (e) {}
+      new MutationObserver(() => { const c = !window.__crowd && document.querySelector('#dock .crowd'); if (c) window.__crowd = c.textContent; })
+        .observe(document, { subtree: true, childList: true });""")
+    page = await ctx.new_page()
+    errs: list[str] = []
+    page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+    try:
+        await page.goto(f"{base}/{PAGE}?c=frnd234")
+        await page.wait_for_selector("#intro .who.chal", timeout=30000)
+        t = await page.evaluate("() => document.querySelector('#intro .who.chal').textContent")
+        if "Eli scored 87 on today’s drive — beat that" not in t:
+            out.append(f"the challenge's intro says {t!r}")
+        if "c=" in page.url:
+            out.append(f"the challenge's id left in the address: {page.url}")
+        if shots:
+            await page.screenshot(path=f"{shots}/challenge-intro.png")
+        crowd, keyed, t0, last, since, decs_seen = "", False, time.time(), None, time.time(), []
+        while time.time() - t0 < 600:
+            try:
+                st = await page.evaluate(STATE)
+            except Exception:
+                st = "loading"
+            if st != last:
+                last, since = st, time.time()
+            elif time.time() - since > LIMIT.get(st, STILL) + 30:
+                raise RuntimeError(f"frozen: the '{st}' screen did not change for {int(time.time() - since)} s")
+            if not crowd:                # (the first rarity line on a result card: the page's observer keeps it)
+                crowd = await page.evaluate("() => window.__crowd || ''")
+            if st == "summary":
+                break
+            try:
+                if st in ("errbar", "error"):
+                    raise RuntimeError(st)
+                if st in ("modal", "deep"):
+                    await page.click("#mClose" if st == "modal" else "#deepClose", timeout=3000)
+                elif st == "pick":
+                    await page.click("#intro .sidepick[data-side='0']", timeout=3000)
+                elif st == "intro":
+                    if not keyed:                # (the first call's spot: the stub's counts say 74 players made calls there)
+                        k = await page.evaluate(CROWD_KEYS)
+                        SOCIAL["calls"] = {key: {"n": 2 * len(k["calls"]) + 20, "c": {**{c: 2 for c in k["calls"]}, "nohuddle": 20, "huddle": 0}} for key in k["keys"]}
+                        keyed = True
+                    await page.click("#intro .btn", timeout=3000)
+                elif st == "animating":
+                    await page.click("#field", timeout=1500)
+                elif st == "result":
+                    await page.click("#dock .result .btn", timeout=3000)
+                elif st == "end":
+                    await page.click("#dock .endcard .btn", timeout=3000)
+                elif st == "choose":
+                    if keyed and not crowd and len(decs_seen) < 3:
+                        # (a player who reads the result card: the counts land on it a moment after the grade; a bot
+                        # tapping on at once has moved on by then)
+                        try:
+                            await page.wait_for_function("() => window.__crowd || !window.__draw.get().G.decisions.length", timeout=3000)
+                        except PWTimeout:
+                            pass
+                        crowd = await page.evaluate("() => window.__crowd || ''")
+                        decs_seen.append((await page.evaluate(CROWD_KEYS))["decs"])
+                    big = page.locator("#dock .key.big:visible")
+                    n = await big.count()
+                    if n:
+                        await big.nth(rnd.randrange(n)).click(timeout=3000)
+                    else:
+                        btns = page.locator("#dock button:visible:not([disabled])")
+                        if await btns.count():
+                            await btns.nth(rnd.randrange(await btns.count())).click(timeout=3000)
+                else:
+                    await page.wait_for_timeout(100)
+            except RuntimeError:
+                raise
+            except Exception:
+                await page.wait_for_timeout(100)
+        else:
+            raise RuntimeError("the drive did not end in time")
+        if not re.search(r"^👥 (\d+|<1)% of today’s \d+ players here called .+|^👥 None of today’s \d+ players here called .+", crowd):
+            out.append(f"no rarity line on the first call's result card: {crowd!r} (the stub's {sorted(SOCIAL['calls'])}, the calls' {decs_seen})")
+        await page.wait_for_selector("#done .chslot:not([hidden]) .chboard", timeout=15000)
+        got = await page.evaluate("""() => ({ board: document.querySelector('#done .chslot').innerText,
+          crowd: (document.querySelector('#done .endmore .crowdsum') || {}).textContent || '', ask: !!document.querySelector('#done .fanask select'),
+          chb: !!document.querySelector('#done > .chbtn'), share: (document.querySelector('#done .grid-share') || {}).textContent || '' })""")
+        if "Eli" not in got["board"] or "Tess (you)" not in got["board"] or "Matt" not in got["board"] or "you vs eli" not in got["board"].lower():
+            out.append(f"the challenge's board on the end card: {got['board']!r}")
+        if len(SOCIAL["plays"]) != 1 or SOCIAL["plays"][0].get("id") != "frnd234" or SOCIAL["plays"][0].get("name") != "Tess":
+            out.append(f"the result posted to the challenge: {SOCIAL['plays']!r}")
+        if not re.match(r"^👥 Uniqueness \d+ · ", got["crowd"]):
+            out.append(f"the breakdown's Uniqueness: {got['crowd']!r}")
+        if not got["ask"] or not got["chb"]:
+            out.append(f"the end card without the team's ask ({got['ask']}) or Challenge a friend ({got['chb']})")
+        for _ in range(50):
+            if SOCIAL["made"] and "?c=made" in await page.evaluate("() => (document.querySelector('#done .grid-share') || {}).textContent || ''"):
+                break
+            await page.wait_for_timeout(100)
+        else:
+            out.append(f"no challenge made, or its link not in the share text: {SOCIAL['made']!r}")
+        if not SOCIAL["daily"] or not any(isinstance(b.get("calls"), list) and b["calls"] for b in SOCIAL["daily"]):
+            out.append(f"the /daily post carries no calls: {SOCIAL['daily'][:1]!r}")
+        if BAD_TEXT.search(await page.evaluate("() => document.getElementById('done').innerText")):
+            out.append("broken text on the end card")
+        if shots:
+            await page.evaluate("() => scrollTo(0, 0)")
+            await page.screenshot(path=f"{shots}/endcard.png")
+            await page.screenshot(path=f"{shots}/endcard-full.png", full_page=True)
+        n0 = len(SOCIAL["daily"])
+        await page.select_option("#done .fanask select", "DAL")
+        for _ in range(50):
+            if len(SOCIAL["daily"]) > n0:
+                break
+            await page.wait_for_timeout(100)
+        if not (len(SOCIAL["daily"]) > n0 and SOCIAL["daily"][-1].get("team") == "DAL"):
+            out.append(f"a team picked on the end card was not posted: {SOCIAL['daily'][n0:]!r}")
+        await page.locator("#done .fanask .fanlink").click(timeout=3000)
+        await page.wait_for_selector("#mBody #fans .brows li", timeout=10000)
+        t = await page.evaluate("() => document.getElementById('fans').innerText")
+        if not ("Dallas" in t and "New York (NFC)" in t and "Philadelphia" in t) or "Cowboys" in t or "Giants" in t:
+            out.append(f"the Fanbases view: {t[:300]!r}")
+        if "on their own team’s drive" not in t:
+            out.append(f"the Fanbases view does not call out the day's own team's fans: {t[:300]!r}")
+        if BAD_TEXT.search(t):
+            out.append("broken text on the Fanbases view")
+        if shots:                        # (the view as Your stats shows it, from Home: a screenshot over the end card's
+            # layers comes out see-through in headless Chromium, though the sheet is on top)
+            async with page.expect_event("load"):
+                await page.goto(f"{base}/{PAGE}#home")
+            await page.click("#statsBtn", timeout=10000)
+            await page.wait_for_selector("#mBody #fans .brows li", timeout=10000)
+            await page.wait_for_timeout(600)
+            await page.evaluate("() => { const b = document.querySelector('#modal .box'), f = document.getElementById('fans'); b.scrollTop += f.getBoundingClientRect().top - b.getBoundingClientRect().top - 12; }")
+            await page.wait_for_timeout(200)
+            await page.screenshot(path=f"{shots}/fanbases.png")
+    except Exception as e:
+        out.append(f"social: {str(e).splitlines()[0][:200]}")
+    finally:
+        await ctx.close()
+    # a past day's challenge without Pro: the challenger's result and the pitch, never the game
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    await pro_context(ctx, base, pro=False)
+    page = await ctx.new_page()
+    page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+    try:
+        await page.goto(f"{base}/{PAGE}?c=past234")
+        await page.wait_for_selector("#arch .chlead", timeout=30000)
+        got = await page.evaluate("() => ({ t: document.getElementById('arch').innerText, pro: !!document.querySelector('#arch .pro .btn'), play: !document.getElementById('play').hidden || !document.getElementById('intro').hidden })")
+        if "Eli scored 71" not in got["t"] or not got["pro"] or got["play"]:
+            out.append(f"a past day's challenge without Pro: {got['t'][:200]!r}")
+        if shots:
+            await page.screenshot(path=f"{shots}/challenge-past.png")
+    except Exception as e:
+        out.append(f"social, a past day: {str(e).splitlines()[0][:200]}")
+    finally:
+        out.extend(errs)
+        await ctx.close()
+    SOCIAL["fans"] = None
+    return out
+
+
 async def main(a) -> int:
     srv, port = serve(Path(a.site).resolve())
     stamped = stamps_of(Path(a.site))
@@ -2393,6 +2606,12 @@ async def main(a) -> int:
         print("survivor's best run follows the account (another phone's best on a phone with nothing saved, a run played here kept on the account, a fresh phone signed in): "
               + ("ok" if not sb else "FAIL") + "".join(f"\n      {x}" for x in sb), flush=True)
         reach += sb
+        launch = json.loads((Path(a.site) / "game.json").read_text())["launch"]
+        import datetime as _dt
+        so = await social(browser, base, (_dt.date.today() - _dt.date.fromisoformat(launch)).days + 1, a.shots)
+        print("challenges, the crowd's calls, fanbases (a challenge link's intro and board, a call's share, Uniqueness, Challenge a friend, your team, the Fanbases view, a past day's pitch): "
+              + ("ok" if not so else "FAIL") + "".join(f"\n      {x}" for x in so), flush=True)
+        reach += so
         if a.scenario:
             pitch = await scenario_pitch(browser, base)
             print("a scenario's link without Pro (the pitch, the scenario's summary), a bad link: " + ("ok" if not pitch else "FAIL")
