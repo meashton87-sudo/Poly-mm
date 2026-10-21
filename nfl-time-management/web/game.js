@@ -9359,13 +9359,14 @@
   }
   // A full-screen ad (interstitial) only at a break: never as the site opens or on the menus (players met a blank or
   // look-alike "Continue" page over the game), only once a drive or a Survivor game is over (its card, ezBreak), for a
-  // minute and a half or until the next drive, and at most once in EZ_GAP
-  const EZ_GAP = 5 * 60e3, EZ_OPEN = 90e3;
+  // minute and a half or until the next drive, never in a visit's first EZ_FIRST, and at most once in EZ_GAP (players:
+  // "giant ads popping up every 15 seconds")
+  const EZ_GAP = 10 * 60e3, EZ_OPEN = 90e3, EZ_FIRST = 5 * 60e3, EZ_T0 = Date.now();
   let ezLastBreak = -Infinity, ezShut = 0;
   const ezNoFull = (why) => ezq((z) => z.setInterstitialAllowed(false, { reason: why }));
   ezNoFull('page-open');
   function ezBreak() {
-    if (!EZ || Date.now() - ezLastBreak < EZ_GAP) return;
+    if (!EZ || Date.now() - ezLastBreak < EZ_GAP || Date.now() - EZ_T0 < EZ_FIRST) return;
     ezLastBreak = Date.now();
     ezq((z) => z.setInterstitialAllowed(true, { reason: 'drive-over' }));
     clearTimeout(ezShut);
