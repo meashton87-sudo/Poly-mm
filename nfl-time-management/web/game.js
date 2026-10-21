@@ -1169,12 +1169,16 @@
         const defs = S('defs', {});
         defs.append(pat);
         put(defs);
-        const ck = put(S('rect', { x: 0, width: 360, fill: `url(#${id})`, opacity: 0.92 }), (Y) => {
-          const y0 = Math.min(Y(a), Y(b)), h = Math.abs(Y(a) - Y(b)), q = Math.max(h / 4, 1);   // (four rows of squares, end line to goal line)
+        // (inside the end zone only: sideline to sideline and goal line to end line, four rows of whole squares and as
+        // many whole columns as fit the width, so none is cut at an edge)
+        const ck = put(S('rect', { x: SX0, width: SX1 - SX0, fill: `url(#${id})` }), (Y) => {
+          const y0 = Math.min(Y(a), Y(b)), h = Math.abs(Y(a) - Y(b)), rh = Math.max(h / 4, 1);
+          const cols = Math.max(2, Math.round((SX1 - SX0) / rh)), cw = (SX1 - SX0) / cols;
           ck.setAttribute('y', y0); ck.setAttribute('height', h);
-          [pat, w1, w2].forEach((x) => { x.setAttribute('width', x === pat ? 2 * q : q); x.setAttribute('height', x === pat ? 2 * q : q); });
-          pat.setAttribute('x', 180 - q * Math.ceil(180 / q)); pat.setAttribute('y', y0);
-          w2.setAttribute('x', q); w2.setAttribute('y', q);
+          pat.setAttribute('x', SX0); pat.setAttribute('y', y0);
+          pat.setAttribute('width', 2 * cw); pat.setAttribute('height', 2 * rh);
+          [w1, w2].forEach((x) => { x.setAttribute('width', cw); x.setAttribute('height', rh); });
+          w2.setAttribute('x', cw); w2.setAttribute('y', rh);
         });
       }
       // (dy: nudged along its end zone, clear of the buttons over the field: ezClear)
