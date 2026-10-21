@@ -66,10 +66,12 @@ function check(before, r, tag) {
     count(inWin ? 'out of bounds, last 2:00/5:00 (clock stopped)' : 'out of bounds, earlier (clock restarts)');
     if (inWin && b.clock_running) flag('the clock ran on after going out of bounds late', `${tag} ${JSON.stringify(k0)}`);
   }
-  // a half never ends on an accepted defensive foul (an untimed down); no try after a touchdown as the fourth quarter
+  // a half never ends on an accepted defensive foul (an untimed down), except by the 10-second runoff the offended team
+  // takes (NFL 4-7: a defensive foul that stops the clock in the last minute, the offense ahead: the runoff can end
+  // it); no try after a touchdown as the fourth quarter
   // runs out when it cannot change the result (a margin of 3 or more); only a team behind declares an onside kick
   const k1 = r.log.find((e) => e.ev === 'play');
-  if (k1 && k1.penalty && k1.yards > 0 && !k1.td && !k1.tdDef && !k1.turnover && !k1.safety && !k1.onDowns && (r.done || b.t <= halfEnd)) flag('a half ended on a defensive foul', `${tag} ${JSON.stringify(k1)}`);
+  if (k1 && k1.penalty && k1.yards > 0 && !k1.runoff10 && !k1.td && !k1.tdDef && !k1.turnover && !k1.safety && !k1.onDowns && (r.done || b.t <= halfEnd)) flag('a half ended on a defensive foul', `${tag} ${JSON.stringify(k1)}`);
   if (k1 && k1.untimed) count('untimed downs');
   if (b.phase === 1 && !r.done && !b.ot && halfEnd === 0 && b.t <= 0 && Math.abs(b.score[b.pos] - b.score[1 - b.pos]) >= 3) flag('a try that cannot change the result', `${tag} ${b.score}`);
   if (r.log.some((e) => e.ev === 'notry')) count('no try after the last play');
