@@ -16,6 +16,15 @@
  *     touchdown that puts the second team ahead ends it (no try)
  * Teams are seats: team 0 (the home side) is seat 0's team, team 1 seat 1's.
  *
+ * The Five-Minute Drill (startFive, ms.game 'five'): the fourth quarter from 5:00, tied 0-0, NFL rules (the engine's:
+ * the two-minute warning, the clock, three timeouts each). Seat 0 calls the coin toss (heads or tails: the coin is the
+ * decision's seed, so nobody knows it before the call); the winner picks Receive, Kick or the end of the field (the
+ * end: the loser picks Receive or Kick); a kickoff, and the clock runs to 0:00. Every decision is the daily game's:
+ * the offense's call with its tempo, a timeout, a spike, a kneel, a kick; the defense's call (and its timeout before
+ * the snap); the kicking team's kickoff; the scoring team's try. Ahead at 0:00 wins; tied, college overtime as below,
+ * after a fresh toss (the server's coin), the score carried. A call not in on time is the engine's own (a typical
+ * coach's), as the room plays it.
+ *
  * opt (start, apply, after, possRoot; Coach mode): opt.twoYl, the yard line a two-point try is snapped from (the rules'
  * twoYl: the 3 in college and high school), and opt.ot, an overtime format (engine.js RULE_BOOK.OT, rules.py OT: the
  * NCAA's, the NFHS "Kansas plan" from the 10, a state's), with opt.regTo the timeouts left in regulation for a format
@@ -81,17 +90,33 @@
   }
   const chooser = (c) => (c.round % 2 ? c.toss : 1 - c.toss);
 
-  // who has to answer this decision: the choosing team, both at a snap (offense and defense), the scoring team at a try
+  // the Five-Minute Drill: 5:00 of the fourth quarter, three timeouts each, the kickoff after the toss
+  const FIVE_T = 300, FIVE_TO = 3, REG_PICKS = ['receive', 'kick', 'end'], COIN = ['heads', 'tails'];
+  function startFive() {
+    return { game: 'five', root: { t: FIVE_T, pos: 0, score: [0, 0], down: 1, ytg: 10, yl: 65, to: [FIVE_TO, FIVE_TO], clock_running: false, phase: KICKOFF, credit: 0, free_kick: false },
+      reg: { call: 0, toss: null, pick: null }, cot: null, seq: 0, over: false, winner: -1, tricks: [0, 0] };
+  }
+  const inReg = (ms) => !ms.cot;                 // the Five-Minute Drill before overtime
+  const regPick = (ms) => (ms.reg && !ms.cot ? ms.reg : null);
+
+  // who has to answer this decision: the choosing team, both at a snap (offense and defense), the scoring team at a
+  // try, the kicking team at a kickoff; the toss: seat 0 calls it
   function need(ms) {
     if (ms.over) return [];
-    if (ms.cot.pick) return [ms.cot.pick.team];
+    const rg = regPick(ms);
+    if (rg && rg.call != null && !rg.toss) return [rg.call];
+    if (rg && rg.pick) return [rg.pick.team];
+    if (ms.cot && ms.cot.pick) return [ms.cot.pick.team];
     return ms.root.phase === SNAP ? [0, 1] : [ms.root.pos];
   }
-  // what a decision is, for a seat: 'pick', 'offense', 'defense', 'pat' (null: nothing to answer)
+  // what a decision is, for a seat: 'toss', 'pick', 'offense', 'defense', 'pat', 'kick' (null: nothing to answer)
   function role(ms, seat) {
     if (!need(ms).includes(seat)) return null;
-    if (ms.cot.pick) return 'pick';
+    const rg = regPick(ms);
+    if (rg && rg.call != null && !rg.toss) return 'toss';
+    if ((rg && rg.pick) || (ms.cot && ms.cot.pick)) return 'pick';
     if (ms.root.phase === PAT) return 'pat';
+    if (ms.root.phase === KICKOFF) return 'kick';
     return ms.root.pos === seat ? 'offense' : 'defense';
   }
 
@@ -107,8 +132,12 @@
     if (typeof a.who === 'string' && WHO.has(a.who)) o.who = a.who;
     if (a.philly === true) o.philly = true;
     if (a.pat === 'two' || a.pat === 'xp') o.pat = a.pat;
+    if (typeof a.tempo === 'string' && TEMPOS.has(a.tempo)) o.tempo = a.tempo;
     return o;
   }
+  const TEMPOS = new Set(['hurry', 'normal', 'milk', 'urgent']);             // engine.js TEMPO
+  const FG_MAX_YL = 45;                                                       // a 62-yard try (the snap 7 back, 10 of end zone)
+  const KICKS = new Set(['deep', 'return', 'touchback', 'onside']);          // engine.js _kickoff
   // the defense's call, cleaned: every part known, or nothing (the default)
   function cleanDef(d) {
     if (!d || typeof d !== 'object') return null;
@@ -119,18 +148,29 @@
   function cleanHalf(ms, seat, h, pb) {
     const r = role(ms, seat);
     if (!r || !h || typeof h !== 'object') return null;
+    const reg = inReg(ms);
+    if (r === 'toss') return COIN.includes(h.call) ? { call: h.call } : null;
+    if (r === 'pick' && reg) return REG_PICKS.includes(h.pick) && !(h.pick === 'end' && ms.reg.pick.end) ? { pick: h.pick } : null;
     if (r === 'pick') return PICKS.includes(h.pick) && !(h.pick === 'end' && ms.cot.pick.end) ? { pick: h.pick } : null;
-    if (r === 'defense') { const dc = cleanDef(h.dc); return dc ? { dc } : null; }
+    if (r === 'kick') return h.action && KICKS.has(h.action.kick) ? { action: { kick: h.action.kick } } : null;
+    if (r === 'defense') {
+      const dc = cleanDef(h.dc), to = reg && h.to_def === true;          // (a timeout before their snap: regulation only)
+      return dc || to ? { ...(dc ? { dc } : {}), ...(to ? { to_def: true } : {}) } : null;
+    }
     if (r === 'pat') {
       if (h.two === true) return { two: true };
       const a = cleanAction(h.action, pb);
       return a && a.pat ? { action: { pat: a.pat } } : null;
     }
-    if (h.timeout === true) return { timeout: true };
+    if (h.timeout === true) return { timeout: true, ...(reg && h.rundown === true ? { rundown: true } : {}) };
     const a = cleanAction(h.action, pb);
+    if (a && !reg) delete a.tempo;                 // (overtime: no clock)
     // the calls the page offers here only (game.js callOptions): a sneak needs 3 yards or less to go; no Hail Mary
-    // (overtime has no clock to beat)
-    if (a && (a.call === 'hail_mary' || (a.call === 'qb_sneak' && ms.root.ytg > 3))) { delete a.call; delete a.route; delete a.who; }
+    // in overtime (no clock to beat)
+    if (a && ((a.call === 'hail_mary' && !reg) || (a.call === 'qb_sneak' && ms.root.ytg > 3))) { delete a.call; delete a.route; delete a.who; }
+    // a field goal from where the page offers one (game.js: a few percent to make, within about 62 yards); from
+    // further, the engine's own call (a 114-yarder from the 3 put the ball past the goal line)
+    if (a && a.play === 'fg' && ms.root.yl > FG_MAX_YL) delete a.play;
     return a ? { action: a } : null;
   }
 
@@ -138,7 +178,7 @@
     ms.root = { ...ms.root, phase: DONE };
     ms.over = true;
     ms.winner = ms.root.score[0] > ms.root.score[1] ? 0 : 1;
-    notes.push({ k: 'final', winner: ms.winner, score: ms.root.score.slice(), round: ms.cot.round, why });
+    notes.push({ k: 'final', winner: ms.winner, score: ms.root.score.slice(), round: ms.cot ? ms.cot.round : 0, why });
   }
   // after each snap: the clock held; a touchdown from the 2nd overtime on goes for two; the possession over, the next
   // one, the next overtime or the end
@@ -178,6 +218,7 @@
   function apply(ms0, halves, step, seed, opt) {
     const ms = copy(ms0), notes = [];
     if (ms.over) throw new Error('the match is over');
+    if (inReg(ms)) return applyReg(ms, halves, step, seed, notes);
     const c = ms.cot, r = ms.root;
     const h = (s) => (halves && halves[s] != null ? halves[s] : null);
     if (c.pick) {
@@ -231,6 +272,114 @@
     return { ms, res, kind: 'play', notes };
   }
 
+  // the Five-Minute Drill's decisions (apply, before overtime)
+  const RUNDOWN_AT = 3;                          // game.js RUNDOWN_AT (engine.js CLOSE_KICK_AT): the timeout at 0:03 for the kick
+  function applyReg(ms, halves, step, seed, notes) {
+    const rg = ms.reg, r = ms.root;
+    const h = (s) => (halves && halves[s] != null ? halves[s] : null);
+    seed >>>= 0;
+    if (rg.call != null && !rg.toss) {           // the toss: the coin is this decision's seed
+      const x = h(rg.call), call = x && COIN.includes(x.call) ? x.call : 'heads', coin = COIN[(seed >>> 31) & 1];
+      const winner = call === coin ? rg.call : 1 - rg.call;
+      rg.toss = { call, coin, winner, auto: !x };
+      rg.pick = { team: winner, end: false };
+      notes.push({ k: 'toss', team: rg.call, call, coin, winner, auto: !x });
+      return { ms, res: null, kind: 'toss', notes };
+    }
+    if (rg.pick) {
+      const P = rg.pick.team, x = h(P);
+      const ch = x && REG_PICKS.includes(x.pick) && !(x.pick === 'end' && rg.pick.end) ? x.pick : null;
+      if (ch === 'end') {
+        notes.push({ k: 'end', team: P });
+        rg.pick = { team: 1 - P, end: true };
+        return { ms, res: null, kind: 'pick', notes };
+      }
+      const choice = ch || 'receive', kicker = choice === 'kick' ? P : 1 - P;
+      notes.push({ k: 'rpick', team: P, choice, auto: !ch, kicker });
+      rg.pick = null;
+      ms.root = { ...r, pos: kicker, phase: KICKOFF, yl: 65, down: 1, ytg: 10, clock_running: false };
+      return { ms, res: null, kind: 'pick', notes };
+    }
+    const off = h(r.pos), def = h(1 - r.pos);
+    // a timeout (the offense's, between snaps; the clock stops, as game.js decideTimeout: never past the two-minute
+    // warning or out of the game; rundown: run it to 0:03 first, for the kick)
+    if (r.phase === SNAP && off && off.timeout && r.to[r.pos] > 0 && !r.try2) {
+      const floor = Math.min(r.t, r.t > 120 ? 120.01 : 0.5);
+      const t = off.rundown && r.clock_running ? Math.min(r.t - 1, RUNDOWN_AT) : r.clock_running ? r.t - 1 : r.t;
+      ms.root = { ...r, to: r.to.slice(), clock_running: false, t: Math.max(floor, t), credit: 0 };
+      ms.root.to[r.pos] -= 1;
+      notes.push({ k: 'timeout', team: r.pos, left: ms.root.to[r.pos], t: ms.root.t, rundown: !!off.rundown });
+      return { ms, res: null, kind: 'timeout', notes };
+    }
+    if (r.phase === PAT && off && off.two) {
+      ms.root = { ...r, phase: SNAP, down: 1, ytg: 2, yl: 2, clock_running: false, try2: { ...r } };
+      notes.push({ k: 'two', team: r.pos });
+      return { ms, res: null, kind: 'two', notes };
+    }
+    let a;
+    if (r.phase === SNAP) {
+      a = off && off.action ? { ...off.action } : (r.try2 ? { pat: 'two' } : {});
+      if (r.try2) a.pat = 'two';
+      if (def && def.dc) a.dc = { ...def.dc };
+      const trick = typeof a.call === 'string' && a.call.startsWith('trick');
+      if (trick) a.seen = (ms.tricks || [0, 0])[r.pos];
+      // nobody's timeout but a called one: the defense's before the snap; the offense calls its own as a decision
+      a.to_off = false; a.to_def = !!(def && def.to_def) && !r.try2;
+    } else a = off && off.action ? { ...off.action } : {};      // a kickoff, a try: the call, or the engine's own
+    ms.seq += 1;
+    let res = step(r.try2 || r, a, seed);
+    res.action = a;
+    if (r.phase === SNAP && typeof a.call === 'string' && a.call.startsWith('trick')) {
+      ms.tricks = (ms.tricks || [0, 0]).slice();
+      ms.tricks[r.pos] += 1;
+    }
+    if (a.philly) res.log.forEach((x) => { if (x.ev === 'pat') x.philly = true; });
+    ms.root = res.root;
+    // no time for another snap (under a second, running, and no timeout the offense would want; or none at all): the
+    // clock runs out now, not on a call nobody can make (game.js advance: "Time runs out")
+    for (let i = 0; i < 3 && ms.root.phase === SNAP && expired(ms.root); i++) {
+      const more = step(ms.root, { to_off: false, to_def: false, tempo: 'normal' }, (seed ^ Math.imul(0x9E3779B9, i + 1)) >>> 0);
+      res = { ...res, root: more.root, log: res.log.concat(more.log), done: more.done };
+      ms.root = more.root;
+    }
+    if (ms.root.phase === DONE) {
+      const sc = ms.root.score;
+      if (sc[0] !== sc[1]) end(ms, notes, 'clock');
+      else {
+        // tied at 0:00: college overtime, a fresh toss (the server's coin), the score carried
+        const toss = (seed >>> 30) & 1, o = start(toss);
+        ms.cot = { ...o.cot, score0: sc.slice() };
+        ms.root = { ...o.root, score: sc.slice() };
+        notes.push({ k: 'regend', score: sc.slice() }, { k: 'ottoss', team: toss });
+      }
+    }
+    return { ms, res, kind: 'play', notes };
+  }
+  // a snap the clock has already run out on (game.js advance's rule)
+  function expired(r) {
+    if (r.clock_running) return r.t < 1 && !(r.to[r.pos] > 0 && r.score[r.pos] <= r.score[1 - r.pos]);
+    return r.t <= 1e-6;
+  }
+  // ranked plays even: both teams at the league's average strength (the real rosters, names and lineups; their style,
+  // proe, stays). Casual and friend matches play the teams as they are
+  function evenTeam(t, pool) {
+    const T = Object.values(pool.teams), mean = (f) => T.reduce((s, x) => s + f(x), 0) / T.length;
+    return { ...t, base: { off_pass: 0, off_rush: 0, def_pass: 0, def_rush: 0, proe: t.base.proe }, qb: { ...t.qb, adjustment: 0 },
+      injury_adjustment: { off_pass: 0, off_rush: 0, def_pass: 0, def_rush: 0 }, kicker: { ...t.kicker, rating: mean((x) => x.kicker.rating) },
+      punter: { ...t.punter, rating: mean((x) => x.punter.rating) }, calls: {} };
+  }
+  function evenPool(pool) {
+    const teams = {};
+    for (const k of Object.keys(pool.teams)) teams[k] = evenTeam(pool.teams[k], pool);
+    return { ...pool, league: { ...pool.league, home_pass: 0, home_rush: 0 }, teams };
+  }
+  // a team's strength, as the pick shows it in casual and friend matches (an overall: 80 the league's average)
+  function strength(pool, code) {
+    const T = Object.values(pool.teams), v = (t) => 0.6 * (t.base.off_pass + t.qb.adjustment) + 0.4 * t.base.off_rush - 0.6 * t.base.def_pass - 0.4 * t.base.def_rush;
+    const m = T.reduce((s, t) => s + v(t), 0) / T.length, sd = Math.sqrt(T.reduce((s, t) => s + (v(t) - m) ** 2, 0) / T.length) || 1;
+    return pool.teams[code] ? Math.round(80 + 7 * (v(pool.teams[code]) - m) / sd) : null;
+  }
+
   // what happened on the real play behind an outcome (game_worker.js describe: the same fields, for the animation)
   function describe(pb, row) {
     const P = pb, out = {};
@@ -270,8 +419,8 @@
   }
   // the engine's step for a match, as apply() wants it: one simulator for the two teams, the plays described
   // (makeSim: how to build it; the server's is board/lazy_sim.js, the same plays in a fraction of the memory)
-  function stepper(eng, pool, home, away, makeSim) {
-    const ctx = eng.makeContext(buildGame(pool, home, away), { receive2h: home });
+  function stepper(eng, pool, home, away, makeSim, even) {
+    const ctx = eng.makeContext(buildGame(even ? evenPool(pool) : pool, home, away), { receive2h: home });
     const sim = makeSim ? makeSim(eng, ctx) : eng.simulator(ctx);
     return (root, action, seed) => {
       const r = sim.step(root, { action, seed });
@@ -319,8 +468,8 @@
     return walk(JSON.parse(new TextDecoder().decode(u8.subarray(8, base))));
   }
 
-  const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, VS_OT, hash, rng, buildGame, possRoot, start, chooser, need, role,
-    cleanAction, cleanDef, cleanHalf, apply, after, describe, called, stepper, unpack };
+  const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, VS_OT, FIVE_T, FIVE_TO, REG_PICKS, COIN, hash, rng, buildGame, possRoot, start, startFive, chooser, need, role,
+    cleanAction, cleanDef, cleanHalf, apply, after, expired, describe, called, stepper, evenPool, evenTeam, strength, unpack };
   if (typeof module !== 'undefined' && module && module.exports) module.exports = VSCore;
   if (global) global.VSCore = VSCore;       // (always: a page with some other script's global `module` still gets it)
 })(typeof self !== 'undefined' ? self : this);

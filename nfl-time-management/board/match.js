@@ -291,7 +291,7 @@ export class Match {
     let result = null;
     if (out.ms.over) {
       R.phase = 'over';
-      result = R.result = { winner: out.ms.winner, by: 'score', score: out.ms.root.score.slice(), round: out.ms.cot.round };
+      result = R.result = { winner: out.ms.winner, by: 'score', score: out.ms.root.score.slice(), round: out.ms.cot ? out.ms.cot.round : 0, t: out.ms.root.t };
     }
     await this.save(R);
     this.broadcast({ t: 'step', ...d, deadline: R.deadline, dl: R.dl, now, result });
@@ -307,7 +307,7 @@ export class Match {
   async finish(R, result) {
     this.steppers.clear();
     R.phase = 'over';
-    R.result = { ...result, score: R.ms ? R.ms.root.score.slice() : [0, 0], round: R.ms ? R.ms.cot.round : 0 };
+    R.result = { ...result, score: R.ms ? R.ms.root.score.slice() : [0, 0], round: R.ms && R.ms.cot ? R.ms.cot.round : 0 };
     await this.ctx.storage.delete('pend');
     await this.save(R);
     this.broadcast({ t: 'over', result: R.result });
