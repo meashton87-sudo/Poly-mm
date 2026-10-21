@@ -42,7 +42,7 @@ jobs:
       VS_ON: "off"            # "on" turns on Versus (two players live) on the site; the Pro preview always has it
       ADS_ON: "on"           # "on" shows the ads (AdSense and the units in web/ads); "off": no ads anywhere, and no extra life
       EZOIC_ADSTXT: "site"   # /ads.txt redirects to Ezoic's ads.txt manager for the site's own domain (SITE_DOMAIN), or a domain named here ("" : our own ads.txt)
-      EZOIC_ON: "off"           # "on": Ezoic's privacy + header scripts on every page (EzoicAds step 2); "off" leaves them out
+      EZOIC_ON: "on"            # "on": Ezoic's privacy + header scripts on every page (EzoicAds step 2); "off" leaves them out
       EZOIC_GAME_IDS: ""        # Ezoic placeholder ids (its dashboard) for the game's cards: day's end, survivor card, run over
       FULLDEF_ON: "on"       # "on" turns on the full defensive call (personnel, front, coverage, rush) in the daily and survivor; the Pro preview always has it
     defaults:
