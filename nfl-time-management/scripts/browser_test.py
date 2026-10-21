@@ -1827,8 +1827,10 @@ CLEAR_DOT = """() => {
   for (const g of [...document.querySelectorAll('#field g.dot.them'), ...[...document.querySelectorAll('#field g.dot.me')].filter((e) => !rcv.test(e.getAttribute('aria-label') || ''))]) {
     const r = g.querySelector('circle.c').getBoundingClientRect(), x = (r.left + r.right) / 2, y = (r.top + r.bottom) / 2, h = document.elementFromPoint(x, y);
     const d = h && h.closest('g.dot');      // (him, or him again in the field as drawn anew over it)
-    if (d && d.getAttribute('aria-label') === g.getAttribute('aria-label') && (y < innerHeight * 0.4 || !document.body.classList.contains('bcast'))) return { dot: [x, y], who: g.getAttribute('aria-label') };
-    why.push(`${Math.round(x)},${Math.round(y)} ${h ? (h.closest('g.dot') ? 'another dot' : h.id || h.tagName) : 'off the screen'}`);
+    // (the broadcast layout, a phone's (game.html, 999px and narrower): the dot above the calls' sheet)
+    const same = d && d.getAttribute('aria-label') === g.getAttribute('aria-label'), high = y < innerHeight * 0.4 || !document.body.classList.contains('bcast') || innerWidth > 999;
+    if (same && high) return { dot: [x, y], who: g.getAttribute('aria-label') };
+    why.push(`${Math.round(x)},${Math.round(y)} ${same ? 'under the sheet' : h ? (h.closest('g.dot') ? 'another dot' : h.id || h.tagName) : 'off the screen'}`);
   }
   return { dot: null, why: why.length ? why.slice(0, 4).join('; ') : 'none on the field' };
 }"""
