@@ -358,7 +358,9 @@ EZOIC_HEAD = ('<script data-cfasync="false" src="https://cmp.gatekeeperconsent.c
               'document.head.appendChild(t);return}'
               'var s=document.createElement("script");s.async=true;s.src="//www.ezojs.com/ezoic/sa.min.js";'
               'document.head.appendChild(s)})()</script>'
-              '<script>window.ezstandalone = window.ezstandalone || {}; ezstandalone.cmd = ezstandalone.cmd || [];</script>'
+              '<script>window.ezstandalone = window.ezstandalone || {}; ezstandalone.cmd = ezstandalone.cmd || [];'
+              # (Ezoic's rewarded ads: the Survivor extra life, game.js rewardedLife)
+              'window.ezRewardedAds = window.ezRewardedAds || {}; ezRewardedAds.cmd = ezRewardedAds.cmd || [];</script>'
               '<script src="//ezoicanalytics.com/analytics.js"></script>')
 EZOIC_ADSTXT = "https://srv.adstxtmanager.com/19390/{domain}"     # Ezoic's ads.txt manager (docs.ezoic.com, ads.txt setup)
 

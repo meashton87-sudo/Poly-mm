@@ -9273,19 +9273,62 @@
   }
   // An ad unit (Google AdSense, the website only: site.py --adsense --ad-slot), only on screens between games, never
   // while a drive is on, labeled as an ad. Nothing without both metas (claude.ai, local copies, the test builds).
-  // survivor: one extra life a run, for a short ad break (only where the site has ads to show). Off for now: no ads
-  const LIFE_ON = false;
+  // Survivor: one extra life a run. Pro: free (Pro has no ads). Else a rewarded ad the player opts into (Ezoic's
+  // rewarded ads, site.py EZOIC_HEAD's ezRewardedAds stub: the life only once the ad's timer is done; none to show, or
+  // closed early, and the run stays over), or where the site runs other networks, the old short ad break
+  const LIFE_ON = true, LIFE_WAIT = 8000;
+  function reviveRun(how) {
+    state.out = false; state.life = true; state.pick = null;
+    saveState();
+    track('extra_life', { streak: state.won, how });
+    survOpen();
+  }
   function lifeOffer() {
-    if (!LIFE_ON || !state.out || state.life || !adCodes().length) return [];
-    const life = el('button', 'btn gold', '❤️ Extra life: watch a 15-second ad');
+    if (!LIFE_ON || !state.out || state.life) return [];
+    const note = el('p', 'note', 'Once a run. Your loss stays on your record, and the board marks the run with \u2764\ufe0f.');
+    if (isPro()) {
+      const b = el('button', 'btn gold', '\u2764\ufe0f Extra life (Pro)');
+      b.type = 'button';
+      b.addEventListener('click', () => reviveRun('pro'));
+      return [b, note];
+    }
+    if (noAds()) return [];
+    const rw = window.ezRewardedAds;
+    if (EZ && rw && rw.cmd) {
+      const b = el('button', 'btn gold', '\u2764\ufe0f Extra life: watch an ad');
+      b.type = 'button';
+      b.addEventListener('click', () => rewardedLife(b));
+      return [b, note];
+    }
+    if (EZ || !adCodes().length) return [];
+    const life = el('button', 'btn gold', '\u2764\ufe0f Extra life: watch a 15-second ad');
     life.type = 'button';
-    life.addEventListener('click', () => adBreak(() => {
-      state.out = false; state.life = true; state.pick = null;
-      saveState();
-      track('extra_life', { streak: state.won });
-      survOpen();
-    }));
-    return [life, el('p', 'note', 'Once a run. Your loss stays on your record, and the board marks the run with ❤️.')];
+    life.addEventListener('click', () => adBreak(() => reviveRun('break')));
+    return [life, note];
+  }
+  function rewardedLife(b) {
+    const rw = window.ezRewardedAds, label = b.textContent;
+    let done = false, granted = false;
+    const back = (why) => { if (done) return; done = true; clearTimeout(t); b.disabled = false; b.textContent = label; if (why) toast(why); };
+    const grant = () => { if (granted) return; granted = true; done = true; clearTimeout(t); reviveRun('ad'); };
+    b.disabled = true; b.textContent = 'Loading the ad\u2026';
+    track('extra_life_offer_taken');
+    const t = setTimeout(() => back('No ad to show right now. Try again in a minute.'), LIFE_WAIT);
+    rw.cmd.push(() => {
+      try {
+        const onDone = (e) => { if (e && e.rewardName === 'extra_life') { rw.removeEventListener('adCompleted', onDone); grant(); } };
+        rw.addEventListener('adCompleted', onDone);
+        rw.request((q) => {
+          if (done) return;
+          clearTimeout(t);
+          if (!q || !q.status) { back('No ad to show right now. Try again in a minute.'); return; }
+          rw.show((r) => {
+            if (r && r.status && r.reward) grant();
+            else back(r && r.status ? 'Watch the ad to the end for the extra life.' : 'The ad could not play. Try again in a minute.');
+          }, { rewardName: 'extra_life', alwaysCallback: true });
+        }, { rewardName: 'extra_life' });
+      } catch (e) { back('The ad could not play. Try again in a minute.'); }
+    });
   }
   // the ad units the site has (site.py: the banner's meta; the footer units are frames on the page)
   const adCodes = () => [document.querySelector('meta[name="ad-frame"]'), ...document.querySelectorAll('.adslot iframe')].filter(Boolean);
