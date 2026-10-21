@@ -1142,6 +1142,8 @@
     CHEER_X.forEach((x, i) => fig(far ? x : 360 - x, cheerleader(c, i + (far ? 0 : 3)), 'cheer', 1, i));
     fig(far ? 214 : 146, mascot(c), 'cheer mascot', 1.25, 2);
   }
+  // end zones painted their own way (team code: the second color of its checkerboard over the team's own)
+  const EZ_CHECKER = { TENN: '#ffffff' };
   const camY = (sc) => { const { lo, hi } = sc.cam, k = (sc.H - 6) / (hi - lo); return (L) => sc.H - 3 - (L - lo) * k; };
 
   // the field and the 22 for state r (side: the strong side of this snap); place() draws them for the camera
@@ -1159,7 +1161,28 @@
       const e = put(S('rect', { x: 0, width: 360, fill: 'var(--turf-2)' }), (Y) => { e.setAttribute('y', Y(L + 5)); e.setAttribute('height', Math.max(0, Y(L) - Y(L + 5))); });
     }
     [[100, 110, code(1 - G.me)], [-10, 0, code(G.me)]].forEach(([a, b, c]) => {
-      const e = put(S('rect', { x: 0, width: 360, fill: color(c), opacity: 0.92 }), (Y) => { e.setAttribute('y', Y(b)); e.setAttribute('height', Math.max(0, Y(a) - Y(b))); });
+      // (a checkerboard end zone is painted inside its lines only: the turf past the sidelines stays green)
+      const ex = EZ_CHECKER[c] ? { x: SX0, width: SX1 - SX0 } : { x: 0, width: 360 };
+      const e = put(S('rect', { ...ex, fill: color(c), opacity: EZ_CHECKER[c] ? 1 : 0.92 }), (Y) => { e.setAttribute('y', Y(b)); e.setAttribute('height', Math.max(0, Y(a) - Y(b))); });
+      // (a home end zone painted its own way, as at the stadium: Tennessee's orange and white checkerboard, Neyland)
+      if (EZ_CHECKER[c]) {
+        const id = `ck-${c}-${a}`, pat = S('pattern', { id, patternUnits: 'userSpaceOnUse' }), w1 = S('rect', { fill: EZ_CHECKER[c] }), w2 = S('rect', { fill: EZ_CHECKER[c] });
+        pat.append(w1, w2);
+        const defs = S('defs', {});
+        defs.append(pat);
+        put(defs);
+        // (inside the end zone only: sideline to sideline and goal line to end line, four rows of whole squares and as
+        // many whole columns as fit the width, so none is cut at an edge)
+        const ck = put(S('rect', { x: SX0, width: SX1 - SX0, fill: `url(#${id})` }), (Y) => {
+          const y0 = Math.min(Y(a), Y(b)), h = Math.abs(Y(a) - Y(b)), rh = Math.max(h / 4, 1);
+          const cols = Math.max(2, Math.round((SX1 - SX0) / rh)), cw = (SX1 - SX0) / cols;
+          ck.setAttribute('y', y0); ck.setAttribute('height', h);
+          pat.setAttribute('x', SX0); pat.setAttribute('y', y0);
+          pat.setAttribute('width', 2 * cw); pat.setAttribute('height', 2 * rh);
+          [w1, w2].forEach((x) => { x.setAttribute('width', cw); x.setAttribute('height', rh); });
+          w2.setAttribute('x', cw); w2.setAttribute('y', rh);
+        });
+      }
       // (dy: nudged along its end zone, clear of the buttons over the field: ezClear)
       const t = put(S('text', { x: 180, class: `ez${darkOn(color(c)) ? ' dk' : ''}`, 'text-anchor': 'middle', 'dominant-baseline': 'central' }, teamName(c).toUpperCase()), (Y) => {
         const lo = Math.min(Y(a), Y(b)), hi = Math.max(Y(a), Y(b)), dy = +t.dataset.dy || 0;
@@ -2488,7 +2511,7 @@
         if (scoring) {
           if (!crossed && (offScores ? a.off : !a.off) && past > 0) crossed = q;
           if (!crossed && !inb && !outFirst) outFirst = q;
-        } else deepest = Math.max(deepest, past);
+        } else if (!(e.incomplete || e.evt === 'drop')) deepest = Math.max(deepest, past);    // (a ball dropped in the end zone was never carried)
         last = q;
       }
     });
@@ -9459,6 +9482,28 @@
     setTimeout(() => ezq((z) => { if (!ph.isConnected) return; if (again) z.destroyPlaceholders(id); z.showAds(id); }), 0);
     return box;
   }
+  // An ad bar pinned to the bottom of the screen (an anchor ad, any network's: it comes outside the game, on the body)
+  // never covers the calls: its height is measured and the playing screen ends above it (--adb, game.html). Players
+  // saw the anchor over the play buttons. Checked every second and a half, and on a resize
+  const AD_FLOOR_MAX = 200;
+  function adFloor() {
+    let h = 0;
+    if (!noAds()) {
+      const vh = innerHeight, vw = innerWidth;
+      for (const el of document.body.children) {
+        if (el.id === 'play' || el.closest('#app, .modal, .deep, .toast, #modal')) continue;
+        const cs = getComputedStyle(el);
+        if (cs.position !== 'fixed' || cs.display === 'none' || cs.visibility === 'hidden') continue;
+        const r = el.getBoundingClientRect();
+        if (r.height < 20 || r.height > AD_FLOOR_MAX || r.width < vw * 0.5 || Math.abs(r.bottom - vh) > 3) continue;
+        h = Math.max(h, Math.ceil(r.height));
+      }
+    }
+    const v = `${h}px`;
+    if (document.documentElement.style.getPropertyValue('--adb') !== v) document.documentElement.style.setProperty('--adb', v);
+  }
+  setInterval(adFloor, 1500);
+  addEventListener('resize', adFloor);
   function adBox(kind) {
     if (noAds()) return null;
     if (EZ && EZ_KINDS.includes(kind)) ezBreak();
