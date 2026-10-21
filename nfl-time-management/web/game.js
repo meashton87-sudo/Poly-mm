@@ -1142,6 +1142,8 @@
     CHEER_X.forEach((x, i) => fig(far ? x : 360 - x, cheerleader(c, i + (far ? 0 : 3)), 'cheer', 1, i));
     fig(far ? 214 : 146, mascot(c), 'cheer mascot', 1.25, 2);
   }
+  // end zones painted their own way (team code: the second color of its checkerboard over the team's own)
+  const EZ_CHECKER = { TENN: '#ffffff' };
   const camY = (sc) => { const { lo, hi } = sc.cam, k = (sc.H - 6) / (hi - lo); return (L) => sc.H - 3 - (L - lo) * k; };
 
   // the field and the 22 for state r (side: the strong side of this snap); place() draws them for the camera
@@ -1160,6 +1162,21 @@
     }
     [[100, 110, code(1 - G.me)], [-10, 0, code(G.me)]].forEach(([a, b, c]) => {
       const e = put(S('rect', { x: 0, width: 360, fill: color(c), opacity: 0.92 }), (Y) => { e.setAttribute('y', Y(b)); e.setAttribute('height', Math.max(0, Y(a) - Y(b))); });
+      // (a home end zone painted its own way, as at the stadium: Tennessee's orange and white checkerboard, Neyland)
+      if (EZ_CHECKER[c]) {
+        const id = `ck-${c}-${a}`, pat = S('pattern', { id, patternUnits: 'userSpaceOnUse' }), w1 = S('rect', { fill: EZ_CHECKER[c] }), w2 = S('rect', { fill: EZ_CHECKER[c] });
+        pat.append(w1, w2);
+        const defs = S('defs', {});
+        defs.append(pat);
+        put(defs);
+        const ck = put(S('rect', { x: 0, width: 360, fill: `url(#${id})`, opacity: 0.92 }), (Y) => {
+          const y0 = Math.min(Y(a), Y(b)), h = Math.abs(Y(a) - Y(b)), q = Math.max(h / 4, 1);   // (four rows of squares, end line to goal line)
+          ck.setAttribute('y', y0); ck.setAttribute('height', h);
+          [pat, w1, w2].forEach((x) => { x.setAttribute('width', x === pat ? 2 * q : q); x.setAttribute('height', x === pat ? 2 * q : q); });
+          pat.setAttribute('x', 180 - q * Math.ceil(180 / q)); pat.setAttribute('y', y0);
+          w2.setAttribute('x', q); w2.setAttribute('y', q);
+        });
+      }
       // (dy: nudged along its end zone, clear of the buttons over the field: ezClear)
       const t = put(S('text', { x: 180, class: `ez${darkOn(color(c)) ? ' dk' : ''}`, 'text-anchor': 'middle', 'dominant-baseline': 'central' }, teamName(c).toUpperCase()), (Y) => {
         const lo = Math.min(Y(a), Y(b)), hi = Math.max(Y(a), Y(b)), dy = +t.dataset.dy || 0;
