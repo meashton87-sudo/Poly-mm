@@ -2385,9 +2385,9 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     # receiver catch it and wait for the tackler). `stall` is how long, in seconds
     stood = [x for x in tk if x.get("stall", 0) >= 0.5]
     say(f"carriers standing in the open (0.5 s+): {len(stood)} of {len(tk)}" + (f" {sorted(stood, key=lambda x: -x['stall'])[:8]}" if stood else ""))
-    # (one in a run passes: about one play in ten thousand still has the field run out on the pursuit, a beat of jog
-    # before the hit; two or more is a regression)
-    if len(waited) > 1:
+    # (a rare one passes, as the tackles' check above: about one play in ten thousand still has the field run out on the
+    # pursuit, a beat of jog before the hit; fail only when this many would be unlikely, p < 0.01, at a 2% rate)
+    if len(waited) > 1 and binom_tail(len(tk), len(waited), 0.02) < 0.01:
         fail("breakaway", f"FAIL: a carrier waited in the open for his tackler {waited[:5]}")
     # forward progress: a carrier never has the ball past where it is spotted (beyond where he got it), so he is
     # never shown driven back from it

@@ -3107,8 +3107,10 @@
       if (tackled && o.from != null && (stuff || closeIn || far) && reach.length && (reach[0].T > tC - t0 + 0.1 || loose)) {
         const tf = stuff || far ? Math.max(o.from, REACT_DEF + 0.2) : Math.max(REACT_DEF + 0.2, t0 - 0.8);
         Wd.rewind(tf);
-        const pick = defs.filter((d) => !stuff || d.b.g !== 'CB').map((d) => ({ d, T: Motion.minTime([here(d), contact], d.b.g, { v0: vel(d), spd: d.b.spd }) }))
+        const pick0 = defs.filter((d) => !stuff || d.b.g !== 'CB').map((d) => ({ d, T: Motion.minTime([here(d), contact], d.b.g, { v0: vel(d), spd: d.b.spd }) }))
           .sort((x, y) => x.T - y.T)[0];
+        // (only for a loose man: one who can't be there by the hit stays as he was, the old tackler, in time)
+        const pick = pick0 && (reach[0].T > tC - t0 + 0.1 || pick0.T <= tC - tf - 0.15) ? pick0 : null;
         if (pick) {
           runFrom(pick.d, tf, [contact], { T: Math.max(pick.T, tC - tf - 0.15) });
           leg(pick.d, tC + 0.05, 'stick', { who: car.b, dx: 0, dy: fd * 0.7 });
