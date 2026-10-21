@@ -3154,7 +3154,15 @@
         (window.__fpLog = window.__fpLog || []).push({ over: +(mx - Math.max(0, fp(t1))).toFixed(2), car: car.label, off: !!car.off, oob: !!o.oob, yds: e.yards, ev: e.evt || '', call: e.call });
       }
       // (tests: how close the nearest defender is when a tackled carrier goes down)
-      if (tackled && window.__sepLog) (window.__tackleLog = window.__tackleLog || []).push({ nd: Math.min(...foes(car).map((d) => dist(here(d), here(car)))), free: free.length, tackler: !!tackler, slowed: +slowed.toFixed(2), ev: e.evt || '', yds: e.yards, call: e.call, from: o.from,
+      // (tests: standing in the open. How long he moves under 2 yd/s with nobody within 3 yards, before the hit)
+      let stall = 0;
+      if (tackled && window.__sepLog) {
+        for (let t = t0 + 0.05; t < tC - 0.25; t += 0.05) {
+          const a = Wd.posAt(car.b, t - 0.05), b = Wd.posAt(car.b, t);
+          if (dist(a, b) / 0.05 < 2 && Math.min(...foes(car).map((d) => dist(Wd.posAt(d.b, t), b))) > 3) stall += 0.05;
+        }
+      }
+      if (tackled && window.__sepLog) (window.__tackleLog = window.__tackleLog || []).push({ stall: +stall.toFixed(2), nd: Math.min(...foes(car).map((d) => dist(here(d), here(car)))), free: free.length, tackler: !!tackler, slowed: +slowed.toFixed(2), ev: e.evt || '', yds: e.yards, call: e.call, from: o.from,
         td: dist(tackler ? here(tackler) : [0, 0], here(car)), car: car.label, mine: !!car.off === !!(car.off && G.root.pos === G.me), span: dist(start, endPt), tC: tC - t0, reach: reach.length ? reach[0].T : null });
       if (tackled) leg(car, tEnd, 'stand');
       // (past the whistle: into the end zone on a touchdown; out of bounds, along the sideline no further than the spot)
@@ -5815,7 +5823,7 @@
     G.odds = {};
     const ad = adaptLooks(G.info.looks);
     G.look = VS ? null : pickLook(ad.p, hash('look', seedKey(), G.si, G.seq));
-    G.lookNote = G.look != null ? ad.note : null;
+    G.lookNote = (G.look != null ? ad.note : null) || repNote();
     // late and trailing (or ending the first half): getting out stops the clock, so it starts on (players didn't find
     // the switch); once turned off it stays off for the drive
     const oobOn = oobMatters(r) && (r.t > 1800 || r.score[G.me] < r.score[1 - G.me]) && !G.oobOff;      // (tied: shown, left to you)
@@ -6281,6 +6289,27 @@
   function remember(call) {
     if (!call || !state) return;
     state.tend = ((state.tend || []).concat([call])).slice(-ADAPT_N);
+  }
+  // A defense that sits on what you keep throwing (players spammed the hitch and it kept working): the same route (a
+  // receiver's pick, whoever runs it) or pass call as in your last REP_N snaps; from the third time in them on, its real
+  // plays are drawn toward the worse ones (engine.js REPEAT_S), and it is graded that way too (every option carries its
+  // own count). Said before the snap once you have run it twice
+  const REP_N = 4;
+  const repKey = (a) => (a && a.play === 'pass' && a.call && a.call !== 'hail_mary' ? (a.route ? `r:${a.route}` : `c:${a.call}`) : null);
+  function repOf(a) {
+    const k = !VS && repKey(a);
+    return k ? ((state && state.rep) || []).slice(-REP_N).filter((x) => x === k).length : 0;
+  }
+  function rememberRep(a) {
+    if (!state || VS) return;
+    state.rep = ((state.rep || []).concat([repKey(a) || '-'])).slice(-REP_N);
+  }
+  function repNote() {
+    const L = (state && state.rep) || [], k = L[L.length - 1];
+    if (VS || !k || k === '-' || L.slice(-REP_N).filter((x) => x === k).length < 2) return null;
+    const what = k.startsWith('r:') ? (ROUTE_SAY[k.slice(2)] || 'that route') : `${(CALL[k.slice(2)] || { label: 'that call' }).label.toLowerCase()}`;
+    const n = L.slice(-REP_N).filter((x) => x === k).length;
+    return `They have seen ${what} ${n === 2 ? 'twice' : `${n} times`} in your last ${Math.min(L.length, REP_N)} plays: they are sitting on it.`;
   }
   // ---- personnel: optional; a button under the field opens the sheet (who is on the field, and why it matters)
   const PERS_INFO = {
@@ -6780,7 +6809,8 @@
     // (the formation too, when it is one the plays are charted by: the quarterback in the shotgun, under center or in
     // the pistol; an empty set and the receivers' look are the lineup drawn only)
     const b = G.form && FORM_ENGINE[G.form.qb] && G.root.pos === G.me ? { ...b0, form: G.form.qb } : b0;
-    return G.root.clock_running && ui && ui.tempo ? { ...b, tempo: engineTempo(ui.tempo, G.root) } : b;
+    const rp = repOf(b), c = rp ? { ...b, rep: rp } : b;
+    return G.root.clock_running && ui && ui.tempo ? { ...c, tempo: engineTempo(ui.tempo, G.root) } : c;
   };
   function callAction(id, oob) {
     return withTempo({ to_off: false, play: CALL[id].kind, call: id, oob: !!oob, looks: G.look != null ? 1 << G.look : 0 });
@@ -6803,6 +6833,7 @@
       specials.forEach((k) => opts.push({ key: k, label: specialLabel(k), action: withTempo({ to_off: false, play: k }) }));
       const chosen = passPick ? passPick.key : pick.call ? (ui.oob ? `${pick.call}+oob` : pick.call) : pick.special;
       remember(opts.find((o) => o.key === chosen).action.call);
+      rememberRep(opts.find((o) => o.key === chosen).action);
       const cid = passPick ? passPick.action.call : pick.call;
       liveDrive.calls++;
       // a drawn run or RPO: the same call, the same grading; its path (and route) only go to the field

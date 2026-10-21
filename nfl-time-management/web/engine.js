@@ -101,7 +101,12 @@
   // it 11.5), and a deep shot's swing stays a deep shot's
   const MATCH_SD = 0.2;              // a full matchup (s = +-1) moves a call's mean EPA by this share of its own spread
   const MATCH_EPA_CAP = 3;
-  const MATCH_AUDIBLE = 0.9;          // when you call their defense, the offense checks into calls that beat it
+  const MATCH_AUDIBLE = 0.9;
+  // daily game: a pass you keep calling (act.rep: the same route or call this many times in your last 4 snaps, game.js
+  // repOf) is one the defense sits on: from the third time on, each repeat moves the matchup by this much (a full
+  // matchup moves the mean by MATCH_SD of the call's spread). The defense's habit, not the real plays: they stay real
+  const REPEAT_S = 0.4;
+  const repeatS = (act) => -REPEAT_S * Math.max(0, Math.min(act.rep | 0, 4) - 1);          // when you call their defense, the offense checks into calls that beat it
   const RUN_M = { blitz: 0, load: -1, soft: 1 }, DEEP_M = { blitz: -1, load: 0.5, soft: 0 };
   const MATCH = {
     rb_out_strong: RUN_M, rb_out_weak: RUN_M, rb_tackle_strong: RUN_M, rb_tackle_weak: RUN_M, rb_inside_strong: RUN_M,
@@ -1795,10 +1800,10 @@
           const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl), who = act.route ? (WHO_CODE[act.who] || 0) : undefined, route = routeOfAct(act);
           if (dcValid(act.dc)) {
             const m = dcEffect(this.e.pb.dcEff, act.call, act.dc, act.pers, act.seen);
-            match = m.s; why = m.why.slice(0, 3);
+            match = m.s + repeatS(act); why = m.why.slice(0, 3);
             pbRow = this.sampleVsDefense(o, callIdx, fk, u[2], mineOob, act.dc, match, route, who, persForm(act));
           } else {
-            match = this.matchOf(callIdx, this.defOfLooks(act.looks));
+            match = this.matchOf(callIdx, this.defOfLooks(act.looks)) + repeatS(act);
             pbRow = this.samplePlaybook(o, callIdx, fk, u[2], mineOob, act.looks, match, route, who, persForm(act));
           }
         } else if (act && dcValid(act.dc) && this.pbCdf && (kind === RUN || kind === PASS)) {

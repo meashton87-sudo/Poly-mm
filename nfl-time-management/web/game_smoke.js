@@ -165,6 +165,19 @@ for (let k = 0; k < 100; k++) {
     assert.ok(lo < mid - 0.08 && hi > mid + 0.08, `matchup tilt ${id}: ${lo.toFixed(2)} / ${mid.toFixed(2)} / ${hi.toFixed(2)}`);
     console.log(`matchup ${id.padEnd(17)} losing ${lo.toFixed(2)}  real ${mid.toFixed(2)}  winning ${hi.toFixed(2)} EPA`);
   });
+  // a pass you keep calling (game.js repOf, engine.js REPEAT_S): the same hitch a third, fourth and fifth time in four
+  // snaps is drawn worse each time, still from real hitches
+  const hitch = (s) => {
+    let t = 0, n = 0;
+    for (let fk = 0; fk < P.nFine; fk += 7) for (let k = 0; k < 200; k++) {
+      const r = S.samplePlaybook(0, P.callIndex.quick_strong, fk, (k + 0.5) / 200, false, 0, s, 'hitch', 0);
+      t += P.epa[r]; n++;
+    }
+    return t / n;
+  };
+  const hs = [0, -0.4, -0.8, -1.2].map(hitch);
+  assert.ok(hs[1] < hs[0] && hs[2] < hs[1] && hs[3] < hs[2] && hs[3] < hs[0] - 0.1, `repeated hitch: ${hs.map((x) => x.toFixed(2))}`);
+  console.log(`the hitch called again and again: ${hs.map((x) => x.toFixed(2)).join(' / ')} EPA (first or second time, third, fourth, fifth)`);
 }
 // personnel: a call with 12 (or 21, 13) personnel draws only real plays run with it, where there are enough (PB_LOOK_MIN
 // of them, by their weights: fewer, and the situation's own plays are drawn, whatever their grouping, rather than the
