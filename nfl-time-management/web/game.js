@@ -2994,7 +2994,10 @@
       // ball, so he is there when the run ends; the carrier never waits for him
       const stuff = fd * (contact[1] - L0) < 1.5 && o.from < t0 - 0.1, closeIn = !stuff && dist(start, contact) < 8;
       const far = !stuff && !closeIn && reach.length && reach[0].T > tC - t0 + 0.4;
-      if (tackled && o.from != null && (stuff || closeIn || far) && reach.length && reach[0].T > tC - t0 + 0.1) {
+      // (a short catch with the nearest man still 3+ yards off: he broke on the ball, not after it; met late, the
+      // receiver stood with the ball waiting for him, players saw it)
+      const loose = closeIn && reach.length && dist(here(reach[0].d), contact) > 3;
+      if (tackled && o.from != null && (stuff || closeIn || far) && reach.length && (reach[0].T > tC - t0 + 0.1 || loose)) {
         const tf = stuff || far ? Math.max(o.from, REACT_DEF + 0.2) : Math.max(REACT_DEF + 0.2, t0 - 0.8);
         Wd.rewind(tf);
         const pick = defs.filter((d) => !stuff || d.b.g !== 'CB').map((d) => ({ d, T: Motion.minTime([here(d), contact], d.b.g, { v0: vel(d), spd: d.b.spd }) }))
