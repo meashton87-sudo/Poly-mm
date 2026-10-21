@@ -2595,6 +2595,28 @@
     // (the ground: inside the end lines, and no more than a step out of bounds, on the drawn sideline; onTurf, a spot
     // across the field kept on it)
     const SIDES = [-0.8, FW + 0.8], onTurf = (x) => clip(x, SIDES[0], SIDES[1]);
+    // a field goal or an extra point: the kicking unit is on the field before the snap (players saw the offense's
+    // lineup jog over and the quarterback's dot kick it). The long snapper over the ball, three either side of him
+    // shoulder to shoulder, a wing a step outside and back at each end; the holder kneeling 7 yards deep, the kicker
+    // two steps behind him and off to the side; the defense's front across the line, one man deep. The dots read LS, H, K
+    const kickUnit = e.ev === 'fg' || (e.ev === 'pat' && !two);
+    if (kickUnit) {
+      const holder = qb || K.off[0], kicker = K.rb || K.off.find((a) => a !== holder);
+      const rest_ = K.off.filter((a) => a !== holder && a !== kicker);
+      const snapper = K.ol[Math.floor(K.ol.length / 2)] || rest_[0], others = rest_.filter((a) => a !== snapper);
+      // (inside the end lines the world keeps everyone in: a kick from the 1 has its deep man short of the end line)
+      const at_ = (a, xy, Ly) => { a.x0 = clampX(bx + xy * XYD); a.L0 = clip(Ly, FULL.lo + 1, FULL.hi - 1); a.x = a.x0; a.L = a.L0; };
+      const tag = (a, t) => { if (!a) return; let j = a.g.querySelector('text.jn'); if (!j) { j = S('text', { class: 'jn', y: 2.6 }); a.g.append(j); } j.textContent = t; a.g.querySelectorAll('text.nm').forEach((n) => n.remove()); };
+      if (snapper) { at_(snapper, 0, fwd(L0, -0.4)); tag(snapper, 'LS'); }
+      const slots = [-1.1, 1.1, -2.2, 2.2, -3.3, 3.3];
+      others.forEach((a, i) => { if (i < slots.length) at_(a, slots[i], fwd(L0, -0.4)); else at_(a, (i % 2 ? 1 : -1) * 4.3, fwd(L0, -1.2)); });
+      at_(holder, 0, fwd(L0, -7)); tag(holder, 'H');
+      if (kicker) { at_(kicker, -2.2, fwd(L0, -9.6)); tag(kicker, 'K'); }
+      const deep = K.def.filter((a) => a.label === 'S').slice(0, 1), front = K.def.filter((a) => !deep.includes(a));
+      front.forEach((a, i) => at_(a, (i - (front.length - 1) / 2) * 1.35, fwd(L0, 0.6)));
+      deep.forEach((a) => at_(a, 0, fwd(L0, 13)));
+      place(sc);
+    }
     const Wd = new Motion.World({ field: [0, FW], ends: [FULL.lo + 0.5, FULL.hi - 0.5], sides: SIDES });
     sc.actors.forEach((a) => { a.trk = null; a.endAt = null; a.b = Wd.add({ id: a.label + (a.p && a.p.num), g: GROUP[a.label] || 'LB', x: yx(a.x0), y: a.L0, spd: 1 + jit(0.035), team: a.off ? 1 : 0 }); });
     const BX = yx(bx);
@@ -3127,7 +3149,8 @@
       else if (fumble) {
         const lost = e.evt !== 'fumble_kept';
         say(tEnd, 'Fumble!', 'hit', { follow: car });
-        const f = [inX(xyEnd[0] + jit(2.5)), xyEnd[1] + dir * 1.2];
+        // (one that went out of bounds, as the engine has it, rolls out over the nearer sideline: the offense keeps it there)
+        const outB = !lost && e.oob, f = outB ? [xyEnd[0] < FW / 2 ? -0.6 : FW + 0.6, xyEnd[1] + dir * 1.2] : [inX(xyEnd[0] + jit(2.5)), xyEnd[1] + dir * 1.2];
         fly(tEnd, tEnd + 0.55, px(xyEnd[0]), xyEnd[1], px(f[0]), f[1], 0.3);
         rest(tEnd + 0.55, px(f[0]), f[1]);
         Wd.run(tEnd);
@@ -3141,7 +3164,7 @@
           if (lost && e.tdDef) t = returnTd(rec, t, f, 'Scoop and score!');
           else {
             leg(rec, t, 'stand');
-            say(t, lost ? `${defName} ball` : 'Recovered', lost ? 'hit' : 'info', { slot: 1, follow: rec });
+            say(t, lost ? `${defName} ball` : outB ? 'Out of bounds' : 'Recovered', lost ? 'hit' : 'info', { slot: 1, follow: rec });
           }
         }
         t += 0.2;
@@ -4602,16 +4625,11 @@
       const T0 = 0.8, hL = fwd(L0, -7), Ly = dir > 0 ? 110 : -10;
       const holder = qb || K.off[0], kicker = K.rb || K.off.find((a) => a !== holder);
       const line = K.off.filter((a) => a !== holder && a !== kicker);
-      const go = (a, t, x, y, eff) => leg(a, t, 'go', { x: yx(x), y, eff: eff ?? 0.8 });
-      line.forEach((a, i) => go(a, 0, clampX(bx + (i - (line.length - 1) / 2) * 15), fwd(L0, -0.3), 0.6));
-      go(holder, 0, bx, hL, 0.6);
-      if (kicker) go(kicker, 0, bx - 10, fwd(L0, -9.5), 0.6);
       const deepD = K.def.filter((a) => a.label === 'S').slice(0, 1), front = K.def.filter((a) => !deepD.includes(a));
-      front.forEach((a, i) => go(a, 0, clampX(bx + (i - (front.length - 1) / 2) * 15), fwd(L0, 0.3), 0.6));
-      deepD.forEach((a) => go(a, 0, bx, fwd(L0, 12), 0.6));
+      // (everyone set where the unit lines up, above; the holder takes the snap kneeling, the kicker steps into it)
       fly(T0, T0 + 0.4, bx, L0, bx, hL, 0.1);
       rest(T0 + 0.4, bx, hL);
-      if (kicker) leg(kicker, T0 + 0.35, 'go', { x: yx(bx) - 0.4, y: fwd(L0, -7.6), eff: 0.55 });
+      if (kicker) leg(kicker, T0 + 0.45, 'go', { x: yx(bx) - 0.5, y: fwd(L0, -7.7), eff: 0.5 });
       const good = e.ev === 'fg' ? e.made : e.good;
       const miss = good ? 0 : (R() < 0.5 ? -1 : 1);
       const tK = T0 + 1.3, t1 = tK + 0.25 + Math.abs(Ly - hL) / 24;
@@ -4925,7 +4943,8 @@
     const runoff = clk ? Math.max(0, clk.t0 - clk.snap) : 0;
     const PRE = Math.max(runoff >= 1 ? clip(0.4 + runoff / 30, 0.55, 1.5) : 0, P.motion ? 1.2 : 0);
     const ZI = 0.6, ZO = 0.5, total = PRE + ZI + P.T + P.hold + ZO, still = reduced();
-    const ck = clk ? document.querySelector('#bar .clk') : null;
+    // (college overtime in Versus has no clock: the scoreboard keeps its possession, never a clock run over it)
+    const ck = clk && !G.cot ? document.querySelector('#bar .clk') : null;
     return new Promise((resolve) => {
       let start = null, skip = false;
       const onTap = () => { skip = true; };
@@ -5196,7 +5215,7 @@
 
   function addLog(text, t, mine) {
     const li = el('li');
-    li.append(el('span', 't', t == null ? '' : clockOf(t).text), el('span', mine ? 'me' : '', text));
+    li.append(el('span', 't', t == null || G.cot ? '' : clockOf(t).text), el('span', mine ? 'me' : '', text));
     $('pbp').prepend(li);
     G.log.push([text, t, !!mine]);
     return li;
@@ -5213,7 +5232,7 @@
     $('pbp').textContent = '';
     G.log.forEach(([text, t, mine]) => {
       const li = el('li');
-      li.append(el('span', 't', t == null ? '' : clockOf(t).text), el('span', mine ? 'me' : '', text));
+      li.append(el('span', 't', t == null || G.cot ? '' : clockOf(t).text), el('span', mine ? 'me' : '', text));
       $('pbp').prepend(li);
     });
   }
@@ -6603,7 +6622,7 @@
     return w;
   }
 
-  function situation(r) { return `${clockOf(r.t).text} ${qLabel(r)}, ${ddText(r)} ${onSpot(r)}`; }
+  function situation(r) { return `${G.cot ? `${G.cot.round > 1 ? G.cot.round : ''}OT` : `${clockOf(r.t).text} ${qLabel(r)}`}, ${ddText(r)} ${onSpot(r)}`; }
   function clockSpec(r, chosen, seq) {
     const me = G.me, lead = r.score[me] - r.score[1 - me];
     const opts = clockOptions(r).map((k) => ({ key: k, label: CLOCK[k].label, action: clockAct(k, r) }));
@@ -7375,7 +7394,7 @@
     if (r.untimed && r.phase === SNAP) text = 'Untimed down: defensive penalty. A half cannot end on a defensive foul, so the offense gets one more snap at 0:00.';
     else if (r.phase === SNAP && r.timeout && r.timeout.team !== G.me) {
       c = code(r.timeout.team);
-      text = `Timeout, ${teamName(c)} (${r.timeout.left} left). The clock is stopped at ${clockOf(r.t).text}.`;
+      text = `Timeout, ${teamName(c)} (${r.timeout.left} left). ${G.cot ? '' : `The clock is stopped at ${clockOf(r.t).text}.`}`;
     } else if (r.phase === SNAP && r.clock_running && r.pos === G.me && halfLeft(r.t) < 1) text = 'Under a second left with the clock running: only a timeout stops it before it runs out.';
     if (!text) return;
     const n = el('div', 'stopnote');
