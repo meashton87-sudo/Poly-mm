@@ -1655,4 +1655,150 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   unset('STRIPE_SECRET', 'STRIPE_WEBHOOK_SECRET', 'RESEND_KEY', 'MAIL_FROM', 'SITE');
   globalThis.fetch = realFetch;
 }
+// Challenges (/challenge*): a short id; the challenger and everyone who played from the link on its board, names and
+// scores only (never a key, a hash or an account); one result a device, never a restarted try or the challenger's own;
+// blocked() names refused, a name someone else holds left off; a device's challenges a day capped; 30 days, then gone
+{
+  const ch = (body, o = {}) => call('POST', body, { path: '/challenge', ...o });
+  const play = (id, body, o = {}) => call('POST', body, { path: `/challenge/${id}/play`, ...o });
+  const view = (id) => call('GET', null, { path: `/challenge/${id}` });
+  const ck = (i) => `chal-device-key-${String(i).padStart(9, '0')}`;
+  let r = await ch({ day: 9, name: 'Eli', score: 87, key: KEY.eli });
+  let d = await r.json();
+  assert.strictEqual(r.status, 200, JSON.stringify(d));
+  assert.match(d.id, /^[a-hjkmnp-z2-9]{7}$/, 'a short id');
+  const id = d.id;
+  for (const [why, body] of [['a blocked name', { name: 'Fuck Face' }], ['a slur spelled around', { name: 'n1gg3r' }], ['no day', { day: undefined }], ['day 0', { day: 0 }],
+    ['a fractional score', { score: 87.5 }], ['score over 100', { score: 101 }], ['score a string', { score: '87' }], ['no key', { key: 'short' }]]) {
+    r = await ch({ day: 9, name: 'Zed', score: 50, key: ck(1), ...body });
+    assert.strictEqual(r.status, 400, why);
+  }
+  assert.match((await (await ch({ day: 9, name: 'sh1t head', score: 50, key: ck(1) })).json()).error, /isn’t allowed/, 'a blocked name says so');
+  d = await (await view(id)).json();
+  assert.deepStrictEqual([d.id, d.day, d.name, d.score, d.n, d.rows], [id, 9, 'Eli', 87, 0, [{ name: 'Eli', score: 87, ch: true }]], 'the challenge as made');
+  // a name another device holds (Eli is Eli's) is left off a new challenge; the score still goes
+  d = await (await ch({ day: 9, name: 'ELI', score: 30, key: KEY.matt })).json();
+  assert.strictEqual(d.taken, true, 'someone else’s name');
+  assert.strictEqual((await (await view(d.id)).json()).name, '', 'made without the name');
+  // plays: one a device, the first stands; restarted and the challenger's own device never count; names only out
+  d = await (await play(id, { name: 'Matt', score: 91, key: KEY.matt })).json();
+  assert.deepStrictEqual([d.counted, d.you, d.n, d.rows.map((x) => [x.name, x.score])], [true, 1, 1, [['Matt', 91], ['Eli', 87]]], 'a friend beats it');
+  d = await (await play(id, { name: 'Matt', score: 99, key: KEY.matt })).json();
+  assert.deepStrictEqual([d.counted, d.n, d.rows[0].score], [false, 1, 91], 'a second try from that device: not counted');
+  d = await (await play(id, { name: 'Eli', score: 100, key: KEY.eli })).json();
+  assert.deepStrictEqual([d.counted, d.n], [false, 1], 'the challenger’s own device: not counted');
+  d = await (await play(id, { name: 'Ren', score: 95, key: ck(2), restarted: true })).json();
+  assert.deepStrictEqual([d.counted, d.n], [false, 1], 'a restarted try: not counted');
+  d = await (await play(id, { name: 'Ren', score: 60, key: ck(2) })).json();
+  assert.deepStrictEqual([d.counted, d.you, d.n], [true, 3, 2], 'the same device, its first real try: counted');
+  assert.strictEqual((await play(id, { name: 'kkk rider', score: 60, key: ck(3) })).status, 400, 'a blocked name on a play');
+  d = await (await play(id, { name: 'eli', score: 70, key: ck(3) })).json();
+  assert.ok(d.counted && d.taken && d.rows.some((x) => x.name === '' && x.score === 70), 'a held name on a play: counted unnamed');
+  for (let i = 10; i < 40; i++) await play(id, { name: `P${i}`, score: i, key: ck(i) });
+  d = await (await view(id)).json();
+  assert.strictEqual(d.rows.length, 20, 'the top 20 shown');
+  assert.strictEqual(d.n, 33, 'everyone counted');
+  const raw = JSON.stringify(d) + JSON.stringify(await (await play(id, { name: 'Late', score: 1, key: ck(99) })).json());
+  for (const k of [KEY.eli, KEY.matt, await sha256hex(KEY.eli), (await sha256hex(KEY.eli)).slice(0, 16), (await sha256hex(KEY.matt)).slice(0, 16), 'seen', 'kh']) assert.ok(!raw.includes(k), `no ${k.slice(0, 20)} out`);
+  // bad ids and paths
+  assert.strictEqual((await view('nope')).status, 404, 'a malformed id');
+  assert.strictEqual((await view('abcdefg')).status, 404, 'an id never made');
+  assert.strictEqual((await call('GET', null, { path: `/challenge/${id}/x` })).status, 404, 'an unknown path');
+  assert.strictEqual((await call('POST', {}, { path: `/challenge/${id}` })).status, 405, 'POST to a challenge itself');
+  assert.strictEqual((await play('abcdefg', { score: 1, key: ck(98) })).status, 404, 'a play on none');
+  // the per-IP limit, and a device's CHAL_PER_DAY a day
+  const one = { ip: '10.77.0.1' };
+  for (let i = 0; i < 30; i++) await view(id, one);
+  for (let i = 0; i < 30; i++) assert.strictEqual((await ch({ day: 9, score: 5, key: ck(500 + i) }, one)).status, 200);
+  assert.strictEqual((await ch({ day: 9, score: 5, key: ck(600) }, one)).status, 429, 'one IP rate limited');
+  for (let i = 0; i < 20; i++) assert.strictEqual((await ch({ day: 9, score: 5, key: ck(700) })).status, 200, `challenge ${i + 1} of the day`);
+  r = await ch({ day: 9, score: 5, key: ck(700) });
+  assert.strictEqual(r.status, 429, 'the 21st of the day from one device');
+  // 30 days: then 410 and gone
+  const c = store.get(`chal:${id}`);
+  store.set(`chal:${id}`, { ...c, at: Date.now() - 31 * 864e5 });
+  assert.strictEqual((await view(id)).status, 410, 'expired');
+  assert.ok(!store.has(`chal:${id}`), 'deleted once expired');
+  assert.strictEqual((await play(id, { score: 1, key: ck(97) })).status, 404, 'a play after: none');
+  // the sweep: a day's index older than 30 days goes, its challenges with it, at the day's first new challenge
+  const today2 = new Date().toISOString().slice(0, 10), old = addDays0(today2, -40);
+  store.set('chal:zzzzzzz', { day: 1, name: 'Old', score: 1, at: Date.now() - 40 * 864e5, kh: 'x', rows: [], seen: [] });
+  store.set(`chalidx:${old}`, { ids: ['zzzzzzz'], dev: {} });
+  store.delete(`chalidx:${today2}`);
+  await ch({ day: 9, score: 5, key: ck(800) });
+  assert.ok(!store.has('chal:zzzzzzz') && !store.has(`chalidx:${old}`), 'old challenges swept');
+}
+function addDays0(date, k) { return new Date(Date.parse(date + 'T12:00:00Z') + k * 864e5).toISOString().slice(0, 10); }
+
+// The crowd's calls (POST /daily calls, GET /calls): a situation's counts out only once 20 players reached it; a
+// device's first result only, never a restarted one; one call a situation a post; malformed fields refused, bad
+// entries dropped; a few days kept
+{
+  const date = addDays0(new Date().toISOString().slice(0, 10), -1);
+  const post = (i, calls, o = {}) => call('POST', { date, key: `crowd-device-key-${String(i).padStart(8, '0')}`, p: 0.5, spots: [0], calls, ...o }, { path: '/daily' });
+  const S1 = 'call.3.c.d.b2.c', S2 = 'clock.1.e.a.b4.h';
+  for (let i = 0; i < 19; i++) assert.strictEqual((await post(i, [[S1, i < 3 ? 'qb_sneak' : 'rb_middle'], [S2, 'nohuddle']])).status, 200);
+  let d = await (await call('GET', null, { path: `/calls?date=${date}` })).json();
+  assert.deepStrictEqual([d.min, d.s], [20, {}], 'under 20 players: nothing');
+  await post(1, [[S1, 'qb_sneak']]);                                  // a replay of the day: not counted
+  await post(50, [[S1, 'qb_sneak']], { restarted: true });           // restarted: never
+  d = await (await call('GET', null, { path: `/calls?date=${date}` })).json();
+  assert.deepStrictEqual(d.s, {}, 'a replay and a restarted try add nothing');
+  await post(19, [[S1, 'hail_mary'], [S1, 'qb_sneak'], ['Bad Key', 'x'], [S2, 'not a call!'], 'junk']);   // (S1 counted once: its first)
+  d = await (await call('GET', null, { path: `/calls?date=${date}` })).json();
+  assert.deepStrictEqual(d.s, { [S1]: { n: 20, c: { qb_sneak: 3, rb_middle: 16, hail_mary: 1 } } }, '20 players: the counts');
+  for (const bad of ['x', { a: 1 }, Array.from({ length: 81 }, () => [S1, 'rb_middle'])]) assert.strictEqual((await post(60, bad)).status, 400, 'calls malformed');
+  assert.strictEqual((await call('GET', null, { path: '/calls?date=x' })).status, 400);
+  assert.strictEqual((await call('POST', {}, { path: '/calls' })).status, 405);
+  // a few days kept: a new day's first post deletes the oldest past CALL_KEEP
+  store.set('csdays', ['2026-01-01', '2026-01-02', date]);
+  store.set('cs:2026-01-01', { k: 1 }); store.set('cs:2026-01-02', { k: 0 }); store.set('cs:2026-01-01:call.1.e.a.b4.h', { rb_middle: 5 });
+  const today3 = new Date().toISOString().slice(0, 10);
+  store.delete(`cs:${today3}`);
+  await call('POST', { date: today3, key: 'crowd-device-key-today01', p: 0.5, spots: [0], calls: [[S1, 'rb_middle']] }, { path: '/daily' });
+  assert.ok(!store.has('cs:2026-01-01') && !store.has('cs:2026-01-01:call.1.e.a.b4.h') && store.has('cs:2026-01-02'), 'the oldest day deleted');
+  assert.deepStrictEqual(store.get('csdays'), ['2026-01-02', date, today3].sort(), 'three days kept');
+}
+
+// Fanbases (POST /daily team, own; GET /fans): a day's average by team, shown at 5 results; restarted and replays
+// never; the week the 7 days added up; a bad team refused; own: the fans on their own team's drive
+{
+  const date = addDays0(new Date().toISOString().slice(0, 10), -1);
+  const post = (i, team, p, o = {}) => call('POST', { date, key: `fans-device-key-${String(i).padStart(9, '0')}`, p, spots: [0], team, ...o }, { path: '/daily' });
+  for (let i = 0; i < 5; i++) await post(i, 'DAL', 0.6 + i * 0.05, { own: i < 2 });
+  for (let i = 5; i < 9; i++) await post(i, 'NYG', 0.9);
+  await post(20, 'DAL', 0.1, { restarted: true });
+  await post(0, 'DAL', 0.0);                                         // (a replay: the first stands)
+  assert.strictEqual((await post(30, 'Dallas', 0.5)).status, 400, 'a team by name: refused');
+  assert.strictEqual((await post(31, 'OSU', 0.5)).status, 400, 'not an NFL team');
+  let d = await (await call('GET', null, { path: `/fans?date=${date}` })).json();
+  assert.deepStrictEqual(d.day, [{ team: 'DAL', n: 5, avg: 70 }], 'Dallas at 5 players, New York (NFC) at 4 not yet; restarted and replays out');
+  for (let i = 9; i < 12; i++) await post(i, 'DAL', 0.5, { own: true });
+  await post(12, 'NYG', 0.95);
+  d = await (await call('GET', null, { path: `/fans?date=${date}` })).json();
+  assert.deepStrictEqual(d.day.map((x) => [x.team, x.n, x.avg, x.own || null]), [['NYG', 5, 91, null], ['DAL', 8, 62.5, { n: 5, avg: 55 }]], 'ranked by average; own at 5');
+  assert.deepStrictEqual(d.week.rows.map((x) => x.team), ['NYG', 'DAL'], 'the week');
+  d = await (await call('GET', null, { path: `/fans?date=${addDays0(date, 3)}` })).json();
+  assert.deepStrictEqual([d.day, d.week.rows.map((x) => [x.team, x.n])], [[], [['NYG', 5], ['DAL', 8]]], 'days later: in the week still');
+  assert.ok(!JSON.stringify(d).includes('fans-device'), 'no keys out');
+  // a team picked after the day's result (the end card's ask): it counts, once; never for a restarted result
+  await post(41, null, 0.8); await post(41, 'SEA', 0.8); await post(41, 'SEA', 0.8); await post(41, 'KC', 0.8);
+  await post(42, null, 0.8, { restarted: true }); await post(42, 'SEA', 0.8);
+  assert.deepStrictEqual(store.get(`fan:${date}`).SEA, { n: 1, sum: 80, on: 0, osum: 0 }, 'a late pick: counted once');
+  assert.ok(!store.get(`fan:${date}`).KC, 'a second pick: not counted again');
+  // "Your team" follows the account (/auth/stats team: the newest pick), never another account's
+  const envs = [env, board.env];
+  for (const e of envs) e.GOOGLE_CLIENT_ID = '1234-test.apps.googleusercontent.com';
+  const tok = (await sha256hex('tok:g:900001')).slice(0, 64), tok2 = (await sha256hex('tok:g:900002')).slice(0, 64);
+  store.set(`auth:sess:${await sha256hex(tok)}`, { acct: 'g:900001', at: Date.now() }); store.set('acct:g:900001', { email: 'fan@example.com', at: '2026-10-20' });
+  store.set(`auth:sess:${await sha256hex(tok2)}`, { acct: 'g:900002', at: Date.now() }); store.set('acct:g:900002', { email: 'fan2@example.com', at: '2026-10-20' });
+  const st = async (session, stats) => (await (await call('POST', { session, ...(stats ? { stats } : {}) }, { path: '/auth/stats' })).json()).stats;
+  assert.strictEqual((await call('POST', { session: tok, stats: { team: { code: 'Dallas', at: 1 } } }, { path: '/auth/stats' })).status, 400, 'a team by name');
+  assert.deepStrictEqual((await st(tok, { team: { code: 'DAL', at: 1790000000000 } })).team, { code: 'DAL', at: 1790000000000 });
+  assert.deepStrictEqual((await st(tok, { team: { code: 'PHI', at: 1780000000000 } })).team, { code: 'DAL', at: 1790000000000 }, 'an older pick: kept the newer');
+  assert.deepStrictEqual((await st(tok, { team: { code: '', at: 1795000000000 } })).team, { code: '', at: 1795000000000 }, 'none picked, later: stands');
+  assert.deepStrictEqual((await st(tok)).team, { code: '', at: 1795000000000 }, 'read back');
+  assert.strictEqual((await st(tok2)).team, undefined, 'never another account’s');
+  for (const e of envs) delete e.GOOGLE_CLIENT_ID;
+}
 console.log('board worker ok');

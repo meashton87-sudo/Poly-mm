@@ -14,7 +14,9 @@ end card saying it is off the leaderboard. Survivor never offers it. Every play 
 the ground (inside the end lines, at most a step past a sideline), and the first episode draws a sweep of short fields
 (the red zone, the goal line, backed up on its own 1 to 5) against every coverage and shell to the same test, then
 600 passes of every kind of result, each measured as drawn against what happened (PASS_LOOK: a catch in his hands, a
-miss where its kind says and never in them; every real pass of the run too), then thousands of drawn runs, RPOs,
+miss where its kind says and never in them; every real pass of the run too), then every call near both goal lines
+with every result (GOAL_LINE, game.js goalCheck: a touchdown over the goal line in bounds before anything else, nothing
+else over it with the ball, out of bounds at the spot, a safety in his own end zone; every real play too), then thousands of drawn runs, RPOs,
 defenses, kicks and kick rushes (DRAW_FUZZ). The bots also draw plays as they go (a run,
 an RPO, the defense, a kick), mostly calling what the drawing reads as.
 Needs Playwright with Chromium (pip install playwright; python -m playwright install chromium).
@@ -80,6 +82,10 @@ SESSION = "ab" * 32
 # the account's record on the stub (board/worker.js /auth/stats, roughly: a union of each kind; survivor's best run and
 # its count of runs the higher of each, never down), what a page signed in posts and reads back
 ACCT: dict = {"stats": None}
+# the social stub (board/worker.js /challenge*, /calls, /fans, /daily): the challenges by id (each { day, name, score,
+# rows }), what the page made and played, its /daily posts, the crowd's counts (a situation key -> { n, c }) and the
+# day's fanbases it answers with
+SOCIAL: dict = {"chal": {}, "made": [], "plays": [], "daily": [], "calls": {}, "fans": None}
 TRACE_HALF = False          # what else the pages asked the stub (printed at the end)
 # the game's page under the base address (daily_check.py --live: "", the site's front door, as players open it)
 PAGE = "index.html"
@@ -126,6 +132,37 @@ async def board_stub(route, path: str, comm: bool = False, headers: dict | None 
     elif comm and path == "/scen/play":
         COMM["plays"].append(body)
         await ok({"counted": True})
+    elif path == "/challenge" and route.request.method == "POST":
+        SOCIAL["made"].append(body)
+        cid = "made" + "abcdefghjk"[len(SOCIAL["made"]) % 10] * 3
+        SOCIAL["chal"][cid] = {"day": body.get("day"), "name": body.get("name") or "", "score": body.get("score"), "rows": []}
+        await ok({"id": cid})
+    elif path.startswith("/challenge/"):
+        parts = path.split("/")
+        c = SOCIAL["chal"].get(parts[2])
+        if not c:
+            await route.fulfill(status=404, content_type="application/json", body=json.dumps({"error": "That challenge link doesn’t work."}), headers=headers)
+            return
+        counted = False
+        if len(parts) == 4 and route.request.method == "POST":
+            SOCIAL["plays"].append({"id": parts[2], **body})
+            counted = not body.get("restarted")
+            if counted:
+                c["rows"].append({"name": body.get("name") or "", "score": body.get("score")})
+        rows = sorted([{"name": c["name"], "score": c["score"], "ch": True}] + c["rows"], key=lambda r: -r["score"])[:20]
+        await ok({"id": parts[2], "day": c["day"], "name": c["name"], "score": c["score"], "n": len(c["rows"]), "rows": rows, "counted": counted})
+    elif path == "/calls":
+        await ok({"date": "", "min": 20, "s": SOCIAL["calls"]})
+    elif path == "/fans" and SOCIAL["fans"] is not None:
+        await ok(SOCIAL["fans"])
+    elif path == "/daily" and route.request.method == "POST" and SOCIAL["fans"] is not None:
+        SOCIAL["daily"].append(body)
+        pt = round(float(body.get("p") or 0) * 100)
+        hist = [0] * 101
+        hist[pt] = 1
+        await ok({"n": 1, "hist": hist, "nr": 0, "spots": [{"n": 1, "avg": w, "hist": [0] * 101} for w in body.get("spots") or [0]], "top": [],
+                  "counted": len(SOCIAL["daily"]) == 1, "you": {"p": body.get("p"), "spots": body.get("spots")},
+                  "week": {"from": "2026-10-15", "to": "2026-10-21", "best": 5, "n": 0, "top": []}})
     else:                     # (accounts off: no way to sign in; nothing else is asked of it on these pages)
         STUB_ASKED.add(path)
         await ok({})
@@ -274,6 +311,59 @@ SHORT_FIELD = """(yl) => {
   D.drawField();
   return { plays, bad: bad.slice(0, 12), n: bad.length };
 }"""
+# The goal line (game.js goalCheck): runs, passes, scrambles, sacks and turnovers of every result near either goal
+# line, for both teams and both strong sides, every call: a touchdown is the ball carried (or caught) over the goal line
+# inside the sidelines before he is ever out of bounds with it (a run the engine has out of bounds and in the end zone
+# too: the touchdown first); a play stopped at the 1 never has the ball over the line; a play out of bounds goes out at
+# its spot; a safety is down in his own end zone; a pick in the end zone, a fumble return, a pick-six as they went
+GOAL_LINE = """([yl, full]) => {
+  const D = window.__draw, { G } = D.get(), calls = Object.values(D.CALL);
+  const logs = ['__sepLog', '__tackleLog', '__fpLog', '__offLog', '__goalLog'], kept = logs.map((k) => (window[k] || []).length);
+  const bad = [], tally = {};
+  let plays = 0;
+  for (const mine of [true, false]) {
+    const r = { ...G.root, phase: 0, down: 3, ytg: Math.min(yl, 10), yl, pos: mine ? G.me : 1 - G.me, try2: false };
+    const dir = mine ? 1 : -1, L0 = mine ? 100 - yl : yl;
+    const rootAt = (absL, pos) => ({ ...r, pos, yl: Math.max(1, Math.min(99, pos === G.me ? 100 - absL : absL)) });
+    for (const side of [1, -1]) {
+      calls.forEach((c, ci) => {
+        if (!full && (ci + (side > 0 ? 0 : 1)) % 2) return;          // (each call from one strong side, alternately)
+        const loss = Math.min(3, 99 - yl), sackL = Math.min(6, 99 - yl);
+        const run = c.kind === 'run', es = [];
+        const sf = yl >= 95 ? [{ yards: yl - 101, safety: true }, { yards: yl - 100, safety: true }] : [];
+        if (run) {
+          es.push({ yards: yl, td: true }, { yards: yl + 4, td: true }, { yards: yl + 3, td: true, oob: true }, { yards: yl, td: true, oob: true },
+            { yards: -loss }, { yards: Math.min(2, yl - 1), evt: 'fumble_lost', turnover: true }, { yards: Math.min(2, yl - 1), evt: 'scoop_score', turnover: true, tdDef: true }, ...sf);
+          if (yl > 1) es.push({ yards: yl - 1 }, { yards: yl - 1, oob: true }, { yards: yl - 1, evt: 'fumble_lost', turnover: true });
+          es.push({ yards: yl - 0.5 });
+        } else {
+          const ez = Math.min(yl + 3, yl + 9);
+          es.push({ air: ez, yards: yl, td: true }, { air: Math.max(-2, yl - 8), yards: yl, td: true }, { air: Math.max(-2, yl - 5), yards: yl + 2, td: true, oob: true },
+            { air: Math.min(yl + 4, yl + 9), yards: 0, evt: 'interception', turnover: true }, { air: Math.min(yl + 2, 15), yards: 0, evt: 'pick_six', turnover: true, tdDef: true },
+            { yards: -sackL, evt: 'sack' }, { yards: yl, evt: 'scramble', td: true }, { yards: yl + 2, evt: 'scramble', td: true, oob: true },
+            { yards: -Math.min(5, sackL), evt: 'strip_sack', turnover: true, tdDef: true }, { air: ez, yards: 0, incomplete: true },
+            ...sf.map((o) => ({ ...o, evt: 'sack' })));
+          if (yl > 1) es.push({ air: Math.max(-2, yl - 4), yards: yl - 1 }, { air: yl - 1, yards: yl - 1 }, { air: Math.max(-2, yl - 3), yards: yl - 1, oob: true },
+            { yards: yl - 1, evt: 'scramble' }, { yards: yl - 1, evt: 'scramble', oob: true });
+        }
+        es.forEach((o, k) => {
+          // (each its own draw of the field: the animation's randomness is seeded by the play, its time among it)
+          const e = { ev: 'play', team: r.pos, call: ci, row: -1, t: 1790 - ((ci * 31 + k * 7 + yl * 3 + (mine ? 0 : 5)) % 1700), kind: run ? 0 : 1, ...o };
+          const end = L0 + dir * (o.yards || 0);
+          const root = o.turnover ? rootAt(o.evt === 'interception' && o.air >= yl ? (mine ? 80 : 20) : end + dir * (o.air || 0) - dir * 4, 1 - r.pos) : rootAt(end, r.pos);
+          const sc = D.makeScene(r, side), P = D.choreograph(sc, e, { action: null, log: [e], root }, false);
+          if (!P) return;
+          plays++;
+          const g = D.goalCheck(sc, P, e, false);
+          g.bad.forEach((b) => { tally[b] = (tally[b] || 0) + 1; if (tally[b] <= 8) bad.push({ yl, mine, side, id: c.id, ...o, why: b, cross: g.cross, out: g.out, deepest: g.deepest }); });
+        });
+      });
+    }
+  }
+  logs.forEach((k, i) => { if (window[k]) window[k].length = kept[i]; });
+  D.drawField();
+  return { plays, bad, tally };
+}"""
 # The pass looks like what happened (game.js missPlan, passCheck): pass plays of every kind of result, on spots from the
 # goal line to backed up, both teams, every pass call and charted route, drawn on the field and measured as drawn: a
 # catch (or a pick) is in the catcher's hands as the ball gets to him and just after; an incompletion never is, and
@@ -297,7 +387,7 @@ PASS_LOOK = """([n, seed]) => {
     const k = pick(kinds), ch = (c, x, d) => ({ catchable: c, contested: x, defended: d });
     const yards = Math.min(yl, Math.max(air, air + Math.floor(R() * 9)));
     const o = { catch: { air, yards, td: yards >= yl, ...ch(true, R() < 0.2, false) }, int: { air, yards: 0, evt: 'interception', turnover: true },
-      bad: { air, yards: 0, incomplete: true, ...ch(false, R() < 0.25, false) }, break: { air, yards: 0, incomplete: true, ...ch(R() < 0.3, R() < 0.6, true) },
+      bad: { air, yards: 0, incomplete: true, ...ch(false, R() < 0.25, false), ...(R() < 0.33 ? { pressure: true } : {}) }, break: { air, yards: 0, incomplete: true, ...ch(R() < 0.3, R() < 0.6, true) },
       tip: { air, yards: 0, incomplete: true, ...ch(true, false, false) }, drop: { air, yards: 0, incomplete: true, evt: 'drop', ...ch(true, R() < 0.2, false) },
       pick: { air, yards: 0, incomplete: true, evt: 'near_pick', ...ch(false, true, true) }, away: { yards: 0, incomplete: true, evt: 'throwaway' },
       plain: { air, yards: 0, incomplete: true }, oob: { air, yards, oob: yards < yl, td: yards >= yl, ...ch(true, R() < 0.2, false) } }[k];
@@ -370,6 +460,10 @@ def pass_look_problems(rows: list) -> list:
                 why.append(f"wide open as it was thrown ({x.get('atThrow'):.1f} yd, {x['tCatch'] - x['tThrow']:.1f} s in the air)")
             if k == "tip" and not 0.9 <= x["reach"] <= 1.9:
                 why.append(f"not at his fingertips ({x['reach']} yd)")
+            # an off-target ball is never thrown at a man wide open, more than 3 yards from every defender, from a clean
+            # pocket (nobody within 3 yards of the passer as he throws): players saw it as missed throws to open men
+            if x.get("bad") and x.get("actual", 0) > 3 and x.get("pressD", 0) > 3:
+                why.append(f"off target to a man {x.get('actual'):.1f} yd clear, nobody on the passer ({x.get('pressD')} yd)")
         if why:
             bad.append({"miss": k, "label": x.get("label"), "air": x.get("air"), "kind": x.get("kind"), "fit": x.get("fit"), "why": why})
     return bad
@@ -1019,6 +1113,19 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         problems.append(f"a pass not drawn as it went: {wrong[:4]}")
                     if off:
                         problems.append(f"off the field on a pass: {off[:4]}")
+                elif st == "choose" and sweep and "goal_line" not in chaos_done:
+                    chaos_done.add("goal_line"); act("goal-line sweep")
+                    t_gl, n_gl, tally, wrong = time.time(), 0, {}, []
+                    for yl in (1, 2, 5, 20, 97, 99):          # (one spot at a time, as the short fields)
+                        gl = await page.evaluate(GOAL_LINE, [yl, False])
+                        n_gl += gl["plays"]; wrong += gl["bad"]
+                        for k, v in gl["tally"].items():
+                            tally[k] = tally.get(k, 0) + v
+                    since = time.time()
+                    t_start += since - t_gl
+                    print(f"{name}: goal line, {n_gl} plays drawn, {sum(tally.values())} not as they went {tally or ''}")
+                    if wrong:
+                        problems.append(f"the ball against the goal line not as the play went: {wrong[:4]}")
                 elif st == "choose" and sweep and "draw_fuzz" not in chaos_done:
                     # thousands of drawings of every kind (runs, RPOs, the defense, kicks, the rush on theirs)
                     chaos_done.add("draw_fuzz"); act("drawing fuzz")
@@ -1203,11 +1310,12 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             fps = await page.evaluate("() => window.__fpLog || []")
             offs = await page.evaluate("() => window.__offLog || []")
             oobs = await page.evaluate("() => window.__oobLog || []")
+            goals = await page.evaluate("() => window.__goalLog || []")
             kept = await page.evaluate("() => (window.__drawLog || []).length")
             snaps = await page.evaluate("() => window.__drawSnaps || []")
             jank = await page.evaluate("() => window.__jank || null")
         except Exception:
-            seps, tackles, fps, offs, oobs, kept, snaps, jank = [], [], [], [], [], 0, [], None
+            seps, tackles, fps, offs, oobs, goals, kept, snaps, jank = [], [], [], [], [], [], 0, [], None
         shot = None
         if problems:
             status = "fail"
@@ -1218,7 +1326,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 shot = None
         await ctx.close()
     return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
-            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "oobs": oobs, "trail": trail if problems else [],
+            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "oobs": oobs, "goals": goals, "trail": trail if problems else [],
             "day": day, "side": picked, "timing": timing, "friction": friction, "jank": jank, "shot": shot.name if shot else None}
 
 
@@ -1750,6 +1858,22 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                 await check("pass", "#snapGo")
                 if mob and h >= 800:
                     await check("pass", "#dock .rcv")
+                # nobody picked: the open man (the Snap key and what it says aloud); a row tapped: him; tapped again:
+                # the open man again
+                snap_txt = "() => { const g = document.getElementById('snapGo'); return g ? [g.querySelector('.go').textContent, g.getAttribute('aria-label')] : null; }"
+                st0 = await page.evaluate(snap_txt)
+                if not st0 or "open man" not in st0[0] or "open man" not in st0[1]:
+                    out.append(f"{at}: the Snap key does not throw to the open man before a pick: {st0!r}")
+                rows0 = page.locator("#dock .rcv")
+                if await rows0.count():
+                    await rows0.nth(0).click(timeout=3000)
+                    st1 = await page.evaluate(snap_txt)
+                    if not st1 or "open man" in st1[0]:
+                        out.append(f"{at}: a receiver tapped, the Snap key still reads {st1!r}")
+                    await page.locator("#dock .rcv").nth(0).click(timeout=3000)
+                    st2 = await page.evaluate(snap_txt)
+                    if not st2 or "open man" not in st2[0]:
+                        out.append(f"{at}: his row tapped again, the Snap key is not back to the open man: {st2!r}")
                 # every receiver with a long name, on the longest-named route he runs: picked (a tap on his row), the
                 # Snap key drawn again for him (another picked first when he already is)
                 rows = page.locator("#dock .rcv")
@@ -2074,6 +2198,16 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
         f"shown otherwise than played: {len(odd)}")
     if odd:
         fail("out-of-bounds", f"FAIL: out of bounds on the field but not in the play, or the other way: {odd[:5]}")
+    # the ball against the goal line and the sidelines on every play shown (game.js goalCheck): a touchdown carried or
+    # caught over the goal line in bounds, before he is ever out of bounds with it; nothing else over that line with the
+    # ball; out of bounds at the spot; a safety down in his own end zone
+    gl = [x for r in results for x in r.get("goals", [])]
+    gbad = [x for x in gl if x.get("bad")]
+    say(f"plays against the goal line: {len(gl)}, touchdowns {sum(1 for x in gl if x.get('td') or x.get('tdDef'))} (crossing in bounds: "
+        f"{sum(1 for x in gl if (x.get('td') or x.get('tdDef')) and (x.get('cross') or {}).get('inb'))}), safeties {sum(1 for x in gl if x.get('safety'))}, "
+        f"not as they went: {len(gbad)}")
+    if gbad:
+        fail("goal-line", f"FAIL: the ball against the goal line or the sideline not as the play went {gbad[:5]}")
     tos = {}
     for r in results:
         for k, v in ((r.get("friction") or {}).get("timeouts") or {}).items():
@@ -2102,6 +2236,9 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     open_bu = [x for x in allseps if x.get("miss") in ("break", "pick") and x.get("defNear", 99) > 1.5]
     say(f"broken up or nearly picked: {sum(1 for x in allseps if x.get('miss') in ('break', 'pick'))}, with no defender within 1.5 yards of him at the catch: {len(open_bu)}")
     say(f"passes as drawn: {dict(sorted(kinds.items(), key=lambda kv: -kv[1]))}; not as they went: {len(looks)}")
+    offt = [x for x in allseps if x.get("bad")]
+    say(f"off-target balls: {len(offt)}, charted pressure {sum(1 for x in offt if x.get('press'))}, to a man 3+ yd clear from a clean pocket: "
+        f"{sum(1 for x in offt if x.get('actual', 0) > 3 and x.get('pressD', 0) > 3)}")
     if looks:
         fail("pass-look", f"FAIL: a pass not drawn as it went {looks[:5]}")
     lonely = [x for r in results for x in r.get("seps", []) if x.get("label") == "Broken up" and x.get("ballD", 0) > 3]
@@ -2257,6 +2394,184 @@ async def survivor_best(browser, base: str, seed: int = 3) -> list[str]:
     return out
 
 
+# the first call's situation (game.js crowdKey) for the call and the tempo before it, and every call there is
+CROWD_KEYS = """() => { const D = window.__draw, { G } = D.get(); return { keys: ['call', 'clock', 'defcall', 'deftime'].map((k) => D.crowdKey(G.root, k)), calls: Object.keys(D.CALL), decs: G.decisions.map((x) => x.ck || '') }; }"""
+
+
+async def social(browser, base: str, day: int, shots: str = "") -> list[str]:
+    """Challenges, the crowd's calls and fanbases against the stub (board/worker.js /challenge*, /calls, /fans):
+    a challenge link to today's drive opens it with the score to beat on the intro; a call made where the stub says 40
+    players were shows its share on the result card; the end card posts the result to the challenge and shows its
+    board (the challenger, you), the drive's Uniqueness in the breakdown, Challenge a friend (a challenge made, its link
+    in the share text) and the one ask for your team, whose pick posts the day again with the team; the Fanbases view
+    ranks the stub's fanbases and calls out the day's own team's fans; a past day's link without Pro is its pitch.
+    shots: a folder for 390x844 screenshots."""
+    out: list[str] = []
+    SOCIAL.update(chal={"frnd234": {"day": day, "name": "Eli", "score": 87, "rows": [{"name": "Matt", "score": 64}]},
+                        "past234": {"day": max(1, day - 1), "name": "Eli", "score": 71, "rows": []}},
+                  made=[], plays=[], daily=[], calls={},
+                  fans={"date": "", "min": 5, "day": [{"team": "DAL", "n": 12, "avg": 71.5}, {"team": "NYG", "n": 9, "avg": 64, "own": {"n": 6, "avg": 66}},
+                                                      {"team": "PHI", "n": 5, "avg": 58}], "week": {"from": "", "to": "", "rows": [{"team": "PHI", "n": 40, "avg": 61}]}})
+    rnd = random.Random(11)
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    await pro_context(ctx, base, pro=False)
+    await ctx.add_init_script("""window.__sepLog = []; try { localStorage.setItem('tmd:v3:seen', 'true');
+      localStorage.setItem('tmd:v3:tour', JSON.stringify({ seen: [], shown: [], done: true })); localStorage.setItem('tmd:v3:name', JSON.stringify('Tess')); } catch (e) {}
+      new MutationObserver(() => { const c = !window.__crowd && document.querySelector('#dock .crowd'); if (c) window.__crowd = c.textContent; })
+        .observe(document, { subtree: true, childList: true });""")
+    page = await ctx.new_page()
+    errs: list[str] = []
+    page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+    try:
+        await page.goto(f"{base}/{PAGE}?c=frnd234")
+        await page.wait_for_selector("#intro .who.chal", timeout=30000)
+        t = await page.evaluate("() => document.querySelector('#intro .who.chal').textContent")
+        if "Eli scored 87 on today’s drive — beat that" not in t:
+            out.append(f"the challenge's intro says {t!r}")
+        if "c=" in page.url:
+            out.append(f"the challenge's id left in the address: {page.url}")
+        if shots:
+            await page.screenshot(path=f"{shots}/challenge-intro.png")
+        crowd, keyed, t0, last, since, decs_seen = "", False, time.time(), None, time.time(), []
+        while time.time() - t0 < 600:
+            try:
+                st = await page.evaluate(STATE)
+            except Exception:
+                st = "loading"
+            if st != last:
+                last, since = st, time.time()
+            elif time.time() - since > LIMIT.get(st, STILL) + 30:
+                raise RuntimeError(f"frozen: the '{st}' screen did not change for {int(time.time() - since)} s")
+            if not crowd:                # (the first rarity line on a result card: the page's observer keeps it)
+                crowd = await page.evaluate("() => window.__crowd || ''")
+            if st == "summary":
+                break
+            try:
+                if st in ("errbar", "error"):
+                    raise RuntimeError(st)
+                if st in ("modal", "deep"):
+                    await page.click("#mClose" if st == "modal" else "#deepClose", timeout=3000)
+                elif st == "pick":
+                    await page.click("#intro .sidepick[data-side='0']", timeout=3000)
+                elif st == "intro":
+                    if not keyed:                # (the first call's spot: the stub's counts say 74 players made calls there)
+                        k = await page.evaluate(CROWD_KEYS)
+                        SOCIAL["calls"] = {key: {"n": 2 * len(k["calls"]) + 20, "c": {**{c: 2 for c in k["calls"]}, "nohuddle": 20, "huddle": 0}} for key in k["keys"]}
+                        keyed = True
+                    await page.click("#intro .btn", timeout=3000)
+                elif st == "animating":
+                    await page.click("#field", timeout=1500)
+                elif st == "result":
+                    await page.click("#dock .result .btn", timeout=3000)
+                elif st == "end":
+                    await page.click("#dock .endcard .btn", timeout=3000)
+                elif st == "choose":
+                    if keyed and not crowd and len(decs_seen) < 3:
+                        # (a player who reads the result card: the counts land on it a moment after the grade; a bot
+                        # tapping on at once has moved on by then)
+                        try:
+                            await page.wait_for_function("() => window.__crowd || !window.__draw.get().G.decisions.length", timeout=3000)
+                        except PWTimeout:
+                            pass
+                        crowd = await page.evaluate("() => window.__crowd || ''")
+                        decs_seen.append((await page.evaluate(CROWD_KEYS))["decs"])
+                    big = page.locator("#dock .key.big:visible")
+                    n = await big.count()
+                    if n:
+                        await big.nth(rnd.randrange(n)).click(timeout=3000)
+                    else:
+                        btns = page.locator("#dock button:visible:not([disabled])")
+                        if await btns.count():
+                            await btns.nth(rnd.randrange(await btns.count())).click(timeout=3000)
+                else:
+                    await page.wait_for_timeout(100)
+            except RuntimeError:
+                raise
+            except Exception:
+                await page.wait_for_timeout(100)
+        else:
+            raise RuntimeError("the drive did not end in time")
+        if not re.search(r"^👥 (\d+|<1)% of today’s \d+ players here called .+|^👥 None of today’s \d+ players here called .+", crowd):
+            out.append(f"no rarity line on the first call's result card: {crowd!r} (the stub's {sorted(SOCIAL['calls'])}, the calls' {decs_seen})")
+        await page.wait_for_selector("#done .chslot:not([hidden]) .chboard", timeout=15000)
+        got = await page.evaluate("""() => ({ board: document.querySelector('#done .chslot').innerText,
+          crowd: (document.querySelector('#done .endmore .crowdsum') || {}).textContent || '', ask: !!document.querySelector('#done .fanask select'),
+          chb: !!document.querySelector('#done > .chbtn'), share: (document.querySelector('#done .grid-share') || {}).textContent || '' })""")
+        if "Eli" not in got["board"] or "Tess (you)" not in got["board"] or "Matt" not in got["board"] or "you vs eli" not in got["board"].lower():
+            out.append(f"the challenge's board on the end card: {got['board']!r}")
+        if len(SOCIAL["plays"]) != 1 or SOCIAL["plays"][0].get("id") != "frnd234" or SOCIAL["plays"][0].get("name") != "Tess":
+            out.append(f"the result posted to the challenge: {SOCIAL['plays']!r}")
+        if not re.match(r"^👥 Uniqueness \d+ · ", got["crowd"]):
+            out.append(f"the breakdown's Uniqueness: {got['crowd']!r}")
+        if not got["ask"] or not got["chb"]:
+            out.append(f"the end card without the team's ask ({got['ask']}) or Challenge a friend ({got['chb']})")
+        for _ in range(50):
+            if SOCIAL["made"] and "?c=made" in await page.evaluate("() => (document.querySelector('#done .grid-share') || {}).textContent || ''"):
+                break
+            await page.wait_for_timeout(100)
+        else:
+            out.append(f"no challenge made, or its link not in the share text: {SOCIAL['made']!r}")
+        if not SOCIAL["daily"] or not any(isinstance(b.get("calls"), list) and b["calls"] for b in SOCIAL["daily"]):
+            out.append(f"the /daily post carries no calls: {SOCIAL['daily'][:1]!r}")
+        if BAD_TEXT.search(await page.evaluate("() => document.getElementById('done').innerText")):
+            out.append("broken text on the end card")
+        if shots:
+            await page.evaluate("() => scrollTo(0, 0)")
+            await page.screenshot(path=f"{shots}/endcard.png")
+            await page.screenshot(path=f"{shots}/endcard-full.png", full_page=True)
+        n0 = len(SOCIAL["daily"])
+        await page.select_option("#done .fanask select", "DAL")
+        for _ in range(50):
+            if len(SOCIAL["daily"]) > n0:
+                break
+            await page.wait_for_timeout(100)
+        if not (len(SOCIAL["daily"]) > n0 and SOCIAL["daily"][-1].get("team") == "DAL"):
+            out.append(f"a team picked on the end card was not posted: {SOCIAL['daily'][n0:]!r}")
+        await page.locator("#done .fanask .fanlink").click(timeout=3000)
+        await page.wait_for_selector("#mBody #fans .brows li", timeout=10000)
+        t = await page.evaluate("() => document.getElementById('fans').innerText")
+        if not ("Dallas" in t and "New York (NFC)" in t and "Philadelphia" in t) or "Cowboys" in t or "Giants" in t:
+            out.append(f"the Fanbases view: {t[:300]!r}")
+        if "on their own team’s drive" not in t:
+            out.append(f"the Fanbases view does not call out the day's own team's fans: {t[:300]!r}")
+        if BAD_TEXT.search(t):
+            out.append("broken text on the Fanbases view")
+        if shots:                        # (the view as Your stats shows it, from Home: a screenshot over the end card's
+            # layers comes out see-through in headless Chromium, though the sheet is on top)
+            async with page.expect_event("load"):
+                await page.goto(f"{base}/{PAGE}#home")
+            await page.click("#statsBtn", timeout=10000)
+            await page.wait_for_selector("#mBody #fans .brows li", timeout=10000)
+            await page.wait_for_timeout(600)
+            await page.evaluate("() => { const b = document.querySelector('#modal .box'), f = document.getElementById('fans'); b.scrollTop += f.getBoundingClientRect().top - b.getBoundingClientRect().top - 12; }")
+            await page.wait_for_timeout(200)
+            await page.screenshot(path=f"{shots}/fanbases.png")
+    except Exception as e:
+        out.append(f"social: {str(e).splitlines()[0][:200]}")
+    finally:
+        await ctx.close()
+    # a past day's challenge without Pro: the challenger's result and the pitch, never the game
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    await pro_context(ctx, base, pro=False)
+    page = await ctx.new_page()
+    page.on("pageerror", lambda e: errs.append(f"script error: {e}"))
+    try:
+        await page.goto(f"{base}/{PAGE}?c=past234")
+        await page.wait_for_selector("#arch .chlead", timeout=30000)
+        got = await page.evaluate("() => ({ t: document.getElementById('arch').innerText, pro: !!document.querySelector('#arch .pro .btn'), play: !document.getElementById('play').hidden || !document.getElementById('intro').hidden })")
+        if "Eli scored 71" not in got["t"] or not got["pro"] or got["play"]:
+            out.append(f"a past day's challenge without Pro: {got['t'][:200]!r}")
+        if shots:
+            await page.screenshot(path=f"{shots}/challenge-past.png")
+    except Exception as e:
+        out.append(f"social, a past day: {str(e).splitlines()[0][:200]}")
+    finally:
+        out.extend(errs)
+        await ctx.close()
+    SOCIAL["fans"] = None
+    return out
+
+
 async def main(a) -> int:
     srv, port = serve(Path(a.site).resolve())
     stamped = stamps_of(Path(a.site))
@@ -2291,6 +2606,12 @@ async def main(a) -> int:
         print("survivor's best run follows the account (another phone's best on a phone with nothing saved, a run played here kept on the account, a fresh phone signed in): "
               + ("ok" if not sb else "FAIL") + "".join(f"\n      {x}" for x in sb), flush=True)
         reach += sb
+        launch = json.loads((Path(a.site) / "game.json").read_text())["launch"]
+        import datetime as _dt
+        so = await social(browser, base, (_dt.date.today() - _dt.date.fromisoformat(launch)).days + 1, a.shots)
+        print("challenges, the crowd's calls, fanbases (a challenge link's intro and board, a call's share, Uniqueness, Challenge a friend, your team, the Fanbases view, a past day's pitch): "
+              + ("ok" if not so else "FAIL") + "".join(f"\n      {x}" for x in so), flush=True)
+        reach += so
         if a.scenario:
             pitch = await scenario_pitch(browser, base)
             print("a scenario's link without Pro (the pitch, the scenario's summary), a bad link: " + ("ok" if not pitch else "FAIL")
