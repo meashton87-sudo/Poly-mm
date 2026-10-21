@@ -3149,7 +3149,8 @@
       else if (fumble) {
         const lost = e.evt !== 'fumble_kept';
         say(tEnd, 'Fumble!', 'hit', { follow: car });
-        const f = [inX(xyEnd[0] + jit(2.5)), xyEnd[1] + dir * 1.2];
+        // (one that went out of bounds, as the engine has it, rolls out over the nearer sideline: the offense keeps it there)
+        const outB = !lost && e.oob, f = outB ? [xyEnd[0] < FW / 2 ? -0.6 : FW + 0.6, xyEnd[1] + dir * 1.2] : [inX(xyEnd[0] + jit(2.5)), xyEnd[1] + dir * 1.2];
         fly(tEnd, tEnd + 0.55, px(xyEnd[0]), xyEnd[1], px(f[0]), f[1], 0.3);
         rest(tEnd + 0.55, px(f[0]), f[1]);
         Wd.run(tEnd);
@@ -3163,7 +3164,7 @@
           if (lost && e.tdDef) t = returnTd(rec, t, f, 'Scoop and score!');
           else {
             leg(rec, t, 'stand');
-            say(t, lost ? `${defName} ball` : 'Recovered', lost ? 'hit' : 'info', { slot: 1, follow: rec });
+            say(t, lost ? `${defName} ball` : outB ? 'Out of bounds' : 'Recovered', lost ? 'hit' : 'info', { slot: 1, follow: rec });
           }
         }
         t += 0.2;
