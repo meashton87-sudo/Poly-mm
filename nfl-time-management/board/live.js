@@ -15,16 +15,22 @@
 // deploy would reset it). Off, the cron does no work at all (not even a read of the object), and GET /live answers
 // { on: false } without asking it, so pages stop asking. On, POST /live/admin pauses and resumes it instantly. The
 // site's <meta name="live"> (site.py --live) only decides whether the page asks GET /live at all.
-// Latency budget: the feed runs 20 to 60 s behind the TV picture; the watcher looks at it once a minute (the cron); the
-// page asks for its drill every POLL_S (12 s) while one is open. A real play reaches the page about 20 to 130 s after it
-// happens, a minute and a half on average (the replay test in worker_test.mjs measures it). The page never shows a
-// drill as live when the worker's last good look at its game is older than STALE_MS (3 minutes): it says it is waiting
-// on the next play, and gives up after 10 minutes without one.
-// Being gentle with the feed: the scoreboard once an hour between games and once a minute while a game is on or about
-// to start (one request for every game); one request a minute for each game in or near a two-minute spot; after an
-// error, that request waits 1, 2, 4 ... up to 30 minutes. Everything read is checked (live_espn.js); a payload that is not
-// as expected is rejected, counted (GET /live/admin: rej) and logged, and no drill is opened or changed on it: no drill
-// rather than a wrong one.
+// Latency budget: the feed runs 20 to 60 s behind the TV picture; the cron wakes the watcher once a minute, and while a
+// game is close to a two-minute spot (or a drill is open) the object's own alarm wakes it every FAST_S (20 s) as well;
+// the page asks for its drill every POLL_S (12 s) while one is open. A real play reaches the page about 30 to 95 s after
+// it happens, under a minute on average (the replay test in worker_test.mjs measures the worker's part). The page never
+// shows a drill as live when the worker's last good look at its game is older than STALE_MS (3 minutes): it says it is
+// waiting on the next play, and gives up after 10 minutes without one.
+// Being gentle with the feed: the scoreboard once an hour between games, once a minute while a game is on or about to
+// start, every 20 s while one is close to a two-minute spot (one request for every game); each game in or near a
+// two-minute spot every 20 s. A failed request is tried once more a moment later (only the first failure of a streak,
+// never a 4xx), then backs off: the scoreboard 1, 2, 4 ... 30 minutes, a game in a drill 20, 40, 80 s ... 10 minutes; a
+// 429 waits at least its Retry-After (5 minutes without one). One look at a time (a look still running when the next
+// wakes: that one is skipped). Everything read is checked (live_espn.js); a payload that is not as expected is
+// rejected, counted (GET /live/admin: rej) and logged, and no drill is opened or changed on it: no drill rather than a
+// wrong one.
+// Stopping: paused (POST /live/admin { on: false }), every open drill is closed at once, as far as it went; with LIVE_ON
+// off, an open drill is answered as over (the page ends it, your calls graded) and the next night's first look closes it.
 // Auto-post to X when a drill opens (xPost): only when all four secrets are set, X_API_KEY, X_API_SECRET (the app's
 // consumer key and secret), X_ACCESS_TOKEN and X_ACCESS_SECRET (the posting account's, read and write), each with
 // `npx wrangler secret put <NAME>` from board/ (never in the repository). Without them nothing is posted. At most
@@ -38,6 +44,9 @@ const POLL_S = 12;                             // the page asks for its drill th
 const STALE_MS = 3 * 60e3;                     // a drill not read from the feed this long is not shown as live (the page: liveStale)
 const IDLE_MS = 20 * 60e3;                     // an open drill not read from the feed this long is closed: the feed lost it
 const TICK_MS = 55e3;                          // a minute, less the cron's jitter: one read of each thing a minute at most
+const FAST_S = 20;                             // close to (or in) a two-minute spot: the object's alarm looks this often
+const FAST_MS = FAST_S * 1e3 - 2e3;            // (less the alarm's jitter: one read of each thing every FAST_S at most)
+const RETRY_MS = 1500;                         // a failed request's one quick retry, this long after
 const BOARD_IDLE_MS = 60 * 60e3;               // the scoreboard between games: once an hour
 const SOON_MS = 15 * 60e3;                     // a kickoff this close counts as a game on
 const ARCH_KEEP = 60, X_DAY_MAX = 8, REJ_KEEP = 20, MEMO_MS = 4000;
@@ -266,7 +275,22 @@ const gameOn = (games, now) => (games || []).some((g) => g.state === 'in' || (g.
 // a game in or near a two-minute spot: worth reading its plays this minute
 const near = (g) => g.state === 'in' && g.score && Math.abs(g.score[0] - g.score[1]) <= ONE_SCORE
   && ((g.period === 2 && g.clock <= 150) || (g.period === 4 && g.clock <= 330) || g.period >= 5);
+// a game getting close to one (the scoreboard every FAST_S, so a drill opens within a minute of the feed having it)
+const nearing = (g) => g.state === 'in' && g.score && Math.abs(g.score[0] - g.score[1]) <= ONE_SCORE + 3
+  && ((g.period === 2 && g.clock <= 240) || (g.period === 4 && g.clock <= 420) || g.period >= 5);
 const backoff = (err) => Math.min(30, 2 ** Math.max(0, err - 1)) * 60e3;     // 1, 2, 4 ... 30 minutes
+const fastBackoff = (err) => Math.min(600e3, FAST_S * 1e3 * 2 ** Math.max(0, err - 1));      // 20, 40, 80 s ... 10 minutes
+// how long a failure waits: its backoff, and at least a 429's Retry-After (5 minutes when it says nothing)
+const waitAfter = (e, ms) => (e && e.status === 429 ? Math.max(ms, Number(e.retryAfter) > 0 ? Number(e.retryAfter) * 1e3 : 300e3) : ms);
+export const LIVE_TUNE = { retryMs: RETRY_MS };       // (the tests make the retry instant)
+// a request, and when it is the first failure of a streak and not the feed refusing it (a 4xx), once more a moment later
+async function fetchFeed(get, url, streak) {
+  try { return await get(url); } catch (e) {
+    if (streak > 0 || (e && e.status >= 400 && e.status < 500)) throw e;
+    if (LIVE_TUNE.retryMs) await new Promise((r) => setTimeout(r, LIVE_TUNE.retryMs));
+    return get(url);
+  }
+}
 // a rejected payload: counted, the last few reasons kept, logged (the owner sees a schema change at GET /live/admin)
 async function reject(s, why, now) {
   const r = (await s.get('rej')) || { n: 0, last: [] };
@@ -275,28 +299,29 @@ async function reject(s, why, now) {
   await s.put('rej', r);
   console.error('live feed: rejected', why.length, JSON.stringify(why.slice(0, 3)));
 }
-// the polite fetch: a timeout, JSON, nothing retried
+// the polite fetch: a timeout, JSON; a refusal carries its status (and a 429 its Retry-After) for the backoff
 async function getJson(url) {
   const ctl = typeof AbortController === 'function' ? new AbortController() : null, t = ctl ? setTimeout(() => ctl.abort(), 8000) : null;
   try {
     const r = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'TwoMinuteDrill-LiveDrills/1.0' }, ...(ctl ? { signal: ctl.signal } : {}) });
-    if (!r.ok) throw new Error(`${r.status}`);
+    if (!r.ok) throw Object.assign(new Error(`${r.status}`), { status: r.status, retryAfter: r.headers.get('Retry-After') });
     return await r.json();
   } finally { if (t) clearTimeout(t); }
 }
 export async function tick(env, s, now, get = getJson) {
   if (!liveOn(env) || (await s.get('sw')) === 'off') return { off: true };
-  const out = { board: false, read: [], opened: [], closed: [] };
+  const out = { board: false, read: [], opened: [], closed: [], fast: false };
   let sched = (await s.get('sched')) || { at: 0, games: [], err: 0, until: 0 };
-  if (now >= (sched.until || 0) && now - (sched.at || 0) >= (gameOn(sched.games, now) ? TICK_MS : BOARD_IDLE_MS)) {
+  const every = (sched.games || []).some(nearing) ? FAST_MS : gameOn(sched.games, now) ? TICK_MS : BOARD_IDLE_MS;
+  if (now >= (sched.until || 0) && now - (sched.at || 0) >= every) {
     try {
-      const { games, bad } = FEED.board(await get(FEED.BOARD));
+      const { games, bad } = FEED.board(await fetchFeed(get, FEED.BOARD, sched.err || 0));
       if (bad.length) await reject(s, bad, now);
       sched = { at: now, games, err: 0, until: 0 };
       out.board = true;
     } catch (e) {
       const err = (sched.err || 0) + 1;
-      sched = { ...sched, err, until: now + backoff(err) };
+      sched = { ...sched, err, until: now + waitAfter(e, backoff(err)) };
       console.error('live feed: the scoreboard failed', e && e.message, `(${err} in a row)`);
     }
     await s.put('sched', sched);
@@ -307,11 +332,12 @@ export async function tick(env, s, now, get = getJson) {
     // (a game being watched that went final since: read once more, for the plays of its last minute)
     const gs = near(g) || mine.length || g.state === 'post' ? (await s.get(gk)) || { at: 0, err: 0, until: 0 } : null;
     if (!gs || (!near(g) && !mine.length && !(g.state === 'post' && gs.state === 'in'))) continue;
-    if (now < (gs.until || 0) || now - (gs.at || 0) < TICK_MS) continue;
+    const hot = near(g) || mine.length > 0;
+    if (now < (gs.until || 0) || now - (gs.at || 0) < (hot ? FAST_MS : TICK_MS)) continue;
     gs.state = g.state;
     let doc;
-    try { doc = await get(FEED.gameUrl(g.id)); } catch (e) {
-      gs.err = (gs.err || 0) + 1; gs.until = now + backoff(gs.err);
+    try { doc = await fetchFeed(get, FEED.gameUrl(g.id), gs.err || 0); } catch (e) {
+      gs.err = (gs.err || 0) + 1; gs.until = now + waitAfter(e, hot ? fastBackoff(gs.err) : backoff(gs.err));
       await s.put(gk, gs);
       console.error('live feed: a game failed', g.id, e && e.message, `(${gs.err} in a row)`);
       continue;
@@ -369,12 +395,24 @@ export async function tick(env, s, now, get = getJson) {
     out.closed.push(id);
   }
   await s.put('open', open);
+  // the alarm's quick looks: while a drill is open or a game is close to a two-minute spot
+  out.fast = open.length > 0 || (sched.games || []).some(nearing);
   return out;
 }
+// paused: every open drill closed at once, as far as it went (one never played is dropped)
+async function closeAll(s, now, how, text) {
+  for (const id of (await s.get('open')) || []) {
+    const d = await s.get(`d:${id}`);
+    if (!d || d.status !== 'open') continue;
+    if (!d.snaps.length) { await s.delete(`d:${id}`); continue; }
+    await closeLost(s, d, now, how, text);
+  }
+  await s.put('open', []);
+}
 // a drill the feed lost: closed as far as it went, on the archive's list
-async function closeLost(s, d, now) {
+async function closeLost(s, d, now, how = 'feed', text = 'The live feed stopped sending plays') {
   const ls = d.snaps[d.snaps.length - 1];
-  Object.assign(d, { status: 'over', closed: now, now: null, end: { how: 'feed', text: 'The live feed stopped sending plays', score: (ls.after || ls.before).score } });
+  Object.assign(d, { status: 'over', closed: now, now: null, end: { how, text, score: (ls.after || ls.before).score } });
   await s.put(`d:${d.id}`, d);
   await archive(s, d);
 }
@@ -461,7 +499,7 @@ async function route(req, env, s, url) {
     if (req.method === 'POST') {
       let b = {};
       try { b = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400); }
-      if (b.on === false) await s.put('sw', 'off'); else if (b.on === true) await s.delete('sw'); else return json({ error: 'on: true or false wanted' }, 400);
+      if (b.on === false) { await s.put('sw', 'off'); await closeAll(s, now, 'paused', 'Live drills were paused'); } else if (b.on === true) await s.delete('sw'); else return json({ error: 'on: true or false wanted' }, 400);
     } else if (req.method !== 'GET') return json({ error: 'method' }, 405);
     const sw = await s.get('sw'), sched = (await s.get('sched')) || {};
     return json({ on: liveOn(env) && sw !== 'off', var: liveOn(env), paused: sw === 'off', rej: (await s.get('rej')) || { n: 0, last: [] },
@@ -476,11 +514,16 @@ async function route(req, env, s, url) {
     for (const id of (await s.get('open')) || []) { const d = await s.get(`d:${id}`); if (d && d.status === 'open') drills.push(summary(d)); }
     const sched = (await s.get('sched')) || {};
     // again: when it is worth asking again (a page on Home during a game, waiting for one to open)
-    return json({ on: true, now, poll: POLL_S, stale: STALE_MS, again: drills.length ? POLL_S : gameOn(sched.games, now) ? 60 : 900, drills });
+    return json({ on: true, now, poll: POLL_S, stale: STALE_MS, again: drills.length ? POLL_S : (sched.games || []).some(nearing) ? FAST_S : gameOn(sched.games, now) ? 60 : 900, drills });
   }
   if (p === '/live/drill') {
     const id = String(url.searchParams.get('id') || '');
-    const d = DRILL_RE.test(id) ? await s.get(`d:${id}`) : null;
+    let d = DRILL_RE.test(id) ? await s.get(`d:${id}`) : null;
+    // switched off or paused: an open drill is over for the page, as far as it went (its storage is left as it is)
+    if (d && d.status === 'open' && !(liveOn(env) && (await s.get('sw')) !== 'off')) {
+      const ls = d.snaps[d.snaps.length - 1];
+      d = { ...d, status: 'over', now: null, end: { how: 'off', text: 'Live drills were switched off', score: ls ? (ls.after || ls.before).score : d.start.score } };
+    }
     return d ? json({ now, poll: POLL_S, stale: STALE_MS, drill: d }) : json({ error: 'no such drill' }, 404);
   }
   if (p === '/live/archive') return json({ now, drills: (await s.get('arch')) || [] });
@@ -488,15 +531,33 @@ async function route(req, env, s, url) {
 }
 
 export class Live {
-  constructor(ctx, env) { this.ctx = ctx; this.env = env; }
+  constructor(ctx, env) { this.ctx = ctx; this.env = env; this.busy = 0; }
+  // one look at a time: a look still running (a slow feed) when the next wakes, that one is skipped
+  async look(now) {
+    if (this.busy && Date.now() - this.busy < 90e3) return { busy: true };
+    this.busy = Date.now();
+    try {
+      const out = await tick(this.env, this.ctx.storage, now);
+      // close to a two-minute spot: the alarm looks again in FAST_S (the cron's minute goes on as well)
+      if (out && out.fast && this.ctx.storage.setAlarm) {
+        const at = await this.ctx.storage.getAlarm();
+        if (!at || at > Date.now() + FAST_S * 1e3) await this.ctx.storage.setAlarm(Date.now() + FAST_S * 1e3);
+      }
+      return out;
+    } finally { this.busy = 0; }
+  }
   async fetch(req) {
     const url = new URL(req.url);
     if (url.pathname === CRON_PATH) {
       let b = {};
       try { b = await req.json(); } catch (e) { /* the time now */ }
-      return json(await tick(this.env, this.ctx.storage, Number(b.now) || nowMs()));
+      return json(await this.look(Number(b.now) || nowMs()));
     }
     return route(req, this.env, this.ctx.storage, url);
+  }
+  // the quick look (set by look() above); off or paused, tick does nothing and sets no alarm
+  async alarm() {
+    try { await this.look(nowMs()); } catch (e) { console.error('live watcher (alarm) failed', e && e.message); }
   }
 }
 // The worker's front door for /live*: off (LIVE_ON not "on"), GET /live is answered here without waking the object;

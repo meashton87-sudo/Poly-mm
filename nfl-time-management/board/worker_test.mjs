@@ -1836,16 +1836,25 @@ function addDays0(date, k) { return new Date(Date.parse(date + 'T12:00:00Z') + k
   assert.deepStrictEqual(fg.end, { how: 'field goal', text: '36-yard field goal is good', score: [31, 33] });
   assert.strictEqual(fg.r2h, 'CIN', 'Cincinnati kicked off the game: it gets the ball after halftime');
   assert.strictEqual(byPlay('4043').snaps[1].call, null, 'a sack: the call it was is not known');
-  // the delay from a play to the worker: the feed's 30 s, then the next minute's look (the page's 0-12 s poll on top)
+  // the delay from a play to the worker: the feed's 30 s, then the next look (every 20 s near a two-minute spot: the
+  // alarm between the cron's minutes); the page's 0-12 s poll on top
   const ds = Object.values(drills).flatMap((d) => d.snaps.map((x) => (x.at - x.wall) / 1e3));
-  assert.ok(ds.length === 19 && ds.every((x) => x >= 30 && x <= 90), `every play within 30-90 s: ${ds}`);
-  assert.ok(run.delays.mean > 40 && run.delays.mean < 75, `about a minute on average: ${run.delays.mean}`);
-  // gentle: a request a minute at most for the scoreboard, and for the game
+  assert.ok(ds.length === 19 && ds.every((x) => x >= 30 && x <= 52), `every play within 30-52 s: ${ds}`);
+  assert.ok(run.delays.mean > 30 && run.delays.mean < 50, `about 40 s on average: ${run.delays.mean}`);
+  // gentle: three requests a minute at most for the scoreboard, and for the game, never two within 18 s
   const perMin = (re) => { const m = new Map(); run.asked.filter((x) => re.test(x.url)).forEach((x) => m.set(Math.floor(x.at / 60e3), (m.get(Math.floor(x.at / 60e3)) || 0) + 1)); return Math.max(...m.values()); };
-  assert.strictEqual(perMin(/scoreboard/), 1); assert.strictEqual(perMin(/summary/), 1);
-  assert.ok(run.asked.filter((x) => /summary/.test(x.url)).length <= 30, 'the game only while it is near a two-minute spot');
+  const minGap = (re) => { const a = run.asked.filter((x) => re.test(x.url)).map((x) => x.at); return Math.min(...a.slice(1).map((t, i) => t - a[i])); };
+  assert.strictEqual(perMin(/scoreboard/), 3); assert.strictEqual(perMin(/summary/), 3);
+  assert.ok(minGap(/scoreboard/) >= 18e3 && minGap(/summary/) >= 18e3, 'never two within 18 s');
+  assert.ok(run.asked.filter((x) => /summary/.test(x.url)).length <= 90, 'the game only while it is near a two-minute spot');
+  // far from a two-minute spot, the cron's minute only: the first quarter's last minutes, one request a minute
+  {
+    const q1 = R.FIXTURE.plays.filter((p) => p.period.number === 1), from = Date.parse(q1[0].wallclock), early = await R.replay(R.FIXTURE, { from, to: from + 10 * 60e3 });
+    assert.ok(early.asked.every((x) => /scoreboard/.test(x.url)) && early.asked.length <= 11, `early in the game: the scoreboard once a minute (${early.asked.length})`);
+    assert.ok(early.steps.every((x) => !x.tick.fast), 'no quick looks');
+  }
   // what a page reads mid-drive: the drill open, where the ball is now, its timeouts, never a stale spot
-  const mid = run.steps.find((x) => x.live.drills.some((d) => d.id === fg.id && d.n === 3));
+  const mid = run.steps.findLast((x) => x.live.drills.some((d) => d.id === fg.id && d.n === 3));       // (the last look before the 4th snap)
   assert.ok(mid && mid.live.on && mid.live.poll === 12, 'open, asked every 12 s');
   assert.deepStrictEqual(mid.live.drills[0].now, { qtr: 4, clock: 107, score: [31, 30], pos: 'CIN', down: 2, ytg: 8, yl: 35, to: [2, 2], running: false }, 'after Pittsburgh\'s timeout');
   assert.strictEqual(mid.live.drills[0].polled, mid.now, 'read this minute');
@@ -1917,24 +1926,95 @@ function addDays0(date, k) { return new Date(Date.parse(date + 'T12:00:00Z') + k
   assert.ok(xs.every((x) => /^OAuth oauth_consumer_key="ck", oauth_nonce="[0-9a-f]{32}", oauth_signature="[^"]+", oauth_signature_method="HMAC-SHA1", oauth_timestamp="\d+", oauth_token="at", oauth_version="1.0"$/.test(x.auth)));
   assert.strictEqual(L.xText(xenv, { ...fg, coach: 'Zac Taylor', now: fg.snaps[3].before }), 'Live now: Cincinnati ball at the Pittsburgh 35, down 1, 1:47 left. Call it before Taylor does → https://2mindrills.com/#live');
 
-  // the feed failing: an error backs off (1, 2, 4 ... minutes), the open drill stops being fresh (polled stays: the
-  // page then says it is waiting on the next play), and after IDLE (20 minutes) it is closed as the feed left it
+  // the feed going down mid-drill (the watcher looking every 20 s, as its alarm does while a drill is open): the first
+  // failure of a streak is tried once more at once, then each request backs off (the game 20, 40, 80 s ..., the
+  // scoreboard 1, 2, 4 ... minutes); the open drill stops being fresh (polled stays: the page then says it is waiting on
+  // the next play). Back within minutes, the drill picks up where the real drive is, the same drill, every play once;
+  // down for good, after IDLE (20 minutes) it is closed as the feed left it
   {
-    const st = R.memStorage(), e2 = { LIVE_ON: 'on' }, fx = R.FIXTURE, t0 = Date.parse('2025-10-17T03:17:00Z');
-    let down = false, n = 0;
-    const get = async (url) => { n++; if (down) throw new Error('503'); const f = R.feedAt(fx, L.LIVE_CLOCK.now, 30e3); return url === FEED.BOARD ? f.board : f.summary; };
-    for (let T = t0 - 60 * 60e3; T <= t0; T += 60e3) { L.LIVE_CLOCK.now = T; await L.tick(e2, st, T, get); }
-    const id = (await st.get('open'))[0], polled = (await st.get(`d:${id}`)).polled;
-    assert.ok(id === '2025101600-4239' && polled === t0, 'Cincinnati\'s drive open, read just now');
-    down = true; n = 0;
-    for (let T = t0 + 60e3; T <= t0 + 15 * 60e3; T += 60e3) { L.LIVE_CLOCK.now = T; await L.tick(e2, st, T, get); }
-    assert.ok(n <= 10, `backing off: ${n} requests in 15 minutes`);
-    assert.strictEqual((await st.get(`d:${id}`)).polled, polled, 'not read since: the page shows it stale');
-    for (let T = t0 + 16 * 60e3; T <= t0 + 22 * 60e3; T += 60e3) { L.LIVE_CLOCK.now = T; await L.tick(e2, st, T, get); }
+    L.LIVE_TUNE.retryMs = 0;
+    const e2 = { LIVE_ON: 'on' }, fx = R.FIXTURE, t0 = Date.parse('2025-10-17T03:17:00Z');
+    let down = false, n = 0, at = [];
+    const get = async (url) => { n++; at.push([L.LIVE_CLOCK.now, url]); if (down) throw new Error(down); const f = R.feedAt(fx, L.LIVE_CLOCK.now, 30e3); return url === FEED.BOARD ? f.board : f.summary; };
+    const run20 = async (st, a, b) => { for (let T = a; T <= b; T += 20e3) { L.LIVE_CLOCK.now = T; await L.tick(e2, st, T, get); } };
+    const upTo = async () => { const st = R.memStorage(); await run20(st, t0 - 60 * 60e3, t0); return st; };
+    // back after four minutes
+    let st = await upTo();
+    const id = (await st.get('open'))[0], d0 = await st.get(`d:${id}`);
+    assert.ok(id === '2025101600-4239' && d0.polled === t0 && d0.snaps.length >= 1, `Cincinnati's drive open, read just now (${id}, ${d0.snaps.length} snaps)`);
+    down = 'fetch failed'; n = 0; at = [];
+    await run20(st, t0 + 20e3, t0 + 4 * 60e3);
+    const games = at.filter(([, u]) => u !== FEED.BOARD).map(([t]) => t);
+    assert.deepStrictEqual(games.map((t) => (t - t0) / 1e3), [20, 20, 40, 80, 160], 'the game: tried again at once, then 20, 40, 80 s apart');
+    assert.ok(n <= 9, `backing off: ${n} requests in four minutes`);
+    assert.strictEqual((await st.get(`d:${id}`)).polled, t0, 'not read since: the page shows it stale');
+    down = false;
+    await run20(st, t0 + 4 * 60e3 + 20e3, t0 + 9 * 60e3);
+    const d1 = await st.get(`d:${id}`);
+    assert.ok(d1.snaps.length > d0.snaps.length && new Set(d1.snaps.map((x) => x.id)).size === d1.snaps.length, `back: the same drill, caught up, every play once (${d1.snaps.length})`);
+    assert.ok(d1.status === 'over' || d1.polled >= t0 + 8 * 60e3, 'read again');
+    assert.strictEqual(((await st.get('arch')) || []).filter((x) => x.id === id).length, d1.status === 'over' ? 1 : 0, 'archived once, when over');
+    // down for good
+    st = await upTo();
+    down = '503'; n = 0;
+    await run20(st, t0 + 20e3, t0 + 15 * 60e3);
+    assert.ok(n <= 16, `backing off: ${n} requests in 15 minutes`);
+    assert.strictEqual((await st.get(`d:${id}`)).polled, t0, 'not read since: the page shows it stale');
+    await run20(st, t0 + 15 * 60e3 + 20e3, t0 + 22 * 60e3);
     const d = await st.get(`d:${id}`);
-    assert.deepStrictEqual([d.status, d.end.how, (await st.get('open')).length], ['over', 'feed', 0], 'closed as the feed left it');
+    assert.deepStrictEqual([d.status, d.end.how, d.snaps.length, (await st.get('open')).length], ['over', 'feed', d0.snaps.length, 0], 'closed as the feed left it');
     assert.ok(logs.some((x) => /live feed: the scoreboard failed 503/.test(x)), 'the failures are logged');
+    // a 429: never tried again at once, and not before its Retry-After; a 404 not tried again at once either
+    down = false;
+    st = await upTo();
+    n = 0; at = [];
+    const refuse = (status, retryAfter) => async (url) => { n++; at.push([L.LIVE_CLOCK.now, url]); throw Object.assign(new Error(String(status)), { status, retryAfter }); };
+    for (let T = t0 + 20e3; T <= t0 + 6 * 60e3; T += 20e3) { L.LIVE_CLOCK.now = T; await L.tick(e2, st, T, refuse(429, '150')); }
+    const g429 = at.filter(([, u]) => u !== FEED.BOARD).map(([t]) => (t - t0) / 1e3), b429 = at.filter(([, u]) => u === FEED.BOARD).map(([t]) => (t - t0) / 1e3);
+    assert.deepStrictEqual(g429, [20, 180, 340], `the game after a 429 (Retry-After 150): ${g429}`);
+    assert.deepStrictEqual(b429, [20, 180, 340], `the scoreboard after a 429: ${b429}`);
+    st = await upTo();
+    n = 0;
+    L.LIVE_CLOCK.now = t0 + 20e3; await L.tick(e2, st, t0 + 20e3, refuse(404));
+    assert.ok(n <= 2 && at.slice(-n).every(([, u], i, a) => !i || u !== a[i - 1][1]), 'a 404: not tried again at once');
     L.LIVE_CLOCK.now = null;
+    L.LIVE_TUNE.retryMs = 1500;
+  }
+  // the alarm: the object looks again in 20 s while a drill is open or a game is close, never off; one look at a time;
+  // paused, every open drill closed at once as far as it went; LIVE_ON off, an open drill is answered as over
+  {
+    const st = R.memStorage(), t0 = Date.parse('2025-10-17T03:17:00Z'), realGet = globalThis.fetch;
+    L.LIVE_CLOCK.now = t0;
+    let slow = null;
+    globalThis.fetch = async (u) => {
+      if (slow) await slow;
+      const f = R.feedAt(R.FIXTURE, L.LIVE_CLOCK.now, 30e3);
+      return new Response(JSON.stringify(u === FEED.BOARD ? f.board : f.summary), { status: 200 });
+    };
+    const obj3 = new L.Live({ storage: st }, { LIVE_ON: 'on' });
+    for (let T = t0 - 30 * 60e3; T <= t0; T += 20e3) { L.LIVE_CLOCK.now = T; await obj3.look(T); }
+    const before = Date.now();
+    await st.setAlarm(null);
+    const o1 = await obj3.look(t0 + 20e3);
+    assert.ok(o1.fast && (await st.getAlarm()) >= before + 19e3 && (await st.getAlarm()) <= Date.now() + 21e3, 'a drill open: the alarm in 20 s');
+    let release;
+    slow = new Promise((r) => { release = r; });
+    const p1 = obj3.look(t0 + 40e3), o2 = await obj3.look(t0 + 41e3);
+    assert.deepStrictEqual(o2, { busy: true }, 'a look still running: the next is skipped');
+    release(); slow = null; await p1;
+    await st.setAlarm(null);
+    const off = new L.Live({ storage: st }, { LIVE_ON: '' });
+    assert.deepStrictEqual(await off.look(t0 + 60e3), { off: true });
+    assert.strictEqual(await st.getAlarm(), null, 'off: no alarm');
+    const opened = (await st.get('open'))[0];
+    const offRead = await (await off.fetch(new Request(`https://w.example/live/drill?id=${opened}`))).json();
+    assert.deepStrictEqual([offRead.drill.status, offRead.drill.end.how, (await st.get(`d:${opened}`)).status], ['over', 'off', 'open'], 'off: over for the page, kept as it was');
+    const adm = new L.Live({ storage: st }, { LIVE_ON: 'on', ADMIN_TOKEN: 'tok-live-2' });
+    await adm.fetch(new Request('https://w.example/live/admin', { method: 'POST', body: '{"on":false}', headers: { Authorization: 'Bearer tok-live-2' } }));
+    const pd = await st.get(`d:${opened}`);
+    assert.deepStrictEqual([pd.status, pd.end.how, (await st.get('open')).length, (await st.get('arch'))[0].id], ['over', 'paused', 0, opened], 'paused: closed and archived');
+    L.LIVE_CLOCK.now = null;
+    globalThis.fetch = realGet;
   }
   // a feed not as expected: rejected, counted and logged (a change of schema shows), and no drill opened or changed on it
   {

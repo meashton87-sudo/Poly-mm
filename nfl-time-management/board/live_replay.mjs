@@ -1,8 +1,9 @@
 // The live drills' replay: a recorded game (live_replay.json, made by scripts/live_fixture.py from nflverse
 // play-by-play) played back through the real watcher (live.js tick) as the feed would have sent it: each play shows up
-// in the feed LAG after it happened (the middle of the 20-60 s the feed runs behind TV), the cron looks once a minute,
-// and after each minute this records what a page would read then (GET /live and each drill). worker_test.mjs checks
-// the drills it makes; browser_test.py serves its minutes to the page (its stub board) and plays them.
+// in the feed LAG after it happened (the middle of the 20-60 s the feed runs behind TV), the watcher wakes every STEP
+// (20 s: the cron's minute and the object's alarm between), and after each step this records what a page would read
+// then (GET /live and each drill). worker_test.mjs checks the drills it makes; browser_test.py serves its steps to the
+// page (its stub board) and plays them.
 //   node board/live_replay.mjs [lag seconds, default 30]  -> { lag, steps: [{ now, live, drills }], delays }
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -32,11 +33,14 @@ export function feedAt(fx, T, lag = 30e3) {
 }
 // a Durable Object's storage, in memory (as worker_test.mjs keeps the board's)
 export function memStorage(store = new Map()) {
+  let alarm = null;
   return { store, get: async (k) => structuredClone(store.get(k)), put: async (k, v) => { store.set(k, structuredClone(v)); }, delete: async (k) => store.delete(k),
+    getAlarm: async () => alarm, setAlarm: async (t) => { alarm = t; }, deleteAlarm: async () => { alarm = null; },
     list: async ({ prefix }) => new Map([...store].filter(([k]) => k.startsWith(prefix)).map(([k, v]) => [k, structuredClone(v)])) };
 }
-// the replay: one step a cron minute from `from` to `to` (default: the fourth quarter's last 6 minutes and the end)
-export async function replay(fx = FIXTURE, { lag = 30e3, from, to, env = { LIVE_ON: 'on' }, feed = feedAt } = {}) {
+// the replay: one step every `step` (the watcher's 20 s) from `from` to `to` (default: the fourth quarter's last 6
+// minutes and the end)
+export async function replay(fx = FIXTURE, { lag = 30e3, from, to, env = { LIVE_ON: 'on' }, feed = feedAt, step = 20e3 } = {}) {
   const storage = memStorage(), obj = new Live({ storage }, env), asked = [];
   const q4 = fx.plays.filter((p) => p.period.number >= 4), T0 = Math.floor((from ?? wallOf(q4[0]) - 120e3) / 60e3) * 60e3, T1 = to ?? wallOf(fx.plays[fx.plays.length - 1]) + lag + 180e3;
   const get = async (url) => {
@@ -48,10 +52,13 @@ export async function replay(fx = FIXTURE, { lag = 30e3, from, to, env = { LIVE_
   };
   const read = async (path) => (await obj.fetch(new Request(`https://w.example${path}`))).json();
   const steps = [];
+  let fast = false;
   try {
-    for (let T = T0; T <= T1; T += 60e3) {
+    for (let T = T0; T <= T1; T += step) {
       LIVE_CLOCK.now = T;
-      const res = await tick(env, storage, T, get);
+      // the cron on each minute; between, the alarm only when the last look asked for it (a game close, a drill open)
+      const res = T % 60e3 === 0 || fast ? await tick(env, storage, T, get) : { asleep: true };
+      if (!res.asleep) fast = !!res.fast;
       const live = await read('/live'), drills = {};
       for (const k of [...storage.store.keys()].filter((x) => x.startsWith('d:'))) drills[k.slice(2)] = (await read(`/live/drill?id=${k.slice(2)}`)).drill;
       steps.push({ now: T, tick: res, live, drills });

@@ -31,7 +31,8 @@ STRIPE_PRICE = "prod_VRryrvDrQxpAC7"      # the live product (Two-Minute Drill P
 # The daily email's runs: the new daily goes live at local midnight (game.js dayOf), and 08:05 UTC is past midnight in
 # every mainland US time zone, summer or winter; the two later runs send what a refused batch or a run's cap left (one a
 # day each)
-# Live Drills (live.js): its watcher looks at the live feed once a minute ("* * * * *"), and only while the variable
+# Live Drills (live.js): its watcher looks at the live feed once a minute ("* * * * *"; while a game is close to a
+# two-minute spot the Live object's own alarm looks every 20 s in between), and only while the variable
 # LIVE_ON is "on": set it in the Cloudflare dashboard (Workers & Pages > two-minute-drill-board > Settings > Variables
 # and Secrets > Add: LIVE_ON, on > Deploy), never here, so a deploy keeps what the owner set (keep_vars). Off or unset,
 # the minute does nothing. On, POST /live/admin { on: false } (the ADMIN_TOKEN) pauses it at once, { on: true } resumes.
