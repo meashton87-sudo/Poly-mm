@@ -1161,7 +1161,9 @@
       const e = put(S('rect', { x: 0, width: 360, fill: 'var(--turf-2)' }), (Y) => { e.setAttribute('y', Y(L + 5)); e.setAttribute('height', Math.max(0, Y(L) - Y(L + 5))); });
     }
     [[100, 110, code(1 - G.me)], [-10, 0, code(G.me)]].forEach(([a, b, c]) => {
-      const e = put(S('rect', { x: 0, width: 360, fill: color(c), opacity: 0.92 }), (Y) => { e.setAttribute('y', Y(b)); e.setAttribute('height', Math.max(0, Y(a) - Y(b))); });
+      // (a checkerboard end zone is painted inside its lines only: the turf past the sidelines stays green)
+      const ex = EZ_CHECKER[c] ? { x: SX0, width: SX1 - SX0 } : { x: 0, width: 360 };
+      const e = put(S('rect', { ...ex, fill: color(c), opacity: EZ_CHECKER[c] ? 1 : 0.92 }), (Y) => { e.setAttribute('y', Y(b)); e.setAttribute('height', Math.max(0, Y(a) - Y(b))); });
       // (a home end zone painted its own way, as at the stadium: Tennessee's orange and white checkerboard, Neyland)
       if (EZ_CHECKER[c]) {
         const id = `ck-${c}-${a}`, pat = S('pattern', { id, patternUnits: 'userSpaceOnUse' }), w1 = S('rect', { fill: EZ_CHECKER[c] }), w2 = S('rect', { fill: EZ_CHECKER[c] });
