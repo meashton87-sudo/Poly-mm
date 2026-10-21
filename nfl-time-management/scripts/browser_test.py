@@ -1611,7 +1611,7 @@ WORKER_SPY = """(() => {
   const pm = Worker.prototype.postMessage;
   Worker.prototype.postMessage = function (m, t) {
     try { if (m && m.scen && m.type !== 'init') (window.__scenIds = window.__scenIds || []).push(`${m.type}|${m.scen.id}`); } catch (e) { /* not the game's */ }
-    try { if (m && m.type === 'step' && m.action && m.action.call != null) (window.__stepActs = window.__stepActs || []).push({ call: m.action.call, pers: m.action.pers ?? null, form: m.action.form ?? null }); } catch (e) { /* not the game's */ }
+    try { if (m && m.type === 'step' && m.action && m.action.call != null) (window.__stepActs = window.__stepActs || []).push({ call: m.action.call, pers: m.action.pers ?? null, form: m.action.form ?? null, bf: m.action.bf ?? null }); } catch (e) { /* not the game's */ }
     return pm.call(this, m, t);
   };
 })();"""
@@ -1826,8 +1826,9 @@ async def formation_pick(browser, base: str, shots: str = "") -> list[str]:
         if shots:
             await page.screenshot(path=str(Path(shots) / "formation-empty.png"))
         a = await snap_pass()
-        if a is None or a["form"] is not None:
-            out.append(f"the formation: Empty (the lineup only) picked, but the snap went with {a and a['form']!r}")
+        # (an empty set is charted: the shotgun with nobody in the backfield, engine.js persForm)
+        if a is None or a["form"] != "gun" or a.get("bf") != 0:
+            out.append(f"the formation: Empty picked, but the snap went with {a and a['form']!r}, backs {a and a.get('bf')!r}")
         if not await next_snap():
             return out + errs
         now = await pick("Bunch")
@@ -2821,7 +2822,7 @@ async def main(a) -> int:
               + ("ok" if not qb else "FAIL") + "".join(f"\n      {x}" for x in qb), flush=True)
         reach += qb
         fp = await formation_pick(browser, base, a.shots)
-        print("the formation (the chip beside Personnel, Pistol lines up and snaps as pistol, Empty is the lineup only, a look, back to the real lineup): "
+        print("the formation (the chip beside Personnel, Pistol lines up and snaps as pistol, Empty snaps as an empty set, a look, back to the real lineup): "
               + ("ok" if not fp else "FAIL") + "".join(f"\n      {x}" for x in fp), flush=True)
         reach += fp
         pg = await pers_group(browser, base)
