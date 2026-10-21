@@ -172,6 +172,13 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   webhook and /claim keep pro:buyer:<HMAC(mailSecret, address)> -> session ids; Stripe's Checkout Sessions list
   (customer_details[email], complete, paid, tagged tmd_pro_) finds purchases from before. Never log or return an address
   or a code.
+- Who you coached like (game.js coachCard: the head coach, "Called it like" an offensive play-caller, "Defended like" a
+  defensive one, the last only from full-defense calls). The play-callers are src/nflclock/play_callers.json (committed,
+  curated): who really called each side, team by team and week by week, with a source; every team and side from 2022 on,
+  the defenses 2016-2021, the best-known offenses 2006-2021. Only real play-callers (a head coach who called his own side
+  is its caller); anything shared or unconfirmed is `unverified` (with a note) and left out of the fit (coaches.py
+  play_caller_fingerprints, CALLER_MIN snaps). Add a season's rows as it goes (tests/test_play_callers.py checks the
+  coverage and the week ranges; web/coach_match_test.js the matcher).
 - Streaks and badges (game.js streakOf, BADGES): the streak is worked out from the days played (the same on every phone); every 7 days in a
   row earn a freeze (2 held at most), spent on a missed day once the next day is played (stats.frozen keeps the day: the
   ❄️, the one note and event). A league board's streak is worked out the same way (worker.js streakOf, the same

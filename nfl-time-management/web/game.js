@@ -7265,11 +7265,12 @@
     } else if (x.kind === 'defcall') DEFS.forEach((k) => out.push([k, x.chosen === k ? 1 : 0, x.q[k] || 0]));
     return out;
   }
-  function coachMatch(decs) {
-    const C = idx.coaches;
-    if (!C || !C.coaches || !C.coaches.length) return null;
-    // per trait: [sum of (you - play-callers), snaps, what you did, what play-callers would have done (expected)]
-    const acc = { pass: [0, 0, 0, 0], deep: [0, 0, 0, 0], go: [0, 0, 0, 0], two: [0, 0, 0, 0] };
+  // the nearest of a list of coaches (each with z per measure, scaled by C.spread) to your calls in decs, on the
+  // measures given: per trait [sum of (you - play-callers), snaps, what you did, what play-callers would have done]
+  function nearestCoach(C, list, keys, decs) {
+    if (!C || !list || !list.length) return null;
+    const acc = {};
+    keys.forEach((k) => { acc[k] = [0, 0, 0, 0]; });
     const add = (k, mine, theirs) => { const a = acc[k]; a[0] += mine - theirs; a[1] += 1; a[2] += mine; a[3] += theirs; };
     decs.forEach((x) => { traitsOf(x).forEach(([k, mine, theirs]) => { if (acc[k]) add(k, mine, theirs); }); });
     const zu = {}, w = {};
@@ -7280,7 +7281,7 @@
     });
     if (!Object.values(w).some((v) => v > 0)) return null;
     let best = null, bd = Infinity;
-    C.coaches.forEach((c) => {
+    list.forEach((c) => {
       let dist = 0;
       Object.keys(w).forEach((k) => { if (w[k]) dist += w[k] * (zu[k] - (c.z[k] || 0)) ** 2; });
       if (dist < bd) { bd = dist; best = c; }
@@ -7293,6 +7294,18 @@
       .map((x, i) => (i ? x : x.replace('(most: ', '(most play-callers: ')));     // (the first names who "most" are)
     return { coach: best, why };
   }
+  function coachMatch(decs) {
+    const C = idx.coaches;
+    return C ? nearestCoach(C, C.coaches, ['pass', 'deep', 'go', 'two'], decs) : null;
+  }
+  // the play-caller you called it like (coaches.py play_caller_fingerprints: who really called the plays, by team and
+  // week): side 'oc' on your offensive calls, 'dc' on the full defense you called (blitz, box, deep zone)
+  function callerMatch(decs, side) {
+    const C = idx.coaches && idx.coaches[side];
+    if (!C) return null;
+    const mine = side === 'dc' ? decs.filter((x) => x.kind === 'defcall' && x.dc && x.nfl) : decs;
+    return nearestCoach(C, C.callers, C.measures || [], mine);
+  }
   function whyText(k, more, [, n, mine, theirs]) {
     const a = Math.round(mine), e = Math.round(theirs), na = n - a, ne = n - e;
     if (more ? a <= e : a >= e) return null;               // rounded, the counts don't show it: say nothing
@@ -7302,19 +7315,38 @@
       deep: more ? `went deep on ${of(a, 'throws')} (most: ${e})` : `kept it short on ${of(na, 'throws')} (most: ${ne})`,
       go: more ? `went for it on ${of(a, 'fourth downs')} (most: ${e})` : `kicked on ${of(na, 'fourth downs')} (most: ${ne})`,
       two: more ? `went for two ${a} of ${n} times (most: ${e})` : `kicked the extra point ${na} of ${n} times (most: ${ne})`,
+      blitz: more ? `sent five or more on ${of(a, 'snaps')} (most: ${e})` : `rushed four or fewer on ${of(na, 'snaps')} (most: ${ne})`,
+      load: more ? `loaded the box on ${of(a, 'snaps')} (most: ${e})` : `kept the box light on ${of(na, 'snaps')} (most: ${ne})`,
+      soft: more ? `sat back in a deep zone on ${of(a, 'snaps')} (most: ${e})` : `played man on ${of(na, 'snaps')} (most: ${ne})`,
     }[k];
   }
+  // where and when a play-caller called them, by the city of the time: "Kansas City 2013–2026", his last two stints
+  const stintText = (st) => (st || []).slice(-2).map(([t, a, b]) => `${cityIn(t, a)} ${a === b ? a : `${a}–${b}`}`).join(', ');
+  function callerLine(m, label) {
+    const c = m.coach, row = el('div', 'caller');
+    row.append(el('div', 'k', label), el('div', 'cname', c.name));
+    if (m.why.length) row.append(el('div', 'why', `Like him, you ${m.why.join(', and ')}.`));
+    row.append(el('div', 'meta', `${stintText(c.stints)} · from ${c.plays.toLocaleString()} late-game snaps he called`));
+    return row;
+  }
   function coachCard(decs, label) {
-    const m = coachMatch(decs);
-    if (!m) return null;
-    const c = m.coach, box = el('div', 'coach');
-    box.append(el('div', 'k', label), el('div', 'name', c.name));
-    const reason = m.why.length ? `Like him, you ${m.why.join(', and ')}.` : 'Your calls sit close to his across the board.';
-    box.append(el('div', 'why', reason));
-    const teams = (c.teams || []).map(teamName).join(', ');
-    box.append(el('div', 'meta', `${teams} · ${c.from === c.to ? c.from : `${c.from}–${c.to}`} · from ${c.plays.toLocaleString()} late-game snaps`));
-    box.title = 'Matched on how often you throw, go deep, go for it on fourth down and go for two, each against what NFL play-callers do in the same spots.';
-    return { el: box, name: c.name };
+    const m = coachMatch(decs), oc = callerMatch(decs, 'oc'), dc = callerMatch(decs, 'dc');
+    if (!m && !oc && !dc) return null;
+    const box = el('div', 'coach');
+    if (m) {
+      const c = m.coach;
+      box.append(el('div', 'k', label), el('div', 'name', c.name));
+      const reason = m.why.length ? `Like him, you ${m.why.join(', and ')}.` : 'Your calls sit close to his across the board.';
+      box.append(el('div', 'why', reason));
+      const teams = (c.teams || []).map(teamName).join(', ');
+      box.append(el('div', 'meta', `${teams} · ${c.from === c.to ? c.from : `${c.from}–${c.to}`} · from ${c.plays.toLocaleString()} late-game snaps`));
+    }
+    if (oc) box.append(callerLine(oc, 'Called it like'));
+    if (dc) box.append(callerLine(dc, 'Defended like'));
+    box.title = 'Matched on how often you throw, go deep, go for it on fourth down and go for two (and on defense how often you ' +
+      'blitz, load the box and sit back in a deep zone), each against what NFL play-callers do in the same spots. The ' +
+      'play-callers are the coaches who really called the plays, team by team and week by week.';
+    return { el: box, name: m ? m.coach.name : null, oc: oc ? oc.coach.name : null, dc: dc ? dc.coach.name : null };
   }
 
   // ---- your tendencies: every call you have had graded (daily days as they finish, survivor games as they end), each
@@ -8458,7 +8490,7 @@
     }
     const took = sideTaken() ? `As ${teamName(today[0].player)}: ${sideLine(today[0])}` : '';
     const text = `${DRIVE ? `Two-Minute Drill · ${PRO.drives[DRIVE - 1].title}\nGrade ${gradeOf(Math.round(p * 100)).L}${p * 100 >= PASS_AT - 0.5 ? ' ✅ passed' : ''}`
-      : CUSTOM ? `Two-Minute Drill · my scenario: ${matchLine(today[0])}\n${gameTag(today[0])}\nGrade ${gradeOf(Math.round(p * 100)).L}` : RUN_N ? `Two-Minute Drill · the ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Two-Minute Drill #${dayN}${dayTitle(dayN) ? ` · ${dayTitle(dayN)}` : ''}${took ? `\n${took}` : ''}`}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc ? `\nCoached like ${cc.name}` : ''}${vs}` +
+      : CUSTOM ? `Two-Minute Drill · my scenario: ${matchLine(today[0])}\n${gameTag(today[0])}\nGrade ${gradeOf(Math.round(p * 100)).L}` : RUN_N ? `Two-Minute Drill · the ${PRO_RUNS.runs[RUN_N - 1].title} run` : `Two-Minute Drill #${dayN}${dayTitle(dayN) ? ` · ${dayTitle(dayN)}` : ''}${took ? `\n${took}` : ''}`}\nBetter than ${Math.round(p * 100)}% of NFL play-callers${cc && cc.name ? `\nCoached like ${cc.name}` : ''}${vs}` +
       `${streak >= 2 && !CUSTOM ? `\n🔥 ${streak}-day streak` : ''}\n${rows.join('\n')}\nCan you beat me? ${CUSTOM ? scenLink(CUSTOM) : !DRIVE && !RUN_N && !ARCH_DAY ? chLink(p) : SITE}`;
     // sharing is how new players find the game: the button sits right under the result, not below the standings
     const chc = challengeCard(p);
