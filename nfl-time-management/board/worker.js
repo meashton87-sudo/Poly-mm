@@ -7,7 +7,8 @@
 //   DELETE /board?name=Eli  (Authorization: Bearer <ADMIN_TOKEN>)          remove a row, all-time and this week (no ADMIN_TOKEN secret: off)
 //   GET    /daily?date=2026-10-14                         -> that day's players: { n, hist, spots, top }
 //   GET    /days                                           -> every day played: { days: [{ date, n, avg, best }] }
-//   POST   /daily  { date, key, p, spots: [w, ...], name?, g?, restarted?, side? }  -> the same, after counting your result
+//   POST   /daily  { date, key, p, spots: [w, ...], name?, g?, restarted?, side?, team?, own?, calls? }  -> the same, after counting your result
+//                                                             (team, own: fanbases; calls: the crowd's calls; both below)
 //                                                             (1-3 spots: the day's drive, or the three spots days had
 //                                                             before), and week: the week to that date with your own line
 //                                                             (you; old: your days in it scored the old way, in no week)
@@ -334,11 +335,15 @@ async function daily(req, env, storage, hits, h, url) {
   const refused = !!raw && blocked(raw), name = refused ? '' : raw;   // a refused name: the result counts, unnamed
   const fair = body.g === 2;                                          // every call graded the fair way (above)
   const side = body.side == null ? null : body.side;                  // the side taken, on a day that offers two (above)
+  const team = body.team == null ? null : body.team;                  // the player's own team ("Your team": fanbases, below)
+  const calls = callsOf(body.calls);                                  // the drive's calls by situation (the crowd's calls, below)
   if (!dateOk(date)) return json({ error: 'date (YYYY-MM-DD, today) wanted' }, 400, h);
   if (!(typeof p === 'number' && p >= 0 && p <= 1)) return json({ error: 'p (0-1) wanted' }, 400, h);
   if (!spots || spots.length < 1 || spots.length > 3 || !spots.every((w) => typeof w === 'number' && w >= -1 && w <= 1)) return json({ error: 'spots (1-3, each -1 to 1) wanted' }, 400, h);
   if (!KEY_RE.test(devKey)) return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
   if (side !== null && !(typeof side === 'string' && SIDE_RE.test(side))) return json({ error: 'side (a team code, 2-4 capital letters) wanted' }, 400, h);
+  if (team !== null && !NFL_TEAMS.includes(team)) return json({ error: 'team (an NFL team code) wanted' }, 400, h);
+  if (calls === false) return json({ error: `calls ([[situation, call], ...], at most ${CALLS_POST}) wanted` }, 400, h);
   const kh = await sha256(devKey);                 // before the reads: from here to the writes is storage only
   const ak = name ? await acctNameKey(storage, env, body.session, name.toLowerCase()) : null, nk = ak || kh;    // who owns the name: the account (its username), else this device
   const mine = `dk:${date}:${kh}`;
@@ -359,6 +364,11 @@ async function daily(req, env, storage, hits, h, url) {
       await storage.put(mine, prev);
       await storage.put(`day:${date}`, day);
       if (unclaimed) await claim(storage, name.toLowerCase(), nk);
+    }
+    if (team && !prev.team && !prev.restarted) {     // a team picked after the day's result (game.js fanAsk): it counts for its fans, once
+      prev.team = team;
+      await fanAdd(storage, date, team, Math.round(prev.p * 100), prev.side ? prev.side === team : body.own === true);
+      await storage.put(mine, prev);
     }
     return json({ ...dayView(day), counted: false, you: { p: prev.p, spots: prev.spots, ...(prev.g === 2 ? { g: 2 } : {}), ...(prev.restarted ? { restarted: true } : {}), ...(prev.side ? { side: prev.side } : {}) },
       week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}) }, 200, h);
@@ -382,12 +392,193 @@ async function daily(req, env, storage, hits, h, url) {
     count(day);
     if (fair) { day.f = day.f || emptyDay(); count(day.f); }
     if (name && !taken) await listed(storage, day, date, name, nk, p, fair);
+    if (calls && calls.length) await callsAdd(storage, date, calls);
+    if (team) await fanAdd(storage, date, team, pt, side ? side === team : body.own === true);
   }
-  const you = { p, spots, ...(fair ? { g: 2 } : {}), ...(restarted ? { restarted: true } : {}), ...(side ? { side } : {}) };
+  const you = { p, spots, ...(fair ? { g: 2 } : {}), ...(restarted ? { restarted: true } : {}), ...(side ? { side } : {}), ...(team ? { team } : {}) };
   await storage.put(mine, { ...you, ...(name && !taken && !restarted ? { name } : {}) });
   await storage.put(`day:${date}`, day);
   if (unclaimed && name) await claim(storage, name.toLowerCase(), nk);
   return json({ ...dayView(day), counted: true, you, week: await weekOut(), ...(taken ? { taken: true } : {}), ...(refused ? { refused: true } : {}) }, 200, h);
+}
+
+// ---- Challenges, the crowd's calls, fanbases (game.js challenge*, crowd*, fan*)
+// A challenge (the daily's "Challenge a friend"): a short link (/?c=<id>) to the day the challenger played and the
+// score to beat, with its own small board: the challenger and everyone who played from the link, names and scores only.
+//   POST /challenge            { day, name?, score, key, session? } -> { id, taken? }   day: the page's day number
+//                                (game.js dayOf), score 0-100. A name is shown to anyone with the link: a blocked() one
+//                                is refused (400), one another device or account holds is left off (taken: true).
+//                                CHAL_PER_DAY a device a UTC day
+//   GET  /challenge/<id>       -> { id, day, name, score, at, n, rows: [{ name, score, ch? }] }   the board's top CHAL_TOP
+//                                (ch: the challenger's own row), n the players from the link; 404 none, 410 expired
+//   POST /challenge/<id>/play  { name?, score, key, restarted?, session? } -> the same, and counted, you (your rank)
+//                                one result a device a challenge (the first stands); a restarted try (restarted: true)
+//                                and the challenger's own device never count
+// Stored as chal:<id> { day, name, score, at, kh, rows: [{ name, score, at }], seen }: kh and seen are device hash
+// prefixes, never sent out. A challenge lasts CHAL_DAYS: after that it answers 410 and is deleted when asked for, and
+// chalidx:<UTC date> (the ids made that day, each device's count) older than that is swept, its challenges with it,
+// by each day's first new challenge.
+const CHAL_ALPHA = 'abcdefghjkmnpqrstuvwxyz23456789', CHAL_LEN = 7, CHAL_RE = /^[a-hjkmnp-z2-9]{7}$/;     // 31^7: 27 billion ids
+const CHAL_DAYS = 30, CHAL_PER_DAY = 20, CHAL_TOP = 20, CHAL_ROWS = 500, CHAL_SEEN = 2000;     // (a link passed round a big group: CHAL_ROWS kept, the best)
+const chalId = () => Array.from(crypto.getRandomValues(new Uint8Array(CHAL_LEN)), (b) => CHAL_ALPHA[b % CHAL_ALPHA.length]).join('');
+const chalOld = (c, now = Date.now()) => now - c.at > CHAL_DAYS * 864e5;
+function chalView(c, id) {
+  const all = [{ name: c.name, score: c.score, at: c.at, ch: true }, ...c.rows].sort((a, b) => b.score - a.score || a.at - b.at);
+  return { id, day: c.day, name: c.name, score: c.score, at: new Date(c.at).toISOString(), n: c.rows.length,
+    rows: all.slice(0, CHAL_TOP).map((r) => ({ name: r.name, score: r.score, ...(r.ch ? { ch: true } : {}) })) };
+}
+// a name for a challenge's board: { name: '' } for none or one another device or account holds (taken), null refused
+async function chalName(storage, env, raw, session, kh) {
+  const name = clean(raw);
+  if (!name) return { name: '' };
+  if (blocked(name)) return null;
+  const lower = name.toLowerCase(), ak = await acctNameKey(storage, env, session, lower), owner = await ownerOf(storage, lower);
+  return owner && owner !== (ak || kh) ? { name: '', taken: true } : { name };
+}
+async function chalSweep(storage, today) {
+  const cut = addDays(today, -CHAL_DAYS - 1);
+  for (const [k, ix] of await storage.list({ prefix: 'chalidx:' })) {
+    if (k.slice(8) >= cut) continue;
+    for (const id of (ix && ix.ids) || []) await storage.delete(`chal:${id}`);
+    await storage.delete(k);
+  }
+}
+async function challenge(req, env, storage, hits, h, url) {
+  const parts = url.pathname.split('/').filter(Boolean), id = parts[1] || '';      // /challenge, /challenge/<id>, /challenge/<id>/play
+  if (parts.length > 3 || (parts.length === 3 && parts[2] !== 'play') || (parts.length > 1 && !CHAL_RE.test(id))) return json({ error: 'not found' }, 404, h);
+  if (parts.length === 2) {
+    if (req.method !== 'GET') return json({ error: 'method' }, 405, h);
+    const c = await storage.get(`chal:${id}`);
+    if (!c) return json({ error: 'That challenge link doesn’t work.' }, 404, h);
+    if (chalOld(c)) { await storage.delete(`chal:${id}`); return json({ error: 'This challenge has expired.' }, 410, h); }
+    return json(chalView(c, id), 200, h);
+  }
+  if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
+  if (limited(req, hits)) return json({ error: 'slow down' }, 429, h);
+  const body = await readBody(req);
+  if (body === false) return json({ error: 'too big' }, 413, h);
+  if (!body) return json({ error: 'bad json' }, 400, h);
+  const devKey = String(body.key || ''), score = body.score;
+  if (!KEY_RE.test(devKey)) return json({ error: 'key (16-128 letters, digits, - or _) wanted' }, 400, h);
+  if (!(Number.isInteger(score) && score >= 0 && score <= 100)) return json({ error: 'score (0-100) wanted' }, 400, h);
+  const kh = await sha256(devKey), dk = kh.slice(0, 16), nm = await chalName(storage, env, body.name, body.session, kh);
+  if (!nm) return json({ error: 'That name isn’t allowed. Pick another.' }, 400, h);
+  if (parts.length === 1) {                      // a new challenge
+    const day = body.day;
+    if (!(Number.isInteger(day) && day >= 1 && day <= 99999)) return json({ error: 'day (a day number) wanted' }, 400, h);
+    const today = new Date().toISOString().slice(0, 10), ik = `chalidx:${today}`, ix = (await storage.get(ik)) || { ids: [], dev: {} };
+    if ((ix.dev[dk] || 0) >= CHAL_PER_DAY) return json({ error: 'That’s a lot of challenges for one day. Try again tomorrow.' }, 429, h);
+    if (!ix.ids.length) await chalSweep(storage, today);
+    let cid = chalId();
+    while (await storage.get(`chal:${cid}`)) cid = chalId();
+    await storage.put(`chal:${cid}`, { day, name: nm.name, score, at: Date.now(), kh: dk, rows: [], seen: [] });
+    ix.ids.push(cid); ix.dev[dk] = (ix.dev[dk] || 0) + 1;
+    await storage.put(ik, ix);
+    return json({ id: cid, ...(nm.taken ? { taken: true } : {}) }, 200, h);
+  }
+  const k = `chal:${id}`, c = await storage.get(k);
+  if (!c) return json({ error: 'That challenge link doesn’t work.' }, 404, h);
+  if (chalOld(c)) { await storage.delete(k); return json({ error: 'This challenge has expired.' }, 410, h); }
+  const counted = body.restarted !== true && dk !== c.kh && !c.seen.includes(dk) && c.seen.length < CHAL_SEEN;
+  if (counted) {
+    c.seen.push(dk);
+    c.rows.push({ name: nm.name, score, at: Date.now() });
+    c.rows.sort((a, b) => b.score - a.score || a.at - b.at);
+    c.rows = c.rows.slice(0, CHAL_ROWS);
+    await storage.put(k, c);
+  }
+  return json({ ...chalView(c, id), counted, ...(counted ? { you: 1 + [c, ...c.rows].filter((r) => r.score > score).length } : {}), ...(nm.taken ? { taken: true } : {}) }, 200, h);
+}
+
+// The crowd's calls: with the day's /daily post (its first result, never a restarted one: above) the page sends the
+// drive's calls, each [situation, call]: the situation a coarse key of the spot the call was made in (game.js crowdKey:
+// the kind of decision, the down, the distance, the yard line, the clock and the margin, a few buckets each, so players
+// meet), the call the option taken. A situation counts once a post (its first call there). Kept a value a situation
+// (cs:<date>:<situation> { <call>: n }, at most CALL_KEYS calls; cs:<date> { k }: the day's situations, at most
+// CALL_SITS), for the last CALL_KEEP days (csdays: their dates; the oldest is deleted when a new day starts).
+//   GET /calls?date=2026-10-21  -> { date, min, s: { <situation>: { n, c: { <call>: n } } } }   only the situations
+//                                at least CALL_MIN players reached (the page shows a share only then)
+const CALLS_POST = 80, CALL_SITS = 2000, CALL_KEYS = 40, CALL_MIN = 20, CALL_KEEP = 3;
+const SIT_RE = /^[a-z]{2,8}(?:\.[a-z0-9]{1,3}){5}$/, CALL_RE = /^[A-Za-z0-9_-]{1,40}$/;
+// the posted calls, cleaned (a bad entry dropped, the first call of each situation kept); false: not a list of them
+function callsOf(v) {
+  if (v == null) return null;
+  if (!Array.isArray(v) || v.length > CALLS_POST) return false;
+  const seen = new Set(), out = [];
+  for (const x of v) {
+    if (!Array.isArray(x) || x.length !== 2 || typeof x[0] !== 'string' || typeof x[1] !== 'string' || !SIT_RE.test(x[0]) || !CALL_RE.test(x[1]) || seen.has(x[0])) continue;
+    seen.add(x[0]); out.push(x);
+  }
+  return out;
+}
+async function callsAdd(storage, date, calls) {
+  const mk = `cs:${date}`, was = await storage.get(mk), meta = was || { k: 0 };
+  if (!was) {                                       // a new day: the oldest kept goes
+    const ds = ((await storage.get('csdays')) || []).filter((d) => d !== date);
+    ds.push(date); ds.sort();
+    while (ds.length > CALL_KEEP) {
+      const old = ds.shift();
+      for (const [k] of await storage.list({ prefix: `cs:${old}:` })) await storage.delete(k);
+      await storage.delete(`cs:${old}`);
+    }
+    await storage.put('csdays', ds);
+  }
+  for (const [sit, call] of calls) {
+    const sk = `cs:${date}:${sit}`, c = await storage.get(sk);
+    if (!c && meta.k >= CALL_SITS) continue;
+    const m = c || {};
+    if (!(call in m) && Object.keys(m).length >= CALL_KEYS) continue;
+    m[call] = (m[call] || 0) + 1;
+    if (!c) meta.k += 1;
+    await storage.put(sk, m);
+  }
+  await storage.put(mk, meta);
+}
+async function callsView(storage, date) {
+  const s = {}, pre = `cs:${date}:`;
+  for (const [k, m] of await storage.list({ prefix: pre })) {
+    const n = Object.values(m || {}).reduce((a, x) => a + x, 0);
+    if (n >= CALL_MIN) s[k.slice(pre.length)] = { n, c: m };
+  }
+  return { date, min: CALL_MIN, s };
+}
+
+// Fanbases: the /daily post's team (the player's "Your team", optional; game.js fanTeam) counts the day's result for
+// that team's fans (the device's first result only, never a restarted one: above): fan:<date> { <team>: { n, sum, on,
+// osum } }, sums in points; on/osum: its fans who played their own team's drive (the day's side taken is theirs, or
+// on a day of one drive the page's own: true). 32 teams a day at most; the week is the 7 days' values added up.
+//   GET /fans?date=2026-10-21  -> { date, min, day: [{ team, n, avg, own? }], week: { from, to, rows: [{ team, n, avg }] } }
+//                                ranked by the average score (0-100), only teams with at least FAN_MIN results; own:
+//                                { n, avg } of its fans on their own team's drive (FAN_MIN of them too)
+const NFL_TEAMS = ['ARI', 'ATL', 'BAL', 'BUF', 'CAR', 'CHI', 'CIN', 'CLE', 'DAL', 'DEN', 'DET', 'GB', 'HOU', 'IND', 'JAX', 'KC', 'LV', 'LAC', 'LA', 'MIA',
+  'MIN', 'NE', 'NO', 'NYG', 'NYJ', 'PHI', 'PIT', 'SF', 'SEA', 'TB', 'TEN', 'WAS'];       // game.js TEAMS (the NFL's 32; game.js FAN_TEAMS)
+const FAN_MIN = 5;
+async function fanAdd(storage, date, team, pt, own) {
+  const k = `fan:${date}`, f = (await storage.get(k)) || {}, x = f[team] || (f[team] = { n: 0, sum: 0, on: 0, osum: 0 });
+  x.n += 1; x.sum += pt;
+  if (own) { x.on += 1; x.osum += pt; }
+  await storage.put(k, f);
+}
+const fanAvg = (sum, n) => Math.round((10 * sum) / n) / 10;
+async function fansView(storage, date) {
+  const rank = (f) => Object.entries(f).filter(([, x]) => x.n >= FAN_MIN).map(([team, x]) => ({ team, n: x.n, avg: fanAvg(x.sum, x.n),
+    ...(x.on >= FAN_MIN ? { own: { n: x.on, avg: fanAvg(x.osum, x.on) } } : {}) })).sort((a, b) => b.avg - a.avg || b.n - a.n);
+  const from = addDays(date, 1 - WEEK_DAYS), wk = {};
+  for (let i = 0; i < WEEK_DAYS; i++) {
+    for (const [t, x] of Object.entries((await storage.get(`fan:${addDays(from, i)}`)) || {})) {
+      const w = wk[t] || (wk[t] = { n: 0, sum: 0, on: 0, osum: 0 });
+      w.n += x.n; w.sum += x.sum;
+    }
+  }
+  return { date, min: FAN_MIN, day: rank((await storage.get(`fan:${date}`)) || {}), week: { from, to: date, rows: rank(wk).map(({ team, n, avg }) => ({ team, n, avg })) } };
+}
+const isSocial = (p) => p === '/calls' || p === '/fans' || p === '/challenge' || p.startsWith('/challenge/');
+async function social(req, env, storage, hits, h, url) {
+  if (url.pathname === '/challenge' || url.pathname.startsWith('/challenge/')) return challenge(req, env, storage, hits, h, url);
+  if (req.method !== 'GET') return json({ error: 'method' }, 405, h);
+  const date = String(url.searchParams.get('date') || '');
+  if (!DATE_RE.test(date) || !Number.isFinite(Date.parse(date + 'T12:00:00Z'))) return json({ error: 'date (YYYY-MM-DD) wanted' }, 400, h);
+  return json(url.pathname === '/calls' ? await callsView(storage, date) : await fansView(storage, date), 200, h);
 }
 
 // ---- Pro
@@ -681,8 +872,9 @@ async function auth(req, env, storage, hits, h, url) {
     const merged = statsMerge(have, inc);
     if (JSON.stringify(merged.days) !== JSON.stringify(have.days)) await storage.put(`stats:d:${acct}`, merged.days);
     if (JSON.stringify([merged.drives, merged.runs]) !== JSON.stringify([have.drives, have.runs])) await storage.put(`stats:x:${acct}`, { drives: merged.drives, runs: merged.runs });
-    if (JSON.stringify([merged.badges, merged.frozen, merged.surv]) !== JSON.stringify([have.badges, have.frozen, have.surv])) {
-      await storage.put(`stats:m:${acct}`, { badges: merged.badges, frozen: merged.frozen, ...(merged.surv.best || merged.surv.runs ? { surv: merged.surv } : {}) });
+    if (JSON.stringify([merged.badges, merged.frozen, merged.surv, merged.team]) !== JSON.stringify([have.badges, have.frozen, have.surv, have.team])) {
+      await storage.put(`stats:m:${acct}`, { badges: merged.badges, frozen: merged.frozen, ...(merged.surv.best || merged.surv.runs ? { surv: merged.surv } : {}),
+        ...(merged.team ? { team: merged.team } : {}) });
     }
     if (JSON.stringify(merged.scen) !== JSON.stringify(have.scen)) await storage.put(`stats:s:${acct}`, merged.scen);
     return json({ stats: merged }, 200, h);
@@ -821,8 +1013,15 @@ function cleanStats(s) {
     if (!v || typeof v !== 'object' || Array.isArray(v)) return 'stats.surv: an object wanted';
     out.surv = survEntry(v);
   }
+  // "Your team" (fanbases): { code, at }, code an NFL team's or '' (none picked: a choice too, so it follows the account)
+  if (s.team !== undefined) {
+    const t = teamEntry(s.team);
+    if (!t) return 'stats.team: { code, at } wanted';
+    out.team = t;
+  }
   return out;
 }
+const teamEntry = (v) => (v && typeof v === 'object' && (v.code === '' || NFL_TEAMS.includes(v.code)) && num(v.at, 0, 1e14) !== null ? { code: v.code, at: Math.round(v.at) } : null);
 const survEntry = (v) => ({ best: Math.round(num(v.best, 0, SURV_BEST_MAX) ?? 0), runs: Math.round(num(v.runs, 0, SURV_RUNS_MAX) ?? 0), ...(v.life === true ? { life: true } : {}) });
 // the best run on two phones: the higher best and the higher count; the life mark goes with the higher best, and on a
 // tie stays only when both used it (a run without the extra life is the better of equals, as the page keeps it)
@@ -853,6 +1052,8 @@ function statsMerge(a, b) {
   out.badges = Object.fromEntries(Object.entries(bd).sort((x, y) => x[1] - y[1] || (x[0] < y[0] ? -1 : 1)).slice(0, BADGES_MAX));
   out.scen = scenMerge(a.scen, b.scen);
   out.surv = survMerge(a.surv, b.surv);
+  const ta = a.team || null, tb = b.team || null, tw = !ta || (tb && tb.at > ta.at) ? tb : ta;     // (the newest pick stands)
+  if (tw) out.team = tw;
   return out;
 }
 // a scenario on two phones: the newest touch stands (removed or not), with the best score, the most tries, won if either
@@ -873,7 +1074,7 @@ async function statsOf(storage, acct) {
   delete b[GONE_BADGE];                    // (kept from before it was retired: read back without it, and without its find's coach)
   const days = Object.fromEntries(Object.entries(d).map(([k, v]) => [k, v && v.madden ? statEntry('days', v) : v]).filter(([, v]) => v));
   return { days, drives: x.drives || {}, runs: x.runs || {}, badges: b, frozen: m.frozen || {}, scen: (await storage.get(`stats:s:${acct}`)) || {},
-    surv: m.surv && typeof m.surv === 'object' ? survEntry(m.surv) : { best: 0, runs: 0 } };
+    surv: m.surv && typeof m.surv === 'object' ? survEntry(m.surv) : { best: 0, runs: 0 }, ...(m.team && teamEntry(m.team) ? { team: teamEntry(m.team) } : {}) };
 }
 
 // ---- Friend leagues: a private group of accounts (a name and a join link) with its own board of the daily: each
@@ -1400,6 +1601,7 @@ export async function handle(req, env, storage, hits) {
   if (COMM_PATHS.includes(url.pathname)) return community(req, env, storage, hits, h, url);
   if (url.pathname === '/race' || url.pathname.startsWith('/race/')) return race(req, env, storage, hits, h, url);
   if (url.pathname === '/daily') return daily(req, env, storage, hits, h, url);
+  if (isSocial(url.pathname)) return social(req, env, storage, hits, h, url);
   if (url.pathname === '/week') return week(req, env, storage, h, url);
   if (url.pathname === '/days') return req.method === 'GET' ? days(storage, h) : json({ error: 'method' }, 405, h);
   if (url.pathname !== '/board') return json({ error: 'not found' }, 404, h);
@@ -1725,7 +1927,7 @@ export default {
   fetch(req, env) {
     const url = new URL(req.url);
     if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me'].includes(url.pathname)) return versus(req, env, url);
-    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, ...COMM_PATHS, '/board', '/daily', '/week', '/days'].includes(url.pathname)) return handle(req, env, null, null);
+    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, ...COMM_PATHS, '/board', '/daily', '/week', '/days'].includes(url.pathname) && !isSocial(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },
   // the cron trigger (wrangler.toml): the day's reminder emails, sent by the Board (its storage); the day is the run's
