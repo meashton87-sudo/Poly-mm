@@ -125,7 +125,8 @@ assert.ok(ROOM_RE.test('ABC234') && !ROOM_RE.test('ABCD10') && !ROOM_RE.test('ab
   off.send({ t: 'ready', n: 4 });
   await w.settle();
   assert.deepStrictEqual([off.last('clock').n, off.last('clock').deadline], [4, t4 + 4000 + DECIDE_MS], 'the clock starts when the call is up');
-  assert.strictEqual(def.last('clock'), undefined, 'the other phone is not told');
+  assert.strictEqual(def.last('clock'), undefined, 'the other phone\'s own clock is not touched');
+  assert.deepStrictEqual([def.last('oclock').n, def.last('oclock').seat, def.last('oclock').deadline], [4, first, t4 + 4000 + DECIDE_MS], 'it is told whose turn it is, and the clock');
   off.send({ t: 'ready', n: 4 });                                     // again: the clock does not start over
   await w.advance(2000);
   assert.strictEqual(off.last('clock').deadline, t4 + 4000 + DECIDE_MS, 'a second ready changes nothing');
@@ -384,6 +385,91 @@ async function runAnswering(w, a, ms) {
   assert.deepStrictEqual([A.last('over').result.by, rated.rated, rated.ratings[0].after > 1000, rated.ratings[1].after < 1000], ['forfeit', true, true, true], 'the quitter loses rating');
   const me = (await w.http('ladder', '/vs/me', { key: B.key })).body;
   assert.deepStrictEqual([me.games, me.l, me.streak, me.provisional], [1, 1, -1, true]);
+  w.close();
+}
+// ---- the host who went to send the link: the match waits for both phones, never a forfeit at the kickoff
+{
+  const w = new World({ engine: stub });
+  const a = new FakeClient(w, K(70)), b = new FakeClient(w, K(71));
+  await a.open('HST234', { mode: 'friend' });
+  a.send({ t: 'team', team: 'KC', name: 'Host' });
+  await w.settle();
+  a.drop();                                                          // (off to the group chat: the page asleep)
+  await w.advance(5 * 60_000);
+  await b.open('HST234');
+  b.send({ t: 'team', team: 'BUF', name: 'Friend' });
+  await w.advance(FORFEIT_MS + 5000);
+  assert.ok(!b.last('start') && !b.last('over'), 'the friend is in, the host away: no kickoff, no forfeit');
+  assert.deepStrictEqual(b.last('peer').online, [false, true], 'the friend sees the host is away');
+  const a2 = new FakeClient(w, a.key);
+  await a2.open('HST234');
+  const st = a2.last('start') || b.last('start');
+  assert.ok(st && st.ms.cot.pick, 'the host back: the kickoff');
+  assert.deepStrictEqual((await state(w, 'HST234')).off, [0, 0], 'nobody on a forfeit clock at the kickoff');
+  await w.advance(FORFEIT_MS + 5000);
+  assert.ok(!b.last('over') || b.last('over').result.why !== 'left', 'no forfeit for the time away before the kickoff');
+  w.close();
+}
+// ranked, matched, one phone gone before the kickoff: a no-show (a loss), the other never waits on it
+{
+  const w = new World({ engine: stub });
+  const a = new FakeClient(w, K(72)), b = new FakeClient(w, K(73));
+  await a.queue({ mode: 'ranked', team: 'KC', name: 'Stays' }); await b.queue({ mode: 'ranked', team: 'BUF', name: 'Leaves' });
+  const code = a.last('match').room;
+  const B = new FakeClient(w, b.key);
+  await B.open(code, { mode: 'ranked' });
+  B.drop();
+  const A = new FakeClient(w, a.key);
+  await A.open(code, { mode: 'ranked' });
+  assert.strictEqual(A.last('start'), undefined, 'no kickoff without the other phone');
+  await w.advance(NOSHOW_MS + 1000);
+  const o = A.last('over').result;
+  assert.deepStrictEqual([o.by, o.why, o.winner], ['forfeit', 'noshow', A.last('hello').seat], 'gone before the kickoff: a no-show');
+  w.close();
+}
+
+// ---- names: a blocked one is no name (Anonymous on the ladder, "their" across the field)
+{
+  const w = new World({ engine: stub });
+  const a = new FakeClient(w, K(80)), b = new FakeClient(w, K(81));
+  await a.queue({ mode: 'ranked', team: 'KC', name: 'sh1thead' }); await b.queue({ mode: 'ranked', team: 'BUF', name: 'Fine Name' });
+  const R = await state(w, a.last('match').room);
+  assert.deepStrictEqual(R.names, ['', 'Fine Name'], 'a blocked name from the lobby is dropped');
+  const c = new FakeClient(w, K(82)), d = new FakeClient(w, K(83));
+  await c.open('NMS234'); await d.open('NMS234');
+  c.send({ t: 'team', team: 'KC', name: 'F u c k' }); d.send({ t: 'team', team: 'BUF', name: 'Dee' });
+  await w.settle();
+  assert.deepStrictEqual(c.last('teams').names, ['', 'Dee'], 'and from a room');
+  const r = await w.http('ladder', '/vs/report', { room: 'NMS235', seats: ['x1', 'x2'], names: ['Nazi', 'Ok'], winner: 0 });
+  assert.ok(r.body.rated);
+  const top = (await w.http('ladder', '/vs/ladder')).body.top;
+  assert.deepStrictEqual(top.map((x) => x.name).sort(), ['Anonymous', 'Ok'], 'never on the ladder');
+  w.close();
+}
+
+// ---- farming: two phones on one network play ranked unrated; the lobby pairs them with someone else first
+{
+  const w = new World({ engine: stub });
+  const [a, b, c] = [90, 91, 92].map((i) => new FakeClient(w, K(i)));
+  await a.queue({ mode: 'ranked', team: 'KC', name: 'Main', ip: '203.0.113.7' });
+  await w.advance(1000);
+  await b.queue({ mode: 'ranked', team: 'BUF', name: 'Alt', ip: '203.0.113.7' });
+  await c.queue({ mode: 'ranked', team: 'CHI', name: 'Other', ip: '198.51.100.4' });
+  assert.ok(a.last('match') && c.last('match') && a.last('match').room === c.last('match').room, 'someone on another network first');
+  b.drop();
+  const [p, q] = [93, 94].map((i) => new FakeClient(w, K(i)));
+  await p.queue({ mode: 'ranked', team: 'KC', name: 'Couch1', ip: '2001:db8:1:2:aaaa::1' });
+  await q.queue({ mode: 'ranked', team: 'BUF', name: 'Couch2', ip: '2001:db8:1:2:bbbb::9' });
+  await w.advance(MM.WIN_OPEN_S * 1000 + 3000);
+  const room = (p.last('match') || {}).room;
+  assert.ok(room && room === (q.last('match') || {}).room, 'nobody else: still a match');
+  const P = new FakeClient(w, p.key), Q = new FakeClient(w, q.key);
+  await P.open(room, { mode: 'ranked' }); await Q.open(room, { mode: 'ranked' });
+  Q.drop();
+  await w.advance(FORFEIT_MS + 1000);
+  const rated = P.last('rated').rated;
+  assert.deepStrictEqual([rated.rated, rated.reason, rated.ratings[0].delta, rated.ratings[1].delta], [false, 'network', 0, 0], 'one network (an IPv6 /64): unrated');
+  assert.ok(!JSON.stringify(await state(w, room)).includes('203.0.113') && !JSON.stringify(await state(w, room)).includes('2001:db8'), 'no address kept');
   w.close();
 }
 console.log('match rooms ok');

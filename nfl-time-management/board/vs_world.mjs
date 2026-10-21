@@ -165,8 +165,8 @@ export class World {
   }
 
   // a phone: a socket to a room or the lobby, its inbox
-  async connect(pathq, name) {
-    const res = await this.run(name, (o) => o.m.fetch(new Request(`https://w${pathq}`, { headers: { Upgrade: 'websocket' } })));
+  async connect(pathq, name, headers = {}) {
+    const res = await this.run(name, (o) => o.m.fetch(new Request(`https://w${pathq}`, { headers: { Upgrade: 'websocket', ...headers } })));
     await this.settle();
     return res;
   }
@@ -186,8 +186,8 @@ export class FakeClient {
     await this.world.settle();
     return 101;
   }
-  async queue(q) {
-    const res = await this.world.connect(`/vs/queue?key=${this.key}&${new URLSearchParams(q)}`, 'lobby');
+  async queue({ ip, ...q }) {        // (ip: the phone's address, as Cloudflare tells the worker: CF-Connecting-IP)
+    const res = await this.world.connect(`/vs/queue?key=${this.key}&${new URLSearchParams(q)}`, 'lobby', ip ? { 'CF-Connecting-IP': ip } : {});
     if ((res.realStatus ?? res.status) !== 101) return res.realStatus ?? res.status;
     this.attach(res.webSocket);
     await this.world.settle();

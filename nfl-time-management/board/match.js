@@ -24,12 +24,17 @@
 //                   result, rated}   on connecting (decisions: the last ones from `since`, to catch up)
 //                 {t:'start', ms, deadline, now}  {t:'step', n, halves, kind, res, notes, ms, deadline, now, result}
 //                 {t:'clock', n, deadline, now}  this seat's deadline for decision n (dl: both seats')
+//                 {t:'oclock', n, seat, deadline, now}  the other seat's call is up: its deadline (whose turn it is)
 //                 {t:'locked', n, seat}  {t:'peer', online, off, now}  {t:'teams', teams, names}  {t:'taken', team}
 //                 {t:'over', result}  {t:'rated', rated}  {t:'rematch-ask', seat}  {t:'rematch', room}
 // Lobby -> client: {t:'queued', mode, size, wait, rating}  {t:'match', room, mode}
 import NFLClockEngine from '../web/engine.js';
 import VSCore from '../web/vs_core.js';
 import { lazySimulator } from './lazy_sim.js';
+import TMDScenario from '../web/scenario.js';
+
+// a name nobody should see on the ladder or across the field (worker.js blocked(): the same lists, scenario.js's copy)
+const { blocked } = TMDScenario;
 
 // each seat's deadline for the decision in play (a room from before the per-seat clock: the decision's)
 const dls = (R) => (Array.isArray(R.dl) && R.dl.length === 2 ? R.dl.slice() : [R.deadline, R.deadline]);
@@ -49,16 +54,26 @@ export const NOSHOW_MS = 60_000;           // a matched room nobody filled (or n
 const ROOM_TTL_MS = 6 * 3600_000;          // a room is cleared this long after it was made
 const MAX_MSG = 4096, MAX_N = 2000, CATCHUP = 40;
 // the ladder: Elo. A new player's rating moves faster (K_NEW for the first PROVISIONAL games); no rating below FLOOR;
-// the same two players count for the ladder at most PAIR_CAP times a day (no farming a friend's second phone)
+// the same two players count for the ladder at most PAIR_CAP times a day, and never two phones on one network (no
+// farming a friend's second phone)
 export const ELO = { START: 1000, K_NEW: 40, K: 24, PROVISIONAL: 10, FLOOR: 100, PAIR_CAP: 3, TOP: 50 };
 // matchmaking (ranked): two players are paired when their ratings are within WIN_BASE + WIN_PER_S for each second
 // the longer of them has waited; after WIN_OPEN_S anyone
-export const MM = { WIN_BASE: 100, WIN_PER_S: 20, WIN_OPEN_S: 45, TICK_MS: 2000 };
+export const MM = { WIN_BASE: 100, WIN_PER_S: 20, WIN_OPEN_S: 45, TICK_MS: 2000, NET_COST: 400 };
 
-const clean = (n) => String(n ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
+const tidy = (n) => String(n ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
+const clean = (n) => { const t = tidy(n); return t && !blocked(t) ? t : ''; };      // a blocked name: none (Anonymous)
 const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 const rand = () => crypto.getRandomValues(new Uint32Array(1))[0];       // the server's coin: the toss, each snap's seed
 export const roomCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => ALPHABET[b % ALPHABET.length]).join('');
+// the player's network (the address, an IPv6 address's /64: one household's phones), hashed: two phones on one network
+// play ranked unrated (no farming a rating off a second phone on the couch). Never kept beyond the room
+async function netOf(req) {
+  const ip = String(req.headers.get('CF-Connecting-IP') || '').trim();
+  if (!ip) return '';
+  const key = ip.includes(':') ? ip.toLowerCase().split(':').slice(0, 4).join(':') : ip;
+  return hashKey(`net:${key}`);
+}
 async function hashKey(k) {
   const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`vs:${k}`)));
   return Array.from(d.slice(0, 12), (b) => b.toString(16).padStart(2, '0')).join('');
@@ -113,7 +128,7 @@ export class Match {
     R.seats[seat] = kh;
     R.seen[seat] = true;
     R.off[seat] = 0;
-    if (R.phase === 'wait' && R.seen[0] && R.seen[1] && R.teams[0] && R.teams[1]) this.begin(R, now);
+    if (R.phase === 'wait' && this.bothHere(R, seat)) this.begin(R, now);
     await this.save(R);
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
@@ -159,12 +174,21 @@ export class Match {
     R.teams = [TEAM_RE.test(b.teams && b.teams[0]) ? b.teams[0] : null, TEAM_RE.test(b.teams && b.teams[1]) ? b.teams[1] : null];
     if (R.teams[0] && R.teams[0] === R.teams[1]) R.teams[1] = null;
     R.names = [clean(b.names && b.names[0]), clean(b.names && b.names[1])];
+    if (Array.isArray(b.nets) && b.nets[0] && b.nets[0] === b.nets[1]) R.sameNet = true;
     await this.save(R);
     await this.schedule(R);
     return reply({ ok: true });
   }
 
+  // the kickoff waits for both phones to be here, both teams picked: a host who went to send the link (the phone's
+  // messages app: its page asleep, its socket closed) is never a forfeit the moment the friend arrives
+  bothHere(R, joining) {
+    const on = this.online();
+    if (joining === 0 || joining === 1) on[joining] = true;
+    return R.seen[0] && R.seen[1] && on[0] && on[1] && !!R.teams[0] && !!R.teams[1];
+  }
   begin(R, now) {
+    R.off = [0, 0];
     R.ms = R.ms0 = VSCore.start(rand() & 1);
     R.phase = 'live';
     R.n = 0;
@@ -217,7 +241,7 @@ export class Match {
       R.teams[seat] = m.team;
       R.names[seat] = clean(m.name) || R.names[seat];
       this.broadcast({ t: 'teams', teams: R.teams, names: R.names });
-      if (R.seen[0] && R.seen[1] && R.teams[0] && R.teams[1]) this.begin(R, now);
+      if (this.bothHere(R, seat)) this.begin(R, now);
       await this.save(R);
       await this.schedule(R);
       return;
@@ -230,6 +254,8 @@ export class Match {
       R.dl[seat] = Math.min(R.dl[seat], now + DECIDE_MS);
       await this.save(R);
       try { ws.send(JSON.stringify({ t: 'clock', n: R.n, deadline: R.dl[seat], now })); } catch (e) { /* closing */ }
+      // the other side sees whose turn it is: this seat's play clock running (never its call)
+      for (const o of this.ctx.getWebSockets(`s${1 - seat}`)) { try { o.send(JSON.stringify({ t: 'oclock', n: R.n, seat, deadline: R.dl[seat], now })); } catch (e) { /* closing */ } }
       await this.schedule(R);
       return;
     }
@@ -294,7 +320,7 @@ export class Match {
     if (R.mode !== 'ranked' || R.rated || !R.result || R.result.winner < 0) return this.schedule(R);
     try {
       const res = await this.env.MATCH.get(this.env.MATCH.idFromName('ladder')).fetch(new Request('https://ladder/vs/report', {
-        method: 'POST', body: JSON.stringify({ room: R.room, seats: R.seats, names: R.names, winner: R.result.winner, by: R.result.by }) }));
+        method: 'POST', body: JSON.stringify({ room: R.room, seats: R.seats, names: R.names, winner: R.result.winner, by: R.result.by, same: !!R.sameNet }) }));
       if (!res.ok) throw new Error(`ladder ${res.status}`);
       const rated = await res.json();
       const R2 = (await this.room()) || R;
@@ -378,7 +404,7 @@ export class Match {
     }
     if (R.phase === 'wait' && R.pre && now >= R.created + NOSHOW_MS) {
       // ranked: matched and never came (or never picked a team) is a loss, so nobody dodges an opponent; else called off
-      const missing = [0, 1].filter((s) => !R.seen[s] || !R.teams[s]);
+      const on = this.online(), missing = [0, 1].filter((s) => !R.seen[s] || !R.teams[s] || !on[s]);
       if (R.mode === 'ranked' && missing.length === 1) return this.finish(R, { winner: 1 - missing[0], by: 'forfeit', loser: missing[0], why: 'noshow' });
       return this.finish(R, { winner: -1, by: 'noshow', missing });
     }
@@ -410,7 +436,8 @@ export class Match {
     const key = url.searchParams.get('key') || '', mode = url.searchParams.get('mode') === 'ranked' ? 'ranked' : 'casual';
     const team = url.searchParams.get('team') || '';
     if (!KEY_RE.test(key) || !TEAM_RE.test(team)) return new Response('bad key or team', { status: 400 });
-    const kh = await hashKey(key), name = clean(url.searchParams.get('name'));
+    // (VS_NET_CHECK "off": a load test's throwaway worker, its players all on one machine: vs_load.yml)
+    const kh = await hashKey(key), name = clean(url.searchParams.get('name')), net = this.env.VS_NET_CHECK === 'off' ? '' : await netOf(req);
     let rating = ELO.START;
     if (mode === 'ranked') {
       try {
@@ -425,7 +452,7 @@ export class Match {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server, ['q']);
-    server.serializeAttachment({ q: true, kh, mode, team, name, rating, since: Date.now() });
+    server.serializeAttachment({ q: true, kh, mode, team, name, rating, net, since: Date.now() });
     await this.pairTick();
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -452,8 +479,10 @@ export class Match {
         for (const b of list) {
           if (b === a || used.has(b) || b.kh === a.kh) continue;
           const wait = (now - Math.min(a.since, b.since)) / 1000, gap = Math.abs(a.rating - b.rating);
-          if (mode === 'ranked' && wait < MM.WIN_OPEN_S && gap > MM.WIN_BASE + MM.WIN_PER_S * wait) continue;
-          const cost = (mode === 'ranked' ? gap : b.since - a.since) + (a.team === b.team ? 50 : 0);
+          // (ranked: two phones on one network only once nobody else has come in WIN_OPEN_S, and then unrated)
+          const same = mode === 'ranked' && !!a.net && a.net === b.net;
+          if (mode === 'ranked' && wait < MM.WIN_OPEN_S && (same || gap > MM.WIN_BASE + MM.WIN_PER_S * wait)) continue;
+          const cost = (mode === 'ranked' ? gap + (same ? MM.NET_COST : 0) : b.since - a.since) + (a.team === b.team ? 50 : 0);
           if (cost < bestCost) { best = b; bestCost = cost; }
         }
         if (!best) continue;
@@ -471,7 +500,7 @@ export class Match {
     for (let i = 0; i < 5; i++) {
       const room = roomCode();
       const r = await this.env.MATCH.get(this.env.MATCH.idFromName(`room:${room}`)).fetch(new Request('https://room/vs/init', {
-        method: 'POST', body: JSON.stringify({ room, mode, seats: [a.kh, b.kh], teams: [a.team, b.team], names: [a.name, b.name] }) }));
+        method: 'POST', body: JSON.stringify({ room, mode, seats: [a.kh, b.kh], teams: [a.team, b.team], names: [a.name, b.name], nets: [a.net || '', b.net || ''] }) }));
       if (r.ok) return room;
     }
     return null;
@@ -521,7 +550,7 @@ export class Match {
     if (done) return reply(JSON.parse(done.out));
     const now = Date.now(), p = [this.player(k0), this.player(k1)];
     const pairN = q.exec('SELECT COUNT(*) AS n FROM games WHERE rated = 1 AND at > ? AND ((a = ? AND b = ?) OR (a = ? AND b = ?))', now - 86400_000, k0, k1, k1, k0).one().n;
-    const rated = pairN < ELO.PAIR_CAP;
+    const rated = pairN < ELO.PAIR_CAP && !body.same;
     const e0 = 1 / (1 + 10 ** ((p[1].rating - p[0].rating) / 400)), exp = [e0, 1 - e0];
     const before = p.map((x) => x.rating), d = [0, 0];
     p.forEach((x, s) => {
@@ -540,7 +569,7 @@ export class Match {
         ON CONFLICT(kh) DO UPDATE SET name = excluded.name, rating = excluded.rating, games = excluded.games, w = excluded.w, l = excluded.l,
         peak = excluded.peak, streak = excluded.streak, updated = excluded.updated`, x.kh, x.name, x.rating, x.games, x.w, x.l, x.peak, x.streak, x.updated);
     });
-    const out = { rated, reason: rated ? null : 'pair', ratings: p.map((x, s) => ({ before: Math.round(before[s]), after: Math.round(x.rating), delta: Math.round(x.rating) - Math.round(before[s]),
+    const out = { rated, reason: rated ? null : body.same ? 'network' : 'pair', ratings: p.map((x, s) => ({ before: Math.round(before[s]), after: Math.round(x.rating), delta: Math.round(x.rating) - Math.round(before[s]),
       games: x.games, rank: x.games ? this.rank(x.rating) : null, provisional: x.games < ELO.PROVISIONAL })) };
     q.exec('INSERT INTO games (room, a, b, winner, by, rated, da, db, at, out) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       body.room, k0, k1, body.winner, String(body.by || 'score'), rated ? 1 : 0, d[0], d[1], now, JSON.stringify(out));

@@ -5365,7 +5365,7 @@
   function persist() {
     state.spots[G.si] = { id: G.scen.id, root: G.root, decisions: G.decisions, log: G.log, seq: G.seq, snapN: G.snapN, over: G.over,
       result: G.result, started: G.started, pending: G.pending || null, regrade: G.regrade && G.regrade.length ? G.regrade : null,
-      pers: G.pers || null, persWho: G.persWho || null, qb: G.qb || null, vsN: G.vsN || 0, cot: G.cot || null };
+      pers: G.pers || null, persWho: G.persWho || null, qb: G.qb || null, vsN: G.vsN || 0, cot: G.cot || null, ...(VS ? { vsCalls: G.vsCalls || [] } : {}) };
     saveState();
   }
   function resumeSpot(i) {
@@ -5373,7 +5373,7 @@
     let s = state.spots[i];
     if (s && s.id && s.id !== G.scen.id) s = state.spots[i] = null;   // saved on another game (a changed schedule): start fresh
     if (s) Object.assign(G, { root: s.root, decisions: s.decisions || [], log: s.log || [], seq: s.seq || 0, snapN: s.snapN || 0,
-      over: s.over, result: s.result, started: !!s.started, pers: s.pers || null, persWho: s.persWho || null, qb: (!VS && s.qb) || null, vsN: s.vsN || 0, cot: s.cot || G.cot || null,
+      over: s.over, result: s.result, started: !!s.started, pers: s.pers || null, persWho: s.persWho || null, qb: (!VS && s.qb) || null, vsN: s.vsN || 0, cot: s.cot || G.cot || null, vsCalls: s.vsCalls || [],
       // a snap left mid-play by a reload: its grading is redone in the background (regradeBg), with any still waiting
       regrade: (s.regrade || []).concat(s.pending ? [s.pending] : []), pending: null });
     G.side = sideFor(G.seq);
@@ -6231,6 +6231,8 @@
   function toButton() {
     const b = $('toBtn'), r = G && G.root;
     if (!b) return;
+    // (never in Versus: college overtime has no clock to stop, so it only ever read "clock stopped", even on the final)
+    if (VS) { b.hidden = true; return; }
     // (on a phone it is the only timeout control, so it shows whenever a timeout can be called, late or not, on every
     // step of your call: players looked for it after picking Pass. When it can't be called, it says why, greyed out:
     // "I don't see the timeout option always")
@@ -11924,7 +11926,7 @@
   const VS_FORFEIT = 60;             // seconds a phone can be gone before its side forfeits (match.js FORFEIT_MS)
   const vs = { ws: null, seat: -1, mode: 'friend', teams: [null, null], taken: '', names: ['', ''], full: false, online: [false, false], off: [0, 0],
     phase: 'wait', n: 0, ms: null, ms0: null, got: {}, waiting: -1, last: null, deadline: 0, skew: 0, result: null, rated: null, started: false,
-    timer: null, retry: 0, closedByUs: false, pool: null, banner: '', oppLocked: -1, ui: 'none', cardTimer: null, q: null };
+    timer: null, retry: 0, closedByUs: false, pool: null, banner: '', oppLocked: -1, oppDl: 0, ui: 'none', cardTimer: null, q: null };
   const vsNow = () => Date.now() + vs.skew;                       // the room's clock
   const vsLink = (room) => `${location.origin}${location.pathname}#vs-${room}`;
   const vsMyTeam = () => { const t = load(VS_TEAM_KEY, ''); return TEAMS[t] ? t : ''; };
@@ -11955,6 +11957,10 @@
   }
   function vsRetry() {
     vs.retry += 1;
+    if (!vs.helloed && vs.retry >= 4) {          // never in: two players already, or no connection at all
+      vsNote(`Couldn’t get into match ${VS_ROOM}. It may already have two players, or the connection is down. Check the code, or start a new match.`);
+      return;
+    }
     if (vs.retry > 14) { vsBanner(`Lost the connection. Reload to get back in: after ${VS_FORFEIT} seconds away the match is a forfeit.`); return; }
     vsBanner('Reconnecting…');
     setTimeout(() => { if (!vs.ws || vs.ws.readyState > 1) vsConnect(); }, Math.min(4000, 400 * 2 ** vs.retry));
@@ -11971,9 +11977,10 @@
   function vsOn(m) {
     if (typeof m.now === 'number') vs.skew = m.now - Date.now();
     if (m.t === 'hello') {
-      vs.retry = 0;
+      vs.retry = 0; vs.helloed = true;
       Object.assign(vs, { seat: m.seat, mode: m.mode || vs.mode, teams: m.teams, names: m.names, full: !!m.full, online: m.online, off: m.off || [0, 0],
-        phase: m.phase, n: m.n, ms: m.ms, ms0: m.ms0 || vs.ms0, deadline: m.deadline || 0, dl: m.dl || null, result: m.result || null, rated: m.rated || vs.rated });
+        phase: m.phase, n: m.n, ms: m.ms, ms0: m.ms0 || vs.ms0, deadline: m.deadline || 0, dl: m.dl || null, result: m.result || null, rated: m.rated || vs.rated,
+        oppDl: m.dl && m.seat >= 0 && m.dl[1 - m.seat] < m.deadline ? m.dl[1 - m.seat] : 0 });
       (m.decisions || []).forEach((d) => { if (d) vs.got[d.n] = d; });
       if (vs.last && vs.last.n === m.n && m.phase === 'live') vsSend(vs.last);    // a call sent as the line dropped
       vsBanner('');
@@ -11995,6 +12002,8 @@
       vsMaybeStart();
     } else if (m.t === 'clock') {                    // the room's word on your play clock for this call
       if (m.n === vs.n && vs.seat >= 0) { vs.dl = vsDls(); vs.dl[vs.seat] = m.deadline; vsDrawBar(); }
+    } else if (m.t === 'oclock') {                   // the other side's call is up on their phone: its play clock
+      if (m.n === vs.n && m.seat === 1 - vs.seat) { vs.oppDl = m.deadline; vsDrawBar(); }
     } else if (m.t === 'locked') {
       if (m.n === vs.n && m.seat !== vs.seat) { vs.oppLocked = m.n; vsDrawBar(); }
       if (m.n === vs.n && m.seat === vs.seat && vs.waiting !== m.n) {          // back after a reload: your call is already in
@@ -12003,8 +12012,9 @@
       }
     } else if (m.t === 'step') {
       vs.got[m.n] = m;
-      Object.assign(vs, { ms: m.ms, n: m.n + 1, deadline: m.deadline, dl: m.dl || null, oppLocked: -1 });
+      Object.assign(vs, { ms: m.ms, n: m.n + 1, deadline: m.deadline, dl: m.dl || null, oppLocked: -1, oppDl: 0 });
       if (m.result) { vs.result = m.result; vs.phase = 'over'; }
+      vsDrawBar();                                   // (the last call's lock and clocks gone with it)
       vsWake();
     } else if (m.t === 'over') {
       vs.result = m.result; vs.phase = 'over';
@@ -12134,8 +12144,17 @@
     }
     const mine = vs.teams[vs.seat] || vsMyTeam();
     if (mine) box.append(el('p', 'note', `Your team: ${teamName(mine)}`));
-    if (vs.full || vs.mode !== 'friend') { box.append(el('p', 'lead', 'Opponent found. Getting the match ready…')); return; }
-    box.append(el('p', 'lead', 'Send this to a friend. The match starts when they open it.'));
+    if (vs.full || vs.mode !== 'friend') {
+      // the kickoff waits for both phones (match.js bothHere): say what it is waiting on
+      const o = 1 - vs.seat, who = vs.mode === 'friend' ? 'Your friend' : 'Your opponent';
+      const lead = !vs.full ? 'Opponent found. Getting the match ready…'
+        : !vs.online[o] ? `${who} stepped away. The match starts as soon as they’re back on this page.`
+          : !vs.teams[o] ? `${who} is here, picking a team…` : 'Getting the match ready…';
+      box.append(el('p', 'lead', lead));
+      if (vs.full && !vs.online[o]) box.append(el('p', 'note', 'Keep this page open.'));
+      return;
+    }
+    box.append(el('p', 'lead', 'Send this to a friend (a group chat works: the first to open it plays you). The match starts when they open it.'));
     box.append(el('div', 'vscode', VS_ROOM));
     const row = el('div', 'row'), copy = el('button', 'btn', 'Copy the link');
     copy.type = 'button';
@@ -12146,10 +12165,10 @@
     if (navigator.share) {
       const sh = el('button', 'btn ghostbtn', 'Share');
       sh.type = 'button';
-      sh.addEventListener('click', () => { navigator.share({ title: 'Two-Minute Drill: versus', text: 'College overtime, you and me. Pick your team.', url: vsLink(VS_ROOM) }).catch(() => {}); });
+      sh.addEventListener('click', () => { track('vs_invite_share'); navigator.share({ title: 'Two-Minute Drill: versus', text: `College overtime, you and me: call the plays against my ${teamName(vsMyTeam() || mine)}. Pick your team.`, url: vsLink(VS_ROOM) }).catch(() => {}); });
       row.append(sh);
     }
-    box.append(row, el('p', 'note', 'Keep this page open.'));
+    box.append(row, el('p', 'note', 'Or they type the code under Friend’s code on the Versus screen. You can leave to send it: the match waits for you to come back to this page.'));
     const back = el('a', 'chip', '◀ Back');
     back.href = '#vs';
     box.append(back);
@@ -12170,7 +12189,11 @@
       info.textContent = `${size > 1 ? `${size} players searching` : 'Searching'} · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}${mode === 'ranked' && rating ? ` · your rating ${rating}` : ''}`;
       if (mode === 'ranked' && s > 25) line.textContent = 'Widening the search…';
       if (s > 90) line.textContent = 'Not many players on right now. Keep waiting, or play a friend.';
+      if (s >= 20 && !friend.isConnected) box.insertBefore(friend, cancel);       // (a long wait: the link to a friend, one tap)
     };
+    const friend = el('button', 'btn', 'Play a friend instead');
+    friend.type = 'button';
+    friend.addEventListener('click', () => { done(); vsFriendRoom('queue'); });
     const tk = setInterval(draw, 1000);
     cancel.addEventListener('click', () => { done(); track('vs_queue_cancel', { mode, secs: Math.round((Date.now() - t0) / 1000) }); renderVsLobby(); });
     const open = () => {
@@ -12197,6 +12220,13 @@
     open();
     track('vs_queue', { mode });
   }
+  // a new friend room: its code is the link to send
+  function vsFriendRoom(from) {
+    const a = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', room = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => a[b % a.length]).join('');
+    try { sessionStorage.setItem(`tmd:vsmode:${room}`, 'friend'); } catch (e) { /* none */ }
+    track('vs_friend', from ? { from } : undefined);
+    location.hash = `#vs-${room}`;
+  }
   // the Versus screen (#vs): your team, then ranked, casual or a friend; the ladder
   async function renderVsLobby() {
     show('arch');
@@ -12213,13 +12243,8 @@
     const go = (mode) => {
       if (!vsMyTeam()) { toast('Pick your team first'); return; }
       if (mode === 'ranked' && !myName()) { toast('Ranked needs a name: set it below'); nameIn.focus(); return; }
-      if (mode === 'friend') {
-        const a = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', room = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => a[b % a.length]).join('');
-        try { sessionStorage.setItem(`tmd:vsmode:${room}`, 'friend'); } catch (e) { /* none */ }
-        track('vs_friend');
-        location.hash = `#vs-${room}`;
-        return;
-      }
+      if (mode === 'friend') { vsFriendRoom(); return; }
+      if (mode === 'ranked' && typeof TMDScenario !== 'undefined' && TMDScenario.blocked(myName())) { toast('That name isn’t allowed on the ladder: pick another'); nameIn.focus(); return; }
       vsQueue(mode);
     };
     [['ranked', 'Ranked', 'Win to climb the ladder'], ['casual', 'Casual', 'Quick match, no rating'], ['friend', 'Friend', 'Send a link']].forEach(([m, label, sub]) => {
@@ -12291,7 +12316,13 @@
       const s = Math.max(0, Math.ceil((vsMyDl() - vsNow()) / 1000));
       b.append(el('span', `clk${s <= 10 ? ' low' : ''}`, `Play clock ${s}`));
     }
-    if (G && vs.oppLocked === G.vsN && vs.n === G.vsN) b.append(el('span', 'lock', 'Opponent locked in'));
+    if (G && vs.oppLocked === G.vsN && vs.n === G.vsN && vs.ui !== 'card' && vs.ui !== 'end') b.append(el('span', 'lock', 'Opponent locked in'));
+    else if (G && !busy && vs.ui === 'idle' && vs.phase === 'live' && vs.n === G.vsN && vs.ms && VSCore.need(vs.ms).includes(1 - vs.seat)) {
+      // whose turn: theirs, on their play clock once their call is up (the room's oclock)
+      const s = vs.oppDl ? Math.max(0, Math.ceil((vs.oppDl - vsNow()) / 1000)) : null;
+      b.append(el('span', 'their', s == null ? 'Their call' : `Their call · ${s}`));
+      clearTimeout(vs.barT); vs.barT = setTimeout(vsDrawBar, 1000);
+    }
     b.hidden = !b.childNodes.length;
   }
   // your call's clock: 30 seconds from the moment the call is up (the room starts it on {t:'ready'} and says when it
@@ -12364,6 +12395,12 @@
       const pe = res.log.find((x) => x.ev === 'play');
       const look = pe && pe.look && pe.look.box && res.action && (res.action.dc || (before.pos !== G.me && res.action.def)) ? (pe.look.box >= 7 ? 2 : 0) + (pe.look.blitz ? 1 : 0) : null;
       G.lastPlay = { before, res, side, look };
+      // the match's calls, both sides, for the end card (kept with the match: a reload still has them)
+      const main = res.log.find((e) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(e.ev));
+      if (!(G.vsCalls || []).some((x) => x.n === d.n)) {
+        G.vsCalls = [...(G.vsCalls || []), { n: d.n, at: before.phase === SNAP ? (before.try2 ? 'Two-point try' : `${ddText(before)} · ${spotText(before)}`) : 'The try',
+          poss: before.pos, round: G.cot ? G.cot.round : 1, calls: vsCalls(d, before), head: headline(main, res.log), score: G.root.score.slice() }];
+      }
       res.animated = await animatePlay(before, res, side, false, look);
       out = { res, d };
     } else if (d.kind === 'timeout') out = { res: { log: [], action: { to_off: true } }, head: 'Timeout', d };
@@ -12421,6 +12458,7 @@
     wrap.append(btn);
     d.append(wrap);
     vs.ui = 'card';
+    vsDrawBar();
     // the play clock runs whether or not Next is tapped: the card gives way when the clock would start anyway (WATCH_MS after the snap)
     clearTimeout(vs.cardTimer);
     vs.cardTimer = setTimeout(go, vs.result ? 8000 : Math.max(4000, vs.deadline - VS_DECIDE_MS - vsNow()));     // the last play: then the final
@@ -12504,17 +12542,36 @@
     d.textContent = '';
     vsBanner('');
     takeBanner(d);
-    const card = el('div', 'endcard');
+    const card = el('div', 'endcard vsend');
     const ot = rounds > 1 ? ` in ${ordinal(rounds)} overtime` : ' in overtime';
-    const head = res.by === 'score' ? (won ? `You win ${mine}–${theirs}${ot}` : `You lose ${mine}–${theirs}${ot}`)
-      : res.by === 'forfeit' ? (won ? 'You win: they forfeited' : 'You forfeited')
-        : res.by === 'abandoned' ? 'No result: both sides left' : 'No result';
-    card.append(el('h2', '', head));
+    const h2 = el('h2', '');
+    if (res.by === 'score') h2.append(won ? 'You win ' : 'You lose ', el('span', 'nw', `${mine}–${theirs}`), ot);      // (the score never broken over two lines)
+    else h2.textContent = res.by === 'forfeit' ? (won ? 'You win: they forfeited' : 'You forfeited') : res.by === 'abandoned' ? 'No result: both sides left' : 'No result';
+    card.append(h2);
     if (res.by === 'forfeit') card.append(el('p', 'note', won ? (res.why === 'afk' ? 'They let the play clock run out on two calls in a row.' : 'They left the match for more than a minute.')
       : (res.why === 'afk' ? 'The play clock ran out on two of your calls in a row.' : `You were away from the match for more than ${VS_FORFEIT} seconds.`)));
     if (res.by === 'error') card.append(el('p', 'note', 'Something went wrong in the match. Nobody’s rating changed.'));
-    card.append(el('p', 'note', `Your ${teamName(code(G.me))} vs ${vs.names[1 - vs.seat] ? `${vs.names[1 - vs.seat]}’s` : 'their'} ${teamName(code(1 - G.me))} · ${VS_MODES[vs.mode] || 'Versus'}`));
+    const oppName = vs.names[1 - vs.seat];
+    card.append(el('p', 'note', `Your ${teamName(code(G.me))} vs ${oppName ? `${oppName}’s` : 'their'} ${teamName(code(1 - G.me))} · ${VS_MODES[vs.mode] || 'Versus'}`));
     card.append(el('p', 'vsrating', ''));
+    // every snap of the match, both sides' calls (kept with the match: vsApply)
+    const calls = G.vsCalls || [];
+    if (calls.length) {
+      const det = el('details', 'vsplays'), ol = el('ol', '');
+      det.append(el('summary', '', `Both sides’ calls · ${calls.length} ${calls.length === 1 ? 'snap' : 'snaps'}`));
+      let was = '';
+      calls.forEach((x) => {
+        if (`${x.round}:${x.poss}` !== was) {           // a heading for each possession
+          was = `${x.round}:${x.poss}`;
+          ol.append(el('li', 'poss', `${ordinal(x.round)} overtime · ${x.poss === G.me ? `your ball (${teamName(code(G.me))})` : `their ball (${teamName(code(1 - G.me))})`}`));
+        }
+        const li = el('li', '');
+        li.append(el('b', '', `${x.at}: ${x.head}`), el('span', '', x.calls));
+        ol.append(li);
+      });
+      det.append(ol);
+      card.append(det);
+    }
     const row = el('div', 'row');
     if (vs.mode === 'ranked') {
       const q = el('button', 'btn', 'Play ranked again');
@@ -12532,6 +12589,24 @@
     next.href = '#vs';
     row.append(next);
     card.append(row);
+    // share: the result, and the way in for whoever reads it (Versus, a team, a friend's link)
+    if (res.by === 'score' || res.by === 'forfeit') {
+      const line = res.by === 'score'
+        ? `${won ? 'Won' : 'Lost'} ${mine}–${theirs}${ot} on Two-Minute Drill Versus: my ${teamName(code(G.me))} vs ${oppName || 'a'}${oppName ? '’s' : ''} ${teamName(code(1 - G.me))}.`
+        : `${won ? 'Won' : 'Lost'} by forfeit on Two-Minute Drill Versus: my ${teamName(code(G.me))} vs ${oppName || 'a'}${oppName ? '’s' : ''} ${teamName(code(1 - G.me))}.`;
+      const x = vs.rated && vs.rated.rated && vs.rated.ratings && vs.rated.ratings[vs.seat];
+      const pre = el('pre', 'vsshare', `${line}${x ? ` Rating ${x.after}${x.rank ? `, #${x.rank}` : ''}.` : ''}\nCall the plays against me: ${location.origin}${location.pathname}#vs`);
+      pre.hidden = true;
+      const sh = el('button', 'btn ghostbtn', 'Share');
+      sh.type = 'button';
+      sh.addEventListener('click', () => {
+        const y = vs.rated && vs.rated.rated && vs.rated.ratings && vs.rated.ratings[vs.seat];          // (the rating may have come in since)
+        pre.textContent = `${line}${y ? ` Rating ${y.after}${y.rank ? `, #${y.rank}` : ''}.` : ''}\nCall the plays against me: ${location.origin}${location.pathname}#vs`;
+        shareText(pre.textContent, pre, 'versus');
+      });
+      row.append(sh);
+      card.append(pre);
+    }
     d.append(card);
     drawTiles();
     vsShowRating();
@@ -12542,7 +12617,7 @@
     const res = vs.result || {};
     if (res.winner < 0) { p.textContent = 'Not rated.'; return; }
     if (!vs.rated) { p.textContent = 'Ranked: updating your rating…'; return; }
-    if (!vs.rated.rated) { p.textContent = 'Not rated: you’ve played each other three times today.'; return; }
+    if (!vs.rated.rated) { p.textContent = vs.rated.reason === 'network' ? 'Not rated: you’re both on the same network.' : 'Not rated: you’ve played each other three times today.'; return; }
     const x = vs.rated.ratings[vs.seat];
     p.textContent = `Rating ${x.before} → ${x.after} (${x.delta >= 0 ? '+' : '−'}${Math.abs(x.delta)})${x.rank ? ` · #${x.rank}` : ''}${x.provisional ? ` · placement ${x.games} of 10` : ''}`;
   }
