@@ -1214,7 +1214,7 @@
           'aria-label': `${teamName(team)} ${POS_NAME[o.label] || o.label} ${num ? `#${num} ` : ''}${o.p.name}, rated ${o.p.ovr}` });
         g.append(S('circle', { class: 'hit', r: 11 }), S('circle', { class: 'c', r: 7.2, fill: rate(o.p.ovr) }));
         if (num) { const t = S('text', { class: 'jn', y: 2.6 }); t.textContent = num; g.append(t); }
-        const open = () => { if (Date.now() - routeTapAt < 600 || (passing() && off && (o.label === 'WR' || o.label === 'TE' || o.label === 'RB'))) return; playerInfo(o.p, o.label, team); };
+        const open = (ev) => { if (!dotTap(ev) || (passing() && off && (o.label === 'WR' || o.label === 'TE' || o.label === 'RB'))) return; playerInfo(o.p, o.label, team); };
         g.addEventListener('click', open);
         g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); if (!passTap(a)) open(); } });
         sc.layer.append(g);
@@ -1448,6 +1448,16 @@
   // the field takes the tap itself (phones do not always send taps on small SVG shapes): a quick touch, not a scroll,
   // anywhere near a receiver's dot or along his route changes that route
   let routeTapAt = 0;                 // when the field last used a tap for a route (the dot under it then stays shut)
+  // A tap meant for the play (tapping it to its end, or the second tap of a double tap as it ends) lands on whatever
+  // the screen shows once it is over: a player's dot, the scoreboard, the buttons on the field, the calls' sheet's grip
+  // as the sheet slides back up. For a moment after a play none of those take a tap (a player's card or the game's
+  // details came up over the result, the sheet went down with the next call's keys on it); the calls themselves always
+  // do (a call cuts a replay short), and so does a keyboard
+  const AFTER_PLAY_MS = 500;
+  let playEnd = -1e9;                 // when the last play's animation ended (performance.now)
+  let fieldPress = null;              // the last press on the field: where it went down, how far it went (px)
+  // a player's card from his dot: a tap of its own, not the end of a drag or a drawing, not during a play
+  const dotTap = (ev) => !(Date.now() - routeTapAt < 600 || $('field').classList.contains('playing') || (ev && ev.detail && fieldPress && fieldPress.far > 10));
   // a phone: the call's keys (Run, Pass, RPO, Trick, or the defense's) in sight under the thumbs, no scrolling. When the
   // last result, the stop note, the defense's look and the tempo push them past the sheet's edge, those fold a step at
   // a time (game.html .fit1-3; a tap on the result shows it all); past that the sheet scrolls to them. The sheet's
@@ -1474,7 +1484,11 @@
   function sheetSetup() {
     const sh = $('sheet'), grip = $('grip');
     let drag = null, moved = false;
-    grip.addEventListener('pointerdown', (ev) => { drag = { y0: ev.clientY, dy: 0 }; moved = false; sh.classList.add('dragging'); try { grip.setPointerCapture(ev.pointerId); } catch (e) { /* the drag still works */ } });
+    // (not while a play runs: the sheet is on its way off the screen and a tap on its grip was meant for the play. A
+    // slow phone's first moments of a play left it in place, the tap sent it down, and the next call came up with its
+    // keys under the screen's edge)
+    const playing = () => $('field').classList.contains('playing');
+    grip.addEventListener('pointerdown', (ev) => { if (playing()) return; drag = { y0: ev.clientY, dy: 0 }; moved = false; sh.classList.add('dragging'); try { grip.setPointerCapture(ev.pointerId); } catch (e) { /* the drag still works */ } });
     grip.addEventListener('pointermove', (ev) => {
       if (!drag) return;
       const down = sh.classList.contains('down'), dy = ev.clientY - drag.y0;
@@ -1491,7 +1505,7 @@
     };
     grip.addEventListener('pointerup', end);
     grip.addEventListener('pointercancel', end);
-    grip.addEventListener('click', () => { if (moved) { moved = false; return; } sheetDown(!sh.classList.contains('down')); });
+    grip.addEventListener('click', () => { if (moved) { moved = false; return; } if (!playing()) sheetDown(!sh.classList.contains('down')); });
     // down, a tap anywhere on its bar brings it back up (not a call made by accident)
     sh.addEventListener('click', (ev) => { if (sh.classList.contains('down') && !grip.contains(ev.target)) { ev.preventDefault(); ev.stopPropagation(); sheetDown(false); } }, true);
     // a new size (another step's calls, up or down): the play framed again in what shows, between plays
@@ -1519,6 +1533,15 @@
   function fieldTaps() {
     const svg = $('field');
     let down = null;
+    // (each press on the field, for the dot it may end on: dotTap)
+    svg.addEventListener('pointerdown', (ev) => { fieldPress = { x: ev.clientX, y: ev.clientY, far: 0 }; }, true);
+    svg.addEventListener('pointermove', (ev) => { if (fieldPress && ev.buttons) fieldPress.far = Math.max(fieldPress.far, Math.hypot(ev.clientX - fieldPress.x, ev.clientY - fieldPress.y)); }, true);
+    // (the moment after a play: AFTER_PLAY_MS from its end to when the tap was made, a tap made before it too, waiting
+    // on a busy phone; not once the next play runs, their drive's next snap: a tap then is that play's. A click from
+    // the keyboard, or one the page makes, has no detail)
+    $('play').addEventListener('click', (ev) => {
+      if (ev.detail && ev.timeStamp - playEnd < AFTER_PLAY_MS && !svg.classList.contains('playing') && !$('dock').contains(ev.target)) { ev.stopPropagation(); ev.preventDefault(); }
+    }, true);
     svg.addEventListener('pointerdown', (ev) => { down = { x: ev.clientX, y: ev.clientY, t: Date.now() }; });
     svg.addEventListener('pointerup', (ev) => {
       const d0 = down; down = null;
@@ -2211,7 +2234,7 @@
   // (browser tests only, window.__sepLog: the drawing and the play, for bots that draw thousands of lines and plays)
   if (window.__sepLog) {
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
-      DRAWN_RANGE, CALL, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, get: () => ({ G, ui, scene, busy }),
+      DRAWN_RANGE, CALL, ROUTES, routeName, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, get: () => ({ G, ui, scene, busy }),
       readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
       promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k),
       drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock() };
@@ -4612,9 +4635,26 @@
 
   // clk: the game clock before the step (t0), at the snap and after the play; the time that runs off before
   // the snap ticks away first (fast, while the players set), then the play's own time as it is run
+  // Pre-snap motion (presentation only, like the rest of the drawing): on about four snaps in ten an NFL offense has a
+  // man in motion. Here the outside receiver jogs in toward the ball and back out (return motion), the snap coming as he
+  // gets back to his spot, so the play runs from where it was charted; the man across from him slides along. Not when a
+  // team hurries to the line with the clock running, nor on a kneel, a spike or a flag before the snap. The same play
+  // (its row) has the same motion, on a replay too
+  function motionOf(sc, e, before, runoff) {
+    if (e.ev !== 'play' || (e.kind !== RUN && e.kind !== PASS) || !(e.row >= 0) || (e.penalty && !(e.dur > 0))) return null;
+    if (before.clock_running && runoff < 12) return null;
+    if ((e.row * 0.6180339887) % 1 >= 0.4) return null;
+    const wr = sc.actors.filter((a) => a.off && a.label === 'WR').sort((a, b) => Math.abs(b.x0 - sc.bx) - Math.abs(a.x0 - sc.bx))[0];
+    if (!wr) return null;
+    const room = Math.abs(wr.x0 - sc.bx) / XYD - 3;
+    if (room < 2) return null;
+    const dx = Math.sign(sc.bx - wr.x0) * Math.min(5, room) * XYD;
+    const cb = sc.actors.filter((a) => !a.off).sort((a, b) => Math.hypot(a.x0 - wr.x0, (a.L0 - wr.L0) * XYD) - Math.hypot(b.x0 - wr.x0, (b.L0 - wr.L0) * XYD))[0];
+    return { a: wr, d: cb && Math.abs(cb.x0 - wr.x0) < 6 * XYD ? cb : null, dx };
+  }
   function runPlan(sc, P, speed, clk) {
     const runoff = clk ? Math.max(0, clk.t0 - clk.snap) : 0;
-    const PRE = runoff >= 1 ? clip(0.4 + runoff / 30, 0.55, 1.5) : 0;
+    const PRE = Math.max(runoff >= 1 ? clip(0.4 + runoff / 30, 0.55, 1.5) : 0, P.motion ? 1.2 : 0);
     const ZI = 0.6, ZO = 0.5, total = PRE + ZI + P.T + P.hold + ZO;
     const ck = clk ? document.querySelector('#bar .clk') : null;
     return new Promise((resolve) => {
@@ -4638,6 +4678,11 @@
           ck.classList.toggle('tick', t < PRE);
         }
         sc.actors.forEach((a) => { const p = at(a, tp); a.x = p.x; a.L = p.L; a.w = p.w; });
+        if (P.motion && t < PRE + ZI) {                 // (in and back out before the snap: motionOf)
+          const m = P.motion, u = Math.sin(Math.PI * EASE.io(clip(t / (PRE + ZI), 0, 1)));
+          m.a.x += m.dx * u;
+          if (m.d) m.d.x += m.dx * 0.6 * u;
+        }
         Object.assign(sc.ball, ballAt(sc, P, tp));
         P.calls.forEach((c) => { if (!c.shown && tp >= c.t) { c.shown = true; showCall(sc, c); } });
         P.fx.forEach((f) => { if (!f.done && tp >= f.t) { f.done = true; f.f(); } });
@@ -4646,6 +4691,7 @@
           if (cutAnim === onTap) cutAnim = null;
           sc.svg.removeEventListener('click', onTap);
           sc.svg.classList.remove('playing');
+          playEnd = performance.now();         // (the taps meant for the play, a moment longer: AFTER_PLAY_MS)
           if (ck) ck.classList.remove('tick');
           resolve();
         } else requestAnimationFrame(frame);
@@ -4697,6 +4743,7 @@
     const pre = k0 < 0 ? res.log : res.log.slice(0, k0), ro = pre.find((x) => x.ev === 'runoff');
     const tos = pre.filter((x) => x.ev === 'timeout'), snapT = ro ? ro.t : tos.length ? tos[tos.length - 1].t : before.t;
     const clk = { t0: before.t, snap: snapT, end: Math.min(res.root.t, snapT) };
+    P.motion = two ? null : motionOf(sc, e, before, before.t - snapT);
     await runPlan(sc, P, PLAY_SPEED * playSpeed(), clk);
     fadeNext = true;
     lastBall = null;
@@ -4868,6 +4915,15 @@
     li.append(el('span', 't', t == null ? '' : clockOf(t).text), el('span', mine ? 'me' : '', text));
     $('pbp').prepend(li);
     G.log.push([text, t, !!mine]);
+    return li;
+  }
+  // any play of the drive again, from its line in the play-by-play (this visit only: the plays are not saved)
+  function reelKey(li, lp) {
+    const b = el('button', 'reel', '↻');
+    b.type = 'button';
+    b.setAttribute('aria-label', 'Watch this play again');
+    b.addEventListener('click', () => replay(lp));
+    li.lastChild.append(' ', b);
   }
   function restoreLog() {
     $('pbp').textContent = '';
@@ -5039,6 +5095,7 @@
     if (e.fd && !e.td) extra.push(e.penalty && e.yards < e.ytg ? 'automatic first down' : 'first down');
     if (e.onDowns) extra.push('turnover on downs');
     if (e.safety) extra.push('safety');
+    if (e.runoff10) extra.push('10-second runoff (a foul stopped the clock inside the last minute)');
     if (e.untimed) extra.push('no time left, but a half cannot end on a defensive foul: an untimed down');
     // out of bounds early in a half: the clock starts again once the ball is spotted (a player saw the clock run on
     // after a man went out, and read it as the game ignoring the sideline)
@@ -5053,7 +5110,7 @@
     for (const e of log) {
       let text = null, t = e.t;
       switch (e.ev) {
-        case 'timeout': text = `Timeout, ${teamName(code(e.team))}${e.left != null ? ` (${e.left} left)` : ''}${e.why === 'kick' ? ', to set up the kick' : ''}`; break;
+        case 'timeout': text = `Timeout, ${teamName(code(e.team))}${e.left != null ? ` (${e.left} left)` : ''}${e.why === 'kick' ? ', to set up the kick' : e.why === 'runoff' ? ', to save the 10-second runoff' : ''}`; break;
         case 'runoff':
           if (e.stop === '2mw') text = 'Two-minute warning';
           else if (e.stop === 'quarter') text = 'End of the quarter';
@@ -5369,7 +5426,9 @@
     const res = (await send({ type: 'step', scen: simScen(), root: G.root.try2 || G.root, action, seed }, true)).res;
     res.action = action;
     if (action && action.philly) res.log.forEach((x) => { if (x.ev === 'pat') x.philly = true; });
-    narrate(res.log, action).forEach(([text, t, mine]) => addLog(text, t, mine));
+    const pe0 = res.log.find((x) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(x.ev));
+    let reelLi = null;
+    narrate(res.log, action).forEach(([text, t, mine]) => { const li = addLog(text, t, mine); if (!reelLi && pe0 && t === pe0.t) reelLi = li; });
     G.root = res.root;
     if (res.done) G.root.phase = DONE;
     // a half that ends on the play itself (a kneel, a last snap, a kick) says so, as one run out between snaps does
@@ -5380,14 +5439,14 @@
     const look = before.pos === G.me ? G.look : action && (action.def || action.dc) && pe && pe.look && pe.look.box ? (pe.look.box >= 7 ? 2 : 0) + (pe.look.blitz ? 1 : 0) : null;
     G.lastPlay = { before, res, side, look };
     res.animated = await animatePlay(before, res, side, false, look);
+    if (res.animated && reelLi && reelLi.isConnected) reelKey(reelLi, G.lastPlay);
     G.look = null;
     return res;
   }
   // a replay never holds up the game: a call, Next play or Next game tapped during it cuts it short (cutReplay)
   let replaying = null, cutAnim = null;
-  function replay() {
+  function replay(lp = G.lastPlay) {
     track('replay');
-    const lp = G.lastPlay;
     if (busy || replaying || !lp) return;
     const g = G;
     replaying = (async () => {
@@ -5775,13 +5834,17 @@
     // as his row would have made it (decideCall: snap first, graded while the play runs)
     const t = E[P.target] ? P.target : 0, ta = E[t], foot = el('div', 'keys snapbar');
     foot.style.setProperty('--cols', 1);
-    const go = key(`Snap · ${shortName(ta.p ? ta.p.name : '') || ta.label}`, ' ', 'big snap', 0);
+    const go = key('', ' ', 'big snap', 0), line = el('span', 'go');
+    line.append(el('span', 'sn', 'Snap · '), el('b', '', shortName(ta.p ? ta.p.name : '') || ta.label));
+    go.firstChild.replaceWith(line);
     go.id = 'snapGo';
     go.setAttribute('aria-label', `Snap: throw it to ${ta.p ? ta.p.name : ta.label}, ${routeName(ta.label, P.routes[t])}`);
     go.addEventListener('click', () => { if (!busy && passing()) decideCall({ pass: t }); });
     foot.append(go);
     d.append(foot);
     snapLine();
+    snapFit();
+    if (document.fonts && document.fonts.status === 'loading') document.fonts.ready.then(snapFit, () => {});     // (fitted in its own type)
     fetchOdds();
     // only on the way in: after that the page stays put while you change routes
     if (P.fresh) {
@@ -5798,6 +5861,27 @@
     if (!a) return;
     const od = G.odds && G.odds[pickKey(passOption(scene, P.target, false).action)];
     g.querySelector('small').textContent = `${P.drawn && P.drawn[P.target] ? '✏️ ' : ''}${routeName(a.label, P.routes[P.target])}${od ? ` · ${oddsText(od)}` : ''}`;
+  }
+  // The Snap key's first line stays one line with the name whole (a long name wrapped it, the key growing at the foot
+  // of the sheet: in the wider type a phone shows before the game's own comes in, on a page zoomed narrow): the type a
+  // step smaller first, then "Snap ·" goes and the name stands alone (game.html .snap.tight, .bare), and past that
+  // the name in type as small as it takes. Its second line, the route and the odds, is cut at its end instead
+  function snapFit() {
+    const g = $('snapGo'), line = g && g.querySelector('.go');
+    if (!line) return;
+    g.classList.remove('tight', 'bare');
+    line.style.fontSize = '';
+    if (!line.clientWidth) return;                      // (not shown: a resize, or the fonts coming in, fits it again)
+    const over = () => line.scrollWidth > line.clientWidth + 0.5;
+    for (const c of ['tight', 'bare']) {
+      if (!over()) return;
+      g.classList.add(c);
+    }
+    // (in steps: the letter spacing, set on the key, stays as it is)
+    for (let k = 0; k < 4 && over(); k++) {
+      const cs = getComputedStyle(line), pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+      line.style.fontSize = `${Math.floor(parseFloat(cs.fontSize) * ((line.clientWidth - pad) / (line.scrollWidth - pad)) * 10) / 10}px`;
+    }
   }
 
   // how fast to get to the next snap while the clock runs: no-huddle, huddle or milk it
@@ -6886,7 +6970,7 @@
     if (G.lastPlay && res.animated) {
       const again = el('button', 'chip replay', '↻ Replay');
       again.type = 'button';
-      again.addEventListener('click', replay);
+      again.addEventListener('click', () => replay());
       acts.append(again);
     }
     acts.append(det);
@@ -7479,7 +7563,7 @@
     return r.json();
   }
   async function apiRefresh() {
-    try { BOARD.rows = (await apiBoard('GET')).rows || []; redrawBoards(); } catch (e) { /* keep what we have */ }
+    try { const r = await apiBoard('GET'); BOARD.rows = r.rows || []; BOARD.week = r.week || null; redrawBoards(); } catch (e) { /* keep what we have */ }
   }
   function boardInit() {
     BOARD.ready = (async () => {
@@ -7505,14 +7589,16 @@
     return BOARD.ready;
   }
   // a player's best run: kept only when it beats what the board has
-  async function boardPost(name, best, life) {
+  // (run: the run just ended, for the week's board; a name's best run of the week goes there)
+  async function boardPost(name, best, life, run) {
     name = String(name || '').trim().slice(0, 24);
     best = Math.round(Number(best));
     if (!BOARD.mode || !BOARD.canWrite || !name || !(best >= 0 && best < 1000)) return false;
     if (BOARD.mode === 'api') {
       try {
-        const res = await apiBoard('POST', { name, best, key: deviceKey(), ...(life ? { life: true } : {}), ...withSession() });
+        const res = await apiBoard('POST', { name, best, key: deviceKey(), ...(life ? { life: true } : {}), ...(Number.isInteger(run) && run >= 0 && run <= best ? { run } : {}), ...withSession() });
         BOARD.rows = res.rows || BOARD.rows;
+        if (res.week) BOARD.week = res.week;
         BOARD.taken = res.taken ? name : '';
         BOARD.refused = res.refused ? name : '';
         redrawBoards();
@@ -7539,7 +7625,23 @@
     b.textContent = '';
     b.hidden = !BOARD.mode;
     if (!BOARD.mode) return;
-    b.append(el('div', 'k', 'Survivor leaderboard'));
+    // this week's board first (Monday to Sunday, a new one every Monday), then the best runs of all time
+    const wk = BOARD.mode === 'api' && BOARD.week;
+    if (wk) {
+      const day = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+      b.append(el('div', 'k', `This week · ${day(wk.from)} to ${day(wk.to)}`));
+      if (!wk.rows.length) b.append(el('p', 'note', 'No runs this week yet. The first one tops the board.'));
+      else {
+        const ol = el('ol', 'brows'), me = myName().toLowerCase();
+        wk.rows.slice(0, 10).forEach((r, i) => {
+          const li = el('li', String(r.name).toLowerCase() === me ? 'me' : '');
+          li.append(el('span', 'n', String(i + 1)), el('span', 'nm', `${String(r.name)}${r.life ? ' ❤️' : ''}`), el('b', '', String(r.best)));
+          ol.append(li);
+        });
+        b.append(ol);
+      }
+    }
+    b.append(el('div', 'k', wk ? 'All time' : 'Survivor leaderboard'));
     if (!BOARD.rows.length) b.append(el('p', 'note', 'No runs on the board yet.'));
     else {
       const ol = el('ol', 'brows'), me = myName().toLowerCase();
@@ -7667,7 +7769,7 @@
     save(`${STORE}:survstats`, st);
     if (JSON.stringify(st) !== was) statsSync(true);          // signed in: the best run follows the account (another phone sees it)
     // the board keeps your best (when you can write it and have a name on it), marked when it used the extra life
-    if (BOARD.ready && myName()) BOARD.ready.then(() => boardPost(myName(), st.best, !!st.bestLife));
+    if (BOARD.ready && myName()) BOARD.ready.then(() => boardPost(myName(), st.best, !!st.bestLife, state.won));
     $('dayLabel').textContent = survLabel();
     drawTiles();
     const box = $('done');
@@ -10366,7 +10468,8 @@
     go.dataset.to = `daily_${status}`;
     if (!(pick && !done)) card.append(go);
     const foot = el('div', 'hfoot');
-    const streak = sk.n >= 2 ? `🔥 ${sk.n}-day streak` : sk.n === 1 ? '🔥 1-day streak' : '';
+    const streak = sk.n >= 1 ? `${sk.n}-day streak` : '';
+    if (sk.n >= 1) foot.append(flameEl(sk.n));
     if (done) {
       foot.append(countdown(streak ? `${streak} · next drive in ` : 'Next drive in '));
     } else {
@@ -10439,8 +10542,85 @@
     try { sessionStorage.setItem(`${STORE}:badlink`, `${m[1] === 'run' ? 'playoff run' : 'historic drive'} ${m[2]}`); } catch (e) { /* storage off */ }
     location.replace(location.pathname + location.search + '#archive');
   }
-  async function renderArchive(now) {
-    track('archive_open', { pro: isPro() });
+  // the streak's flame: bigger and hotter as the streak grows (game.html .flame.t0-t5): out, orange (1), red (3), blue
+  // (7: a week, a freeze earned), purple (14), and at 30 days a gold flame that shifts colour
+  const FLAME_TIERS = [[30, 5], [14, 4], [7, 3], [3, 2], [1, 1], [0, 0]];
+  const flameTier = (n) => FLAME_TIERS.find(([k]) => n >= k)[1];
+  function flameEl(n) {
+    const w = el('span', `flame t${flameTier(n)}`), svg = S('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' });
+    svg.append(S('path', { class: 'fo', d: 'M12 1.5c.8 3.6 5.6 6.2 5.6 11.6a5.6 5.6 0 0 1-11.2 0c0-2.6 1.3-4.4 2.6-5.6 0 2.1.9 3.3 2.1 3.6-.9-3.6.2-6.9.9-9.6z' }),
+      S('path', { class: 'fi', d: 'M12 11.2c.4 1.8 2.8 3 2.8 5.4a2.8 2.8 0 0 1-5.6 0c0-1.3.6-2.2 1.3-2.8.1 1 .5 1.6 1 1.7-.3-1.6 0-3 .5-4.3z' }));
+    w.append(svg);
+    return w;
+  }
+  // your streak, big: the flame, the days, and how far to the next flame
+  function streakEl(sk) {
+    const row = el('div', `streak t${flameTier(sk.n)}`), next = FLAME_TIERS.slice().reverse().find(([k]) => k > sk.n);
+    const txt = el('div', 'stx');
+    txt.append(el('b', '', sk.n ? `${sk.n}-day streak` : 'No streak yet'),
+      el('span', '', sk.pending.length ? 'Play today’s drive to keep it (a freeze ❄️ covers the day you missed)'
+        : next ? `${next[0] - sk.n} more day${next[0] - sk.n === 1 ? '' : 's'} of the daily for a hotter flame` : 'The hottest flame there is'));
+    row.append(flameEl(sk.n), txt);
+    return row;
+  }
+  // a mode's card on the Pro hub: its icon, name, a line about you in it, a bar when it has one
+  const PICON = {
+    comm: ['M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM16.5 11.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM2.5 19c0-3.2 2.5-5.4 5.5-5.4s5.5 2.2 5.5 5.4M14 14.2c3.4-.6 7 1.2 7 4.8'],
+    drives: ['M6 3.5h12v5a6 6 0 0 1-12 0zM6 5H3.5v1.5A3.5 3.5 0 0 0 6.3 10M18 5h2.5v1.5a3.5 3.5 0 0 1-2.8 3.5M9 20.5h6M12 14.5v6'],
+    runs: ['M3.5 4.5h5v5h5v5h5M3.5 19.5h5v-5M20.5 14.5h-2'],
+    build: ['M4 20l1.2-4.4L16 4.8a2.1 2.1 0 0 1 3 3L8.2 18.6zM14.5 6.3l3 3'],
+    dailies: ['M4 6.5h16v14H4zM4 10.5h16M8.5 3.5v4M15.5 3.5v4M8 14h2M14 14h2M8 17h2'],
+  };
+  function proCard(kind, title, sub, go, o = {}) {
+    const a = el(typeof go === 'string' ? 'a' : 'button', `pcard ${kind}${o.big ? ' big' : ''}`);
+    if (typeof go === 'string') a.href = go; else { a.type = 'button'; a.addEventListener('click', go); }
+    const ic = el('span', 'pico'), svg = S('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' });
+    PICON[kind].forEach((d) => svg.append(S('path', { d })));
+    ic.append(svg);
+    const tx = el('span', 'ptx');
+    if (o.k) tx.append(el('span', 'pk', o.k));
+    tx.append(el('b', '', title), el('span', 'ps', sub));
+    if (o.bar != null) { const bar = el('span', 'pbar'), f = el('i'); f.style.width = `${Math.round(o.bar * 100)}%`; bar.append(f); tx.append(bar); }
+    a.append(ic, tx);
+    return a;
+  }
+  async function proHub(box, now, todayN) {
+    gauntletFresh();
+    const [pro, runs] = await Promise.all([loadPro(), loadRuns()]);
+    const ds = load(`${STORE}:drives`, {}), rs = load(`${STORE}:runs`, {}), n = pro && pro.drives ? pro.drives.length : 0;
+    const passed = n ? pro.drives.filter((_, k) => ds[k + 1] && Math.round(ds[k + 1].p * 100) >= PASS_AT).length : 0;
+    const sk = streakOf(load(`${STORE}:stats`, { days: {} }), todayN);
+    const head = el('section', 'phub');
+    if (n) {
+      const rk = proRank(passed, n), rt = el('div', 'prank'), bar = el('span', 'pbar'), f = el('i');
+      f.style.width = `${Math.round((100 * passed) / n)}%`;
+      bar.append(f);
+      rt.append(el('span', 'pk', 'Your rank'), el('b', '', rk.title),
+        el('span', 'ps', `${passed} of ${n} drives passed${rk.next ? ` · ${rk.next.at - passed} more to ${rk.next.title}` : ' · every one'}`), bar);
+      head.append(rt);
+    }
+    head.append(streakEl(sk));
+    box.append(head);
+    const open = (sec) => () => { track('pro_tap', { to: sec }); renderArchive(now, sec); scrollTo(0, 0); };
+    // option A, a grid of square tiles: Build a scenario the big one (two rows tall), Community beside it, then the
+    // drives under Community, the runs and the past dailies
+    const tiles = el('div', 'ptiles');
+    if (SCN) {
+      const mine = Object.values(scenList()).filter((e) => e && !e.gone).length;
+      tiles.append(proCard('build', 'Build a scenario', `Any two teams from 2001 on, any situation${mine ? ` · ${mine} played` : ''}`, '#custom', { k: 'Your game', big: true }),
+        proCard('comm', 'Community', 'What others built', '#community', { k: 'New' }));
+    }
+    if (n) tiles.append(proCard('drives', 'Historic drives', `${passed} of ${n} passed`, open('drives'), { bar: passed / n }));
+    const nr = runs && runs.runs ? runs.runs.length : 0, played = Object.keys(rs).length, titles = Object.values(rs).filter((r) => r && r.w === r.n).length;
+    if (nr) tiles.append(proCard('runs', 'Playoff runs', played ? `${played} of ${nr} played${titles ? ` · ${titles} 🏆` : ''}` : 'Every game of a real run', open('runs')));
+    if (todayN > 1) tiles.append(proCard('dailies', 'Past dailies', `${todayN - 1} so far`, open('dailies')));
+    box.append(tiles);
+    box.append(proCodeCard(false), authNodes());
+  }
+  // the Pro screen: with Pro, a hub of cards (your rank and streak, then Community, Historic drives, Playoff runs, Build
+  // and Past dailies); a card opens its section here (sec), with a way back
+  async function renderArchive(now, sec) {
+    if (!sec) track('archive_open', { pro: isPro() });
     show('arch');
     const box = $('arch'), todayN = dayOf(now);
     box.textContent = '';
@@ -10448,7 +10628,7 @@
     let bad = null;
     try { bad = sessionStorage.getItem(`${STORE}:badlink`); sessionStorage.removeItem(`${STORE}:badlink`); } catch (e) { /* storage off */ }
     if (bad) box.append(el('p', 'note badlink', `There is no ${bad}${isPro() ? ': here are the ones there are.' : '.'}`));
-    if (SCN) box.append(scenEntry(), commEntry());        // Build a scenario first on the Pro screen, with Pro or without (building is free to try), then what others built
+    if (SCN && !isPro()) box.append(scenEntry(), commEntry());        // Build a scenario first on the Pro screen, with Pro or without (building is free to try), then what others built
     if (!isPro()) {
       box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''}, the historic drives and the playoff runs: play any of them, graded like the day it ran.`));
       if (PRO_LIVE === null && (proCode() || authSession())) {     // a code (or a session) is kept here but the board could not confirm it
@@ -10458,10 +10638,14 @@
       } else box.append(...proNodes(), authNodes());
       return;
     }
-    box.append(proCodeCard(false));
-    box.append(authNodes());        // Pro by code: keep it on an account; signed in: who, and Sign out
+    if (!sec) { await proHub(box, now, todayN); return; }
+    const back = el('button', 'chip pback', '‹ Pro');
+    back.type = 'button';
+    back.addEventListener('click', () => { renderArchive(now); scrollTo(0, 0); });
+    box.firstChild.before(back);
     gauntletFresh();
     const pro = await loadPro(), ds = load(`${STORE}:drives`, {});
+    if (sec === 'drives') {
     if (pro && pro.drives.length) {
       // your record across them: passed (an A), the rank it earns, the next rank, every drive's best grade
       const n = pro.drives.length, rec = (k) => ds[k + 1], scoreOf = (k) => Math.round(rec(k).p * 100);
@@ -10492,6 +10676,8 @@
       });
       box.append(dl);
     } else box.append(el('h3', '', 'Historic drives'), el('p', 'note', 'The historic drives land here with the next build.'));
+    }
+    if (sec === 'runs') {
     box.append(el('h3', '', 'Playoff runs'));
     const runs = await loadRuns(), rs = load(`${STORE}:runs`, {});
     if (runs && runs.runs.length) {
@@ -10505,6 +10691,8 @@
       });
       box.append(rl, el('p', 'note', 'Every game of the run in order, each from its spot with the most at stake, the game still in doubt. Lose one and the season is over, as it was for real; win them all.'));
     } else box.append(el('p', 'note', 'The playoff runs land here with the next build.'));
+    }
+    if (sec !== 'dailies') return;
     box.append(el('h3', '', 'Past dailies'));
     if (todayN <= 1) { box.append(el('p', '', 'The archive fills from tomorrow: today’s drive is on the Daily tab.')); return; }
     const st = load(`${STORE}:stats`, { days: {} }), list = el('div', 'days');
@@ -11804,7 +11992,15 @@
     $('modeVs').hidden = !VS_ON;
     if (VS || VS_LOBBY) { $('modeDaily').removeAttribute('aria-current'); $('modeVs').setAttribute('aria-current', 'page'); }
     $('statsBtn').addEventListener('click', openStats);
-    $('bar').addEventListener('click', () => { if (G) spotInfo(); });
+    // (a tap on the scoreboard where it sits over the field while a play runs is a tap on the play: a phone's, or one
+    // stuck to the top of a page scrolled down; it skips it as a tap anywhere there does. The game's details came up
+    // over the play)
+    $('bar').addEventListener('click', (ev) => {
+      if (!G) return;
+      const f = $('field').getBoundingClientRect();
+      if (ev.detail && cutAnim && $('field').classList.contains('playing') && ev.clientY >= f.top && ev.clientY <= f.bottom) { cutAnim(); return; }
+      spotInfo();
+    });
     $('restartBtn').addEventListener('click', restartAsk);
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
     $('persBtn').addEventListener('click', openPers);
@@ -11841,7 +12037,7 @@
     dockKeys();
     let rz = null;
     // (not while a play runs: the redraw would wipe the animation; the next draw picks up the new size)
-    window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); fitDock(fitKeys); }, 150); });
+    window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (G && !$('play').hidden && !busy && !$('field').classList.contains('playing')) { lastBall = null; drawField(); } placeTo(); fitDock(fitKeys); snapFit(); }, 150); });
     show('boot');
     if (!(VS || VS_LOBBY || ARCH || ARCH_DAY || DRIVE || RUN_N || CUSTOM || CUSTOM_BUILD || COMMUNITY || HOME_PG)) fetchData();      // the daily, survivor, practice
     try {

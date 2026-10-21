@@ -30,6 +30,19 @@ let b = await r.json();
 assert.strictEqual(b.kept, 7);
 assert.deepStrictEqual(b.rows.map((x) => [x.name, x.best]), [['Eli', 7], ['Matt', 3]]);
 assert.ok(b.rows.every((x) => Object.keys(x).sort().join() === 'at,best,name'), 'rows never carry the key hash');
+// the week's board (Monday to Sunday, UTC): each name's best run this week, from the run just ended, never the all-time best
+{
+  let w = await (await call('POST', { name: 'Eli', best: 7, run: 4, key: KEY.eli })).json();
+  assert.deepStrictEqual(w.week.rows.map((x) => [x.name, x.best]), [['Eli', 4]], 'this week: the run, not the all-time best');
+  w = await (await call('POST', { name: 'Eli', best: 7, run: 2, key: KEY.eli })).json();
+  assert.deepStrictEqual(w.week.rows.map((x) => [x.name, x.best]), [['Eli', 4]], 'a worse run this week: kept');
+  w = await (await call('POST', { name: 'Eli', best: 7, run: 9, key: KEY.eli })).json();
+  assert.deepStrictEqual(w.week.rows.map((x) => [x.name, x.best]), [['Eli', 4]], 'a run past the best sent: refused');
+  w = await (await call('GET')).json();
+  const mon = new Date(w.week.from + 'T00:00:00Z');
+  assert.ok(mon.getUTCDay() === 1 && Date.now() - mon.getTime() < 7 * 864e5 && w.week.to > w.week.from, 'the week is this one, from Monday');
+  assert.ok(w.week.rows.every((x) => !('kh' in x)), 'week rows never carry the key hash');
+}
 r = await call('POST', { name: 'Matt', best: 9, key: KEY.matt });       // a better run replaces it
 assert.deepStrictEqual(await names(r), [['Matt', 9], ['Eli', 7]]);
 

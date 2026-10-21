@@ -1,9 +1,10 @@
 // Survivor leaderboard for the Two-Minute Drill website: a Cloudflare Worker in front of one Durable Object (Board),
 // which keeps the board in its own storage. One object handles every post in turn, so two runs posted together
 // can't overwrite each other, and its per-IP limit is the same everywhere (KV took up to a minute to sync).
-//   GET    /board                       -> { rows: [{ name, best, at }] }   the top 25 best runs
-//   POST   /board  { name, best, key }  -> { rows, kept? }                  a player's best (only a better run replaces it)
-//   DELETE /board?name=Eli  (Authorization: Bearer <ADMIN_TOKEN>)          remove a row (no ADMIN_TOKEN secret: off)
+//   GET    /board                       -> { rows: [{ name, best, at }], week }   the top 25 best runs, and this week's
+//   POST   /board  { name, best, key, run? } -> { rows, week, kept? }       a player's best (only a better run replaces it);
+//                                          run: the run just ended, for the week's board (a name's best run of the week)
+//   DELETE /board?name=Eli  (Authorization: Bearer <ADMIN_TOKEN>)          remove a row, all-time and this week (no ADMIN_TOKEN secret: off)
 //   GET    /daily?date=2026-10-14                         -> that day's players: { n, hist, spots, top }
 //   GET    /days                                           -> every day played: { days: [{ date, n, avg, best }] }
 //   POST   /daily  { date, key, p, spots: [w, ...], name?, g?, restarted?, side? }  -> the same, after counting your result
@@ -197,6 +198,9 @@ async function days(storage, h) {
 // Your rank (the poster's own) comes from the histogram: 1 + the names with more points.
 const WEEK_DAYS = 7, WEEK_BEST = 5, WEEK_KEEP = 100, WEEK_TOP = 10, DAY_KEEP = 25;    // DAY_KEEP: kept past the 10 shown, so a name taken off leaves the next in line
 const OLD_WAY_DAYS = ['2026-10-18'];     // game.js OLD_WAY_DAYS (day 7): the day the fair score came in (above)
+const SURV_WEEK_TOP = 10;
+// the Monday (UTC) of the week a time is in: the week's survivor board (survwk:<that date>)
+const survWeek = (d) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - ((d.getUTCDay() + 6) % 7))).toISOString().slice(0, 10);
 const addDays = (date, k) => new Date(Date.parse(date + 'T12:00:00Z') + k * 864e5).toISOString().slice(0, 10);
 function weekOf(d, end) {       // (a null day: an old-way result of an OLD_WAY day, in no week)
   const from = addDays(end, 1 - WEEK_DAYS), s = Object.entries(d || {}).filter(([k, v]) => v != null && k >= from && k <= end).map(([, v]) => v).sort((a, b) => b - a);
@@ -1400,7 +1404,11 @@ export async function handle(req, env, storage, hits) {
   if (url.pathname === '/days') return req.method === 'GET' ? days(storage, h) : json({ error: 'method' }, 405, h);
   if (url.pathname !== '/board') return json({ error: 'not found' }, 404, h);
   const readAll = async () => { const all = await storage.get('runs'); return Array.isArray(all) ? all : []; };
-  if (req.method === 'GET') return json({ rows: ranked(await readAll()) }, 200, h);
+  // the week's board: Monday to Sunday (UTC), each name's best run of the week, a fresh board every Monday
+  const wkFrom = survWeek(new Date()), wkKey = `survwk:${wkFrom}`;
+  const readWeek = async () => { const w = await storage.get(wkKey); return Array.isArray(w) ? w : []; };
+  const weekView = (w) => ({ from: wkFrom, to: addDays(wkFrom, 6), rows: ranked(w).slice(0, SURV_WEEK_TOP) });
+  if (req.method === 'GET') return json({ rows: ranked(await readAll()), week: weekView(await readWeek()) }, 200, h);
 
   if (req.method === 'DELETE') {
     const auth = req.headers.get('Authorization') || '', want = env.ADMIN_TOKEN ? `Bearer ${env.ADMIN_TOKEN}` : '';
@@ -1408,7 +1416,9 @@ export async function handle(req, env, storage, hits) {
     const key = clean(url.searchParams.get('name')).toLowerCase(), all = await readAll();
     const left = all.filter((r) => String(r.name).toLowerCase() !== key);
     if (left.length !== all.length) await storage.put('runs', left);
-    return json({ rows: ranked(left), removed: all.length - left.length }, 200, h);
+    const wk = await readWeek(), wkLeft = wk.filter((r) => String(r.name).toLowerCase() !== key);
+    if (wkLeft.length !== wk.length) await storage.put(wkKey, wkLeft);
+    return json({ rows: ranked(left), week: weekView(wkLeft), removed: all.length - left.length }, 200, h);
   }
   if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
 
@@ -1427,16 +1437,28 @@ export async function handle(req, env, storage, hits) {
   if (acctTakes(owner, ak, dk)) { await claim(storage, lower, ak); owner = ak; }
   if (owner && owner !== kh) return json({ error: 'name taken', rows: ranked(all) }, 409, h);
   if (!owner) await claim(storage, lower, kh);
+  // the run just ended, on the week's board when it is the name's best this week
+  let wk = await readWeek();
+  const run = Number(body.run);
+  if (Number.isInteger(run) && run >= 0 && run <= best) {
+    const j = wk.findIndex((r) => String(r.name).toLowerCase() === lower);
+    if (j < 0 || wk[j].best < run) {
+      const wr = { name, best: run, at: new Date().toISOString().slice(0, 10), kh, ...(body.life === true ? { life: true } : {}) };
+      if (j >= 0) wk[j] = wr; else wk.push(wr);
+      wk = wk.sort((a, b) => b.best - a.best).slice(0, KEEP);
+      await storage.put(wkKey, wk);
+    }
+  }
   if (i >= 0 && all[i].best >= best) {
     if (!all[i].kh) { all[i].kh = kh; await storage.put('runs', all); }       // a row from before names were claimed
-    return json({ rows: ranked(all), kept: all[i].best }, 200, h);
+    return json({ rows: ranked(all), week: weekView(wk), kept: all[i].best }, 200, h);
   }
   // life: the run used its one extra life (an ad watched to keep it going): shown with the row
   const row = { name, best, at: new Date().toISOString().slice(0, 10), kh, ...(body.life === true ? { life: true } : {}) };
   if (i >= 0) all[i] = row; else all.push(row);
   const kept = all.sort((a, b) => b.best - a.best).slice(0, KEEP);
   await storage.put('runs', kept);
-  return json({ rows: ranked(kept) }, 200, h);
+  return json({ rows: ranked(kept), week: weekView(wk) }, 200, h);
 }
 
 // The Gauntlet (a contest for Pro players): pass every historic drive (an A: 90 or better) first. An entrant is a Pro
