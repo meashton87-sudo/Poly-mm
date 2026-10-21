@@ -108,7 +108,10 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   penaltyAsk: the same seed stepped again). Pre-snap motion (game.js readMotion/setMotion: a receiver, tight end or
   back swiped sideways behind the line): the coverage is decided then (the snap's draw at MAN_SHARE, the man share real
   defenses play against the look shown), shown on the field (in man his man goes with him; in zone the linebackers and
-  safeties slide), and a pass is a real play charted in it (act.cov, engine.js _covOk; game_smoke.js checks). Versus
+  safeties slide), and a pass is a real play charted in it (act.cov, engine.js _covOk; game_smoke.js checks). The
+  Formation picker's empty set and two-back sets are charted too (playbook.py _backfield, FTN n_offense_backfield:
+  act.bf, engine.js persForm bits 12-14), with a picked receiver's route as well (routeSet keeps the personnel and
+  formation first). Versus
   sends none of these (cleanAction).
 - Pro data (src/nflclock/pro.py build: pro_drives.json, pro_runs.json -> web/pro/drives.json, runs.json, d*.json, r*.json;
   generated, never committed; the site workflow builds it and deploys it to the worker's assets). Each spot's teams come

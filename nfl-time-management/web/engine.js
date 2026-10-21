@@ -219,14 +219,17 @@
   // in the shotgun, under center or in the pistol. A pick rides with the personnel in one number, pf = pers | form << 8
   const FORM_CODE = { gun: 1, under: 2, pistol: 3 };
   // what an action picked: its personnel (act.pers) and formation (act.form: a FORM_CODE name or its code) as one
-  const persForm = (act) => ((act.pers || 0) & 255) | ((typeof act.form === 'string' ? FORM_CODE[act.form] || 0 : act.form || 0) << 8);
+  // and the backs in the backfield (act.bf: 0 empty, 1, 2, 3; playbook.py _backfield's code, n + 1, in bits 12-14)
+  const persForm = (act) => ((act.pers || 0) & 255) | ((typeof act.form === 'string' ? FORM_CODE[act.form] || 0 : act.form || 0) << 8)
+    | (Number.isInteger(act.bf) && act.bf >= 0 ? (Math.min(act.bf, 3) + 1) << 12 : 0);
   // a real play run with the personnel and the formation picked (pf; either part 0: not picked). lenient: a play whose
   // personnel or formation was not charted passes (the defense's draws, as before); strict: it does not (a group's own
   // plays only)
   function pfOk(P, r, pf, lenient) {
-    const pg = pf & 255, fm = pf >> 8;
+    const pg = pf & 255, fm = (pf >> 8) & 15, bf = (pf >> 12) & 7;
     if (pg) { const v = P.ngs.pers[r]; if (lenient ? v && v !== pg : v !== pg) return false; }
     if (fm) { const v = P.look ? P.look[r] & 3 : 0; if (lenient ? v && v !== fm : v !== fm) return false; }
+    if (bf && P.bf) { const v = P.bf[r]; if (lenient ? v && v !== bf : v !== bf) return false; }
     return true;
   }
   // the route an action asks for: the receiver's route, at the depth it was drawn to when it was drawn (act.depth)
@@ -516,6 +519,7 @@
         air: R.air ? decode(R.air) : null, carry: R.carry ? decode(R.carry) : null,    // the animation: air yards, carrier, broken tackle
         ball: R.ball ? decode(R.ball) : null,          // and how the ball got there (playbook.py _ball: FTN catchable, contested, defended)
         // the animation: NGS route, coverage, pass rush, time to throw (playbook.py _charting)
+        bf: R.bf ? decode(R.bf) : null,               // backs in the backfield (playbook.py _backfield): an empty set, two backs
         ngs: R.route ? { route: decode(R.route), cover: decode(R.cover), rush: decode(R.rush), ttt: decode(R.ttt), pers: R.pers ? decode(R.pers) : null,
           dpers: R.dpers ? decode(R.dpers) : null } : null,
         routeNames: pb.routes || [], shellNames: pb.shells || [],
@@ -899,7 +903,7 @@
         const N = preDone === 2 ? null : this._noTarget(cdf, pool, looks);
         if (N && u < N.share) return this._pickT(N, u / N.share);
         if (N) u = (u - N.share) / (1 - N.share);
-        const r = this._pickT(this.routeSet(team, callIdx, fk, oob, looks, s, route, who), u);
+        const r = this._pickT(this.routeSet(team, callIdx, fk, oob, looks, s, route, who, pers), u);
         if (r >= 0) return r;
       }
       if (pers && P.ngs && P.ngs.pers) {
@@ -907,7 +911,9 @@
         if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (!pools.includes(lp)) pools.push(lp); }
         // (only with enough plays with it, PB_LOOK_MIN: fewer, and the grouping is dropped; both picked, the grouping
         // alone goes next, then the formation alone)
-        const pg = pers & 255, fm = pers >> 8, picks = pg && fm ? [pers, pg, fm << 8] : [pers];
+        // (with the backfield picked too: all of it, the grouping with the backfield, the grouping, then the formation)
+        const pg = pers & 255, fm = pers >> 8, picks = [pers, pg && fm >> 4 ? pg | ((fm >> 4) << 12) : 0, pg && fm ? pg : 0, pg && fm ? fm << 8 : 0]
+          .filter((x, i, a) => x && a.indexOf(x) === i);
         for (const pf of picks) for (const lk of looks && P.lookB ? [looks, 0] : [0]) {
           for (const pl of pools) {
             const r = this._sampleLook(cdf, pl, u, lk, s, 0, 0, true, pf);
@@ -949,13 +955,20 @@
     // the real plays a pick (a receiver's route) draws from, with their weights: the route always; then the position,
     // then the look the defense showed, before the situation: the situation's pool, the call's coarser pools, every
     // situation of this call, then of every call of its kind (a dropback, play action, a rollout). null: none
-    routeSet(team, callIdx, fk, oob, looks, s, route, who) {
+    // (pers: the personnel and formation picked, kept first where the situation's pools have enough such plays)
+    routeSet(team, callIdx, fk, oob, looks, s, route, who, pers) {
       const P = this.e.pb, cdf = this._cdfOf(team, oob);
       const ri0 = P.ngs ? this._ri(route) : -1;
       if (!(ri0 > 0)) return null;
       const pool = P.poolOf[callIdx * P.nFine + fk], coarse = [];
       if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (lp !== pool && !coarse.includes(lp)) coarse.push(lp); }
       const sets = [this._callRows(callIdx), this._groupRows(callIdx)];
+      if (pers) {
+        for (const ri of ri0 >= 16 ? [ri0, ri0 & 15] : [ri0]) for (const lk of looks ? [looks, 0] : [0]) {
+          for (const pl of [pool, ...coarse]) { const T = this._lookT(cdf, pl, lk, s, ri, 0, true, pers); if (T) return T; }
+          for (const set of sets) { const T = this._setT(set, lk, s, ri, 0, callIdx, oob, pers); if (T) return T; }
+        }
+      }
       for (const ri of ri0 >= 16 ? [ri0, ri0 & 15] : [ri0]) for (const w of who ? [who, 0] : [0]) for (const lk of looks ? [looks, 0] : [0]) {
         for (const pl of [pool, ...coarse]) { const T = this._lookT(cdf, pl, lk, s, ri, w, true); if (T) return T; }
         for (const set of sets) { const T = this._setT(set, lk, s, ri, w, callIdx, oob); if (T) return T; }
@@ -1473,10 +1486,10 @@
       const fam = om < 0 ? (P.stayOdds ? P.stayOdds[c] : 1) : P.oobOdds[c];
       return t && rt ? (r) => t[rt[r]] ?? fam : () => fam;
     }
-    _setT(set, looks, s, ri, who, c, oob) {
+    _setT(set, looks, s, ri, who, c, oob, pers) {
       const om = c >= 0 ? oobMode(oob) : 0, P0 = this.e.pb;
       const cv = this._cov || 0;
-      const key = `${set.id}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${om ? `${P0.oobKey[c]}:${om}` : ''}${cv ? `|c${cv}` : ''}`;
+      const key = `${set.id}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${om ? `${P0.oobKey[c]}:${om}` : ''}${cv ? `|c${cv}` : ''}${pers ? `|p${pers}` : ''}`;
       this._setPick = this._setPick || new Map();
       let T = this._setPick.get(key);
       if (T === undefined) {
@@ -1486,6 +1499,7 @@
           if (ri && !this._rOk(r, ri)) continue;
           if (who && (P.carry[r] & 7) !== who) continue;
           if (cv && !this._covOk(r, cv)) continue;
+          if (pers && !pfOk(P, r, pers, false)) continue;
           rows.push(r);
         }
         let k = 0;

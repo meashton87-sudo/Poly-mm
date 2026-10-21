@@ -247,6 +247,17 @@ for (let k = 0; k < 100; k++) {
     console.log(`  formation ${form} on ${id}: ${hit} of ${n} plays drawn ran from it`);
     assert.ok(n && hit / n >= want, `formation ${form}: ${hit} of ${n}`);
   }
+  // the backs in the backfield (act.bf, playbook.py _backfield: an empty set, two backs): passes to a picked receiver too
+  if (P.bf) for (const [label, act0, code, want] of [['empty', { form: 'gun', bf: 0 }, 1, 0.8], ['two backs (21, the I)', { pers: 21, form: 'under', bf: 2 }, 3, 0.8]]) {
+    let n = 0, hit = 0;
+    for (let k = 0; k < 60; k++) {
+      const e = sim.step(at, { action: { to_off: false, play: 'pass', call: 'quick_strong', route: 'out', who: 'WR', ...act0 }, seed: 5300 + k }).log.find((x) => x.ev === 'play');
+      if (!e || !(e.row >= 0) || e.penalty || !P.bf[e.row]) continue;
+      n++; if (P.bf[e.row] === code) hit++;
+    }
+    console.log(`  backfield ${label}: ${hit} of ${n} passes drawn ran from it`);
+    assert.ok(n && hit / n >= want, `backfield ${label}: ${hit} of ${n}`);
+  }
   const r = sim.step(at, { action: { to_off: false, play: 'run', call: 'rb_inside_strong', looks: 0, pers: 21 }, seed: 777 });
   const pe = r.log.find((e) => e.ev === 'play');
   assert.ok(pe && pe.row >= 0 && P.ngs.pers[pe.row] === 21, 'a 21-personnel run is a real 21-personnel run');

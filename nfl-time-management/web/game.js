@@ -6601,7 +6601,7 @@
   const FORM_QB = [['gun', 'Shotgun', 'The quarterback five yards back, the back beside him. About 6 snaps in 10.'],
     ['under', 'Under center', 'The back seven deep (a fullback in front of him: the I). About 3 in 10.'],
     ['pistol', 'Pistol', 'The quarterback four back, the back behind him. About 1 in 20.'],
-    ['empty', 'Empty', 'Nobody in the backfield: the back split out. The lineup only; no charting marks it, so the plays are drawn as from any set.']];
+    ['empty', 'Empty', 'Nobody in the backfield: the back split out. The play is drawn from real plays run from an empty set.']];
   const FORM_LOOK = [['trips', 'Trips', 'Three receivers to the strong side.'], ['spread', 'Spread', 'Two and two.'],
     ['bunch', 'Bunch', 'Three in a cluster off the tackle.'], ['tight', 'Tight', 'Everyone in close to the line.']];
   const FORM_ENGINE = { gun: 1, under: 2, pistol: 3 };         // (engine.js FORM_CODE: the formations the plays are drawn by)
@@ -6645,7 +6645,7 @@
     };
     const render = () => {
       const f = G.form || {};
-      const hint = el('p', 'phint', 'Optional. Where the quarterback stands is charted on the real plays: pick the shotgun, under center or the pistol and the play is drawn from real plays run from it (never from a handful: too few, and every play counts). The receivers’ look is the lineup on the field only.');
+      const hint = el('p', 'phint', 'Optional. Where the quarterback stands and how many backs are behind him are charted on the real plays: pick the shotgun, under center, the pistol or an empty set (with two backs in your personnel, two-back sets) and the play is drawn from real plays run from it (never from a handful: too few, and every play counts). The receivers’ look is the lineup on the field only.');
       const done = el('button', 'btn pdone', 'Done');
       done.type = 'button';
       done.addEventListener('click', closeModal);
@@ -6985,7 +6985,10 @@
     const b0 = G.pers && G.root.pos === G.me && G.pers !== persOf(lineup(G.me).off) ? { ...a, pers: G.pers } : a;
     // (the formation too, when it is one the plays are charted by: the quarterback in the shotgun, under center or in
     // the pistol; an empty set and the receivers' look are the lineup drawn only)
-    const b = G.form && FORM_ENGINE[G.form.qb] && G.root.pos === G.me ? { ...b0, form: G.form.qb } : b0;
+    // (an empty set and two backs too: the backs in the backfield are charted, FTN; engine.js persForm)
+    const fq = G.form && G.root.pos === G.me ? G.form.qb : null;
+    const backs = (lineup(G.me).off || []).filter((p) => p.pos === 'RB' || p.pos === 'FB').length;
+    const b = fq && (FORM_ENGINE[fq] || fq === 'empty') ? { ...b0, form: FORM_ENGINE[fq] ? fq : 'gun', bf: fq === 'empty' ? 0 : Math.min(backs, 3) } : b0;
     const rp = repOf(b), c0 = rp ? { ...b, rep: rp } : b;
     const c1 = schemeOn() && G.root.pos === G.me && c0.play === 'run' && /^rb_/.test(c0.call || '') ? { ...c0, scheme: G.scheme } : c0;
     const mo = G.root.pos === G.me ? curMotion(G.root) : null, c = mo && c1.play === 'pass' ? { ...c1, cov: mo.cov } : c1;
