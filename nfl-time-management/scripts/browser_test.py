@@ -300,6 +300,7 @@ SHORT_FIELD = """(yl) => {
             const sc = D.makeScene(r, side), P = D.choreograph(sc, e, { action: null, log: [e], root: { ...r, yl: Math.max(1, yl - (o.yards || 0)) } }, false);
             if (!P) return;
             plays++;
+            D.speedLog(sc, P, e, { sweep: 'short', yl, mine, side, shell, id });
             D.offField(sc, P, e.ev === 'fg' && !e.blocked).slice(0, 2).forEach((b) => bad.push({ yl, mine, side, shell, id, ev: e.ev, ...o, ...b }));
           });
         });
@@ -354,6 +355,7 @@ GOAL_LINE = """([yl, full]) => {
           const sc = D.makeScene(r, side), P = D.choreograph(sc, e, { action: null, log: [e], root }, false);
           if (!P) return;
           plays++;
+          D.speedLog(sc, P, e, { sweep: 'goal', yl, mine, side, id: c.id });
           const g = D.goalCheck(sc, P, e, false);
           g.bad.forEach((b) => { tally[b] = (tally[b] || 0) + 1; if (tally[b] <= 8) bad.push({ yl, mine, side, id: c.id, ...o, why: b, cross: g.cross, out: g.out, deepest: g.deepest }); });
         });
@@ -405,6 +407,7 @@ PASS_LOOK = """([n, seed]) => {
     }
     const P = D.choreograph(sc, e, { action, log: [e], root: { ...r, yl: Math.max(1, yl - (e.yards || 0)) } }, false);
     if (!P) continue;
+    D.speedLog(sc, P, e, { sweep: 'pass', yl, id, k, route: e.route || '', to: action ? action.route : '' });
     D.offField(sc, P, false).slice(0, 2).forEach((b) => { if (off.length < 10) off.push({ id, k, yl, to: action ? action.route : '', ...b }); });
     const xe = (D.ballAt(sc, P, P.T).x - D.SX0) / D.XYD;
     if (xe < 2) edge[0]++; else if (xe > 160 / 3 - 2) edge[1]++;
@@ -413,6 +416,43 @@ PASS_LOOK = """([n, seed]) => {
   logs.forEach((k, i) => { if (window[k]) window[k].length = kept[i]; });
   D.drawField();
   return { rows, off, edge };
+}"""
+
+
+# Real plays, as the game draws them (game.js speedCheck): n snaps from spots all over the field, every kind of call (a
+# run, a quick pass, a deep shot, a screen, play action, a rollout, an RPO, a Hail Mary), run by the simulator and
+# drawn with everything the real play's charting gives the animation (the route, the time to throw, the rush, the
+# pressure, the yards, where it ended); nobody on the field ever runs faster than an NFL player or jumps across it
+REAL_PLAYS = """async ([n, seed]) => {
+  const D = window.__draw, { G, ui } = D.get(), calls = Object.values(D.CALL);
+  let s = seed >>> 0;
+  const R = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const pick = (a) => a[Math.floor(R() * a.length)];
+  const logs = ['__sepLog', '__tackleLog', '__fpLog', '__offLog', '__goalLog'], kept = logs.map((k) => (window[k] || []).length);
+  const ids = ['rb_out_strong', 'rb_inside_weak', 'rb_middle', 'qb_run', 'rpo_strong', 'quick_strong', 'quick_weak', 'quick_middle', 'screen', 'deep_strong', 'deep_weak',
+    'deep_middle', 'pa_short', 'pa_deep', 'roll_strong', 'roll_weak', 'hail_mary'];
+  const look0 = G.look, step0 = ui.step;
+  const out = { plays: 0, errs: [] };
+  for (let i = 0; i < n; i++) {
+    const id = pick(ids), ci = calls.findIndex((c) => c.id === id), yl = pick([1, 3, 8, 15, 25, 40, 55, 70, 85, 95, 99]), mine = R() < 0.7;
+    const r = { ...G.root, phase: 0, down: 1 + Math.floor(R() * 3), ytg: Math.min(yl, pick([1, 3, 7, 10, 15])), yl, pos: mine ? G.me : 1 - G.me, try2: false,
+      clock_running: false, t: id === 'hail_mary' ? 6 : pick([3500, 1830, 600, 90, 25]) };
+    G.look = mine && R() < 0.5 ? Math.floor(R() * 4) : null;
+    ui.step = 'x';
+    const act = { to_off: false, play: calls[ci].kind, call: id, oob: R() < 0.2, looks: G.look != null ? 1 << G.look : 0 };
+    let res;
+    try { res = (await D.send({ type: 'step', scen: D.simScen(), root: r, action: act, seed: (seed * 7919 + i) >>> 0 }, true)).res; } catch (err) { out.errs.push(String(err)); continue; }
+    const e = res && res.log && res.log.find((y) => y.ev === 'play');
+    if (!e) continue;
+    const side = R() < 0.5 ? 1 : -1, sc = D.makeScene(r, side), P = D.choreograph(sc, e, res, false);
+    if (!P) continue;
+    out.plays++;
+    D.speedLog(sc, P, e, { sweep: 'real', yl, mine, side, id, row: e.row, route: e.route || '', ttt: e.ttt });
+  }
+  G.look = look0; ui.step = step0;
+  logs.forEach((k, i) => { if (window[k]) window[k].length = kept[i]; });
+  D.drawField();
+  return out;
 }"""
 
 
@@ -1113,6 +1153,17 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         problems.append(f"a pass not drawn as it went: {wrong[:4]}")
                     if off:
                         problems.append(f"off the field on a pass: {off[:4]}")
+                elif st == "choose" and sweep and "real_plays" not in chaos_done:
+                    chaos_done.add("real_plays"); act("real plays sweep")
+                    t_rp, n_rp, errs_rp = time.time(), 0, []
+                    for k in range(3):
+                        rp = await page.evaluate(REAL_PLAYS, [100, seed * 13 + k])
+                        n_rp += rp["plays"]; errs_rp += rp["errs"]
+                    since = time.time()
+                    t_start += since - t_rp
+                    print(f"{name}: real plays, {n_rp} run by the simulator and drawn" + (f", {len(errs_rp)} not run: {errs_rp[:2]}" if errs_rp else ""))
+                    if errs_rp:
+                        problems.append(f"real plays not run: {errs_rp[:3]}")
                 elif st == "choose" and sweep and "goal_line" not in chaos_done:
                     chaos_done.add("goal_line"); act("goal-line sweep")
                     t_gl, n_gl, tally, wrong = time.time(), 0, {}, []
@@ -1315,12 +1366,13 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             fps = await page.evaluate("() => window.__fpLog || []")
             offs = await page.evaluate("() => window.__offLog || []")
             oobs = await page.evaluate("() => window.__oobLog || []")
+            speeds = await page.evaluate("() => window.__speedLog || []")
             goals = await page.evaluate("() => window.__goalLog || []")
             kept = await page.evaluate("() => (window.__drawLog || []).length")
             snaps = await page.evaluate("() => window.__drawSnaps || []")
             jank = await page.evaluate("() => window.__jank || null")
         except Exception:
-            seps, tackles, fps, offs, oobs, goals, kept, snaps, jank = [], [], [], [], [], [], 0, [], None
+            seps, tackles, fps, offs, oobs, speeds, goals, kept, snaps, jank = [], [], [], [], [], [], [], 0, [], None
         shot = None
         if problems:
             status = "fail"
@@ -1331,7 +1383,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 shot = None
         await ctx.close()
     return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
-            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "oobs": oobs, "goals": goals, "trail": trail if problems else [],
+            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "oobs": oobs, "speeds": speeds, "goals": goals, "trail": trail if problems else [],
             "day": day, "side": picked, "timing": timing, "friction": friction, "jank": jank, "shot": shot.name if shot else None}
 
 
@@ -2157,6 +2209,10 @@ def binom_tail(n: int, k: int, p: float) -> float:
     return min(1.0, sum(math.exp(math.lgamma(n + 1) - math.lgamma(j + 1) - math.lgamma(n - j + 1) + j * lp + (n - j) * lq) for j in range(k, n + 1)))
 
 
+SPEED_MAX = 11.5        # yd/s: the fastest NFL ball carriers top out near 23 mph (11.2 yd/s)
+JUMP_MAX = 1.5          # yards between two frames (1/20 s): 30 yd/s, a teleport
+
+
 def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     """What the plays on the field showed over every episode's logs (seps, tackles, fps, offs): the lines to print, in
     order, and the checks that failed, each with its line (daily_check.py reports them from the live site)."""
@@ -2182,6 +2238,13 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     tail_tk = binom_tail(n_tk, len(alone), 0.02)
     if alone and tail_tk < 0.01:
         fail("tackles", f"FAIL: tackled with nobody near {alone[:5]}")
+    # a breakaway is drawn as one: a carrier never eases up in the open waiting for a tackler to arrive (game.js runDown
+    # sends the man with the angle from the moment he got the ball; on a short interception return the receiver it was
+    # thrown to makes the tackle). `slowed` is how long the carrier had to wait at the spot, in seconds
+    waited = [x for x in tk if x.get("slowed", 0) > 0.6]
+    say(f"carriers slowed for the tackler: {sum(1 for x in tk if x.get('slowed', 0) > 0)} (over 0.6 s: {len(waited)})")
+    if waited:
+        fail("breakaway", f"FAIL: a carrier waited in the open for his tackler {waited[:5]}")
     # forward progress: a carrier never has the ball past where it is spotted (beyond where he got it), so he is
     # never shown driven back from it
     fp = [x for r in results for x in r.get("fps", [])]
@@ -2203,6 +2266,17 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
         f"shown otherwise than played: {len(odd)}")
     if odd:
         fail("out-of-bounds", f"FAIL: out of bounds on the field but not in the play, or the other way: {odd[:5]}")
+    # nobody runs faster than an NFL player on any play shown (game.js speedCheck): about 23 mph, 11.2 yards a second, at
+    # the very top (a breakaway is drawn as one: the man who catches him had the angle), and nobody jumps across the
+    # field between two frames
+    sp = [x for r in results for x in r.get("speeds", [])]
+    fast = [x for x in sp if x.get("v1", 0) > SPEED_MAX]
+    jumps = [x for x in sp if x.get("jump", 0) > JUMP_MAX]
+    say(f"plays timed: {len(sp)}, anyone over {SPEED_MAX} yd/s: {len(fast)} (over a fifth of a second: "
+        f"{sum(1 for x in sp if x.get('v4', 0) > SPEED_MAX)}), a jump over {JUMP_MAX} yd between frames: {len(jumps)}"
+        + (f"; fastest {max(x['v1'] for x in sp):.1f} yd/s" if sp else ""))
+    if fast or jumps:
+        fail("speed", f"FAIL: faster than an NFL player, or a jump across the field {sorted(fast + jumps, key=lambda x: -x.get('v1', 0))[:5]}")
     # the ball against the goal line and the sidelines on every play shown (game.js goalCheck): a touchdown carried or
     # caught over the goal line in bounds, before he is ever out of bounds with it; nothing else over that line with the
     # ball; out of bounds at the spot; a safety down in his own end zone
@@ -2660,6 +2734,7 @@ async def main(a) -> int:
         (out / "seps.json").write_text(_json.dumps([x for r in results for x in r.get("seps", [])]))
         (out / "tackles.json").write_text(_json.dumps([x for r in results for x in r.get("tackles", [])]))
         (out / "fps.json").write_text(_json.dumps([x for r in results for x in r.get("fps", [])]))
+        (out / "speeds.json").write_text(_json.dumps([x for r in results for x in r.get("speeds", [])]))
     except Exception:
         pass
     lines, failed = field_checks(results)

@@ -2234,7 +2234,7 @@
   // (browser tests only, window.__sepLog: the drawing and the play, for bots that draw thousands of lines and plays)
   if (window.__sepLog) {
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
-      DRAWN_RANGE, CALL, ROUTES, routeName, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, goalCheck, get: () => ({ G, ui, scene, busy }),
+      DRAWN_RANGE, CALL, ROUTES, routeName, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, goalCheck, speedLog, get: () => ({ G, ui, scene, busy }),
       readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
       promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k),
       drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock(), crowdKey: (r, k) => crowdKey(r, k) };
@@ -2427,6 +2427,29 @@
       if (!kick && b.show && out(b.x, b.L)) bad.push({ who: 'ball', t: +t.toFixed(1), x: +b.x.toFixed(1), L: +b.L.toFixed(2) });
     }
     return bad;
+  }
+  // (browser tests) how fast anyone runs on a play as drawn: every man's track frame by frame (1/20 s) to the play's
+  // end, in yards: his top speed from one frame to the next (v1) and over a fifth of a second (v4: what the eye sees),
+  // and his longest jump between two frames (a teleport). The fastest man of the play and the worst jump
+  function speedCheck(sc, P) {
+    const top1 = { v: 0, who: '', t: 0 }, top4 = { v: 0, who: '', t: 0 }, jump = { v: 0, who: '', t: 0 };
+    const up = (m, v, a, t) => { if (v > m.v) { m.v = v; m.who = a.label + (a.off ? '' : ' (D)'); m.t = t; } };
+    sc.actors.forEach((a) => {
+      const k = a.trk;
+      if (!k || k.hold) return;
+      const n = Math.min(k.n, Math.ceil(P.T / k.dt) + 1), X = (j) => k.x[j] / XYD, Y = (j) => k.L[j];
+      for (let j = 1; j < n; j++) {
+        const d = Math.hypot(X(j) - X(j - 1), Y(j) - Y(j - 1));
+        up(jump, d, a, j * k.dt); up(top1, d / k.dt, a, j * k.dt);
+        if (j >= 4) up(top4, Math.hypot(X(j) - X(j - 4), Y(j) - Y(j - 4)) / (4 * k.dt), a, j * k.dt);
+      }
+    });
+    const r = (x) => +x.toFixed(2);
+    return { v1: r(top1.v), who1: top1.who, t1: r(top1.t), v4: r(top4.v), who4: top4.who, t4: r(top4.t), jump: r(jump.v), jwho: jump.who, jt: r(jump.t) };
+  }
+  function speedLog(sc, P, e, x) {
+    (window.__speedLog = window.__speedLog || []).push({ ev: e.ev, call: e.call, evt: e.evt || '', yards: e.yards, td: !!(e.td || e.tdDef || e.retTd), air: e.air,
+      ...(x || {}), ...speedCheck(sc, P) });
   }
   // (browser tests) where the man with the ball was against the goal lines and the sidelines while he had it (P's
   // holds, every 0.05 s to the end of the play): a touchdown is the ball carried (or caught) over the scoring team's
@@ -2816,7 +2839,7 @@
       busy.add(car);
       // the tackler comes from the defenders still free; when every one is busy (in coverage, on the ball), from all of
       // them: a carrier never stops in the open with nobody there (players saw it)
-      const free = foes(car).filter((d) => !busy.has(d));
+      const free = foes(car).filter((d) => !busy.has(d) || (o.also && o.also.includes(d)));
       const start = here(car), defs = free.length ? free : foes(car);
       const tackled = !o.td && !o.oob && !o.free;
       // going out (o.out: the sideline he goes for, -1 or 1): the spot is never back toward the middle from where he
@@ -2904,9 +2927,13 @@
       // (a stuff is penetration, not a back waiting in the backfield for someone to come)
       // The same on a short catch-and-run with nobody near (players saw backs at the sideline turn back to the hash to
       // find a tackler): the nearest man breaks on the ball before it arrives and meets him where he is
+      // A breakaway run or catch nobody could reach from where the pursuit is now (players saw the carrier ease up in
+      // the open for a tackler to arrive): the man with the best angle commits from the moment the carrier got the
+      // ball, so he is there when the run ends; the carrier never waits for him
       const stuff = fd * (contact[1] - L0) < 1.5 && o.from < t0 - 0.1, closeIn = !stuff && dist(start, contact) < 8;
-      if (tackled && o.from != null && (stuff || closeIn) && reach.length && reach[0].T > tC - t0 + 0.1) {
-        const tf = stuff ? Math.max(o.from, REACT_DEF + 0.2) : Math.max(REACT_DEF + 0.2, t0 - 0.8);
+      const far = !stuff && !closeIn && reach.length && reach[0].T > tC - t0 + 0.4;
+      if (tackled && o.from != null && (stuff || closeIn || far) && reach.length && reach[0].T > tC - t0 + 0.1) {
+        const tf = stuff || far ? Math.max(o.from, REACT_DEF + 0.2) : Math.max(REACT_DEF + 0.2, t0 - 0.8);
         Wd.rewind(tf);
         const pick = defs.filter((d) => !stuff || d.b.g !== 'CB').map((d) => ({ d, T: Motion.minTime([here(d), contact], d.b.g, { v0: vel(d), spd: d.b.spd }) }))
           .sort((x, y) => x.T - y.T)[0];
@@ -2947,7 +2974,7 @@
         if (!done) A = runFrom(car, t0, route, runO);                              // (back to his own run)
       }
       car.endAt = endPt;
-      let tackler = null, tEnd = tC, tGo = t0, B = null;
+      let tackler = null, tEnd = tC, tGo = t0, B = null, slowed = 0;
       // a man whose way in runs with the carrier, at his side within reach long before he is down, reads as one who
       // could have made the tackle then: he keeps a couple of yards off instead (one in front gives ground and turns
       // as the carrier goes by on the other side), and closes at the end, to `off` from him at tA
@@ -2970,6 +2997,7 @@
       if (tackled && reach.length) {
         tackler = reach[0].d;
         if (reach[0].T > tC - t0 + 0.1) {            // still nobody (the field ran out): he slows in traffic
+          slowed = reach[0].T - (tC - t0);
           A = runFrom(car, t0, route, { T: reach[0].T + 0.1, v1: 3.4, lim });
           tC = t0 + A.T;
         }
@@ -3064,7 +3092,7 @@
         (window.__fpLog = window.__fpLog || []).push({ over: +(mx - Math.max(0, fp(t1))).toFixed(2), car: car.label, off: !!car.off, oob: !!o.oob, yds: e.yards, ev: e.evt || '', call: e.call });
       }
       // (tests: how close the nearest defender is when a tackled carrier goes down)
-      if (tackled && window.__sepLog) (window.__tackleLog = window.__tackleLog || []).push({ nd: Math.min(...foes(car).map((d) => dist(here(d), here(car)))), free: free.length, tackler: !!tackler,
+      if (tackled && window.__sepLog) (window.__tackleLog = window.__tackleLog || []).push({ nd: Math.min(...foes(car).map((d) => dist(here(d), here(car)))), free: free.length, tackler: !!tackler, slowed: +slowed.toFixed(2), ev: e.evt || '', yds: e.yards, call: e.call, from: o.from,
         td: dist(tackler ? here(tackler) : [0, 0], here(car)), car: car.label, mine: !!car.off === !!(car.off && G.root.pos === G.me), span: dist(start, endPt), tC: tC - t0, reach: reach.length ? reach[0].T : null });
       if (tackled) leg(car, tEnd, 'stand');
       // (past the whistle: into the end zone on a touchdown; out of bounds, along the sideline no further than the spot)
@@ -3568,6 +3596,9 @@
           if (arr >= ball - 0.05 || k >= legL) break;
         }
         rpts = [rpts[0], top, catchPt];
+        // (he gets to the end of his break after the ball would: the passer holds it until he is there, and it flies
+        // at its own speed; the flight stretched to meet him hung the ball in the air for seconds on a deep hitch)
+        if (tCatch > tThrow + flightTo(catchPt) + 0.05) tThrow = tCatch - flightTo(catchPt);
         // a hitch on time comes back to the ball; early, he settles facing the passer, and it comes to him
         if (routeName === 'hitch') {
           const sit = plan(tgt, rpts, { v1: 0 });
@@ -4041,7 +4072,7 @@
       breakers.forEach((d, i) => {
         if (d === picker || d === broke || d === shadow) return;
         const near_ = dist(here(d), catchPt);
-        const yac = Math.abs(e.yards - air);
+        const yac = Math.abs((e.yards || 0) - air);
         // the closer the coverage, the shorter the run after the catch: trail by more when he got loose
         const lag = clip(yac * 0.07, 0, 1.2);
         if (caught && !e.incomplete) {
@@ -4147,8 +4178,10 @@
           return;
         }
         const end = e.tdDef ? [inX(catchPt[0] + jit(10)), defTdL()] : [inX(catchPt[0] + jit(8)), inL(losOf(res.root))];
-        // he runs it back the other way: the offense becomes the chasers
-        const tEnd = runDown(picker, tCatch + 0.05, end, { td: e.tdDef, after: 0.6 });
+        // he runs it back the other way: the offense becomes the chasers (the man it was thrown to first of all: he is
+        // right there, and makes the tackle on a short return as real receivers do; the picker never waits in the
+        // open for a lineman to jog over)
+        const tEnd = runDown(picker, tCatch + 0.05, end, { td: e.tdDef, after: 0.6, from: tCatch + 0.05, also: [tgt] });
         if (e.tdDef) say(tEnd, 'Pick-six!', 'hit', { follow: picker });
         else down(tEnd + 0.05, picker);
         lastEnd(tEnd + 1.0);
@@ -4945,6 +4978,9 @@
         (window.__oobLog = window.__oobLog || []).push({ oob: !!e.oob, shown: x < SX0 || x > SX1, mine: e.team === G.me, call: e.call, evt: e.evt || '', yards: e.yards, x: +x.toFixed(1), running: !!res.root.clock_running });
       }
     }
+    // (and nobody on the field runs faster than an NFL player: every man's top speed over the play, frame to frame and
+    // over a fifth of a second, and his longest single-frame jump; speedCheck)
+    if (window.__sepLog && P) speedLog(sc, P, drawnE, { yl: two ? 2 : before.yl, mine: e.team === G.me, two: !!two });
     // (and every pass in the air flies at a pass's speed: one that hangs, slower than a soft toss, is drawn wrong)
     if (window.__sepLog && P) {
       const pass = P.segs.find((s) => s.kind === 'fly' && s.lift);
