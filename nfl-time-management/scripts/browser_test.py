@@ -1959,7 +1959,11 @@ async def play_taps(browser, base: str) -> list[str]:
             if not await to_call():
                 continue
             await page.wait_for_timeout(600)          # (the field framed again for the sheet as it now is)
-            dot = await page.evaluate(CLEAR_DOT)
+            for _ in range(6):                        # (the next call's players fading in over the last play's: a moment)
+                dot = await page.evaluate(CLEAR_DOT)
+                if dot["dot"]:
+                    break
+                await page.wait_for_timeout(400)
             if dot["dot"]:
                 x, y = dot["dot"]
                 await page.mouse.move(x, y); await page.mouse.down()
