@@ -1303,6 +1303,11 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             problems.append(f"never finished: {finished} of {target} games after {steps} steps")
         if not problems and finished < (1 if mode == "daily" else target):
             problems.append(f"stopped after {finished} of {target} games")
+        # every pass in the air at a pass's speed: none hanging over the line waiting for its receiver (game.js logs
+        # one slower than 10 yards a second over more than 0.45 s)
+        floats = await page.evaluate("() => window.__floatLog || []")
+        if floats:
+            problems.append(f"{len(floats)} passes hung in the air: {floats[:3]}")
     finally:
         try:
             seps = await page.evaluate("() => window.__sepLog || []")

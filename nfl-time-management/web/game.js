@@ -2362,20 +2362,28 @@
   const flight = (air, arm) => (Math.abs(air) + 7) / ballSpeed(air, arm);              // seconds the ball is in the air
   const PLAY_SPEED = 1;        // real time, your snaps and theirs
   // the player's own speed-up (1x, 1.5x, 2x: the button on the field), kept on the device; a tap on the field skips
-  const SPEEDS = [1, 1.5, 2], SPEED_KEY = `${STORE}:speed`;
+  // 0: plays off (the result straight away), the player's own choice on the same button. A device set to reduce
+  // motion still sees the plays (players on a computer with it on saw none and asked why), with the camera held
+  // still instead of zooming in and out
+  const SPEEDS = [1, 1.5, 2, 0], SPEED_KEY = `${STORE}:speed`;
   const playSpeed = () => { const v = Number(load(SPEED_KEY, 1)); return SPEEDS.includes(v) ? v : 1; };
+  const playsOn = () => playSpeed() > 0;
   let speedOn = false;
   function speedBtn() {
     const b = $('speedBtn');
     if (!b) return;
     speedOn = true;
-    const show = () => { b.textContent = `${playSpeed()}\u00d7`; b.setAttribute('aria-label', `Play speed ${playSpeed()} times. Tap to change`); };
+    const show = () => {
+      const v = playSpeed();
+      b.textContent = v ? `${v}\u00d7` : 'Off';
+      b.setAttribute('aria-label', v ? `Play speed ${v} times. Tap to change` : 'Plays off: results only. Tap to turn them on');
+    };
     show();
     b.hidden = false;
     b.addEventListener('click', () => {
       const v = SPEEDS[(SPEEDS.indexOf(playSpeed()) + 1) % SPEEDS.length];
       save(SPEED_KEY, v); show();
-      toast(v === 1 ? 'Plays at real speed' : `Plays at ${v}\u00d7 speed. Tap the field to skip one`);
+      toast(v === 1 ? 'Plays at real speed' : v ? `Plays at ${v}\u00d7 speed. Tap the field to skip one` : 'Plays off: you see each result straight away');
       track('play_speed', { speed: v });
     });
   }
@@ -3568,7 +3576,10 @@
         }
       }
       const tp = plan(tgt, rpts, { T: timed ? tCatch - tStart : undefined, v1 });
-      if (tp.late > 0.02) tCatch += tp.late;
+      // he can't be there when the ball would be (a route drawn deeper than the call's release allows: a hitch drawn
+      // on an RPO, thrown at 1.3 s): the quarterback holds it until he can, and the ball flies at its own speed. Before,
+      // the flight stretched to wait for him: the ball hung in the air at the line ("it just gets floated")
+      if (tp.late > 0.02) { tThrow += tp.late; tCatch += tp.late; }
       follow(tgt, tStart, tp);
       if (act && act.open && mine && !thrownAway && tgt === pick) P.openAt = { tThrow, flight: tCatch - tThrow };
       // the rush and the line
@@ -4850,7 +4861,7 @@
   function runPlan(sc, P, speed, clk) {
     const runoff = clk ? Math.max(0, clk.t0 - clk.snap) : 0;
     const PRE = Math.max(runoff >= 1 ? clip(0.4 + runoff / 30, 0.55, 1.5) : 0, P.motion ? 1.2 : 0);
-    const ZI = 0.6, ZO = 0.5, total = PRE + ZI + P.T + P.hold + ZO;
+    const ZI = 0.6, ZO = 0.5, total = PRE + ZI + P.T + P.hold + ZO, still = reduced();
     const ck = clk ? document.querySelector('#bar .clk') : null;
     return new Promise((resolve) => {
       let start = null, skip = false;
@@ -4863,7 +4874,8 @@
       const frame = (now) => {
         if (start === null) start = now;
         const t = skip ? total : ((now - start) / 1000) * speed, tt = t - PRE;
-        const k = EASE.io(clip(tt / ZI, 0, 1)) * (P.stay ? 1 : 1 - EASE.io(clip((tt - ZI - P.T - P.hold) / ZO, 0, 1)));
+        // (reduced motion: the play's frame from the start, held still; no zoom in or out)
+        const k = still ? 1 : EASE.io(clip(tt / ZI, 0, 1)) * (P.stay ? 1 : 1 - EASE.io(clip((tt - ZI - P.T - P.hold) / ZO, 0, 1)));
         const c0 = sc.cam0 || FULL;            // from the pre-snap frame into the play's, and back
         sc.cam = { lo: lerp(c0.lo, P.cam.lo, k), hi: lerp(c0.hi, P.cam.hi, k) };
         const tp = clip(tt - ZI, 0, P.T);
@@ -4898,7 +4910,7 @@
   // play one snap on the field: `before` is the state it was snapped from, `side` its strong side
   async function animatePlay(before, res, side, replay, look) {
     if (!replay) await cutReplay();
-    if (reduced() || (G.fast && !replay) || $('play').hidden) return false;
+    if ((!playsOn() && !replay) || (G.fast && !replay) || $('play').hidden) return false;
     const e = res.log.find((x) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(x.ev));
     if (!e) return false;
     const two = e.ev === 'pat' && e.two;
@@ -4933,6 +4945,14 @@
         (window.__oobLog = window.__oobLog || []).push({ oob: !!e.oob, shown: x < SX0 || x > SX1, mine: e.team === G.me, call: e.call, evt: e.evt || '', yards: e.yards, x: +x.toFixed(1), running: !!res.root.clock_running });
       }
     }
+    // (and every pass in the air flies at a pass's speed: one that hangs, slower than a soft toss, is drawn wrong)
+    if (window.__sepLog && P) {
+      const pass = P.segs.find((s) => s.kind === 'fly' && s.lift);
+      if (pass) {
+        const yd = Math.hypot((pass.x1 - pass.x0) / XYD, pass.L1 - pass.L0), dur = pass.t1 - pass.t0;
+        if (dur > 0.45 && yd / dur < 10) (window.__floatLog = window.__floatLog || []).push({ call: e.call, yl: before.yl, yd: +yd.toFixed(1), s: +dur.toFixed(2), route: e.route || null });
+      }
+    }
     scene = sc;
     if (!P) return false;
     sc.svg.querySelectorAll('.nm').forEach((t) => t.classList.add('gone'));     // the names drop at the snap
@@ -4942,7 +4962,7 @@
     const tos = pre.filter((x) => x.ev === 'timeout'), snapT = ro ? ro.t : tos.length ? tos[tos.length - 1].t : before.t;
     const clk = { t0: before.t, snap: snapT, end: Math.min(res.root.t, snapT) };
     P.motion = two ? null : motionOf(sc, e, before, before.t - snapT);
-    await runPlan(sc, P, PLAY_SPEED * playSpeed(), clk);
+    await runPlan(sc, P, PLAY_SPEED * (playSpeed() || 1), clk);
     fadeNext = true;
     lastBall = null;
     return true;
