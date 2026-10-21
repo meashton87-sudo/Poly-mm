@@ -2511,7 +2511,7 @@
         if (scoring) {
           if (!crossed && (offScores ? a.off : !a.off) && past > 0) crossed = q;
           if (!crossed && !inb && !outFirst) outFirst = q;
-        } else deepest = Math.max(deepest, past);
+        } else if (!(e.incomplete || e.evt === 'drop')) deepest = Math.max(deepest, past);    // (a ball dropped in the end zone was never carried)
         last = q;
       }
     });
