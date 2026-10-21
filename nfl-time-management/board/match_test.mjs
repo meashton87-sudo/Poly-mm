@@ -263,7 +263,7 @@ async function runAnswering(w, a, ms) {
   const codes = new Set([...a.all('rematch'), ...b.all('rematch')].map((m) => m.room));
   assert.strictEqual(codes.size, 1, 'one new room, however many taps');
   const nr = [...codes][0], R2 = await state(w, nr);
-  assert.deepStrictEqual([R2.teams, R2.pre, R2.mode], [['CHI', 'GB'], true, 'friend'], 'the same teams, the same two players');
+  assert.deepStrictEqual([R2.teams, R2.pre, R2.mode, R2.seats], [['GB', 'CHI'], true, 'friend', (await state(w, 'FFF234')).seats.slice().reverse()], 'the same teams, the same two players, the seats flipped (the other calls the toss)');
   assert.strictEqual(await new FakeClient(w, K(99)).open(nr), 409, 'nobody else gets in');
   w.close();
 }
@@ -289,7 +289,7 @@ async function runAnswering(w, a, ms) {
   await p2b.queue({ mode: 'ranked', team: 'GB', name: 'New2' });
   await w.advance(MM.WIN_OPEN_S * 1000 + 3000);
   assert.ok(!p[2].last('match') && !p2b.last('match'), 'never matched with itself');
-  assert.strictEqual(w.obj('lobby').ctx.getWebSockets('q').length, 1, 'one ticket per device');
+  assert.strictEqual(w.obj('lobby:ot:ranked:0').ctx.getWebSockets('q').length, 1, 'one ticket per device');
   // a long wait opens the window: anyone
   await p[3].queue({ mode: 'ranked', team: 'GB', name: 'New3' });
   assert.ok(p2b.last('match') && p2b.last('match').room === p[3].last('match').room, 'paired');
@@ -470,6 +470,81 @@ async function runAnswering(w, a, ms) {
   const rated = P.last('rated').rated;
   assert.deepStrictEqual([rated.rated, rated.reason, rated.ratings[0].delta, rated.ratings[1].delta], [false, 'network', 0, 0], 'one network (an IPv6 /64): unrated');
   assert.ok(!JSON.stringify(await state(w, room)).includes('203.0.113') && !JSON.stringify(await state(w, room)).includes('2001:db8'), 'no address kept');
+  w.close();
+}
+// ---- the computer: seat 1 is the engine (its every call the engine's own), never a forfeit, never rated
+async function playOut(w, phones, maxN = 400) {
+  for (let g = 0; g < maxN; g++) {
+    const last = phones[0].last('step') || { ...phones[0].last('start'), n: -1 };
+    if (phones[0].last('over') || (last.result)) break;
+    for (const [seat, c] of phones.entries()) {
+      if (!c || !last.ms || !VSCore.need(last.ms).includes(seat) || c.answered === last.n + 1) continue;
+      const role = VSCore.role(last.ms, seat);
+      c.answered = last.n + 1;
+      c.send({ t: 'half', n: last.n + 1, half: role === 'pick' ? { pick: 'offense' } : role === 'defense' ? { dc: { pers: 'base', front: 'even', cover: 'c3', rush: 4 } } : role === 'pat' ? { two: true } : { action: { call: g % 3 ? 'inside' : 'td' } } });
+    }
+    await w.advance(1000);
+  }
+}
+{
+  const w = new World({ engine: stub });
+  const a = new FakeClient(w, K(100));
+  await a.open('CPU234', { mode: 'cpu' });
+  assert.deepStrictEqual([a.last('hello').seat, a.last('hello').cpu, a.last('hello').names[1]], [0, 1, 'The computer'], 'the player is seat 0, the computer seat 1');
+  a.send({ t: 'team', team: 'KC', name: 'Solo' });
+  await w.settle();
+  const st = a.last('start');
+  assert.ok(st && a.last('teams').teams[1] && a.last('teams').teams[1] !== 'KC', 'the computer takes another team, and the match starts at once');
+  await playOut(w, [a, null]);
+  const fin = a.last('step');
+  assert.ok(fin && fin.result && fin.result.by === 'score', 'a match against the computer plays to the end');
+  assert.ok(fin.n > 3 && !a.last('rated'), 'never rated');
+  const R = await state(w, 'CPU234');
+  assert.deepStrictEqual([R.mode, R.defaults[1]], ['cpu', 0], 'the computer never defaults');
+  a.send({ t: 'rematch' });
+  await w.settle();
+  const nr = a.last('rematch');
+  assert.ok(nr && (await state(w, nr.room)).mode === 'cpu', 'a rematch with the computer at once');
+  w.close();
+}
+
+// ---- the room's object evicted mid-match, then a deploy (every socket closed, the object restarted): the match goes on
+{
+  const w = new World({ engine: stub });
+  const a = new FakeClient(w, K(110)), b = new FakeClient(w, K(111));
+  await a.open('EVC234', { mode: 'friend' }); await b.open('EVC234');
+  a.send({ t: 'team', team: 'KC', name: 'A' }); b.send({ t: 'team', team: 'BUF', name: 'B' });
+  await w.settle();
+  await playOut(w, [a, b], 3);
+  const n0 = (await state(w, 'EVC234')).n;
+  w.evict('room:EVC234');
+  await playOut(w, [a, b], 3);
+  assert.ok((await state(w, 'EVC234')).n > n0, 'evicted: the next calls are played (state in storage, the stepper rebuilt)');
+  w.evict('room:EVC234', { deploy: true });
+  assert.ok(a.closedWith === 1012 && b.closedWith === 1012, 'a deploy closes the sockets');
+  const n1 = (await state(w, 'EVC234')).n;
+  const a2 = new FakeClient(w, a.key), b2 = new FakeClient(w, b.key);
+  await a2.open('EVC234', { since: 0 }); await b2.open('EVC234', { since: 0 });
+  assert.deepStrictEqual([a2.last('hello').n, a2.last('hello').phase, a2.last('hello').seat, b2.last('hello').seat], [n1, 'live', 0, 1], 'back in after the deploy, the same seats and state');
+  a2.inbox.push(...a.inbox.filter((m) => m.t === 'step' || m.t === 'start'));
+  await playOut(w, [a2, b2]);
+  const fin = a2.last('step');
+  assert.ok(fin && fin.result && fin.ms.over, 'the match ends on the field after an eviction and a deploy');
+  assert.strictEqual(w.errors.length, 0, `no errors: ${w.errors[0]}`);
+  w.close();
+}
+// ---- full or off: the phone is told (busy), never left waiting
+{
+  const w = new World({ engine: stub });
+  w.env.VS_MAX_QUEUE = '1';
+  const a = new FakeClient(w, K(120)), b = new FakeClient(w, K(121));
+  await a.queue({ mode: 'ranked', team: 'KC', name: 'One', game: 'five' });
+  await b.queue({ mode: 'ranked', team: 'BUF', name: 'Two', game: 'five', ip: '1.2.3.4' });
+  assert.ok(!a.last('busy') && b.last('busy') && b.closedWith === 4002, 'a full queue says busy');
+  const c = new FakeClient(w, K(122));
+  assert.strictEqual(await c.open('QFF234', { mode: 'friend' }), 101);
+  const st = await w.connect(`/vs/ws?room=QFF235&key=${K(123)}&off=1`, 'room:QFF235');
+  assert.strictEqual(st.realStatus, 101, 'Versus off: a new room answers busy');
   w.close();
 }
 console.log('match rooms ok');

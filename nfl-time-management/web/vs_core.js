@@ -363,7 +363,8 @@
   // ranked plays even: both teams at the league's average strength (the real rosters, names and lineups; their style,
   // proe, stays). Casual and friend matches play the teams as they are
   function evenTeam(t, pool) {
-    const T = Object.values(pool.teams), mean = (f) => T.reduce((s, x) => s + f(x), 0) / T.length;
+    if (!t || !t.base) return t;               // (a test's stand-in team: nothing to even out)
+    const T = Object.values(pool.teams).filter((x) => x.kicker && x.punter), mean = (f) => T.reduce((s, x) => s + f(x), 0) / T.length;
     return { ...t, base: { off_pass: 0, off_rush: 0, def_pass: 0, def_rush: 0, proe: t.base.proe }, qb: { ...t.qb, adjustment: 0 },
       injury_adjustment: { off_pass: 0, off_rush: 0, def_pass: 0, def_rush: 0 }, kicker: { ...t.kicker, rating: mean((x) => x.kicker.rating) },
       punter: { ...t.punter, rating: mean((x) => x.punter.rating) }, calls: {} };

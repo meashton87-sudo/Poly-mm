@@ -1890,22 +1890,66 @@ async function raceAdmin(req, env, storage, h, url) {
     next: i0 + limit < all.length ? page[page.length - 1].id : null }, 200, h);
 }
 
-// Versus (match.js): the room for a code, or the lobby for a quick match; only from the site's own pages
+// Versus (match.js): the room for a code, or the lobby for a quick match; only from the site's own pages.
+// Worker vars, no deploy needed: VS_ON "off" turns new matches off (a match already going plays on; the page says
+// Versus is busy and offers the computer), VS_MAX_QUEUE caps the players waiting in one lobby, VS_LOBBY_SHARDS spreads
+// casual matchmaking over that many objects. Per address (this isolate's count, a minute at a time): VS_JOIN_MAX queue
+// joins and VS_ROOM_MAX room connections
+const VS_RATE = new Map();
+function vsLimited(req, env, what) {
+  const ip = req.headers.get('CF-Connecting-IP') || '', now = Date.now();
+  if (!ip) return false;
+  const max = +(what === 'q' ? env.VS_JOIN_MAX || 30 : env.VS_ROOM_MAX || 90), k = `${what}:${ip}`;
+  let x = VS_RATE.get(k);
+  if (!x || now - x.at > 60_000) { x = { at: now, n: 0 }; VS_RATE.set(k, x); }
+  if (VS_RATE.size > 20000) VS_RATE.clear();
+  x.n += 1;
+  return x.n > max;
+}
+let VS_STATUS = null;
+async function vsStatus(env) {
+  if (VS_STATUS && Date.now() - VS_STATUS.at < 5000) return VS_STATUS.body;
+  const on = String(env.VS_ON || 'on') !== 'off', shards = Math.max(1, Math.min(64, Math.floor(+env.VS_LOBBY_SHARDS) || 1));
+  const names = [];
+  for (const g of ['five', 'ot']) { names.push(`lobby:${g}:ranked:0`); for (let i = 0; i < shards; i++) names.push(`lobby:${g}:casual:${i}`); }
+  let waiting = 0;
+  await Promise.all(names.map((n) => env.MATCH.get(env.MATCH.idFromName(n)).fetch(new Request('https://lobby/vs/count')).then((r) => r.json()).then((x) => { waiting += x.waiting || 0; }).catch(() => {})));
+  const body = { on, waiting, max: +(env.VS_MAX_QUEUE || 20000) };
+  VS_STATUS = { at: Date.now(), body };
+  return body;
+}
 async function versus(req, env, url) {
   const h = cors(req, env);
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: h });
   if (!env.MATCH) return json({ error: 'versus is not set up' }, 503, h);
   const allowed = String(env.ALLOWED_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean), origin = req.headers.get('Origin') || '';
   if (allowed.length && !allowed.includes('*') && !allowed.includes(origin)) return json({ error: 'origin' }, 403, h);
+  if (url.pathname === '/vs/status') return json(await vsStatus(env), 200, { ...h, 'Cache-Control': 'no-store' });
   if (url.pathname === '/vs/ladder' || url.pathname === '/vs/me') {
     if ((url.pathname === '/vs/ladder') !== (req.method === 'GET') || !['GET', 'POST'].includes(req.method)) return json({ error: 'method' }, 405, h);
     const r = await env.MATCH.get(env.MATCH.idFromName('ladder')).fetch(req);
     return new Response(r.body, { status: r.status, headers: { ...h, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
   }
-  if (url.pathname === '/vs/queue') return env.MATCH.get(env.MATCH.idFromName('lobby')).fetch(req);      // matchmaking (a WebSocket)
+  const off = String(env.VS_ON || 'on') === 'off';
+  if (url.pathname === '/vs/queue') {          // matchmaking (a WebSocket): off or too many joins from one address: busy
+    if (off || vsLimited(req, env, 'q')) return vsBusy(req, h);
+    return env.MATCH.get(env.MATCH.idFromName(lobbyName(url.searchParams.get('game'), url.searchParams.get('mode'), env.VS_LOBBY_SHARDS))).fetch(req);
+  }
   const room = url.searchParams.get('room') || '';
   if (!ROOM_RE.test(room)) return json({ error: 'room' }, 400, h);
+  if (vsLimited(req, env, 'r')) return vsBusy(req, h);
+  // (off: a match going on plays on; a new one is never made: the room says so when it is empty)
+  if (off) req = new Request(req.url.replace(/([?&])room=/, '$1off=1&room='), req);
   return env.MATCH.get(env.MATCH.idFromName(`room:${room}`)).fetch(req);
+}
+// busy: a WebSocket that says so and closes (the page can read a message; it can't read an HTTP status on a socket)
+function vsBusy(req, h) {
+  if (req.headers.get('Upgrade') !== 'websocket') return json({ error: 'busy' }, 503, h);
+  const [client, server] = Object.values(new WebSocketPair());
+  server.accept();
+  server.send(JSON.stringify({ t: 'busy' }));
+  server.close(4002, 'busy');
+  return new Response(null, { status: 101, webSocket: client });
 }
 
 export class Board {
@@ -1921,12 +1965,12 @@ export class Board {
 }
 
 export { Match } from './match.js';
-import { ROOM_RE } from './match.js';
+import { ROOM_RE, lobbyName } from './match.js';
 
 export default {
   fetch(req, env) {
     const url = new URL(req.url);
-    if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me'].includes(url.pathname)) return versus(req, env, url);
+    if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me', '/vs/status'].includes(url.pathname)) return versus(req, env, url);
     if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, ...COMM_PATHS, '/board', '/daily', '/week', '/days'].includes(url.pathname) && !isSocial(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },

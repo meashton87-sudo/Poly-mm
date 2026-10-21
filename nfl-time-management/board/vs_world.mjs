@@ -8,7 +8,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Match, resetEngine } from './match.js';
+import { Match, resetEngine, lobbyName } from './match.js';
 
 const RealResponse = globalThis.Response;
 if (!globalThis.WebSocketPair || !globalThis.WebSocketPair.fake) {
@@ -86,6 +86,14 @@ export class World {
     if (engine) this.env.VS_ENGINE = engine;
   }
   close() { Date.now = this.realNow; }
+  // the object evicted (or restarted by a deploy): its memory gone, its storage, alarm and sockets kept (hibernation);
+  // deploy: every socket closed too (Cloudflare's 1012), the phones reconnect
+  evict(name, { deploy = false } = {}) {
+    const o = this.objects.get(name);
+    if (!o) return;
+    if (deploy) for (const ws of [...o.sockets]) { if (!ws.closed) { ws.closed = true; ws.code = 1012; const p = ws.peer; if (!p.closed) { p.closed = true; p.code = 1012; if (p.onclose) p.onclose({ code: 1012 }); } } }
+    o.m = new Match(o.ctx, this.env);
+  }
 
   obj(name) {
     let o = this.objects.get(name);
@@ -117,14 +125,17 @@ export class World {
   async run(name, fn) {
     const o = this.obj(name);
     await o.gate.enter();
-    try { return await this.als.run(o, () => fn(o)); } catch (e) { this.errors.push(`${name}: ${e && e.stack}`); throw e; } finally { o.gate.leave(); }
+    const st = { o, active: true, held: true };
+    try { return await this.als.run(st, () => fn(o)); } catch (e) { this.errors.push(`${name}: ${e && e.stack}`); throw e; } finally { st.active = false; if (st.held) o.gate.leave(); }
   }
   // waiting on the outside: the object's gate opens meanwhile (not inside blockConcurrencyWhile)
   async outside(fn) {
-    const o = this.als.getStore();
-    if (!o || o.bcw) return fn();
-    o.gate.leave();
-    try { return await this.als.exit(fn); } finally { await o.gate.enter(); }
+    // (work the event left running in the background, ctx.waitUntil's: outside the gate, the event long over)
+    const st = this.als.getStore();
+    if (!st || st.o.bcw || !st.active || !st.held) return this.als.exit(fn);
+    st.held = false;
+    st.o.gate.leave();
+    try { return await this.als.exit(fn); } finally { if (st.active) { await st.o.gate.enter(); st.held = true; } }
   }
   deliver(o, ws, raw) { this.pending = (this.pending || 0) + 1; this.run(o.name, (x) => x.m.webSocketMessage(ws, raw)).catch(() => {}).finally(() => { this.pending -= 1; }); }
   closed(o, ws) { this.pending = (this.pending || 0) + 1; this.run(o.name, (x) => x.m.webSocketClose(ws)).catch(() => {}).finally(() => { this.pending -= 1; }); }
@@ -179,15 +190,15 @@ export class World {
 // a phone's connection to a room: what it got, in order
 export class FakeClient {
   constructor(world, key) { this.world = world; this.key = key; this.inbox = []; this.ws = null; this.closedWith = null; this.handlers = []; }
-  async open(room, { mode = '', since = 0 } = {}) {
-    const res = await this.world.connect(`/vs/ws?room=${room}&key=${this.key}${mode ? `&mode=${mode}` : ''}&since=${since}`, `room:${room}`);
+  async open(room, { mode = '', since = 0, game = '' } = {}) {
+    const res = await this.world.connect(`/vs/ws?room=${room}&key=${this.key}${mode ? `&mode=${mode}` : ''}&since=${since}${game ? `&game=${game}` : ''}`, `room:${room}`);
     if ((res.realStatus ?? res.status) !== 101) return res.realStatus ?? res.status;
     this.attach(res.webSocket);
     await this.world.settle();
     return 101;
   }
   async queue({ ip, ...q }) {        // (ip: the phone's address, as Cloudflare tells the worker: CF-Connecting-IP)
-    const res = await this.world.connect(`/vs/queue?key=${this.key}&${new URLSearchParams(q)}`, 'lobby', ip ? { 'CF-Connecting-IP': ip } : {});
+    const res = await this.world.connect(`/vs/queue?key=${this.key}&${new URLSearchParams(q)}`, lobbyName(q.game, q.mode), ip ? { 'CF-Connecting-IP': ip } : {});
     if ((res.realStatus ?? res.status) !== 101) return res.realStatus ?? res.status;
     this.attach(res.webSocket);
     await this.world.settle();
