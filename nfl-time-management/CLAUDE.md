@@ -77,6 +77,10 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   off every request to another host than the site's own and hands the page a stub board in place of its
   `<meta name="board-api">`, so the page's board address must keep coming only from that meta (its selftest fails on a
   page that still names the real board). Findings go in its report; only the harness breaking turns the run red.
+- Versus on the site (site.yml VS_ON): "off", "on" (everyone) or "pro" (site.py --vs --vs-pro: part of Pro; game.js VS_PRO:
+  the lobby, its quick match, ranked and the computer take Pro, anyone else gets the Pro pitch; a room's link, a Pro
+  player's invite, plays for whoever has it); VS_AT (--vs-at: <meta name="vs-at">) holds it until a time, a reload after
+  shows it. "pro" without PRO_ON is no Versus at all. The gate is the page's (isPro): the room never asks.
 - Versus (board/match.js): the room plays the football (web/vs_core.js holds the college-overtime rules, shared with the
   page); phones only send calls. Each snap's seed is drawn fresh by the room and never sent to a phone (a phone that
   knew it could see what a call does before making it). lazy_sim_test.mjs and vs_stress.mjs need board/assets/vs (the
