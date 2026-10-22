@@ -264,6 +264,9 @@ export class Match {
     if (seat in pend.halves) return;                                   // a call, once locked, stays
     pend.halves[seat] = VSCore.cleanHalf(R.ms, seat, m.half, E.eng.pb);
     R.defaults[seat] = pend.halves[seat] ? 0 : R.defaults[seat] + 1;   // nothing usable (the phone's clock ran out): a default
+    // (the computer's call in here too: cpuTurn's own write of it, racing this one, could be lost under it, and the
+    // match then waited out CPU_DECIDE_MS)
+    if (R.cpu != null && VSCore.need(R.ms).includes(R.cpu) && !(R.cpu in pend.halves)) pend.halves[R.cpu] = R.cpuLevel === 'rookie' ? this.rookieHalf(R, E) : null;
     if (VSCore.need(R.ms).every((s) => s in pend.halves)) return this.commit(R, pend, E, now);
     await this.ctx.storage.put('pend', pend);
     await this.save(R);

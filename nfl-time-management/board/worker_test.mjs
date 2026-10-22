@@ -119,7 +119,7 @@ b = await (await day({ date: today, key: 'anon-device-key-0000001', p: 0.9, spot
 assert.strictEqual(b.counted, false); assert.strictEqual(b.n, 4); assert.deepStrictEqual(b.top.map((x) => [x.name, x.p]), [['Eli', 0.82], ['Pat', 0.5]]);
 r = await call('GET', null, { path: `/daily?date=${today}` });
 b = await r.json();
-assert.strictEqual(b.n, 4); assert.ok(!JSON.stringify(b).includes('kh'), 'no key hashes out');
+assert.strictEqual(b.n, 4); assert.ok(!JSON.stringify(b).includes('"kh"'), 'no key hashes out');
 assert.strictEqual((await (await call('GET', null, { path: '/daily?date=2001-01-01' })).json()).n, 0, 'a day nobody played');
 // a name claimed on the daily list is claimed on the survivor board too
 await day({ date: today, key: 'nate-device-key-0000001', p: 0.7, spots: [0, 0, 0], name: 'Nate' });
@@ -178,7 +178,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   b = await (await post({ key: 'fair-old-device-key-0002', p: 0.9, name: 'Bee' })).json();
   assert.ok(b.top.some((x) => x.name === 'Bee') && !b.fair.top.some((x) => x.name === 'Bee'), 'an old result on the whole list only');
   b = await (await call('GET', null, { path: `/daily?date=${D}` })).json();
-  assert.deepStrictEqual([b.n, b.fair.n], [5, 2]); assert.ok(!JSON.stringify(b).includes('kh'), 'no key hashes out of the fair set');
+  assert.deepStrictEqual([b.n, b.fair.n], [5, 2]); assert.ok(!JSON.stringify(b).includes('"kh"'), 'no key hashes out of the fair set');
   // the stats page's day list: the fair set's players, average and best beside the day's
   const dd = (await (await call('GET', null, { path: '/days' })).json()).days, x = dd.find((e) => e.date === D);
   assert.deepStrictEqual([x.n, x.n2, x.best2, x.best], [5, 2, 0.5, 0.99]); assert.ok(Math.abs(x.avg2 - 0.4) < 1e-9);
@@ -851,7 +851,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual(w.week.from, D(1));
   let g = await (await call('GET', null, { path: `/week?date=${D(6)}` })).json();
   assert.deepStrictEqual(g.top.map((x) => [x.name, x.pts]), [['Wes', 350], ['Val', 285], ['Late Larry', 100]], 'a past week stands as it was');
-  assert.strictEqual(g.you, undefined, 'a GET has no "you"'); assert.ok(!JSON.stringify(g).includes('kh') && !JSON.stringify(g).includes('"at"'), 'no key hashes or times out');
+  assert.strictEqual(g.you, undefined, 'a GET has no "you"'); assert.ok(!JSON.stringify(g).includes('"kh"') && !JSON.stringify(g).includes('"at"'), 'no key hashes or times out');
   // a result counts in the weeks it is in, and only those: D(6)'s in the week to D(12), not D(13)
   g = await (await call('GET', null, { path: `/week?date=${D(12)}` })).json();
   assert.deepStrictEqual(g.top.map((x) => [x.name, x.pts]), [['Late Larry', 100], ['Val', 95], ['Wes', 50]], 'the week to D(12): D(6) and D(7) only (Wes 30 + 20)');
@@ -1718,7 +1718,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual(d.rows.length, 20, 'the top 20 shown');
   assert.strictEqual(d.n, 33, 'everyone counted');
   const raw = JSON.stringify(d) + JSON.stringify(await (await play(id, { name: 'Late', score: 1, key: ck(99) })).json());
-  for (const k of [KEY.eli, KEY.matt, await sha256hex(KEY.eli), (await sha256hex(KEY.eli)).slice(0, 16), (await sha256hex(KEY.matt)).slice(0, 16), 'seen', 'kh']) assert.ok(!raw.includes(k), `no ${k.slice(0, 20)} out`);
+  for (const k of [KEY.eli, KEY.matt, await sha256hex(KEY.eli), (await sha256hex(KEY.eli)).slice(0, 16), (await sha256hex(KEY.matt)).slice(0, 16), '"seen"', '"kh"']) assert.ok(!raw.includes(k), `no ${k.slice(0, 20)} out`);     // (the fields by name: a random challenge id can hold the letters kh)
   // bad ids and paths
   assert.strictEqual((await view('nope')).status, 404, 'a malformed id');
   assert.strictEqual((await view('abcdefg')).status, 404, 'an id never made');

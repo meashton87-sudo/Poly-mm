@@ -26,6 +26,19 @@ def test_only_the_game():
             assert not OFF.search(x), f"{n['date']}: {x!r} names something that is not the game ({OFF.search(x).group(0)})"
 
 
+# the league's marks (the owner's rule: nothing on the page for the league to object to): never the league's name or
+# its events and trademarks, a club's nickname (tests/test_names.py) or a famous play's trademarked name
+MARKS = re.compile(r"\b(NFL\w*|National Football League|Super Bowl|Pro Bowl|Lombardi|Philly Special|Madden|NFLPA)\b", re.I)
+
+
+def test_no_league_marks():
+    for n in NOTES:
+        for x in [n["title"], *n["items"]]:
+            assert not MARKS.search(x), f"{n['date']}: {x!r} names a league mark ({MARKS.search(x).group(0)})"
+    page = (ROOT / "web" / "patch-notes.html").read_text()
+    assert not MARKS.search(page.split("<!--SITE-FOOT-->")[0] if "<!--SITE-FOOT-->" in page else page)
+
+
 def test_the_page_is_built():
     spec = importlib.util.spec_from_file_location("site_build", ROOT / "scripts" / "site.py")
     s = importlib.util.module_from_spec(spec)
