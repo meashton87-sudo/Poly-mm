@@ -1,0 +1,182 @@
+{
+  "about": "Every change to the game, newest first. Each update adds its notes here (scripts/site.py builds /patch-notes from this file). Game changes only: no ads, analytics, payments or behind-the-scenes work, and nothing that is not live yet.",
+  "notes": [
+    {
+      "date": "2026-10-21",
+      "title": "Honest odds, pass protection and one-tap pass plays",
+      "items": [
+        "A receiver's catch % is now how often that pick is caught on the snap: sacks, scrambles and throwaways count, and so does calling the same route again and again.",
+        "Rollouts fixed: a rollout to a receiver was mostly ending in a scramble, sack or throwaway. Now it is at most 15%.",
+        "Pass protection: Standard, RB in or Max protect. More blockers mean less pressure and fewer sacks, but the men who stay in can't catch a pass.",
+        "📋 Plays: nine one-tap pass concepts (Four Verticals, Smash, Flood, Mesh, Slants, Stick, Dagger, Post-Wheel, Sideline), each drawn from your formation with what it beats. The one that fits the situation comes first, and you can still change any route after.",
+        "Phones: the pass and run screens fit with no scrolling. Receivers two to a row, the options as small chips, the big buttons kept big.",
+        "The tackler is on screen from the moment he goes for the ball carrier.",
+        "Defenders no longer run right by the ball carrier without making the tackle."
+      ]
+    },
+    {
+      "date": "2026-10-21",
+      "title": "Sacks, penalties, run blocking and motion",
+      "items": [
+        "A pass to a receiver you picked can be sacked, or end in a scramble or throwaway, at the real NFL rate.",
+        "Penalties: accept or decline them.",
+        "Calling the same pass over and over gets worse: the defense sits on it, and the game tells you after the second time.",
+        "Run blocking: Zone, Power, Counter, Duo or Trap, each better against a light box, a loaded box or a blitz.",
+        "Motion: swipe a receiver, tight end or back sideways. Against man coverage, his defender follows him; against zone, the linebackers and safeties slide.",
+        "Empty and two-back formations are real: plays come from NFL plays run from that set.",
+        "The stats page counts Survivor games and Pro drives in the drives played.",
+        "Kicks line up as a real kicking unit.",
+        "A fumble recovered out of bounds is shown going out of bounds.",
+        "Tennessee's checkerboard end zone.",
+        "A quick throw nobody could get to that falls incomplete is shown as a drop."
+      ]
+    },
+    {
+      "date": "2026-10-20",
+      "title": "Challenges, fanbases, replays and rules fixes",
+      "items": [
+        "Challenge a friend from the daily's end card; see how rare your calls were against the crowd; pick your team and see how its fans did.",
+        "Who you called it like: the real offensive and defensive play-callers your calls matched.",
+        "Replays, the 10-second runoff, pre-snap motion, a weekly Survivor board, and Thursday's featured daily.",
+        "A shorter end card, with the details behind See the breakdown.",
+        "Who plays: pick the quarterback too. Swapping one player for another at his position keeps the same grouping.",
+        "Passes look like what happened: a catch in his hands, and each miss as it was charted.",
+        "Rules from player reports: offside is not an automatic first down, punts into the end zone, timeouts where they belong.",
+        "Punt return touchdowns happen at the real rate.",
+        "Every kick can be blocked, at the NFL's rate.",
+        "False starts are back, at the situation's real rate.",
+        "Punts land on whole yard lines.",
+        "A personnel grouping draws from enough real plays, so the same few results no longer repeat.",
+        "Survivor's best run follows your account to every phone."
+      ]
+    },
+    {
+      "date": "2026-10-19",
+      "title": "Build a scenario",
+      "items": [
+        "Pro: build a scenario with any two team-seasons from 2001 to 2026, in any situation.",
+        "Pro: title your scenarios and post them to Community scenarios, with plays and wins.",
+        "Get out of bounds is set route by route.",
+        "This week's featured dailies.",
+        "Teams go by their city everywhere.",
+        "If something breaks, the game says so with a Reload button."
+      ]
+    },
+    {
+      "date": "2026-10-18",
+      "title": "Fair scores, start over and draw any play",
+      "items": [
+        "A fairer daily score: every call graded the same way, and luck counts for nobody.",
+        "Start over: restart a drive mid-play.",
+        "Draw the play in every mode: runs, RPOs, the quarterback's drop, your defense and kicks.",
+        "The Snap button is always in reach at the bottom of the calls.",
+        "A Home screen: today's drive, Survivor, Pro and your stats in one place.",
+        "Featured days get a title. Daily No. 8: Arizona at Los Angeles, pick your side.",
+        "The computer plays smarter: defensive timeouts, untimed downs, a late hurry-up, fourth downs and onside kicks.",
+        "Matchups measured on real plays; every Pro try gets fresh dice.",
+        "Pro: historic drives use the real drive's lineup and their era's overtime rules; playoff runs end on a loss.",
+        "Pro: lost your code? Enter the email you paid with and it is emailed to you.",
+        "Faster loading, and play offline after your first visit.",
+        "A reload in the middle of a play picks up right away.",
+        "Play the whole game from the keyboard, with better contrast.",
+        "Every player and the ball stay on the field on a short field."
+      ]
+    },
+    {
+      "date": "2026-10-17",
+      "title": "Badges, leaderboards, friend challenges and the broadcast view",
+      "items": [
+        "Badges, and streak freezes that save a missed day.",
+        "Daily and weekly leaderboards by name, and practice drives after the daily.",
+        "Friend challenges: your share link carries your score.",
+        "Share my week: a picture of your last seven dailies.",
+        "A first-drive tour, and Add to Home Screen.",
+        "The daily's intro shows today's players, the typical score and the one to beat.",
+        "Phones: the broadcast view, with the field filling the screen, the scoreboard on top and the calls in a sheet you can drag down.",
+        "Draw a receiver's route on the field; it plays as the closest real route at the depth drawn.",
+        "Your defense lines up on the field as you pick it.",
+        "A simple-defense switch, and quick-call descriptions on screen.",
+        "One-tap quick pass and real screens; get out of bounds shown up front late.",
+        "A real pocket in pass protection, breakups at the ball, and punt coverage that runs.",
+        "Ball speed by the throw: line drives, lofted deep balls and soft tosses.",
+        "Ball carriers stay in bounds unless you ask them out. Catch-and-runs follow the route, and runs head for open grass.",
+        "A called kick always gets off, and a timeout never ends the half. Their timeouts are shown before your call, and no snap happens at 0:00.",
+        "Stands, cheerleaders and a mascot behind each end zone.",
+        "One brag number on the card: outcalled X% of today's players.",
+        "Faster loading."
+      ]
+    },
+    {
+      "date": "2026-10-16",
+      "title": "Pro, accounts and the end card",
+      "items": [
+        "Pro: famous historic drives with A-to-F grades, playoff runs, and the archive of past dailies.",
+        "Pro: a just-played drive from the latest NFL game, marked with a badge.",
+        "The Gauntlet: a one-night contest on the historic drives.",
+        "Accounts: sign in with Google or an emailed link. Your stats follow you, your username goes on the boards, plus friend leagues and an optional daily email.",
+        "The end of the game: why each call was graded as it was, the real coach by name, a picture to share, and a daily reminder.",
+        "The score is mostly your calls, partly the result.",
+        "Anticipation throws: the ball meets the receiver as he comes out of his break.",
+        "Running backs no longer wait to be tackled.",
+        "Spots start from the score before the snap.",
+        "No defensive call when the other team kneels out the clock.",
+        "Saturday's daily: a college classic, with college overtime."
+      ]
+    },
+    {
+      "date": "2026-10-15",
+      "title": "Overtime, personnel, coach match and Super Bowl LI",
+      "items": [
+        "Coach match: your calls compared with 144 head coaches since 1999, each in his own era.",
+        "Personnel: pick 11, 12, 21 or 13. Backups come in, players jog on and off, and plays come from real NFL plays with that grouping.",
+        "Overtime in the daily drive, the two-minute warning, realistic long kicks, and a clearer clock.",
+        "Run it down: burn the clock to 0:03, call timeout, then kick.",
+        "Call the play on a two-point try, Philly Special included.",
+        "Each kick's make chance shown on its button.",
+        "Your score is measured against NFL play-callers of every skill level.",
+        "Your stats: how you call it, with a running tally of your calls against NFL play-callers in the same spots.",
+        "Featured days with their story. Sunday: 28–3, Super Bowl LI.",
+        "Spots from any season since 2012.",
+        "Player ratings blend several seasons of play.",
+        "A Screen button on the pass screen.",
+        "Incompletions show why they failed, with a defender at the ball. Loss call-outs say how big the loss was.",
+        "Tackles look real: the right defender makes the tackle at the right spot.",
+        "Stay in bounds when leading late.",
+        "The 2MD logo at midfield.",
+        "On wide screens the calls sit beside the field; compact receivers on phones.",
+        "A fumble after crossing the goal line is a touchdown. A field goal is allowed on any down late."
+      ]
+    },
+    {
+      "date": "2026-10-14",
+      "title": "One drive a day",
+      "items": [
+        "One drive a day, the same for everyone, and a stats page with everyone's results.",
+        "Jersey numbers on the players, and name tags before the snap.",
+        "Trick plays revamped.",
+        "Simpler screens and a faster first snap.",
+        "Share opens your phone's share sheet, and shared links show a preview.",
+        "A welcome screen, your streak on the results, and a share that asks back.",
+        "Your score is measured against NFL play-callers who read the defense's look.",
+        "Fixes: Survivor no longer freezes at the end of a game; the first half ends after a try at 0:00."
+      ]
+    },
+    {
+      "date": "2026-10-13",
+      "title": "Launch: Two-Minute Drill",
+      "items": [
+        "Call the plays in a real NFL late-game drive. Every snap is a real NFL play of your call, from the same kind of situation.",
+        "A playbook of runs, passes, RPOs and trick plays, built from 160,000 real snaps.",
+        "Every snap animated on the field at real NFL speeds, with players moving like NFL players.",
+        "The real teams and lineups of that game, with our own player ratings.",
+        "Every call graded on win chance, and you against the real coach.",
+        "Tempo control: no-huddle, huddle, spike or kneel.",
+        "Defense: read their look and make the call when they have the ball. Kickoffs: onside, deep or touchback.",
+        "Pick a receiver and change any route by tapping him on the field, with each receiver's odds shown.",
+        "A defense that adapts to your tendencies.",
+        "The snap goes at once; your call is graded while the play runs.",
+        "Survivor: win each random real game to keep going, with its own leaderboard and overtime."
+      ]
+    }
+  ]
+}

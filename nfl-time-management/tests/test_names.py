@@ -36,7 +36,8 @@ def test_every_team_by_its_city():
 
 
 def test_no_nickname_in_what_the_site_shows():
-    pages = ["game.js", "game.html", "scenario.js", "stats.html", "about.html", "how-it-works.html", "privacy.html", "og_card.html"]
+    pages = ["game.js", "game.html", "scenario.js", "stats.html", "about.html", "how-it-works.html", "privacy.html", "og_card.html",
+             "patch-notes.html", "patch_notes.json"]
     for f in pages:
         hits = [(i + 1, m.group(0)) for i, ln in enumerate((WEB / f).read_text().splitlines()) for m in NICK.finditer(ln)]
         assert not hits, (f, hits)

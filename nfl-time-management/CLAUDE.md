@@ -45,6 +45,11 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   web/spot_info.js, the site's own worker on its packs). spot_info.js copies game.js startRoot, buildScen, simScen and
   infoKey: change them together (a mismatch only makes the first call wait on the simulator, and the browser test fails).
   Every file the site loads is stamped with its own content (`?v=`; site.py check_stamps fails the build otherwise).
+- Patch notes (web/patch_notes.json -> /patch-notes, site.py patch_notes_html; the game's Home links it): **every PR that
+  changes the game adds its notes at the top** in the same PR (the date it merges, Eastern; a short title; one plain line
+  a change, as a player would say it). Game changes only: never ads, analytics, payments, the site's address, tests or
+  tooling, nor anything not live (Versus, Coach mode, the full defense) until it is. tests/test_patch_notes.py checks the
+  order and the wording; tests/test_names.py the team names.
 - NFL rules are encoded explicitly (clock stops, two-minute warning, out-of-bounds windows, play clock,
   timeouts). Keep a one-line rationale next to every policy constant at the top of `sim.py`.
 - The full grading pipeline (`scripts/run_analysis.py`, `validate_sim.py`, `make_report.py`,
