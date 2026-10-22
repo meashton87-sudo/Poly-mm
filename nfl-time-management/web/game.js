@@ -1015,6 +1015,17 @@
     const bot = sh.classList.contains('down') ? 66 : clip(sh.offsetHeight || vh * 0.45, 66, vh * 0.6);      // (a pass's sheet: up to 58%, game.html)
     return { top: 104, bot };
   }
+  // the field's size on a desktop (a player: "it feels condensed"): Standard, Large (the default) or Extra large, kept
+  // per device; the page wider and the field's column with it (game.html body.fs-*), and taller (fieldHeight)
+  const FS_KEY = `${STORE}:fieldsize`, FS = ['m', 'l', 'xl'], FS_LABEL = { m: 'Standard', l: 'Large', xl: 'Extra large' };
+  const fieldSize = () => { const v = load(FS_KEY, 'l'); return FS.includes(v) ? v : 'l'; };
+  function applyFieldSize() {
+    const v = fieldSize();
+    FS.forEach((k) => document.body.classList.toggle(`fs-${k}`, k === v));
+    const b = $('sizeBtn');
+    if (b) { b.textContent = `⤢ ${FS_LABEL[v]}`; b.title = 'Field size: tap for the next size'; b.setAttribute('aria-label', `Field size: ${FS_LABEL[v]}`); }
+  }
+  if (document.body) applyFieldSize();                  // (before the field is first drawn: its width comes from the page's)
   function fieldHeight() {
     const svg = $('field');
     const wpx = svg.parentElement.clientWidth || 360;
@@ -1022,7 +1033,9 @@
     // room left for the field: on wide screens the calls sit beside it (game.html); on a phone, what is above it (the
     // header, the score bar) and the call's first row below it (DOCK_ROOM) fit on the screen with no scrolling
     const side = window.matchMedia && window.matchMedia('(min-width: 1000px)').matches;
-    if (side) return Math.round((360 * clip(window.innerHeight - 280, 360, 860)) / wpx);
+    // (and as tall as the size picked lets it be: Standard leaves the most room around it)
+    const fs = fieldSize(), [room, lo, hi] = fs === 'xl' ? [140, 440, 1200] : fs === 'l' ? [200, 400, 1000] : [280, 360, 860];
+    if (side) return Math.round((360 * clip(window.innerHeight - room, lo, hi)) / wpx);
     const top = svg.parentElement.getBoundingClientRect().top + window.scrollY;
     return Math.round((360 * clip(window.innerHeight - clip(top, 60, 260) - DOCK_ROOM, 300, 720)) / wpx);
   }
@@ -13465,6 +13478,14 @@
     });
     $('restartBtn').addEventListener('click', restartAsk);
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
+    applyFieldSize();
+    $('sizeBtn').addEventListener('click', () => {
+      const v = FS[(FS.indexOf(fieldSize()) + 1) % FS.length];
+      save(FS_KEY, v);
+      track('field_size', { size: v });
+      applyFieldSize();
+      window.dispatchEvent(new Event('resize'));          // (the field drawn again at its new size: the resize handler)
+    });
     $('persBtn').addEventListener('click', openPers);
     $('formBtn').addEventListener('click', openForm);
     speedBtn();
