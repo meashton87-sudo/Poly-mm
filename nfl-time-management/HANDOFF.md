@@ -92,7 +92,11 @@ that folder first. It holds the project's rules and how every part works.
 - There's a "Share the result" button.
 - **Computer levels:** Rookie and Pro.
   - Rookie throws deep on any down and plays a soft defense with a light rush.
-  - `vs_cpu_test.mjs` measures a random-calling player beating the Rookie 53% of the time and the Pro 42%.
+  - It also settles for a field goal from second down on in range, unless three points would lose on the spot.
+  - `vs_cpu_test.mjs 600` measures a random-calling player beating the Rookie about 41–47% of the time and the Pro
+    40–47% (the 53% from 120 matches was noise). The calls move a match only a few points, so the Rookie is only a
+    little easier. Kicking a field goal that loses on the spot made it easier (57%) but looked broken, so it was
+    dropped.
 - **No play clock against the computer:** each call has 10 minutes, and locking the phone for under 10 minutes
   never forfeits (`CPU_DECIDE_MS`).
 - The match intro shows the full rules only for your first two matches.

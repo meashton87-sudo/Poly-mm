@@ -51,9 +51,11 @@ export const CPU_AFTER_S = 20;             // waiting this long in the queue: th
 // close a match left open), and a phone locked or away this long, not a minute, before it counts as leaving
 export const CPU_DECIDE_MS = 10 * 60_000;
 // the computer's level: 'pro' calls as NFL play-callers do (the engine's own call); 'rookie' makes a rookie's calls (deep
-// shots on any down, a soft defense with a light rush), a beatable first opponent (vs_cpu_test.mjs measures both)
+// shots on any down, field goals early, a soft defense with a light rush). vs_cpu_test.mjs measures both: the calls move
+// a match only a few points either way, so the rookie is only a little easier
 export const CPU_LEVELS = ['rookie', 'pro'];
-// (what a rookie play-caller does: throws deep on any down, sits back soft with three or four rushing)
+// (what a rookie play-caller does: throws deep on any down, settles for field goals, sits back soft with three or four
+// rushing)
 const ROOKIE_CALLS = ['deep_strong', 'deep_weak', 'deep_middle', 'pa_deep', 'deep_middle'];
 const ROOKIE_DEF = [{ pers: 'dime', front: 'light', cover: 'prevent', rush: 3 }, { pers: 'dime', front: 'light', cover: 'c4', rush: 3 }, { pers: 'nickel', front: 'light', cover: 'prevent', rush: 4 }];
 export const WATCH_MS = 15_000;            // after a snap: the play to watch (at most) before the play clock runs anyway
@@ -525,6 +527,9 @@ export class Match {
     if (role === 'offense') {
       const id = pick(ROOKIE_CALLS), c = E.eng.pb.calls.find((x) => x.id === id);
       if (c) h = { action: { call: c.id, play: c.kind === 'run' ? 'run' : 'pass' } };
+      // and it settles: in field-goal range from second down on it kicks, unless three points would lose it on the spot
+      const r = R.ms.root;
+      if (r.down >= 2 && r.yl <= 35 && !r.try2 && r.score[1 - R.cpu] - r.score[R.cpu] <= 3) h = { action: { play: 'fg' } };
     } else if (role === 'defense') h = { dc: { ...pick(ROOKIE_DEF) } };
     return h ? VSCore.cleanHalf(R.ms, R.cpu, h, E.eng.pb) : null;
   }

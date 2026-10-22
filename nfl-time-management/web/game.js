@@ -13011,7 +13011,7 @@
       Object.entries(VS_CPU_LEVELS).forEach(([k, label]) => {
         const b = el('button', `chip opt${vsCpuLevel() === k ? ' on' : ''}`, label);
         b.type = 'button'; b.setAttribute('aria-pressed', String(vsCpuLevel() === k));
-        b.title = k === 'rookie' ? 'Deep shots on any down and a soft defense: a good first opponent' : 'Calls plays the way NFL play-callers do';
+        b.title = k === 'rookie' ? 'Deep shots on any down, early field goals and a soft defense' : 'Calls plays the way NFL play-callers do';
         b.addEventListener('click', () => { save(VS_CPU_KEY, k); track('vs_cpu_level', { level: k }); drawLv(); });
         lv.append(b);
       });
