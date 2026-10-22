@@ -3,6 +3,13 @@
   "notes": [
     {
       "date": "2026-10-22",
+      "title": "No more runs backward for no reason",
+      "items": [
+        "A run can no longer turn into a runner going backward on purpose (a punter taking a safety to run out the clock): those real plays are left out of what a run can be."
+      ]
+    },
+    {
+      "date": "2026-10-22",
       "title": "A simpler pass screen",
       "items": [
         "The pass screen is simpler: your receivers, the quick throws and Snap, with more of the field in view. Protection, play action and rollouts are under More.",

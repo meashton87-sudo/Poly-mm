@@ -26,6 +26,7 @@ N_FINE = N_MODE * N_DOWN * N_YTG * N_ZONE
 ZONE_EDGES = np.array([3, 9, 20, 39, 59, 79, 99])
 YTG_EDGES = np.array([2, 5, 10, 99])
 MIN_POOL = 150
+RUN_LOSS_MAX = 15      # yards: a run losing more without a fumble was meant (an intentional safety): not drawn as a run
 
 
 # ------------------------------------------------------------- situations ---
@@ -152,7 +153,11 @@ def build_library(pbp: pd.DataFrame, seasons=None, seed: int = 7) -> pd.DataFram
         "yl": s["yardline_100"].to_numpy(),
         "season": s["season"].to_numpy(),
     })
-    lib = lib[~bad].reset_index(drop=True)
+    # a run that loses more than RUN_LOSS_MAX with no fumble was run backward on purpose (a punter taking a safety to
+    # burn the clock, 2020-25: 5 of the 7) or a trick play gone wrong: a coach's choice, never a run's random outcome
+    deliberate = ((lib["kind"] == KIND_RUN) & ~lib["penalty"] & (lib["yards"] < -RUN_LOSS_MAX)
+                  & s["fumble"].fillna(0).eq(0).to_numpy())
+    lib = lib[~bad & ~deliberate].reset_index(drop=True)
     lib["fine"] = fine_key(lib["mode"], lib["down"], lib["ytg"], lib["yl"])
     return lib
 
