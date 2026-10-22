@@ -3,6 +3,15 @@
   "notes": [
     {
       "date": "2026-10-22",
+      "title": "A simpler pass screen",
+      "items": [
+        "The pass screen is simpler: your receivers, the quick throws and Snap, with more of the field in view. Protection, play action and rollouts are under More.",
+        "When the rush gets there before your quarterback can throw to the man you picked, the play says so, and a throwaway goes out on that man's side.",
+        "Sacks and throwaways no longer hit every pass call on the same snap at once: each call has its own luck, at the same real-life rate."
+      ]
+    },
+    {
+      "date": "2026-10-22",
       "title": "A fix",
       "items": [
         "An interception no longer hangs in the air waiting for the defender: he takes it where he can get to it."
