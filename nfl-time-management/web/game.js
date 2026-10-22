@@ -8808,6 +8808,10 @@
     let groups = spotGroups();
     if (!groups.length) groups = [{ decs, res: 0, start: decs[0].bestWp }];
     const my = groups.reduce((a, g) => a + RESULT_W * g.res - g.decs.reduce((b, x) => b + x.cost, 0), 0);
+    // a game won where no call had anything at stake (up 50, say): every typical play-caller ends just where you did,
+    // and a tie counts in full, as good as theirs (a player who made every call right was graded an F, the middle of a
+    // crowd of ties). A loss with nothing at stake keeps half (a deep hole lost is no pass)
+    const held = groups.every((g) => g.res === 1) && snapStats(decs).every((x) => !x.matters);
     const R = rng(hash('pct3', dayN, DRIVE, RUN_N, ...(CUSTOM ? [CUSTOM] : []))), N = 6000;
     const lnL = Math.log(SKILL_LOOSE), lnS = Math.log(SKILL_SHARP) - lnL, lnM = Math.log(SKILL_MISREAD) - lnL;
     const D = groups.map((g) => g.decs.map((x) => ({ q: x.wps.map((o) => x.q[o.key] || 0), c: x.wps.map((o) => o.c), top: Math.max(...x.wps.map((o) => o.c)) })));
@@ -8828,7 +8832,7 @@
         const win = R() < clip(g.start - tot, 0.002, 0.998) ? 1 : 0;
         m += RESULT_W * win - tot;
       });
-      if (m < my - 1e-9) better += 1; else if (Math.abs(m - my) <= 1e-9) better += 0.5;
+      if (m < my - 1e-9) better += 1; else if (Math.abs(m - my) <= 1e-9) better += held ? 1 : 0.5;
     }
     if (mustWin() && groups.some((g) => g.res < 1)) return pctShown(Math.min(better / N, (PASS_AT - 1) / 100));
     return pctShown(better / N);
