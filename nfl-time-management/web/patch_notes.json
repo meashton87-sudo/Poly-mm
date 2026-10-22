@@ -3,6 +3,15 @@
   "notes": [
     {
       "date": "2026-10-22",
+      "title": "A cleaner screen",
+      "items": [
+        "The field is clear again: play speed, personnel, formation and ratings are under one ⚙ Options button (open it once and it stays open).",
+        "The run screen goes straight to the runs. The blocking choices are under ⋯, like the pass options.",
+        "The how-to lines show for your first few snaps, then get out of the way."
+      ]
+    },
+    {
+      "date": "2026-10-22",
       "title": "No more floating passes",
       "items": [
         "A short pass picked off near the quarterback, or a missed screen, no longer hangs in the air: he holds it a moment longer and it goes at a pass's speed."
