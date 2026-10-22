@@ -1718,7 +1718,7 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual(d.rows.length, 20, 'the top 20 shown');
   assert.strictEqual(d.n, 33, 'everyone counted');
   const raw = JSON.stringify(d) + JSON.stringify(await (await play(id, { name: 'Late', score: 1, key: ck(99) })).json());
-  for (const k of [KEY.eli, KEY.matt, await sha256hex(KEY.eli), (await sha256hex(KEY.eli)).slice(0, 16), (await sha256hex(KEY.matt)).slice(0, 16), 'seen', 'kh']) assert.ok(!raw.includes(k), `no ${k.slice(0, 20)} out`);
+  for (const k of [KEY.eli, KEY.matt, await sha256hex(KEY.eli), (await sha256hex(KEY.eli)).slice(0, 16), (await sha256hex(KEY.matt)).slice(0, 16), '"seen"', '"kh"']) assert.ok(!raw.includes(k), `no ${k.slice(0, 20)} out`);     // (the fields by name: a random challenge id can hold the letters kh)
   // bad ids and paths
   assert.strictEqual((await view('nope')).status, 404, 'a malformed id');
   assert.strictEqual((await view('abcdefg')).status, 404, 'an id never made');
