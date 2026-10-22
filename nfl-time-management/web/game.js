@@ -11727,6 +11727,7 @@
     const modes = el('div', `hmodes${PRO_ON ? '' : ' one'}`);
     modes.append(homeSurv());
     if (PRO_ON) modes.append(homePro(n));
+    if (VS_ON) modes.append(homeVs());
     box.append(h, day.el, modes, homeTools());
     const ls = myLeagues();
     if (ls.length) {
@@ -11817,6 +11818,16 @@
     a.append(el('div', 'hk', 'Survivor'), num,
       el('p', '', alive ? `Your run is alive: ${run.won} win${run.won === 1 ? '' : 's'} so far.` : 'Real fourth quarters back to back. One loss ends it.'),
       el('span', 'cta', alive ? 'Continue' : 'Play'));
+    return a;
+  }
+  // Versus: someone live (or the computer when nobody is on), college overtime
+  function homeVs() {
+    const a = el('a', 'hcard hvs');
+    a.href = '#vs';
+    a.dataset.to = 'versus';
+    a.append(el('div', 'hk', 'Versus · live'), el('div', 'hpitch', 'Play someone'),
+      el('p', '', 'College overtime against another player: you call your offense and your defense. Nobody on? Play the computer.'),
+      el('span', 'cta', 'Play'));
     return a;
   }
   // Pro: your record (drives passed and the rank, the runs, the archive), else what it is and its price
@@ -12640,7 +12651,7 @@
   // result to both phones, which animate it. The room keeps the play clock and the score, calls forfeits and rates
   // ranked matches; a phone only ever sends a call. Modes: ranked (the ladder: matched by rating), casual, a friend.
   const VS_TEAM_KEY = `${STORE}:vsteam`;
-  const VS_MODES = { ranked: 'Ranked', casual: 'Casual', friend: 'Friend match' };
+  const VS_MODES = { ranked: 'Ranked', casual: 'Casual', friend: 'Friend match', cpu: 'Versus the computer' };
   const VS_FORFEIT = 60;             // seconds a phone can be gone before its side forfeits (match.js FORFEIT_MS)
   const vs = { ws: null, seat: -1, mode: 'friend', teams: [null, null], taken: '', names: ['', ''], full: false, online: [false, false], off: [0, 0],
     phase: 'wait', n: 0, ms: null, ms0: null, got: {}, waiting: -1, last: null, deadline: 0, skew: 0, result: null, rated: null, started: false,
@@ -12771,6 +12782,7 @@
     state = load(stateKey(), null) || { spots: [], current: 0, done: false };
     startWorkers();
     track('vs_start', { mode: vs.mode, seat: vs.seat });
+    ezDrive(true);                      // (a match on: no full-screen ad or floating video over it, like a drive)
     resumeSpot(0);
     // this phone against the room: catch up decision by decision from where it was, or (too far behind) jump to now
     const have = (i) => !!vs.got[i];
@@ -12882,14 +12894,24 @@
     const t0 = Date.now(), line = el('p', 'lead', 'Finding you an opponent…'), info = el('p', 'note', '');
     const cancel = el('button', 'btn ghostbtn', 'Cancel');
     cancel.type = 'button';
-    box.append(el('h2', '', VS_MODES[mode]), el('p', 'note', `Your team: ${teamName(vsMyTeam())}`), line, info, cancel);
+    box.append(el('h2', '', VS_MODES[mode]), el('p', 'note', `Your team: ${teamName(vsMyTeam())}`), line, info, cpu, cancel);
     let ws, closed = false, tries = 0, size = 0, rating = 0;
+    // nobody to play after a while (match.js CPU_AFTER_S): the computer, one tap (never rated), or keep waiting
+    const cpu = el('button', 'btn', 'Play the computer now');
+    cpu.type = 'button'; cpu.hidden = true;
+    cpu.append(el('small', '', 'Unranked · starts right away'));
+    cpu.addEventListener('click', () => {
+      if (!ws || ws.readyState !== 1) return;
+      cpu.disabled = true;
+      track('vs_cpu', { mode, secs: Math.round((Date.now() - t0) / 1000) });
+      try { ws.send(JSON.stringify({ t: 'cpu' })); } catch (e) { cpu.disabled = false; }
+    });
     const done = () => { closed = true; clearInterval(tk); try { ws && ws.close(); } catch (e) { /* gone */ } };
     const draw = () => {
       const s = Math.round((Date.now() - t0) / 1000);
       info.textContent = `${size > 1 ? `${size} players searching` : 'Searching'} · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}${mode === 'ranked' && rating ? ` · your rating ${rating}` : ''}`;
       if (mode === 'ranked' && s > 25) line.textContent = 'Widening the search…';
-      if (s > 90) line.textContent = 'Not many players on right now. Keep waiting, or play a friend.';
+      if (s > 90 && cpu.hidden) line.textContent = 'Not many players on right now. Keep waiting, or play a friend.';
     };
     const tk = setInterval(draw, 1000);
     cancel.addEventListener('click', () => { done(); track('vs_queue_cancel', { mode, secs: Math.round((Date.now() - t0) / 1000) }); renderVsLobby(); });
@@ -12900,7 +12922,10 @@
       vs.q = ws;
       ws.onmessage = (ev) => {
         let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-        if (m.t === 'queued') { size = m.size; rating = m.rating; tries = 0; draw(); }
+        if (m.t === 'queued') {
+          size = m.size; rating = m.rating; tries = 0; draw();
+          if (m.cpu && cpu.hidden) { cpu.hidden = false; line.textContent = 'Nobody free right now. Keep waiting, or play the computer.'; track('vs_cpu_offer', { mode }); }
+        }
         if (m.t === 'match') {
           done();
           try { sessionStorage.setItem(`tmd:vsmode:${m.room}`, m.mode); } catch (e) { /* none */ }
@@ -12942,8 +12967,10 @@
       }
       vsQueue(mode);
     };
-    [['ranked', 'Ranked', 'Win to climb the ladder'], ['casual', 'Casual', 'Quick match, no rating'], ['friend', 'Friend', 'Send a link']].forEach(([m, label, sub]) => {
-      const b = el('button', `btn${m === 'friend' ? ' ghostbtn' : ''}`);
+    // (casual first: a quick match, no rating; ranked's first 10 games are placement, a rating that moves faster)
+    [['casual', 'Play now', 'Quick match, no rating'], ['ranked', 'Ranked', 'Win to climb the ladder'], ['cpu', 'Computer', 'Starts right away, no rating'],
+      ['friend', 'Friend', 'Send a link']].forEach(([m, label, sub]) => {
+      const b = el('button', `btn${m === 'friend' || m === 'cpu' ? ' ghostbtn' : ''}`);
       b.type = 'button';
       b.append(document.createTextNode(label), el('small', '', sub));
       b.disabled = !BOARD.api;
@@ -13252,6 +13279,10 @@
     next.href = '#vs';
     row.append(next);
     card.append(row);
+    // between matches: the card's ad (and a full-screen one at most every 10 minutes, ezBreak), never during one
+    ezDrive(false);
+    const ad = adBox('done');
+    if (ad) card.append(ad);
     d.append(card);
     drawTiles();
     vsShowRating();

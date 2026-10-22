@@ -1,0 +1,31 @@
+# The Versus load test's own worker (.github/workflows/versus-load.yml): the board's code under another name, so its
+# Durable Objects (lobby, rooms, ladder, board) are its own and nothing reaches the real board, ladder or players. No
+# cron, no secrets, any origin (the test's bots send none); only the engine's assets (assets/vs). Deleted after the run.
+name = "two-minute-drill-loadtest"
+main = "worker.js"
+compatibility_date = "2025-06-01"
+
+[vars]
+ALLOWED_ORIGINS = "*"
+SITE = "https://example.invalid"
+
+[assets]
+directory = "./assets-loadtest"
+binding = "ASSETS"
+run_worker_first = true
+
+[[durable_objects.bindings]]
+name = "BOARD"
+class_name = "Board"
+
+[[durable_objects.bindings]]
+name = "MATCH"
+class_name = "Match"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Board"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Match"]

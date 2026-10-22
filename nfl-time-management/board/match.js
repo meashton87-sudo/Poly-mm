@@ -13,7 +13,8 @@
 // decisions in a row, or whose phone is gone for FORFEIT_MS, forfeits. A ranked match is rated by the room when it ends (the ladder object), never by a phone.
 //
 //   GET  /vs/ws?room=CODE&key=DEVICEKEY&mode=M&since=N (WebSocket)  the room: seat by device, the calls, the plays
-//   GET  /vs/queue?key=DEVICEKEY&mode=ranked|casual&team=T&name=X (WebSocket)  matchmaking: a room when paired
+//   GET  /vs/queue?key=DEVICEKEY&mode=ranked|casual|cpu&team=T&name=X (WebSocket)  matchmaking: a room when paired
+//        (mode cpu: the computer at once, never in the queue)
 //   GET  /vs/ladder                                                    the ranked ladder (the top 50)
 //   POST /vs/me {key}                                                  your rating, record and rank
 //
@@ -26,7 +27,12 @@
 //                 {t:'clock', n, deadline, now}  this seat's deadline for decision n (dl: both seats')
 //                 {t:'locked', n, seat}  {t:'peer', online, off, now}  {t:'teams', teams, names}  {t:'taken', team}
 //                 {t:'over', result}  {t:'rated', rated}  {t:'rematch-ask', seat}  {t:'rematch', room}
-// Lobby -> client: {t:'queued', mode, size, wait, rating}  {t:'match', room, mode}
+// Lobby -> client: {t:'queued', mode, size, wait, rating, cpu}  {t:'match', room, mode}
+// Client -> lobby: {t:'cpu'}  play the computer now (offered once a ticket has waited CPU_AFTER_S)
+//
+// The computer (mode 'cpu', never rated): seat CPU_SEAT is no phone. Its half of every decision is the default, the
+// engine's own call: what NFL play-callers call in that spot, as often as they call it (the toss: defense, the try:
+// the kick), so it plays like an average NFL staff. It is in at once, never late, never away, never a forfeit.
 import NFLClockEngine from '../web/engine.js';
 import VSCore from '../web/vs_core.js';
 import { lazySimulator } from './lazy_sim.js';
@@ -38,7 +44,9 @@ export const ROOM_RE = /^[A-HJ-KM-NP-Z2-9]{6}$/;
 const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const KEY_RE = /^[A-Za-z0-9_-]{16,128}$/;
 const TEAM_RE = /^[A-Z]{2,3}$/;
-const MODES = ['ranked', 'casual', 'friend'];
+const MODES = ['ranked', 'casual', 'friend', 'cpu'];
+export const CPU_SEAT = 1, CPU_KEY = 'cpu', CPU_NAME = 'Computer';
+export const CPU_AFTER_S = 20;             // waiting this long in the queue: the computer is offered (casual or ranked)
 export const WATCH_MS = 15_000;            // after a snap: the play to watch (at most) before the play clock runs anyway
 export const DECIDE_MS = 30_000;           // the play clock: 30 seconds to call, from the moment the call comes up
 export const PLAY_MS = WATCH_MS + DECIDE_MS;    // a decision's last moment after the last snap
@@ -106,7 +114,7 @@ export class Match {
     const kh = await hashKey(key), now = Date.now();
     const mode = MODES.includes(url.searchParams.get('mode')) ? url.searchParams.get('mode') : 'friend';
     let R = await this.room();
-    if (!R) R = this.fresh(room, mode === 'ranked' ? 'casual' : mode, now);    // a ranked room is only ever made by the lobby
+    if (!R) R = this.fresh(room, mode === 'ranked' || mode === 'cpu' ? 'casual' : mode, now);    // a ranked room (or the computer's) is only ever made by the lobby
     let seat = R.seats.indexOf(kh);
     if (seat < 0 && !R.pre) seat = R.seats.indexOf(null);
     if (seat < 0) return new Response('the room is full', { status: 409 });
@@ -115,6 +123,7 @@ export class Match {
     R.off[seat] = 0;
     if (R.phase === 'wait' && R.seen[0] && R.seen[1] && R.teams[0] && R.teams[1]) this.begin(R, now);
     await this.save(R);
+    if (R.cpu != null && R.phase === 'live') await this.cpuTurn();
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     for (const old of this.ctx.getWebSockets(`s${seat}`)) { try { old.close(4000, 'replaced'); } catch (e) { /* gone */ } }
@@ -140,10 +149,11 @@ export class Match {
   async room() {
     const R = await this.ctx.storage.get('room');
     if (R && R.v !== 2) { await this.ctx.storage.deleteAll(); return null; }    // a room from before the server played the football
+    if (R) this.cpuSeat = R.cpu;
     return R || null;
   }
   save(R) { return this.ctx.storage.put('room', R); }
-  online() { return [0, 1].map((s) => this.ctx.getWebSockets(`s${s}`).length > 0); }
+  online() { const c = this.cpuSeat; return [0, 1].map((s) => s === c || this.ctx.getWebSockets(`s${s}`).length > 0); }
   broadcast(msg) {
     const s = JSON.stringify(msg);
     for (const ws of this.ctx.getWebSockets()) { try { ws.send(s); } catch (e) { /* closing */ } }
@@ -156,6 +166,7 @@ export class Match {
     const now = Date.now(), R = this.fresh(b.room, MODES.includes(b.mode) ? b.mode : 'casual', now);
     R.pre = true;
     R.seats = [b.seats[0], b.seats[1]];
+    if (R.mode === 'cpu') { R.cpu = CPU_SEAT; R.seats[CPU_SEAT] = CPU_KEY; R.seen[CPU_SEAT] = true; this.cpuSeat = CPU_SEAT; }
     R.teams = [TEAM_RE.test(b.teams && b.teams[0]) ? b.teams[0] : null, TEAM_RE.test(b.teams && b.teams[1]) ? b.teams[1] : null];
     if (R.teams[0] && R.teams[0] === R.teams[1]) R.teams[1] = null;
     R.names = [clean(b.names && b.names[0]), clean(b.names && b.names[1])];
@@ -199,8 +210,9 @@ export class Match {
     let m;
     try { m = JSON.parse(raw); } catch (e) { return; }
     if (!m || typeof m !== 'object') return;
-    const { seat } = ws.deserializeAttachment() || {};
+    const att = ws.deserializeAttachment() || {}, { seat } = att;
     if (m.t === 'ping') { try { ws.send('{"t":"pong"}'); } catch (e) { /* closing */ } return; }
+    if (att.q) return m.t === 'cpu' ? this.cpuMatch(ws, att) : undefined;
     if (seat !== 0 && seat !== 1) return;
     // the engine first (a fetch the first time): everything after it is this room's storage only, so no other
     // message gets in between reading the room and saving it
@@ -220,6 +232,7 @@ export class Match {
       if (R.seen[0] && R.seen[1] && R.teams[0] && R.teams[1]) this.begin(R, now);
       await this.save(R);
       await this.schedule(R);
+      if (R.cpu != null && R.phase === 'live') await this.cpuTurn();
       return;
     }
     if (m.t === 'rematch') return this.rematch(R, seat);
@@ -270,10 +283,29 @@ export class Match {
     await this.save(R);
     this.broadcast({ t: 'step', ...d, deadline: R.deadline, dl: R.dl, now, result });
     if (result) { this.steppers.clear(); return this.rate(R); }
-    const afk = [0, 1].filter((s) => R.defaults[s] >= AFK_LIMIT);
+    const afk = [0, 1].filter((s) => s !== R.cpu && R.defaults[s] >= AFK_LIMIT);
     if (afk.length === 2) return this.finish(R, { winner: -1, by: 'abandoned' });
     if (afk.length === 1) return this.finish(R, { winner: 1 - afk[0], by: 'forfeit', loser: afk[0], why: 'afk' });
     if (R.n >= MAX_N) return this.finish(R, { winner: -1, by: 'error' });
+    await this.schedule(R);
+    if (R.cpu != null) await this.cpuTurn();
+  }
+
+  // the computer's half of the decision now up (the default: the engine's own call), in at once; the snap when it was
+  // the last one wanted (a decision only the computer answers, a toss or a try, plays straight away: the phones play
+  // each step in turn)
+  async cpuTurn() {
+    let E;
+    try { E = await loadEngine(this.env); } catch (e) { console.error('vs engine', e && e.message); return; }    // the deadline retries
+    const R = await this.room();
+    if (!R || R.cpu == null || R.phase !== 'live' || !VSCore.need(R.ms).includes(R.cpu)) return;
+    let pend = await this.ctx.storage.get('pend');
+    if (!pend || pend.n !== R.n) pend = { n: R.n, halves: {} };
+    if (R.cpu in pend.halves) return;
+    pend.halves[R.cpu] = null;
+    if (VSCore.need(R.ms).every((s) => s in pend.halves)) return this.commit(R, pend, E, Date.now());
+    await this.ctx.storage.put('pend', pend);
+    this.broadcast({ t: 'locked', n: pend.n, seat: R.cpu });
     await this.schedule(R);
   }
 
@@ -310,7 +342,7 @@ export class Match {
 
   async rematch(R, seat) {                 // both have to ask: then one new room for both, the same teams (never ranked)
     if (R.phase !== 'over' || !R.seats.every(Boolean)) return;
-    R.again = [...new Set([...(R.again || []), seat])];
+    R.again = [...new Set([...(R.again || []), seat, ...(R.cpu != null ? [R.cpu] : [])])];      // (the computer always says yes)
     if (R.again.length < 2) { await this.save(R); this.broadcast({ t: 'rematch-ask', seat }); return; }
     let next = R.next;
     if (!next) {
@@ -322,7 +354,7 @@ export class Match {
         for (let i = 0; i < 5; i++) {
           const code = roomCode();
           const r = await this.env.MATCH.get(this.env.MATCH.idFromName(`room:${code}`)).fetch(new Request('https://room/vs/init', {
-            method: 'POST', body: JSON.stringify({ room: code, mode: R2.mode === 'friend' ? 'friend' : 'casual', seats: R2.seats, teams: R2.teams, names: R2.names }) }));
+            method: 'POST', body: JSON.stringify({ room: code, mode: R2.mode === 'friend' || R2.mode === 'cpu' ? R2.mode : 'casual', seats: R2.seats, teams: R2.teams, names: R2.names }) }));
           if (r.ok) { R2.next = code; await this.save(R2); return code; }
         }
         return null;
@@ -407,7 +439,7 @@ export class Match {
   // Every tick it pairs who it can: ranked by rating (a window that widens while they wait), casual first come.
   async queue(req, url) {
     if (req.headers.get('Upgrade') !== 'websocket') return new Response('websocket wanted', { status: 426 });
-    const key = url.searchParams.get('key') || '', mode = url.searchParams.get('mode') === 'ranked' ? 'ranked' : 'casual';
+    const want = url.searchParams.get('mode'), key = url.searchParams.get('key') || '', mode = want === 'ranked' ? 'ranked' : 'casual';
     const team = url.searchParams.get('team') || '';
     if (!KEY_RE.test(key) || !TEAM_RE.test(team)) return new Response('bad key or team', { status: 400 });
     const kh = await hashKey(key), name = clean(url.searchParams.get('name'));
@@ -424,6 +456,14 @@ export class Match {
     }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
+    // (the computer asked for straight away: its room, no time in the queue, nobody paired with it)
+    if (want === 'cpu') {
+      this.ctx.acceptWebSocket(server, ['cpuq']);
+      const t = { q: true, kh, mode: 'casual', team, name, rating, since: Date.now(), now: true };
+      server.serializeAttachment(t);
+      await this.cpuMatch(server, t);
+      return new Response(null, { status: 101, webSocket: client });
+    }
     this.ctx.acceptWebSocket(server, ['q']);
     server.serializeAttachment({ q: true, kh, mode, team, name, rating, since: Date.now() });
     await this.pairTick();
@@ -437,7 +477,8 @@ export class Match {
     const left = this.tickets(), now = Date.now();
     for (const t of left) {
       const size = left.filter((x) => x.mode === t.mode).length;
-      try { t.ws.send(JSON.stringify({ t: 'queued', mode: t.mode, size, wait: Math.round((now - t.since) / 1000), rating: Math.round(t.rating) })); } catch (e) { /* closing */ }
+      const wait = Math.round((now - t.since) / 1000);
+      try { t.ws.send(JSON.stringify({ t: 'queued', mode: t.mode, size, wait, rating: Math.round(t.rating), cpu: wait >= CPU_AFTER_S })); } catch (e) { /* closing */ }
     }
     if (left.length) await this.ctx.storage.setAlarm(now + MM.TICK_MS);
   }
@@ -466,6 +507,20 @@ export class Match {
         }
       }
     }
+  }
+  // a ticket that has waited CPU_AFTER_S asks for the computer: a room of its own against a team other than its own
+  // (never rated), and it leaves the queue
+  async cpuMatch(ws, t) {
+    if (!t.q || t.paired || (!t.now && Date.now() - t.since < CPU_AFTER_S * 1000 - 2000)) return;
+    let E;
+    try { E = await loadEngine(this.env); } catch (e) { return; }
+    const teams = Object.keys(E.pool.teams).filter((c) => c !== t.team && TEAM_RE.test(c));
+    if (!teams.length) return;
+    const other = teams[rand() % teams.length];
+    const room = await this.makeRoom('cpu', t, { kh: CPU_KEY, team: other, name: CPU_NAME });
+    if (!room) return;
+    ws.serializeAttachment({ ...t, paired: room });
+    try { ws.send(JSON.stringify({ t: 'match', room, mode: 'cpu' })); ws.close(1000, 'matched'); } catch (e) { /* gone: the room calls it off */ }
   }
   async makeRoom(mode, a, b) {
     for (let i = 0; i < 5; i++) {
