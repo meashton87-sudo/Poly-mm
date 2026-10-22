@@ -6470,7 +6470,7 @@
     // per device), and shown anyway while one of them is on
     const full = passMore() || (G.prot && G.prot !== 'std') || P.pa || P.roll;
     if (!VS && !P.draw) {
-      const mo = el('button', `chip more${passMore() ? ' on' : ''}`, passMore() ? 'Less' : 'More');
+      const mo = el('button', `chip more${passMore() ? ' on' : ''}`, bcast() ? '⋯' : passMore() ? 'Less' : 'More');     // (a phone: the head's one line)
       mo.type = 'button'; mo.id = 'passMore';
       mo.setAttribute('aria-pressed', String(passMore()));
       mo.setAttribute('aria-label', passMore() ? 'Fewer pass options' : 'More pass options: protection, play action, rollout');
