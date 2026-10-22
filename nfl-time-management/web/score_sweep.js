@@ -99,7 +99,8 @@ function play(SI, POL, GAME, DAY) {
     const lead = r.score[me] - r.score[1 - me], th = halfLeft(r.t);
     if (r.down > 3) return false;
     if (r.t > 1800) return lead >= 0 && th <= 120;
-    return lead > 0 && th <= 40 * Math.max(5 - r.down - r.to[1 - me] - (r.clock_running ? 0 : 1), 0) + 30;
+    if (lead > 0 && th <= 40 * Math.max(5 - r.down - r.to[1 - me] - (r.clock_running ? 0 : 1), 0) + 30) return true;
+    return lead <= 0 && lead >= -2 && th <= 120 && (INFO.pFg || 0) >= 0.5;
   }
   function clockOptions(r) {
     const lead = r.score[me] - r.score[1 - me], needTime = r.t > 1800 || lead <= 0, th = halfLeft(r.t), keys = TEMPOS.slice();
@@ -113,7 +114,7 @@ function play(SI, POL, GAME, DAY) {
     const th = halfLeft(r.t);
     const calls = idx.calls.map((c) => c.id).filter((id) => !(id === 'qb_sneak' && r.ytg > 3) && !(id === 'hail_mary' && !(th <= 30 && r.yl >= 30)));
     const specials = [], p = INFO.pFg, kickable = !r.clock_running || th >= 7, late = r.t > 1800 ? th <= 120 : th <= 300;
-    if (kickable && ((r.down === 4 && p >= 0.05) || (th <= 20 && p >= 0.2) || (r.down === 3 && th <= 40 && p >= 0.4) || (late && p >= 0.3))) specials.push('fg');
+    if (kickable && ((r.down === 4 && p >= 0.05) || (th <= 20 && p >= 0.2) || (r.down === 3 && th <= 40 && p >= 0.4) || ((late || r.ot) && p >= 0.3))) specials.push('fg');
     const behind = r.score[me] < r.score[1 - me];
     if (r.down === 4 && r.yl >= 30 && !(r.t <= 1800 && behind && th <= 40) && !(r.clock_running && TEMPOS.every((k) => runsOut(k, r)))) specials.push('punt');
     if (!r.clock_running && canKneel(r)) specials.push('kneel');

@@ -12,9 +12,12 @@ name: Daily bot check
 # Never on the live site: an ad or analytics request (every request to another host is cut off in the browser: bot
 # ad impressions would get the ad accounts banned), a request to the real board (the page is given a stub's address;
 # the board's own, from the page and BOARD_API, is cut off and reported), a purchase, a sign-in or an email.
+# GitHub runs scheduled workflows late or not at all when it is busy (Oct 20: 4 hours late; Oct 21: never): a second
+# time later in the day runs the check only if the day has none yet (the gate job)
 on:
   schedule:
     - cron: "23 10 * * *"
+    - cron: "41 17 * * *"
   workflow_dispatch:
     inputs:
       minutes:
@@ -23,6 +26,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: daily-check
@@ -32,7 +36,26 @@ env:
   LIVE: ${{ vars.SITE_DOMAIN && format('https://{0}', vars.SITE_DOMAIN) || 'https://nfl2mindrill.com' }}
 
 jobs:
+  # a scheduled run when today (UTC) already has another run of this check: nothing to do
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.today.outputs.run }}
+    steps:
+      - id: today
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          n=$(gh api "repos/${{ github.repository }}/actions/workflows/daily-check.yml/runs?created=>=$(date -u +%F)&per_page=20" \
+            --jq '[.workflow_runs[] | select(.id != ${{ github.run_id }} and .conclusion != "cancelled")] | length')
+          echo "other runs today: $n"
+          if [ "$n" = "0" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
+
   browsers:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -70,6 +93,8 @@ jobs:
           retention-days: 3
 
   engine:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 75
     defaults:
@@ -100,8 +125,8 @@ jobs:
           retention-days: 3
 
   report:
-    needs: [browsers, engine]
-    if: always()
+    needs: [gate, browsers, engine]
+    if: always() && needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
