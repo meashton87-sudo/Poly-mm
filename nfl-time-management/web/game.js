@@ -12730,7 +12730,7 @@
       if (m.n === vs.n && m.seat !== vs.seat) { vs.oppLocked = m.n; vsDrawBar(); }
       if (m.n === vs.n && m.seat === vs.seat && vs.waiting !== m.n) {          // back after a reload: your call is already in
         vs.waiting = m.n;
-        if (vs.ui === 'prompt' && G && G.vsN === m.n) { clearInterval(vs.timer); vs.ui = 'idle'; status('Locked in. Waiting for your opponent…'); vsDrawBar(); }
+        if (vs.ui === 'prompt' && G && G.vsN === m.n) { clearInterval(vs.timer); vs.ui = 'idle'; status(vs.mode === 'cpu' ? 'Locked in. Snapping…' : 'Locked in. Waiting for your opponent…'); vsDrawBar(); }
       }
     } else if (m.t === 'step') {
       vs.got[m.n] = m;
@@ -12949,10 +12949,24 @@
     box.textContent = '';
     box.append(el('h2', '', 'Versus'), el('p', 'lead', 'College overtime against another player: each team gets the ball at the other’s 25, no clock. You call your offense and your defense; both calls lock in before the snap, and the same play runs on both phones.'));
     const pick = el('div', 'vspick');
+    // (your team in one line with Change, the 32 only when you pick: the Play keys were under them on a phone. A
+    // fanbase pick, Your team, is your Versus team until you choose another)
+    const fan = load(FAN_KEY, null);
+    if (!vsMyTeam() && fan && TEAMS[fan] && !COLLEGE.has(fan)) save(VS_TEAM_KEY, fan);
+    let open = !vsMyTeam();
     const drawPick = () => {
       pick.textContent = '';
       const t = vsMyTeam();
-      pick.append(el('h3', '', t ? `Your team: ${teamName(t)}` : 'Pick your team'), vsTeamPicker(() => { drawPick(); }));
+      if (t && !open) {
+        const row = el('div', 'vsteamrow'), sw = el('span', 'sw'), ch = el('button', 'chip', 'Change');
+        sw.style.background = color(t);
+        ch.type = 'button';
+        ch.addEventListener('click', () => { open = true; drawPick(); });
+        row.append(sw, el('b', '', `Your team: ${teamName(t)}`), ch);
+        pick.append(row);
+        return;
+      }
+      pick.append(el('h3', '', t ? `Your team: ${teamName(t)}` : 'Pick your team'), vsTeamPicker(() => { open = false; drawPick(); }));
     };
     const modes = el('div', 'vsmodes');
     const go = (mode) => {
@@ -13086,7 +13100,7 @@
     vs.last = { t: 'half', n, half: vsSealed(half) };
     vsSend(vs.last);
     vs.ui = 'idle';
-    status('Locked in. Waiting for your opponent…');
+    status(vs.mode === 'cpu' ? 'Locked in. Snapping…' : 'Locked in. Waiting for your opponent…');
     vsDrawBar();
   }
   // the room sent something: play it now, unless a play is running or its result is up (Next play, or the clock)
@@ -13197,7 +13211,7 @@
       vsDrawBar();
       return 'stop';
     }
-    if (vs.waiting === G.vsN) { vs.ui = 'idle'; status('Locked in. Waiting for your opponent…'); vsDrawBar(); return 'stop'; }
+    if (vs.waiting === G.vsN) { vs.ui = 'idle'; status(vs.mode === 'cpu' ? 'Locked in. Snapping…' : 'Locked in. Waiting for your opponent…'); vsDrawBar(); return 'stop'; }
     if (vsNow() >= vsMyDl()) { vs.ui = 'idle'; status('Out of time: your default call is in'); return 'stop'; }
     vsClockStart();
     if (role === 'pick') vsPromptPick();
@@ -13253,7 +13267,8 @@
     takeBanner(d);
     const card = el('div', 'endcard');
     const ot = rounds > 1 ? ` in ${ordinal(rounds)} overtime` : ' in overtime';
-    const head = res.by === 'score' ? (won ? `You win ${mine}–${theirs}${ot}` : `You lose ${mine}–${theirs}${ot}`)
+    const sc = `${mine}\u2060–\u2060${theirs}`;          // (the score on one line: "0–" and "3" wrapped apart)
+    const head = res.by === 'score' ? (won ? `You win ${sc}${ot}` : `You lose ${sc}${ot}`)
       : res.by === 'forfeit' ? (won ? 'You win: they forfeited' : 'You forfeited')
         : res.by === 'abandoned' ? 'No result: both sides left' : 'No result';
     card.append(el('h2', '', head));
@@ -13279,6 +13294,15 @@
     next.href = '#vs';
     row.append(next);
     card.append(row);
+    // the result to a group chat (how a two-player game gets its next player): the score, who, and the way in
+    if (res.by === 'score') {
+      const opp = vs.mode === 'cpu' ? 'the computer' : vs.names[1 - vs.seat] || 'my opponent';
+      const text = `${won ? `I beat ${opp}` : `${opp === 'the computer' ? 'The computer' : opp} beat me`} ${won ? `${mine}–${theirs}` : `${theirs}–${mine}`}${ot} on Two-Minute Drill Versus (${teamName(code(G.me))} vs ${teamName(code(1 - G.me))}). ${won ? 'Think you can beat me?' : 'Get me a rematch.'} https://${SITE}/#vs`;
+      const pre = el('p', 'note sharetext', text), sh = el('button', 'btn ghostbtn', 'Share the result');
+      sh.type = 'button';
+      sh.addEventListener('click', () => shareText(text, pre, 'vs_result'));
+      card.append(sh);
+    }
     // between matches: the card's ad (and a full-screen one at most every 10 minutes, ezBreak), never during one
     ezDrive(false);
     const ad = adBox('done');
