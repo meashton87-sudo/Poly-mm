@@ -2780,13 +2780,14 @@
     const h = i > 0 ? segs.slice(0, i).reverse().find((s) => s.kind === 'hold' && s.a) : null;
     if (!h || h.a.label !== 'QB' || /sack/.test(e.evt || '')) return null;
     const qb = h.a, t0 = segs[i].t0, yd = (p, q) => Math.hypot((p.x - q.x) / XYD, p.L - q.L);
-    let on = 0, minR = 99;
+    let on = 0, minR = 99, who = null;
+    const ds = sc.actors.filter((d) => !d.off && d.trk);
     for (let t = t0 + 0.1; t <= Math.min(P.T, t0 + 1.2); t += 0.05) {
-      const q = at(qb, t), r = Math.min(...sc.actors.filter((d) => !d.off && d.trk).map((d) => yd(at(d, t), q)));
-      minR = Math.min(minR, r);
+      const q = at(qb, t), rs = ds.map((d) => yd(at(d, t), q)), r = Math.min(...rs);
+      if (r < minR) { minR = r; const d = ds[rs.indexOf(r)]; who = { label: d.label, t: +(t - t0).toFixed(2), home: d.homeK || 0 }; }
       if (r < 1.0) on += 0.05;
     }
-    return { on: +on.toFixed(2), minR: +minR.toFixed(2), evt: e.evt || '', press: !!e.pressure, call: e.call };
+    return { on: +on.toFixed(2), minR: +minR.toFixed(2), evt: e.evt || '', press: !!e.pressure, call: e.call, who };
   }
   function speedLog(sc, P, e, x) {
     (window.__speedLog = window.__speedLog || []).push({ ev: e.ev, call: e.call, evt: e.evt || '', yards: e.yards, td: !!(e.td || e.tdDef || e.retTd), air: e.air,
@@ -4051,6 +4052,9 @@
         else leg(K.fb, REACT_OFF, 'track', { gain: 2.4, eff: 0.6, fn: (t) => { const Q = qbSpot(t); return [Q[0] + side * 1.6, Q[1] + dir * 1.4]; } });
       }
       if (wP) leg(wP, tWin, 'chase', { who: passer.b, gap: 1.1, eff: 1, lead: 0.3 });
+      // (once the ball is out nobody stays on the passer: the man who beat his block and the blitzers ease off to a
+      // couple of yards and pull up. A chaser left a yard off him after the throw read as a sack that never came)
+      [wP, ...blitzers].filter(Boolean).forEach((d) => { leg(d, tThrow + 0.4, 'chase', { who: passer.b, gap: 2.3, eff: 0.45, lead: 0 }); leg(d, tThrow + 1.3, 'stand'); });
       const cov = passShape({ kind, tgt, catchPt, tThrow, tCatch, rushers, shell: shellOf(), side, qbSpot, passer });
       // a man with a receiver of his own: running with a vertical, or on his man
       const onMan = (d) => cov.carry.has(d) || !!(cov.man && cov.assigned.get(d) && cov.assigned.get(d) !== tgt);
@@ -4461,6 +4465,7 @@
         if (stick) { leg(hr, tThrow + 0.1, 'stick', { who: passer.b, dx: ux * k, dy: uy * k, ease: 0.2 }); leg(hr, tThrow + 0.3, 'go', { ...xy([q[0] + ux * 3.2, q[1] + uy * 3.2]), eff: 0.5 }); leg(hr, tThrow + 1.1, 'stand'); }
         else leg(hr, tThrow + 0.3, 'stand');
         busy.add(hr);
+        hr.homeK = stick ? 2 : 1;                           // (the browser test's qbCheck: who got there)
         Wd.run(t0);
       };
       const pocketD = () => { Wd.run(Math.max(Wd.t, tThrow)); return Math.min(...K.def.map((d) => dist(Wd.posAt(d.b, tThrow), Wd.posAt(passer.b, tThrow)))); };
