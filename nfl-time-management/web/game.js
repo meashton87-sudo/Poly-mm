@@ -319,8 +319,13 @@
     b.setAttribute('aria-label', `Grade ${g.L}${g.pass ? ', passed' : ''}`);
     return b;
   }
-  // versus (two players, live; the site build's --vs turns it on: <meta name="vs">): #vs the lobby, #vs-CODE a room
-  const VS_ON = !!document.querySelector('meta[name="vs"]');
+  // versus (two players, live; the site build's --vs turns it on: <meta name="vs">): #vs the lobby, #vs-CODE a room.
+  // --vs-at holds it until a time (<meta name="vs-at">: a reload after shows it); --vs-pro makes it Pro's (<meta
+  // name="vs-pro">): the lobby, its quick match and the computer take Pro, and anyone without it sees the Pro pitch.
+  // A room's link (#vs-CODE, a Pro player's invite) still plays for whoever has it
+  const VS_AT = Date.parse((document.querySelector('meta[name="vs-at"]') || {}).content || '') || 0;
+  const VS_ON = !!document.querySelector('meta[name="vs"]') && Date.now() >= VS_AT;
+  const VS_PRO = VS_ON && !!document.querySelector('meta[name="vs-pro"]');
   const VS_LOBBY = VS_ON && location.hash === '#vs';
   const VS_ROOM = VS_ON ? ((location.hash.match(/^#vs-([A-HJ-KM-NP-Z2-9]{6})$/) || [])[1] || '') : '';
   const VS = !!VS_ROOM;
@@ -11798,6 +11803,7 @@
     [`The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed, with its score and stats`,
       'The historic drives. Mahomes’ 13 seconds, the Minneapolis Miracle, the Helmet Catch, 28–3 and more, each from its real spot',
       'The playoff runs. A team’s whole postseason, every late-game spot in order. Win them all',
+      ...(VS_PRO ? ['Versus. Play someone live, or the computer: college overtime, you call your offense and your defense'] : []),
       ...(SCN ? ['Build a scenario. Any two teams of any season from 2001 on, as they lined up then, in any situation: 2007 New England against 2023 Kansas City, down 4 with two minutes left'] : [])].forEach((t) => ul.append(el('li', '', t)));
     box.append(ul);
     if (isPro()) {
@@ -12044,10 +12050,10 @@
   function homeVs() {
     const a = el('a', 'hcard hvs');
     a.href = '#vs';
-    a.dataset.to = 'versus';
-    a.append(el('div', 'hk', 'Versus · live'), el('div', 'hpitch', 'Play someone'),
+    a.dataset.to = VS_PRO && !isPro() ? 'versus_pitch' : 'versus';
+    a.append(el('div', 'hk', VS_PRO ? (isPro() ? 'Versus · Pro' : 'Versus · with Pro') : 'Versus · live'), el('div', 'hpitch', 'Play someone'),
       el('p', '', 'College overtime against another player: you call your offense and your defense. Nobody on? Play the computer.'),
-      el('span', 'cta', 'Play'));
+      el('span', 'cta', VS_PRO && !isPro() ? 'Take a look' : 'Play'));
     return a;
   }
   // Pro: your record (drives passed and the rank, the runs, the archive), else what it is and its price
@@ -13235,6 +13241,13 @@
     show('arch');
     const box = $('arch');
     box.textContent = '';
+    // (Versus as part of Pro: without it, what Versus is and the Pro pitch)
+    if (VS_PRO && !isPro()) {
+      track('versus_pitch', {});
+      box.append(el('h2', '', 'Versus'), el('p', 'lead', 'Play someone live, or the computer. College overtime: each team gets the ball at the other’s 25. You call your offense and your defense; both calls lock in before the snap. Versus is part of Pro.'));
+      box.append(...proNodes(), authNodes());
+      return;
+    }
     box.append(el('h2', '', 'Versus'), el('p', 'lead', 'College overtime against another player, or the computer: each team gets the ball at the other’s 25, no clock. You call your offense and your defense; both calls lock in before the snap.'));
     if (BOARD.api) box.append(vsCupBox());
     const pick = el('div', 'vspick');
