@@ -69,8 +69,10 @@ async function bot(i, wantCpu) {
       ws.send(JSON.stringify({ t: 'half', n: mine, half: halfFor(ms, seat) }));
       rep.decisions++;
     };
+    let last = '-', lastAt = Date.now();
     ws.onmessage = (ev) => {
       const m = JSON.parse(ev.data);
+      last = m.t + (m.n != null ? `:${m.n}` : ''); lastAt = Date.now();
       if (m.t === 'hello') {
         seat = m.seat; ms = m.ms; n = m.n;
         if (m.phase === 'over') { finish(m.result); return; }
@@ -90,7 +92,9 @@ async function bot(i, wantCpu) {
     };
     const finish = (res) => { if (res.by === 'noshow') rep.noshowRooms = (rep.noshowRooms || []).concat([`${room.room}:${JSON.stringify(rooms.get(room.room))}:${JSON.stringify(res.missing)}`]); rep.ended++; rep.by[res.by] = (rep.by[res.by] || 0) + 1; try { ws.close(1000); } catch (e) { /* gone */ } resolve(); };
     ws.onerror = () => reject(new Error(`room ${room.room}: socket error`));
-    setTimeout(() => reject(new Error(`room ${room.room}: not over in ${DEADLINE_MS / 60000} minutes`)), DEADLINE_MS);
+    // (a room not over: what it was waiting on, for the log)
+    setTimeout(() => reject(new Error(`room ${room.room}: not over in ${DEADLINE_MS / 60000} minutes (${room.mode}, seat ${seat}, n ${n}, sent ${sent}, `
+      + `needs ${ms ? JSON.stringify(VSCore.need(ms)) : '-'}, role ${ms && seat >= 0 ? VSCore.role(ms, seat) : '-'}, last ${last}, ${Math.round((Date.now() - lastAt) / 1000)} s ago)`)), DEADLINE_MS);
   });
 }
 
