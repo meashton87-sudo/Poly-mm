@@ -13,6 +13,13 @@
     },
     {
       "date": "2026-10-22",
+      "title": "A bigger field on desktop",
+      "items": [
+        "On a computer the field is bigger now, and the new ⤢ button on the field switches between Standard, Large and Extra large. Your pick is kept on that computer."
+      ]
+    },
+    {
+      "date": "2026-10-22",
       "title": "No more floating passes",
       "items": [
         "A short pass picked off near the quarterback, or a missed screen, no longer hangs in the air: he holds it a moment longer and it goes at a pass's speed."
