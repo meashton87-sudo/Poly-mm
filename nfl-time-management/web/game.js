@@ -236,6 +236,19 @@
     ['counter', 'Counter', 'The back steps the other way, then the guard and tackle pull back across: misdirection that works on a light box, slow against a blitz.'],
     ['duo', 'Duo', 'Double teams driving straight ahead, downhill: built for a loaded box, less to gain against a light one.'],
     ['trap', 'Trap', 'A defensive lineman is let in, then a pulling guard traps him: punishes a blitz, struggles against a loaded box.']];
+  // pass protection (engine.js PROT_N): who stays in to block. Each blocker more counts as a pass rusher fewer against
+  // the real plays' pressure; the men who stay in run no route and can't be thrown to
+  const PROTS = [['std', 'Standard', 'Five linemen; the back checks the blitz and releases.'],
+    ['back', 'Back stays in', 'Six block: the back stays in. Less pressure, one receiver fewer.'],
+    ['max', 'Max protect', 'Seven block: the back and a tight end stay in. The least pressure, only the rest go out.']];
+  const PROT_SHORT = { std: 'Standard', back: 'RB in', max: 'Max protect' };
+  const protOn = () => (!VS && G.prot && G.prot !== 'std' ? G.prot : null);
+  // the men a protection keeps in: the back, then the tight end nearest the ball (none on the roster: nobody more)
+  function protMen(sc, prot) {
+    const E = eligibles(sc), rb = E.find((a) => a.label === 'RB'), bx = sc.bx ?? 0;
+    const te = E.filter((a) => a.label === 'TE').sort((a, b) => Math.abs(a.x0 - bx) - Math.abs(b.x0 - bx))[0];
+    return (prot === 'max' ? [rb, te] : prot === 'back' ? [rb] : []).filter(Boolean);
+  }
   const schemeOn = () => !VS && G.scheme && G.scheme !== 'zone' ? G.scheme : null;
   const DEEP_ROUTES = new Set(['go', 'post', 'corner', 'wheel']);
   const YAC_IN = new Set(['slant', 'in', 'cross', 'post', 'angle', 'drag']), YAC_OUT = new Set(['out', 'deep_out', 'corner', 'flat', 'wheel']);
@@ -1494,8 +1507,16 @@
   function drawRoutes(sc) {
     const P = ui.pass, E = eligibles(sc), Y = camY(sc), g = S('g', { class: 'routes' });
     sc.routePts = [];
+    const st = protOn() ? protMen(sc, G.prot) : [];
     E.forEach((a, i) => {
       const rt = P.routes[i], dr = P.drawn && P.drawn[i];
+      if (st.includes(a)) {                // (kept in to block: a short T toward the line, no route)
+        const x = a.x0, y0 = Y(a.L0), y1 = Y(a.L0 + sc.dir * 1.6);
+        sc.routePts[i] = [[x, y0], [x, y1]];
+        g.append(S('path', { class: 'route block', d: `M${x.toFixed(1)} ${y0.toFixed(1)}L${x.toFixed(1)} ${y1.toFixed(1)}M${(x - 6).toFixed(1)} ${y1.toFixed(1)}L${(x + 6).toFixed(1)} ${y1.toFixed(1)}` }));
+        a.g.setAttribute('aria-label', `${a.g.getAttribute('aria-label')}: blocking`);
+        return;
+      }
       const r = Motion.routeOnField(dr || rt, ROUTE_DEPTH[rt], (a.x0 - SX0) / XYD, routeOut(sc, a), sc.dir, sc.losL, Math.abs(a.L0 - sc.losL), 0.5);
       const pts = r.pts.map((q) => [clip(SX0 + q[0] * XYD, SX0 + 2, SX1 - 2), Y(clip(q[1], -9, 109))]);
       sc.routePts[i] = [[a.x0, Y(a.L0)], ...pts];
@@ -1517,7 +1538,7 @@
   function passTap(a) {
     if (busy || !passing() || !scene || !a.off) return false;
     const i = eligibles(scene).indexOf(a);
-    if (i < 0) return false;
+    if (i < 0 || blocks(scene, i)) return false;
     const list = ROUTES[a.label], P = ui.pass;
     if (P.draw) { P.sel = P.sel === i ? null : i; redrawPass(); return true; }
     P.drawn = P.drawn || [];
@@ -1540,15 +1561,15 @@
   // each receiver's odds on his current route, from the real plays it would draw (worker 'odds'), cached per snap
   const routeAt = (a) => (Number.isFinite(a.depth) ? `${a.route}@${a.depth}` : a.route);     // (engine.js routeOfAct)
   // (with what else the snap draws by: the repeats, personnel, formation, backs and motion read, engine.js routeOdds)
-  function pickKey(a) { return `${a.call}|${routeAt(a)}|${a.who}|${a.looks}|${a.rep || 0}|${a.pers || 0}|${a.form || ''}|${a.bf ?? ''}|${a.cov || ''}|${a.oob ? 1 : 0}`; }
+  function pickKey(a) { return `${a.call}|${routeAt(a)}|${a.who}|${a.looks}|${a.rep || 0}|${a.pers || 0}|${a.form || ''}|${a.bf ?? ''}|${a.cov || ''}|${a.oob ? 1 : 0}|${a.prot || ''}`; }
   async function fetchOdds() {
     if (!passing() || !scene) return;
     G.odds = G.odds || {};
-    const picks = eligibles(scene).map((_, i) => passOption(scene, i, false).action).filter((a) => !(pickKey(a) in G.odds));
+    const picks = eligibles(scene).map((_, i) => (blocks(scene, i) ? null : passOption(scene, i, false).action)).filter((a) => a && !(pickKey(a) in G.odds));
     if (!picks.length) return;
     picks.forEach((a) => { G.odds[pickKey(a)] = null; });
     try {
-      const res = await send({ type: 'odds', scen: simScen(), root: G.root, picks: picks.map((a) => ({ call: a.call, route: routeAt(a), who: a.who, looks: a.looks, rep: a.rep, pers: a.pers, form: a.form, bf: a.bf, cov: a.cov, oob: a.oob })) }, true);
+      const res = await send({ type: 'odds', scen: simScen(), root: G.root, picks: picks.map((a) => ({ call: a.call, route: routeAt(a), who: a.who, looks: a.looks, rep: a.rep, pers: a.pers, form: a.form, bf: a.bf, cov: a.cov, oob: a.oob, prot: a.prot })) }, true);
       picks.forEach((a, k) => { G.odds[pickKey(a)] = res.out[k]; });
     } catch (e) { picks.forEach((a) => { delete G.odds[pickKey(a)]; }); return; }      // asked again on the next redraw
     // into the cards already up, not a redrawn dock: a redraw between a finger's down and up would eat the throw
@@ -2374,16 +2395,18 @@
   // address bar)
   // (his row tapped again: back to the open man)
   function passPick(i) {
-    if (busy || !passing() || !scene || !eligibles(scene)[i]) return;
+    if (busy || !passing() || !scene || !eligibles(scene)[i] || blocks(scene, i)) return;
     ui.pass.target = ui.pass.target === i ? null : i;
     redrawPass();
   }
   // No receiver picked: the throw goes to the open man. The engine plays exactly what the Snap key always sent before
-  // a pick (the first receiver's call, route and position: OPEN_I), graded the same; only the field reads act.open and
-  // draws the ball to whoever is open there among the men whose routes make that same call (choreograph openPick)
-  const OPEN_I = 0;
+  // a pick (the first receiver's call, route and position: openI, the first who goes out: not one your protection keeps
+  // in), graded the same; only the field reads act.open and draws the ball to whoever is open there among the men whose
+  // routes make that same call (choreograph openPick)
+  const openI = (sc) => { const st = protOn() && sc ? protMen(sc, G.prot) : []; return Math.max(0, sc ? eligibles(sc).findIndex((a) => !st.includes(a)) : 0); };
+  const blocks = (sc, i) => !!(protOn() && sc && protMen(sc, G.prot).includes(eligibles(sc)[i]));
   function openOption(sc, oob) {
-    const o = passOption(sc, OPEN_I, oob), P = ui.pass;
+    const o = passOption(sc, openI(sc), oob), P = ui.pass;
     o.label = `Pass to the open man${P.pa ? ', play action' : P.roll ? ', rollout' : ''}${oob ? ', get out of bounds' : ''}`;
     o.action.open = true;
     return o;
@@ -2439,7 +2462,7 @@
     sc.svg.parentElement.classList.toggle('chipsdown', camY(sc)(spotGeom(G.root).L) < sc.H / 2);
     if (passing()) {
       if (!ui.pass.routes || ui.pass.routes.length !== eligibles(sc).length) { ui.pass.routes = defaultRoutes(sc); ui.pass.drawn = []; ui.pass.sel = null; ui.pass.target = null; }
-      // (no target picked: the Snap key throws to the open man, OPEN_I's call for the engine: openOption)
+      // (no target picked: the Snap key throws to the open man, openI's call for the engine: openOption)
       drawRoutes(sc);
     }
     drawSketch(sc);
@@ -2579,6 +2602,30 @@
     const r = (x) => +x.toFixed(2);
     return { v1: r(top1.v), who1: top1.who, t1: r(top1.t), v4: r(top4.v), who4: top4.who, t4: r(top4.t), jump: r(jump.v), jwho: jump.who, jt: r(jump.t) };
   }
+  // (browser tests) a defender who goes by the man with the ball within arm's reach and lets him go: not the tackler,
+  // not the broken tackle's man, not a man in a block (one of the offense on him). Every 0.05 s of each hold, from 0.3 s
+  // after he has it to 0.3 s before it ends (players saw men run right by a back with no missed tackle called)
+  function passCheck(sc, P, e) {
+    const segs = P.segs.slice().sort((a, b) => a.t0 - b.t0), keys = new Set((P.keys || []).map((k) => k.a).concat(P.misses || []));
+    const out = [];
+    segs.forEach((s, i) => {
+      if (s.kind !== 'hold' || !s.a) return;
+      const car = s.a, t1 = (i + 1 < segs.length ? segs[i + 1].t0 : P.T) - 0.3, seen = new Set();
+      const yd = (p, q) => Math.hypot((p.x - q.x) / XYD, p.L - q.L);
+      for (let t = s.t0 + 0.3; t < t1; t += 0.05) {
+        const c = at(car, t);
+        sc.actors.forEach((d) => {
+          if (!d.trk || d.off === car.off || keys.has(d) || seen.has(d)) return;
+          const p = at(d, t), r = yd(p, c);
+          if (r >= 1) return;
+          if (sc.actors.some((m) => m.off === car.off && m !== car && yd(at(m, t), p) < 1.2)) return;      // in a block
+          seen.add(d);
+          out.push({ who: d.label, car: car.label, r: +r.toFixed(2), t: +t.toFixed(2), ev: e.ev, evt: e.evt || '', call: e.call, yds: e.yards });
+        });
+      }
+    });
+    return out;
+  }
   function speedLog(sc, P, e, x) {
     (window.__speedLog = window.__speedLog || []).push({ ev: e.ev, call: e.call, evt: e.evt || '', yards: e.yards, td: !!(e.td || e.tdDef || e.retTd), air: e.air,
       ...(x || {}), ...speedCheck(sc, P) });
@@ -2670,7 +2717,7 @@
     let best = act.target, bs = -Infinity;
     E.forEach((a, i) => {
       const rt = act.routes[i], dr = act.drawn && act.drawn[i] && Number.isFinite(act.drawn[i].depth) ? act.drawn[i] : null;
-      if (!rt || a.label === 'QB' || !a.trk) return;
+      if (!rt || a.label === 'QB' || !a.trk || (i !== act.target && act.prot && protMen(sc, act.prot).includes(a))) return;
       if (i !== act.target && passCallOf(sc, a, rt, act.pa, act.roll, dr, side) !== act.call) return;
       const depth = dr ? dr.depth : ROUTE_DEPTH[rt] ?? 6;
       const s = Math.min(6, (sep(a, o.tThrow) + sep(a, t2)) / 2) - 0.2 * Math.abs(depth - air);
@@ -3192,6 +3239,7 @@
         const two_ = reach.find((r) => r.d !== tackler && r.T < tEnd - t0 + 0.6);
         if (two_) {
           busy.add(two_.d);
+          (P.misses = P.misses || []).push(two_.d);        // (in on the tackle: passCheck)
           const q = here(two_.d), [qx, qy] = unit(endPt[0] - q[0], endPt[1] - q[1]);
           const T2 = Math.max(0.4, tEnd - t0 + 0.12);
           trail(two_.d, t0, runFrom(two_.d, t0, [[endPt[0] - qx * 1.0, endPt[1] - qy * 1.0]], { T: T2 }), t0 + T2, [-qx, -qy]);
@@ -3212,6 +3260,7 @@
         const miss = nearest(foes(car).filter((d) => !busy.has(d)), [pc[0], pc[1]]);
         if (miss) {
           busy.add(miss);
+          (P.misses = P.misses || []).push(miss);
           runFrom(miss, t0, [[pc[0] + vy * 0.9, pc[1] - vx * 0.9]], { T: tb - t0 });
           leg(miss, tb + 0.05, 'go', { x: pc[0] + vy * 1.6 - vx * 1.5, y: pc[1] - vx * 1.6 - vy * 1.5, eff: 0.5 });
           leg(miss, tb + 0.6, 'stand');
@@ -3386,13 +3435,15 @@
       const man = Motion.MAN[shell];
       // (a second back you gave a route runs it too)
       const backs = mine && act && act.routes ? eligibles(sc).filter((a) => a.label === 'RB' && a !== K.rb) : [];
+      // your protection (act.prot, PROTS): the men it keeps in block and run no route
+      const stays = new Set(mine && act && act.prot ? protMen(sc, act.prot) : []), stayIn = (a) => stays.has(a);
       const others = K.recv.concat(backs).filter((a) => a !== tgt && a !== o.passer);
       const runners = [];                     // [actor, route plan] for coverage to read
       const drewFor = (a) => { const k = mine && act && act.drawn ? eligibles(sc).indexOf(a) : -1; return k >= 0 ? act.drawn[k] : null; };
       others.forEach((a, i) => {
         const yours = mine && act && act.routes && eligibles(sc).indexOf(a) >= 0;    // you gave him a route: he runs it
         // a tight end stays in to block against six or more (and now and then otherwise); one you drew a route for runs it
-        if (a.label === 'TE' && !drewFor(a) && (rushers.length >= 6 || (!yours && R() < 0.3))) {
+        if (a.label === 'TE' && (stayIn(a) || (!drewFor(a) && (rushers.length >= 6 || (!yours && R() < 0.3))))) {
           const edge = nearest(K.rush, here(a)), at = edge && passRush.get(edge);
           // (on a rusher in the pocket: beside his blocker, on the outside of him)
           if (at) {
@@ -3417,7 +3468,7 @@
       });
       // the back: blocks when they send five or more (unless you drew him a route), else checks out into the flat
       if (K.rb && K.rb !== tgt && kind !== 'pa' && kind !== 'flea' && !(kind === 'tpass' && (o.passer === K.rb || e.philly))) {
-        if (rushers.length >= 5 && !drewFor(K.rb)) {
+        if ((rushers.length >= 5 && !drewFor(K.rb)) || stayIn(K.rb)) {
           const blitzer = rushers[rushers.length - 1];
           leg(K.rb, REACT_OFF, 'track', { gain: 2.6, eff: 0.85, fn: (t) => {
             const q = Wd.posAt(blitzer.b, t), Q = qbSpot(t);
@@ -3434,7 +3485,7 @@
       }
       // coverage: man (trail him a beat behind, a cushion deep) or zone (drop to the landmark), then break on the ball
       const cover = K.def.filter((d) => !rushers.includes(d));
-      const rbOut = K.rb && K.rb !== tgt && (rushers.length < 5 || drewFor(K.rb));
+      const rbOut = K.rb && K.rb !== tgt && !stayIn(K.rb) && (rushers.length < 5 || drewFor(K.rb));
       const recvs = K.recv.concat(rbOut ? [K.rb] : []).concat(K.rb === tgt ? [K.rb] : []).concat(backs.filter((a) => a !== o.passer));
       const S_ = Motion.SHELLS[shell] || Motion.SHELLS.cover3, mark = markIn(S_);
       const assigned = new Map(), carry = new Map();         // carry: a deep man running with a vertical
@@ -5185,6 +5236,7 @@
       if (bad.length) (window.__offLog = window.__offLog || []).push({ ev: e.ev, call: e.call, yl: before.yl, mine: e.team === G.me, bad: bad.slice(0, 5) });
       // (the ball against the goal line and the sidelines: goalCheck)
       (window.__goalLog = window.__goalLog || []).push({ ...goalCheck(sc, P, drawnE, two), yl: two ? 2 : before.yl, mine: e.team === G.me });
+      (window.__passLog = window.__passLog || []).push(...passCheck(sc, P, drawnE).slice(0, 3));
       // (and the man with the ball goes past the sideline with it on the field just when the engine has the play out of
       // bounds, for its clock: a player saw the other team run out and the clock run on. After the whistle he may walk
       // back on)
@@ -6174,7 +6226,7 @@
     if (ui.fam === 'run' && !VS) {
       // the blocking (SCHEMES): one tap, kept for the drive's next runs
       const cur = G.scheme || 'zone', row = el('div', 'opts-row schemes');
-      row.append(el('span', 'lab', 'Blocking'));
+      row.append(el('span', 'lab', bcast() ? 'Block' : 'Blocking'));
       SCHEMES.forEach(([k, label, tip]) => {
         const b = el('button', `chip opt${cur === k ? ' on' : ''}`, label);
         b.type = 'button'; b.title = tip; b.dataset.scheme = k;
@@ -6292,11 +6344,32 @@
     pen.setAttribute('aria-pressed', String(!!P.draw));
     pen.addEventListener('click', () => { if (!busy) setDraw(!P.draw); });
     head.append(pen);
-    if (G.look != null) d.append(readLine(G.look));
+    // (the broadcast view on a phone: the defense's look in the head's line, the receivers' room below it)
+    if (G.look != null && bcast()) { const L = LOOKS[G.look], rc = el('span', `readchip${L.blitz ? ' blitz' : ''}`, `${L.loaded ? 'Loaded box' : 'Light box'}${L.blitz ? ' · blitz' : ''}`); rc.title = L.loaded ? '7 or more near the line' : '6 or fewer near the line'; head.insertBefore(rc, pen); }
+    else if (G.look != null) d.append(readLine(G.look));
+    if (!VS) {
+      // the protection (PROTS): one tap, kept for the drive's next passes
+      const cur = G.prot || 'std', row = el('div', 'opts-row prots');
+      row.append(el('span', 'lab', 'Protection'));
+      PROTS.forEach(([k, label, tip]) => {
+        const b = el('button', `chip opt${cur === k ? ' on' : ''}`, bcast() ? PROT_SHORT[k] : label);
+        b.type = 'button'; b.title = tip; b.dataset.prot = k;
+        b.setAttribute('aria-pressed', String(cur === k));
+        b.addEventListener('click', () => {
+          if (busy || !sc) return;
+          G.prot = k;
+          if (P.target != null && blocks(sc, P.target)) P.target = null;
+          track('pass_prot', { prot: k });
+          redrawPass();
+        });
+        row.append(b);
+      });
+      d.append(row);
+    }
     const E = eligibles(sc), selA = P.draw && P.sel != null ? E[P.sel] : null;
     // (the whole of it the first few times; after that one line, so the receivers and the Snap key fit under the field)
     if (!P.draw) {
-      const h = load(`${STORE}:passhint`, 0) < 3 ? el('p', 'hint', 'Snap throws to the open man, or tap a name to pick who gets the ball. Tap a man on the field for his next route, or drag him to draw one.')
+      const h = load(`${STORE}:passhint`, 0) < 3 && !bcast() ? el('p', 'hint', 'Snap throws to the open man, or tap a name to pick who gets the ball. Tap a man on the field for his next route, or drag him to draw one.')
         : el('p', 'hint one', 'Snap: the open man, or pick one. Tap a dot: his route.');
       h.title = 'Snap throws to whoever gets open, or tap a name to pick who gets the ball (tap it again for the open man). Tap a receiver on the field to change his route, or drag him to draw your own (drag the quarterback for his drop or a rollout).';
       d.append(h);
@@ -6321,6 +6394,14 @@
     list.setAttribute('role', 'group');
     list.setAttribute('aria-label', 'Who gets the ball');
     E.forEach((a, i) => {
+      if (blocks(sc, i)) {                    // (kept in by your protection: no route, no ball)
+        const b = el('button', 'rcv blk');
+        b.type = 'button'; b.disabled = true;
+        b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label), el('span', 'rt', 'Blocking'));
+        b.setAttribute('aria-label', `${a.p ? a.p.name : a.label}: staying in to block`);
+        list.append(b);
+        return;
+      }
       const b = el('button', `rcv${P.target === i ? ' on' : ''}`);
       b.type = 'button';
       b.setAttribute('aria-pressed', String(P.target === i));
@@ -6375,7 +6456,7 @@
     go.firstChild.replaceWith(line);
     go.id = 'snapGo';
     go.setAttribute('aria-label', ta ? `Snap: throw it to ${ta.p ? ta.p.name : ta.label}, ${routeName(ta.label, P.routes[t])}` : 'Snap: throw it to the open man');
-    go.addEventListener('click', () => { if (!busy && passing()) decideCall(t == null ? { pass: OPEN_I, open: true } : { pass: t }); });
+    go.addEventListener('click', () => { if (!busy && passing()) decideCall(t == null ? { pass: openI(scene), open: true } : { pass: t }); });
     foot.append(go);
     d.append(foot);
     snapLine();
@@ -6395,7 +6476,7 @@
     if (!g || !passing() || !scene) return;
     const a = eligibles(scene)[P.target];
     if (!a) {             // the open man: the throw's odds as the engine plays it
-      const op = passOption(scene, OPEN_I, false), od = G.odds && G.odds[pickKey(op.action)];
+      const op = passOption(scene, openI(scene), false), od = G.odds && G.odds[pickKey(op.action)];
       g.querySelector('small').textContent = `whoever gets open${od ? ` · ${oddsText(od)}` : ''}`;
       return;
     }
@@ -7011,7 +7092,8 @@
     const backs = (lineup(G.me).off || []).filter((p) => p.pos === 'RB' || p.pos === 'FB').length;
     const b = fq && (FORM_ENGINE[fq] || fq === 'empty') ? { ...b0, form: FORM_ENGINE[fq] ? fq : 'gun', bf: fq === 'empty' ? 0 : Math.min(backs, 3) } : b0;
     const rp = repOf(b), c0 = rp ? { ...b, rep: rp } : b;
-    const c1 = schemeOn() && G.root.pos === G.me && c0.play === 'run' && /^rb_/.test(c0.call || '') ? { ...c0, scheme: G.scheme } : c0;
+    const cp = protOn() && G.root.pos === G.me && c0.play === 'pass' && c0.call !== 'hail_mary' && c0.call !== 'screen' ? { ...c0, prot: G.prot } : c0;
+    const c1 = schemeOn() && G.root.pos === G.me && cp.play === 'run' && /^rb_/.test(cp.call || '') ? { ...cp, scheme: G.scheme } : cp;
     const mo = G.root.pos === G.me ? curMotion(G.root) : null, c = mo && c1.play === 'pass' ? { ...c1, cov: mo.cov } : c1;
     return G.root.clock_running && ui && ui.tempo ? { ...c, tempo: engineTempo(ui.tempo, G.root) } : c;
   };

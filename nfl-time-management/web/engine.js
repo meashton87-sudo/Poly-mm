@@ -114,6 +114,14 @@
   const SCHEME_M = { power: { soft: 0, load: 0.3, blitz: -0.2 }, counter: { soft: 0.2, load: 0.1, blitz: -0.3 },
     duo: { soft: -0.2, load: 0.3, blitz: 0 }, trap: { soft: 0, load: -0.3, blitz: 0.4 } };
   const schemeS = (act, id, def) => (act.scheme && SCHEME_M[act.scheme] && def && /^rb_/.test(id || '') ? SCHEME_M[act.scheme][def] || 0 : 0);
+  // daily game: your pass protection (act.prot, game.js PROTS): the back ('back') or the back and the tight end ('max')
+  // stay in to block. No charting says how many blocked on a real play, but NGS charts how many rushed and whether the
+  // passer was pressured: in the playbook's plays, pressure on 21% of dropbacks against 3 rushers, 27% against 4, 36%
+  // against 5, 44% against 6 (about x1.3 a rusher, the sacks with it). A blocker more counts as a rusher fewer: the
+  // pressured real plays (most of the sacks, scrambles and throwaways among them) drawn PROT_F as often for each, the
+  // clean ones in their place. Its cost is on the field: the men who stay in run no route and can't be thrown to
+  const PROT_N = { back: 1, max: 2 }, PROT_F = 0.78;
+  const protOf = (act) => (act && PROT_N[act.prot]) || 0;
   const dcDef = (dc) => (dc.front === 'loaded' ? 'load' : +dc.rush >= 5 ? 'blitz' : 'soft');          // when you call their defense, the offense checks into calls that beat it
   const RUN_M = { blitz: 0, load: -1, soft: 1 }, DEEP_M = { blitz: -1, load: 0.5, soft: 0 };
   const MATCH = {
@@ -886,7 +894,7 @@
     // quarterback in the shotgun, under center or in the pistol, as FTN charts it): only real plays run with both,
     // against the look, from the situation's pool then the call's coarser pools; without the look; then run with the
     // personnel alone, then the formation alone; else as if none was picked (pfOk)
-    samplePlaybook(team, callIdx, fk, u, oob, looks, s, route, who, pers, preDone) {
+    samplePlaybook(team, callIdx, fk, u, oob, looks, s, route, who, pers, preDone, prot) {
       const P = this.e.pb, cdf = this._cdfOf(team, oob);
       const pool = P.poolOf[callIdx * P.nFine + fk];
       // a foul before the snap (a false start, a delay of game, a neutral zone infraction) has no look, route or
@@ -904,10 +912,12 @@
         // a sack, a scramble, a throwaway with nobody charted as the target: no route to filter them by, so a pick left
         // every one out (a picked pass was never sacked: 0% against the real 5%). They come first, as often as in
         // the situation's own plays (against the look the defense showed, when there are enough)
-        const N = preDone === 2 ? null : this._noTarget(cdf, pool, looks, callIdx);
-        if (N && u < N.share) return this._pickT(N, u / N.share);
-        if (N) u = (u - N.share) / (1 - N.share);
-        const r = this._pickT(this.routeSet(team, callIdx, fk, oob, looks, s, route, who, pers), u);
+        // (your protection, prot: the pressured plays drawn less often, _protMix)
+        const X = this._protMix(cdf, pool, preDone === 2 ? null : this._noTarget(cdf, pool, looks, callIdx),
+          this.routeSet(team, callIdx, fk, oob, looks, s, route, who, pers), prot);
+        if (X.N && u < X.share) return this._pickT(X.N, u / X.share);
+        if (X.N) u = (u - X.share) / (1 - X.share);
+        const r = this._pickT(X.T, u);
         if (r >= 0) return r;
       }
       if (pers && P.ngs && P.ngs.pers) {
@@ -1002,7 +1012,18 @@
         if ((f & 64) && /interception|pick_six/.test(ev)) picks += w;
       });
       if (!(w0 > 0)) return null;
-      const N = this._noTarget(this._cdfOf(team, oob), P.poolOf[callIdx * P.nFine + fk], looks, callIdx), nt = N ? N.share : 0;
+      const cdf = this._cdfOf(team, oob), pool = P.poolOf[callIdx * P.nFine + fk];
+      const X = this._protMix(cdf, pool, this._noTarget(cdf, pool, looks, callIdx), T, protOf(act)), N = X.N, nt = N ? X.share : 0;
+      if (X.T !== T) {           // (your protection: the route's plays reweighted too)
+        T = X.T; w0 = 0; caught = 0; yds = 0; picks = 0;
+        T.items.forEach((r, i) => {
+          const w = T.cum[i] - (i ? T.cum[i - 1] : 0), f = P.flags[r], ev = P.eventNames[P.event[r]] || '';
+          if (f & 1) return;
+          w0 += w; yds += w * gain(r);
+          if (!(f & 4) && !(f & 64) && !/sack|scramble|throwaway/.test(ev)) caught += w;
+          if ((f & 64) && /interception|pick_six/.test(ev)) picks += w;
+        });
+      }
       let ntY = 0;
       if (N) N.items.forEach((r, i) => { ntY += (N.cum[i] - (i ? N.cum[i - 1] : 0)) * gain(r); });
       if (N) ntY /= N.tot;
@@ -1139,6 +1160,46 @@
       byPool.set(key, T);
       return T;
     }
+    // pass protection (prot: PROT_N blockers more): the pressure of a draw's sacks, scrambles and throwaways (N, drawn
+    // first at its share) and of the route's plays (T; null: as the situation's pool), the pressured ones weighted m so
+    // the whole is pressured PROT_F as often a blocker. Returns the sets reweighted, N's new share and m
+    _protMix(cdf, pool, N, T, prot) {
+      if (!prot || !this.e.pb.ngs || !this.e.pb.ngs.rush) return { N, T, share: N ? N.share : 0, m: 1 };
+      const pp = this._poolPress(cdf, pool), pN = N ? this._pressOf(N) : 0, pT = T ? this._pressOf(T) : pp;
+      const s0 = N ? N.share : 0, p = s0 * pN + (1 - s0) * pT;
+      if (!(p > 0 && p < 1)) return { N, T, share: s0, m: 1 };
+      const p1 = p * Math.pow(PROT_F, prot), m = (p1 * (1 - p)) / (p * (1 - p1));
+      const a = s0 * (m * pN + 1 - pN), b = (1 - s0) * (m * pT + 1 - pT);
+      return { N: this._protT(N, m), T: this._protT(T, m), share: a / (a + b), m };
+    }
+    _pressOf(T) {
+      const R = this.e.pb.ngs.rush;
+      let w = 0, pw = 0;
+      T.items.forEach((r, i) => { const x = T.cum[i] - (i ? T.cum[i - 1] : 0); w += x; if ((R[r] >> 4) & 1) pw += x; });
+      return w > 0 ? pw / w : 0;
+    }
+    _poolPress(cdf, pool) {
+      const P = this.e.pb, R = P.ngs.rush, lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
+      let w = 0, pw = 0;
+      for (let i = lo; i <= hi; i++) { const x = cdf[i] - (i > lo ? cdf[i - 1] : pool), r = P.items[i]; w += x; if ((R[r] >> 4) & 1) pw += x; }
+      return w > 0 ? pw / w : 0;
+    }
+    // a set with its pressured plays weighted m (cached on the set)
+    _protT(T, m) {
+      if (!T || m === 1 || !(T.items && T.items.length)) return T;
+      const R = this.e.pb.ngs.rush;
+      this._pt = this._pt || new WeakMap();
+      let by = this._pt.get(T);
+      if (!by) { by = new Map(); this._pt.set(T, by); }
+      let o = by.get(m);
+      if (o) return o;
+      const cum = new Array(T.items.length);
+      let tot = 0;
+      T.items.forEach((r, i) => { const x = T.cum[i] - (i ? T.cum[i - 1] : 0); tot += (R[r] >> 4) & 1 ? x * m : x; cum[i] = tot; });
+      o = { ...T, cum, tot };
+      by.set(m, o);
+      return o;
+    }
     _pickT(T, u) {
       if (!T) return -1;
       const target = u * T.tot, c = T.cum;
@@ -1187,7 +1248,7 @@
     // defense's call says nothing about (_dcAbout: the flags; on a pass call what is not a dropback, an RPO's
     // handoffs) come from the situation's own pool, as often as there. Its mean EPA:
     // the offense's own here plus the defense's effect s (dcEffect). No pool at all: samplePlaybook
-    sampleVsDefense(team, callIdx, fk, u, oob, dc, s, route, who, pers) {
+    sampleVsDefense(team, callIdx, fk, u, oob, dc, s, route, who, pers, prot) {
       const P = this.e.pb;
       let preDone = false;
       if (P.ngs && P.ngs.dpers && dcValid(dc)) {
@@ -1202,10 +1263,13 @@
         }
         // (and a pick's sacks, scrambles and throwaways, samplePlaybook's, as often as in the situation's plays;
         // preDone 2: samplePlaybook, if it comes to that, has them drawn)
+        let pm = 1;
         if (route && P.calls[callIdx].kind !== 'run') {
-          const N = this._noTarget(cdf, pool, 0, callIdx);
-          if (N && u < N.share) return this._pickT(N, u / N.share);
-          if (N) u = (u - N.share) / (1 - N.share);
+          // (your protection: as samplePlaybook's, the route's plays taken as pressured as the situation's)
+          const X = this._protMix(cdf, pool, this._noTarget(cdf, pool, 0, callIdx), null, prot);
+          pm = X.m;
+          if (X.N && u < X.share) return this._pickT(X.N, u / X.share);
+          if (X.N) u = (u - X.share) / (1 - X.share);
           preDone = 2;
         }
         if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (!pools.includes(lp)) pools.push(lp); }
@@ -1224,19 +1288,19 @@
             seen.add(key);
             if (where !== 'wide') {
               for (const pl of where === 'pool' ? [pool] : pools) {
-                const r = this._pickT(this._dcT(cdf, pl, null, dc, L, s, ri, who || 0, pers || 0, pass, ref), u);
+                const r = this._pickT(this._protT(this._dcT(cdf, pl, null, dc, L, s, ri, who || 0, pers || 0, pass, ref), pm), u);
                 if (r >= 0) return r;
               }
             }
             if (where === 'pool') continue;
             for (const set of where === 'near' ? near : wide) {
-              const r = this._pickT(this._dcT(null, -1, set(), dc, L, s, ri, who || 0, pers || 0, pass, ref, callIdx, oob), u);
+              const r = this._pickT(this._protT(this._dcT(null, -1, set(), dc, L, s, ri, who || 0, pers || 0, pass, ref, callIdx, oob), pm), u);
               if (r >= 0) return r;
             }
           }
         }
       }
-      return this.samplePlaybook(team, callIdx, fk, u, oob, 0, 0, route, who, pers, preDone);
+      return this.samplePlaybook(team, callIdx, fk, u, oob, 0, 0, route, who, pers, preDone, prot);
     }
     // each real play's EPA (capped) over the mean of its own situation's pool (the smallest pool a situation draws
     // from that holds it: its call in its situation, or the coarser one its situation was pooled into), as
@@ -1674,10 +1738,10 @@
         if (dcValid(act.dc)) {
           const m = dcEffect(this.e.pb.dcEff, act.call, act.dc, act.pers, act.seen);
           why = m.why.slice(0, 3);
-          row = this.sampleVsDefense(o, callIdx, fineKey(MODE_NORMAL, 3, R.twoYl, R.twoYl), u[2], false, act.dc, m.s, route, who, persForm(act));
+          row = this.sampleVsDefense(o, callIdx, fineKey(MODE_NORMAL, 3, R.twoYl, R.twoYl), u[2], false, act.dc, m.s, route, who, persForm(act), protOf(act));
         } else {
           const match = this.matchOf(callIdx, this.defOfLooks(act.looks));
-          row = this.samplePlaybook(o, callIdx, fineKey(MODE_NORMAL, 3, R.twoYl, R.twoYl), u[2], false, act.looks, match, route, who, persForm(act));
+          row = this.samplePlaybook(o, callIdx, fineKey(MODE_NORMAL, 3, R.twoYl, R.twoYl), u[2], false, act.looks, match, route, who, persForm(act), undefined, protOf(act));
         }
         if (row >= 0) {
           const f = P.flags[row];
@@ -1904,10 +1968,10 @@
           if (dcValid(act.dc)) {
             const m = dcEffect(this.e.pb.dcEff, act.call, act.dc, act.pers, act.seen);
             match = m.s + repeatS(act) + schemeS(act, act.call, dcDef(act.dc)); why = m.why.slice(0, 3);
-            pbRow = this.sampleVsDefense(o, callIdx, fk, u[2], mineOob, act.dc, match, route, who, persForm(act));
+            pbRow = this.sampleVsDefense(o, callIdx, fk, u[2], mineOob, act.dc, match, route, who, persForm(act), protOf(act));
           } else {
             match = this.matchOf(callIdx, this.defOfLooks(act.looks)) + repeatS(act) + schemeS(act, act.call, this.defOfLooks(act.looks));
-            pbRow = this.samplePlaybook(o, callIdx, fk, u[2], mineOob, act.looks, match, route, who, persForm(act));
+            pbRow = this.samplePlaybook(o, callIdx, fk, u[2], mineOob, act.looks, match, route, who, persForm(act), undefined, protOf(act));
           }
         } else if (act && dcValid(act.dc) && this.pbCdf && (kind === RUN || kind === PASS)) {
           // no call from the offense: a call of the kind it chose, as often as play-callers make it here, against the

@@ -202,6 +202,23 @@ for (let k = 0; k < 100; k++) {
     }
     assert.ok(nt / n <= 0.2, `a picked rollout sacked, scrambling or thrown away ${(100 * nt / n).toFixed(1)}%`);
   }
+  // your protection (act.prot, engine.js PROT_N): a blocker more is a pass rusher fewer against the real plays'
+  // pressure (x0.78 a blocker: 27% against 4 rushers, 21% against 3); the sacks come down with it
+  {
+    const R = P.ngs.rush, rate = (prot) => {
+      let n = 0, pr = 0, sk = 0;
+      for (const id of ['quick_strong', 'deep_strong', 'deep_middle', 'pa_deep']) for (let fk = 0; fk < P.nFine; fk += 5) for (let k = 0; k < 60; k++) {
+        const r = S.samplePlaybook(0, P.callIndex[id], fk, (k + 0.5) / 60, false, 0, 0, 'out', 3, 0, undefined, prot);
+        if (r < 0 || P.flags[r] & 1) continue;
+        n++; pr += (R[r] >> 4) & 1; sk += /sack/.test(P.eventNames[P.event[r]] || '') ? 1 : 0;
+      }
+      return [pr / n, sk / n];
+    };
+    const [p0, s0] = rate(0), [p1, s1] = rate(1), [p2, s2] = rate(2);
+    assert.ok(Math.abs(p1 / p0 - 0.78) < 0.05 && Math.abs(p2 / p0 - 0.78 * 0.78) < 0.06, `pressure by protection: ${p0.toFixed(3)} ${p1.toFixed(3)} ${p2.toFixed(3)}`);
+    assert.ok(s2 < s1 && s1 < s0, `sacks by protection: ${s0.toFixed(3)} ${s1.toFixed(3)} ${s2.toFixed(3)}`);
+    console.log(`protection: pressure ${(100 * p0).toFixed(1)}% / ${(100 * p1).toFixed(1)}% / ${(100 * p2).toFixed(1)}%, sacks ${(100 * s0).toFixed(1)}% / ${(100 * s1).toFixed(1)}% / ${(100 * s2).toFixed(1)}% (standard / the back in / max protect)`);
+  }
   // a receiver's odds on his chip (game.js oddsEl) are what the snap draws: caught per snap, the sacks, scrambles and
   // throwaways and a route thrown again and again counted (a player: "told 70% or higher and get screwed every time")
   {
