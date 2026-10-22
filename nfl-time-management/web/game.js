@@ -335,7 +335,8 @@
   const FULLDEF = VS || !!document.querySelector('meta[name="fulldef"]');
   // a player can keep the defense to the three simple calls (asked for: the full one is a lot to take in)
   const simpleDef = () => !VS && !!load(`${STORE}:simpledef`, false);
-  const VS_DECIDE_MS = 30000;      // the play clock in Versus: 30 seconds a call (board/match.js DECIDE_MS)
+  const VS_DECIDE_MS = 30000;      // the play clock in Versus: 30 seconds a call (board/match.js DECIDE_MS: a pick, a try)
+  const VS_DEF_MS = 10000, VS_OFF_MS = 20000;     // ... at a snap: 10 seconds on defense, 20 on offense (match.js DEF_MS, OFF_MS)
   // spots whose data was corrected, and when the fix went live: a drive's try saved before it starts over
   // (the two overtime drives were played as a fourth quarter until their start carried the overtime: startRoot otOf)
   const SPOT_FIXED = { '2018_14_NE_MIA#4172': Date.parse('2026-10-16T22:50:00Z'), '2023_22_SF_KC#4561': Date.parse('2026-10-18T13:00:00Z'),
@@ -373,6 +374,8 @@
   function load(key, dflt) { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : dflt; } catch (e) { return dflt; } }
   function save(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) { /* storage off: play on */ } }
   function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  // the longer reading, a tap away (the owner: nothing to read on a page unless you ask for it)
+  function moreEl(label, text) { const d = el('details', 'more'); d.append(el('summary', '', label), el('p', '', text)); return d; }
   function S(tag, attrs, text) {
     const e = document.createElementNS(SVGNS, tag);
     for (const k in attrs) e.setAttribute(k, attrs[k]);
@@ -1346,6 +1349,24 @@
   // Kickoff alignment (the 2024 rules): the kicker at the ball, his ten teammates at the receiving 40 (25 yards
   // ahead of the ball), nine of the receiving team in the setup zone 30-35 yards ahead, and two returners deep.
   // Special-teams units are drawn in team colors: who covers kicks is not in the lineups.
+  // a kick's specialist on the dot that plays him (a field goal's kicker, a punt's punter): his number, his rating's
+  // colour and his name, as every other man's (the owner: numbers and ratings on the kickers and punters too), else the
+  // letter. teams.json and the spots carry each one's num and ovr (history.py specialist)
+  function specDot(a, rec, letter) {
+    if (!a) return;
+    const has = !!(rec && rec.name);
+    let j = a.g.querySelector('text.jn');
+    if (!j) { j = S('text', { class: 'jn', y: 2.6 }); a.g.append(j); }
+    j.textContent = has && rec.num != null ? String(rec.num) : letter;
+    a.g.querySelectorAll('text.nm').forEach((n) => n.remove());
+    if (!has) return;
+    const c = a.g.querySelector('circle.c');
+    if (c && rec.ovr != null) c.setAttribute('fill', rate(rec.ovr));
+    const t = S('text', { class: 'nm', x: 0, y: 16 });
+    t.textContent = `${shortName(rec.name)} · ${letter}`;
+    a.g.append(t);
+    a.g.setAttribute('aria-label', `${teamName(a.team)} ${letter === 'K' ? 'kicker' : 'punter'} ${rec.num != null ? `#${rec.num} ` : ''}${rec.name}${rec.ovr != null ? `, rated ${rec.ovr}` : ''}`);
+  }
   function kickoffUnits(sc, r, L, dir) {
     const kt = r.pos, goal = dir > 0 ? 100 : 0;
     const row = (n, pad) => Array.from({ length: n }, (_, i) => SX0 + pad + (i * (SX1 - SX0 - 2 * pad)) / (n - 1));
@@ -2509,7 +2530,7 @@
   // (browser tests only, window.__sepLog: the drawing and the play, for bots that draw thousands of lines and plays)
   if (window.__sepLog) {
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
-      DRAWN_RANGE, CALL, ROUTES, routeName, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, goalCheck, speedLog, get: () => ({ G, ui, scene, busy }),
+      DRAWN_RANGE, CALL, ROUTES, routeName, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, goalCheck, qbCheck, speedLog, get: () => ({ G, ui, scene, busy }),
       readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
       promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k),
       drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock(), crowdKey: (r, k) => crowdKey(r, k) };
@@ -2751,6 +2772,23 @@
     });
     return out;
   }
+  // (browser tests) the passer after his throw: how long a defender is on him (within a yard) in the second after the
+  // ball goes. Anything but a sack is never drawn with a man on him after the throw (it read as a sack that never came:
+  // the owner, Oct 22)
+  function qbCheck(sc, P, e) {
+    const segs = P.segs.slice().sort((a, b) => a.t0 - b.t0), i = segs.findIndex((s) => s.kind === 'fly' && s.lift);
+    const h = i > 0 ? segs.slice(0, i).reverse().find((s) => s.kind === 'hold' && s.a) : null;
+    if (!h || h.a.label !== 'QB' || /sack/.test(e.evt || '')) return null;
+    const qb = h.a, t0 = segs[i].t0, yd = (p, q) => Math.hypot((p.x - q.x) / XYD, p.L - q.L);
+    let on = 0, minR = 99, who = null;
+    const ds = sc.actors.filter((d) => !d.off && d.trk);
+    for (let t = t0 + 0.1; t <= Math.min(P.T, t0 + 1.2); t += 0.05) {
+      const q = at(qb, t), rs = ds.map((d) => yd(at(d, t), q)), r = Math.min(...rs);
+      if (r < minR) { minR = r; const d = ds[rs.indexOf(r)]; who = { label: d.label, t: +(t - t0).toFixed(2) }; }
+      if (r < 1.0) on += 0.05;
+    }
+    return { on: +on.toFixed(2), minR: +minR.toFixed(2), evt: e.evt || '', press: !!e.pressure, call: e.call, who };
+  }
   function speedLog(sc, P, e, x) {
     (window.__speedLog = window.__speedLog || []).push({ ev: e.ev, call: e.call, evt: e.evt || '', yards: e.yards, td: !!(e.td || e.tdDef || e.retTd), air: e.air,
       ...(x || {}), ...speedCheck(sc, P) });
@@ -2898,7 +2936,7 @@
       const slots = [-1.1, 1.1, -2.2, 2.2, -3.3, 3.3];
       others.forEach((a, i) => { if (i < slots.length) at_(a, slots[i], fwd(L0, -0.4)); else at_(a, (i % 2 ? 1 : -1) * 4.3, fwd(L0, -1.2)); });
       at_(holder, 0, fwd(L0, -7)); tag(holder, 'H');
-      if (kicker) { at_(kicker, -2.2, fwd(L0, -9.6)); tag(kicker, 'K'); }
+      if (kicker) { at_(kicker, -2.2, fwd(L0, -9.6)); specDot(kicker, teamOf(kicker.teamI).kicker, 'K'); }
       const deep = K.def.filter((a) => a.label === 'S').slice(0, 1), front = K.def.filter((a) => !deep.includes(a));
       front.forEach((a, i) => at_(a, (i - (front.length - 1) / 2) * 1.35, fwd(L0, 0.6)));
       deep.forEach((a) => at_(a, 0, fwd(L0, 13)));
@@ -4014,6 +4052,9 @@
         else leg(K.fb, REACT_OFF, 'track', { gain: 2.4, eff: 0.6, fn: (t) => { const Q = qbSpot(t); return [Q[0] + side * 1.6, Q[1] + dir * 1.4]; } });
       }
       if (wP) leg(wP, tWin, 'chase', { who: passer.b, gap: 1.1, eff: 1, lead: 0.3 });
+      // (once the ball is out nobody stays on the passer: the man who beat his block and the blitzers ease off to a
+      // couple of yards and pull up. A chaser left a yard off him after the throw read as a sack that never came)
+      [wP, ...blitzers].filter(Boolean).forEach((d) => { leg(d, tThrow + 0.15, 'chase', { who: passer.b, gap: 2.6, eff: 0.45, lead: 0 }); leg(d, tThrow + 1.2, 'stand'); });
       const cov = passShape({ kind, tgt, catchPt, tThrow, tCatch, rushers, shell: shellOf(), side, qbSpot, passer });
       // a man with a receiver of his own: running with a vertical, or on his man
       const onMan = (d) => cov.carry.has(d) || !!(cov.man && cov.assigned.get(d) && cov.assigned.get(d) !== tgt);
@@ -4415,17 +4456,29 @@
         const q = Wd.posAt(passer.b, tThrow);                // (where he throws from)
         Wd.rewind(tP);                                        // (the world may have been run on past it: back to then)
         const pool = stick ? rushers : K.def.filter((d) => d !== tgt);
-        const hr = (pool.map((d) => ({ d, T: Motion.minTime([here(d), q], d.b.g, { v0: vel(d), spd: d.b.spd }) })).sort((x, y) => x.T - y.T)[0] || {}).d || wP;
+        // (on him: the man who beat his block, when there is one; else the rusher who can be there first)
+        const hr = (stick && wP) || (pool.map((d) => ({ d, T: Motion.minTime([here(d), q], d.b.g, { v0: vel(d), spd: d.b.spd }) })).sort((x, y) => x.T - y.T)[0] || {}).d || wP;
         if (!hr) { Wd.run(t0); return; }
         const w = here(hr), [ux, uy] = unit(w[0] - q[0], w[1] - q[1]);
-        runFrom(hr, tP, [[q[0] + ux * k, q[1] + uy * k]], { T: tThrow + 0.05 - tP, v1: stick ? undefined : 0 });
-        if (stick) leg(hr, tThrow + 0.1, 'stick', { who: passer.b, dx: ux * k, dy: uy * k, ease: 0.2 });
+        runFrom(hr, tP, [[q[0] + ux * k, q[1] + uy * k]], { T: tThrow + 0.05 - tP, v1: 0 });
+        // (with him a beat as the ball goes, then he pulls up: a rusher left on the passer after the throw read as a
+        // sack that never came; the owner, Oct 22)
+        if (stick) { leg(hr, tThrow + 0.1, 'go', { ...xy([q[0] + ux * 2.8, q[1] + uy * 2.8]), eff: 0.4 }); leg(hr, tThrow + 1.0, 'stand'); }
         else leg(hr, tThrow + 0.3, 'stand');
         busy.add(hr);
         Wd.run(t0);
       };
       const pocketD = () => { Wd.run(Math.max(Wd.t, tThrow)); return Math.min(...K.def.map((d) => dist(Wd.posAt(d.b, tThrow), Wd.posAt(passer.b, tThrow)))); };
-      if (wP && !thrownAway) rushHome(0.9, true);
+      if (wP && !thrownAway) rushHome(1.3, true);       // (a step off him, never on top of him: no sack drawn)
+      // (and a rusher the line lets near him, an edge ridden round the pocket: off him once the ball is out; a man left
+      // on the passer after the throw read as a sack that never came)
+      {
+        const t0 = Wd.t, ts = [0.2, 0.4, 0.6, 0.8].map((x) => tThrow + x);
+        if (Wd.t < ts[3]) Wd.run(ts[3]);
+        const near = front.filter((d) => d !== wP && !busy.has(d) && ts.some((t) => dist(Wd.posAt(d.b, t), Wd.posAt(passer.b, t)) < 2.2));
+        Wd.rewind(t0);
+        near.forEach((d) => { leg(d, tThrow + 0.15, 'chase', { who: passer.b, gap: 2.6, eff: 0.45, lead: 0 }); leg(d, tThrow + 1.2, 'stand'); });
+      }
       // the throw
       Wd.run(tThrow);
       const qT = here(passer);
@@ -4448,7 +4501,9 @@
       };
       const throwTo = (t1, p, h, d) => { const [t0, a] = launch(t1, p); fly(t0, t1, px(a[0]), a[1], px(p[0]), p[1], h ?? arcH, d ?? arcD, true); };
       ring(tThrow, passer, false);
-      leg(passer, tThrow + 0.15, 'go', { x: qT[0] + jit(1), y: qT[1] + dir * 1.2, eff: 0.25 });
+      // (his follow-through: a step up into the space, or, hit as he threw, a fade back off the man on him; stepping
+      // up into the rusher read as a sack)
+      leg(passer, tThrow + 0.15, 'go', { x: qT[0] + jit(1), y: qT[1] + dir * (wP ? -0.5 : 1.2), eff: 0.25 });
       // the defense breaks on the ball a beat after it is out: the nearest two to where it is going
       // (not a man running with another receiver, deep or in man, unless he is right there: pulled off to the ball,
       // his own man ran free downfield as it arrived)
@@ -5078,6 +5133,7 @@
       const back = dir > 0 ? L0 - FULL.lo : FULL.hi - L0;
       const T0 = 0.8, pL = fwd(L0, -Math.min(14, back - 1.2)), Lnew = clip(losOf(res.root), -9, 109);
       const punter = qb || K.off[0], upback = K.rb && K.rb !== punter ? K.rb : null;
+      specDot(punter, punter && teamOf(punter.teamI).punter, 'P');
       const gunners = K.recv.filter((a) => a.label === 'WR').slice(0, 2);
       const line = K.off.filter((a) => a !== punter && a !== upback && !gunners.includes(a));
       const lineX = [0, -15, 15, -30, 30, -45, 45, -60, 60];
@@ -5456,6 +5512,8 @@
       // (the ball against the goal line and the sidelines: goalCheck)
       (window.__goalLog = window.__goalLog || []).push({ ...goalCheck(sc, P, drawnE, two), yl: two ? 2 : before.yl, mine: e.team === G.me });
       (window.__passLog = window.__passLog || []).push(...passCheck(sc, P, drawnE).slice(0, 3));
+      const qc = qbCheck(sc, P, drawnE);
+      if (qc) (window.__qbLog = window.__qbLog || []).push(qc);
       // (and the man with the ball goes past the sideline with it on the field just when the engine has the play out of
       // bounds, for its clock: a player saw the other team run out and the clock run on. After the whistle he may walk
       // back on)
@@ -6039,15 +6097,12 @@
     }
     box.append(el('div', 'who', VS ? `You're ${teamName(me)}. Your opponent has ${teamName(op)}: they call their side, you call yours.`
       : `You're calling it for ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
-    if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
-    if (todayDaily() && state.restarts) box.append(el('div', 'who prac', 'Started over: this drive counts for your streak and stats, not on today’s leaderboard.'));
-    if (PRACTICE) box.append(el('div', 'who prac', 'Practice: graded like the daily, but it doesn’t count toward your stats, streak or the leaderboard.'));
+    if (SURV) box.append(el('div', 'who surv', 'Win to stay alive.'));
+    if (todayDaily() && state.restarts) box.append(el('div', 'who prac', 'Started over: not on today’s leaderboard.'));
+    if (PRACTICE) box.append(el('div', 'who prac', 'Practice: doesn’t count.'));
     const chl = challengeLine();
     if (chl) box.append(chl);
     box.append(todaySoFar());
-    const rl = sc.real || {};
-    box.append(el('div', 'from', sc.custom ? `Your situation, with each team as it lined up that season and every player rated as of the end of its regular season.`
-      : `The real score, clock, ball and timeouts from that game, with the players who were on the field and how good they were that week.`));
     box.append(el('div', 'from legal', 'Fan-made. Not affiliated with or endorsed by the NFL or its teams.'));
     go.focus({ preventScroll: true });
     // the first call's facts, asked for while the intro is read: the worker keeps the answer (game_worker.js), so Play
@@ -6383,6 +6438,14 @@
       if (crowdOn()) crowdCounts();          // (the crowd's counts, in before this call's result card: crowdLine)
       head.append(el('h2', '', 'Your call'), el('span', 'sub', `${ddText(r)} · ${spotText(r)}`));
       sketchChips(head, 'play');
+      // Versus: your last play again in one tap (the owner: a way to run the same play on offense and defense)
+      if (VS && vs.lastOff && r.phase === SNAP && !r.try2) {
+        const a = vs.lastOff.half.action, nm = a.call && CALL[a.call] ? CALL[a.call].label : a.play === 'fg' ? 'Field goal' : a.play ? a.play[0].toUpperCase() + a.play.slice(1) : 'Last play';
+        const same = el('button', 'btn ghostbtn same', `↻ Same play: ${nm}`);
+        same.type = 'button'; same.id = 'samePlay';
+        same.addEventListener('click', () => { if (busy || ui.step !== 'family') return; track('vs_same', { side: 'offense' }); ui.step = 'snapped'; vsSubmit({ action: { ...vs.lastOff.half.action } }, vs.lastOff.local); });
+        d.append(same);
+      }
       if (G.look != null) d.append(readLine(G.look));
       if (r.clock_running) d.append(tempoPicker(r));
       const fam = el('div', 'keys fam');          // (fam: what the first drive's tour points at)
@@ -6635,7 +6698,7 @@
       // (the first few passes only: after that the screen is the receivers and the keys)
       const told = load(`${STORE}:passhint`, 0);
       const h = told >= 3 ? null : !bcast() ? el('p', 'hint', 'Snap throws to the open man, or tap a name to pick who gets the ball. Tap a man on the field for his next route, or drag him to draw one.')
-        : el('p', 'hint one', 'Snap: the open man, or pick one. Tap a dot: his route.');
+        : el('p', 'hint one', VS ? 'Pick a play. Snap: the open man, or tap a man on the field to throw to him.' : 'Snap: the open man, or pick one. Tap a dot: his route.');
       if (h) {
         h.title = 'Snap throws to whoever gets open, or tap a name to pick who gets the ball (tap it again for the open man). Tap a receiver on the field to change his route, or drag him to draw your own (drag the quarterback for his drop or a rollout).';
         d.append(h);
@@ -6698,7 +6761,22 @@
       opt(P.roll && P.rollSide ? `Roll out ${P.rollSide === 'strong' ? 'strong' : 'weak'}` : 'Roll out', 'Move the pocket toward your receiver’s side (or drag the quarterback the way to go).', P.roll, (v) => { P.roll = v; P.qb = null; P.rollSide = null; if (v) P.pa = false; }));
     if (oobMatters(r)) opts.append(opt('⏱ Out of bounds', 'Going out stops the clock now.', ui.oob, setOob, 'oobSwitch'));
     if (opts.childElementCount) d.append(opts);
-    d.append(list);
+    // Versus: the playbook on the sheet itself, a row of plays, the one set marked (the owner: players don't need a list
+    // of who to throw to, a tap on the man on the field picks him; the plays were behind a small chip)
+    if (VS && !P.draw && sc) {
+      const fitK = CONCEPT_FIT[spotKind(r)], row = el('div', 'concepts inline');
+      row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Pass plays');
+      CONCEPTS.slice().sort((a, b) => (b.k === fitK) - (a.k === fitK)).forEach((c) => {
+        const b = conceptCard(sc, c, c.k === fitK);
+        if (P.concept === c.k) { b.classList.add('on'); b.setAttribute('aria-pressed', 'true'); }
+        row.append(b);
+      });
+      d.append(row);
+      if (P.target != null && E[P.target]) {
+        const a = E[P.target], who = el('p', 'hint one', `Throwing to ${shortName(a.p ? a.p.name : '') || a.label} (${routeName(a.label, P.routes[P.target])}). Tap him again for the open man.`);
+        d.append(who);
+      }
+    } else d.append(list);
     const avail = callOptions(r).calls, more = ['hail_mary'].filter((id) => avail.includes(id));
     // the screen in one tap: the back's route set to the screen and the ball to him (it was only a route on the
     // picker, which players didn't find, while the grade could still name the screen as the best call)
@@ -7015,7 +7093,7 @@
     };
     const render = () => {
       const f = G.form || {};
-      const hint = el('p', 'phint', 'Optional. Where the quarterback stands and how many backs are behind him are charted on the real plays: pick the shotgun, under center, the pistol or an empty set (with two backs in your personnel, two-back sets) and the play is drawn from real plays run from it (never from a handful: too few, and every play counts). The receivers’ look is the lineup on the field only.');
+      const hint = el('p', 'phint', 'Optional.');
       const done = el('button', 'btn pdone', 'Done');
       done.type = 'button';
       done.addEventListener('click', closeModal);
@@ -7094,7 +7172,7 @@
     const qbs = bq && !VS ? [bq, ...((base.lineup || {}).qbs || []).filter((q) => q.name !== bq.name && typeof q.adj === 'number')] : [];
     const render = () => {
       const cur = G.pers || real, L = lineup(G.me);
-      const hint = el('p', 'phint', `Optional. The play is drawn from real NFL plays run with the grouping you pick; the players you pick are the ones on the field and the ones you can throw to${qbs.length > 1 ? ', and the quarterback’s passes go as his had before this game' : ''}.`);
+      const hint = el('p', 'phint', 'Optional.');
       const groups = el('div', 'pgroups');
       PERS.forEach(([k]) => {
         const [t, sub] = PERS_INFO[k], b = el('button', `pgroup${cur === k ? ' on' : ''}`);
@@ -7468,6 +7546,12 @@
       if (VS) vsSubmit({ dc: { ...sk.dc } }, sk.draw);
       else decideDefense({ ...sk.dc }, sk.draw);
     });
+    if (VS && vs.lastDef && !r.try2) {
+      const same = el('button', 'btn ghostbtn same', `↻ Same defense: ${vdefText(vs.lastDef.dc)}`);
+      same.type = 'button'; same.id = 'sameDef';
+      same.addEventListener('click', () => { if (busy || ui.step !== 'vdef') return; track('vs_same', { side: 'defense' }); ui.step = 'sent'; vsSubmit({ dc: { ...vs.lastDef.dc } }); });
+      d.append(same);
+    }
     const presets = el('div', 'vpresets');
     presets.setAttribute('aria-label', 'Quick calls');
     const box = el('div', 'vdef');
@@ -8218,7 +8302,10 @@
       else if (x.k === 'two') addLog('Going for two', VSCore.COT_T, mine(x.team));
       else if (x.k === 'must2') addLog('Second overtime on: a touchdown has to go for two', VSCore.COT_T, mine(x.team));
       else if (x.k === 'poss') addLog(`${tn(x.team)} ball${x.round >= 3 ? ': a two-point play' : ' at the 25'}`, VSCore.COT_T, mine(x.team));
-      else if (x.k === 'round') addLog(`${ordinal(x.round)} overtime, tied ${x.score[G.me]}–${x.score[1 - G.me]}${x.round === 2 ? ': a touchdown has to go for two' : x.round >= 3 ? ': a two-point play each' : ''}. ${tn(x.chooser)} chooses`, VSCore.COT_T, mine(x.chooser));
+      else if (x.k === 'round') {
+        const f = x.first != null ? x.first : x.chooser;          // (an old match's note: who chose)
+        addLog(`${ordinal(x.round)} overtime, tied ${x.score[G.me]}–${x.score[1 - G.me]}${x.round === 2 ? ': a touchdown has to go for two' : x.round >= 3 ? ': a two-point play each' : ''}. ${x.first != null ? `${tn(f)} has the ball first` : `${tn(f)} chooses`}`, VSCore.COT_T, mine(f));
+      }
     }
   }
   // A college game tied at the end goes to college overtime (web/vs_core.js, the rules Versus plays by): a coin toss,
@@ -9895,15 +9982,13 @@
     const box = el('div', 'pro provalue'), days = Math.max(0, dayOf(new Date()) - 1);
     box.append(el('div', 'k', 'Want more? Two-Minute Drill Pro'), el('div', 'price', '$4.99 \u00b7 once, yours for good'));
     const ul = el('ul');
-    ['The historic drives: Mahomes\u2019 13 seconds, the Minneapolis Miracle, the Helmet Catch, 28\u20133 and more, from their real spots',
-      'Playoff runs: coach a team through its whole postseason, every late-game spot in order',
-      `The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed`].forEach((t) => ul.append(el('li', '', t)));
+    ['Historic drives', 'Playoff runs', `Every past daily${days ? ` (${days})` : ''}`].forEach((t) => ul.append(el('li', '', t)));
     const row = el('div', 'row'), buy = el('button', 'btn', 'Unlock Pro \u00b7 $4.99'), more = el('a', 'btn ghostbtn', 'See what\u2019s inside');
     buy.type = 'button';
     buy.addEventListener('click', () => { track('pro_value_buy'); startPurchase(buy); });
     more.href = '#archive';
     row.append(buy, more);
-    box.append(ul, row, el('p', 'note', 'Apple Pay, Google Pay or a card on Stripe\u2019s secure page. Signed in, it goes on your account for every device.'));
+    box.append(ul, row);
     track('pro_value_seen');
     return box;
   }
@@ -10298,7 +10383,7 @@
       },
       week: () => {
         if (!wk) { panel.append(el('p', 'note', 'The week’s list did not load. Refresh to try again.')); return; }
-        panel.append(el('p', 'note lbrule', `${span(wk.from, wk.to)}: each player’s best ${wk.best} daily scores of the 7 days, added up (${wk.best * 100} is perfect). Play ${wk.best} days to max it out; a bad day never counts against you.`));
+        panel.append(el('p', 'note lbrule', `${span(wk.from, wk.to)}: best ${wk.best} days added up`));
         const y = wk.you;
         panel.append(list(wk.top.map((r) => ({ name: r.name, score: String(r.pts), sub: `${r.days}d` })), y ? [y.rank, wk.n, String(y.pts), `${y.days}d`] : null));
         if (!wk.top.length) panel.append(el('p', 'note', 'Nobody on this week’s list yet.'));
@@ -11748,11 +11833,9 @@
     const box = el('div', 'pro'), days = Math.max(0, dayOf(new Date()) - 1);
     box.append(el('div', 'k', 'Two-Minute Drill Pro'), el('div', 'price', '$4.99 · once'));
     const ul = el('ul');
-    [`The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed, with its score and stats`,
-      'The historic drives. Mahomes’ 13 seconds, the Minneapolis Miracle, the Helmet Catch, 28–3 and more, each from its real spot',
-      'The playoff runs. A team’s whole postseason, every late-game spot in order. Win them all',
-      ...(VS_PRO ? ['Versus. Play someone live, or the computer: college overtime, you call your offense and your defense'] : []),
-      ...(SCN ? ['Build a scenario. Any two teams of any season from 2001 on, as they lined up then, in any situation: 2007 New England against 2023 Kansas City, down 4 with two minutes left'] : [])].forEach((t) => ul.append(el('li', '', t)));
+    ['Historic drives', 'Playoff runs', `Every past daily${days ? ` (${days})` : ''}`,
+      ...(VS_PRO ? ['Versus: play someone live'] : []),
+      ...(SCN ? ['Build your own scenario'] : [])].forEach((t) => ul.append(el('li', '', t)));
     box.append(ul);
     if (isPro()) {
       box.append(el('p', '', acctPro() ? `Pro is on your account (${ACCT.me.email}): sign in on any device to play it there.` : `Pro is on. Your code: ${proCode()}. Keep it: it unlocks Pro on up to 3 of your devices.`));
@@ -11762,8 +11845,7 @@
     buy.type = 'button';
     buy.addEventListener('click', () => startPurchase(buy));
     row.append(buy);
-    box.append(row, el('p', 'note', acctPro() || !authSession() ? 'Apple Pay, Google Pay or a card, on Stripe’s secure page. One code, up to 3 of your devices.'
-      : `Apple Pay, Google Pay or a card, on Stripe’s secure page. Signed in as ${(ACCT.me && ACCT.me.email) || 'you'}: Pro goes on your account, for any device you sign in on.`));
+    box.append(row);
     const rs = el('div', 'row'), inp = el('input'), go = el('button', 'btn', 'Restore');
     inp.placeholder = 'TMD-XXXX-XXXX-XXXX'; inp.setAttribute('aria-label', 'Your Pro code'); inp.autocapitalize = 'characters'; inp.spellcheck = false;
     go.type = 'button';
@@ -11782,7 +11864,10 @@
       }
     });
     rs.append(inp, go);
-    box.append(el('p', 'note', 'Already have Pro? Enter your code.'), rs, recoverNodes());
+    // (restoring a code, folded away: most people come here to buy)
+    const have = el('details', 'havepro');
+    have.append(el('summary', '', 'Already have Pro?'), rs, ...[].concat(recoverNodes() || []));
+    box.append(have);
     if (!BOARD.api) { buy.disabled = true; go.disabled = true; }
     return [box];
   }
@@ -11976,7 +12061,7 @@
     if (done) {
       foot.append(countdown(streak ? `${streak} · next drive in ` : 'Next drive in '));
     } else {
-      foot.append(el('span', '', streak ? `${streak}${sk.pending.length ? ' ❄️' : ''}: play today to keep it` : 'One real drive a day, the same for everyone'));
+      if (streak) foot.append(el('span', '', `${streak}${sk.pending.length ? ' ❄️' : ''}: play today to keep it`));
     }
     card.append(foot);
     return { el: card, status };
@@ -11990,7 +12075,7 @@
     const num = el('div', 'hnum');
     num.append(el('b', '', sv.best ? String(sv.best) : '–'), el('span', '', sv.best ? `win${sv.best === 1 ? '' : 's'}, your best run` : 'no runs yet'));
     a.append(el('div', 'hk', 'Survivor'), num,
-      el('p', '', alive ? `Your run is alive: ${run.won} win${run.won === 1 ? '' : 's'} so far.` : 'Real fourth quarters back to back. One loss ends it.'),
+      ...(alive ? [el('p', '', `Your run is alive: ${run.won} win${run.won === 1 ? '' : 's'} so far.`)] : []),
       el('span', 'cta', alive ? 'Continue' : 'Play'));
     return a;
   }
@@ -12000,7 +12085,6 @@
     a.href = '#vs';
     a.dataset.to = VS_PRO && !isPro() ? 'versus_pitch' : 'versus';
     a.append(el('div', 'hk', VS_PRO ? (isPro() ? 'Versus · Pro' : 'Versus · with Pro') : 'Versus · live'), el('div', 'hpitch', 'Play someone'),
-      el('p', '', 'College overtime against another player: you call your offense and your defense. Nobody on? Play the computer.'),
       el('span', 'cta', VS_PRO && !isPro() ? 'Take a look' : 'Play'));
     return a;
   }
@@ -12011,7 +12095,6 @@
     a.dataset.to = isPro() ? 'pro' : 'pro_pitch';
     if (!isPro()) {
       a.append(el('div', 'hk', 'Pro · $4.99 once'), el('div', 'hpitch', 'Historic drives'),
-        el('p', '', `The Helmet Catch, 28\u2060–\u20603 and more, playoff runs, every past daily.`),
         el('span', 'cta', 'Take a look'));
       return a;
     }
@@ -12083,6 +12166,11 @@
     runs: ['M3.5 4.5h5v5h5v5h5M3.5 19.5h5v-5M20.5 14.5h-2'],
     build: ['M4 20l1.2-4.4L16 4.8a2.1 2.1 0 0 1 3 3L8.2 18.6zM14.5 6.3l3 3'],
     dailies: ['M4 6.5h16v14H4zM4 10.5h16M8.5 3.5v4M15.5 3.5v4M8 14h2M14 14h2M8 17h2'],
+    // (Versus: the lobby's tiles, vsLobbyTiles)
+    play: ['M13 2.5L5 13.5h6l-1 8 8-11h-6z'],
+    ranked: ['M6 3.5h12v5a6 6 0 0 1-12 0zM6 5H3.5v1.5A3.5 3.5 0 0 0 6.3 10M18 5h2.5v1.5a3.5 3.5 0 0 1-2.8 3.5M9 20.5h6M12 14.5v6'],
+    cpu: ['M7 7h10v10H7zM10 10h4v4h-4zM9.5 3.5V7M14.5 3.5V7M9.5 17v3.5M14.5 17v3.5M3.5 9.5H7M3.5 14.5H7M17 9.5h3.5M17 14.5h3.5'],
+    friend: ['M10 14a4 4 0 0 0 5.7 0l3.5-3.5a4 4 0 0 0-5.7-5.7l-1.2 1.2M14 10a4 4 0 0 0-5.7 0l-3.5 3.5a4 4 0 0 0 5.7 5.7l1.2-1.2'],
   };
   function proCard(kind, title, sub, go, o = {}) {
     const a = el(typeof go === 'string' ? 'a' : 'button', `pcard ${kind}${o.big ? ' big' : ''}`);
@@ -12092,7 +12180,8 @@
     ic.append(svg);
     const tx = el('span', 'ptx');
     if (o.k) tx.append(el('span', 'pk', o.k));
-    tx.append(el('b', '', title), el('span', 'ps', sub));
+    tx.append(el('b', '', title));
+    if (sub) tx.append(el('span', 'ps', sub));
     if (o.bar != null) { const bar = el('span', 'pbar'), f = el('i'); f.style.width = `${Math.round(o.bar * 100)}%`; bar.append(f); tx.append(bar); }
     a.append(ic, tx);
     return a;
@@ -12143,7 +12232,6 @@
     if (bad) box.append(el('p', 'note badlink', `There is no ${bad}${isPro() ? ': here are the ones there are.' : '.'}`));
     if (SCN && !isPro()) box.append(scenEntry(), commEntry());        // Build a scenario first on the Pro screen, with Pro or without (building is free to try), then what others built
     if (!isPro()) {
-      box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''}, the historic drives and the playoff runs: play any of them, graded like the day it ran.`));
       if (PRO_LIVE === null && (proCode() || authSession())) {     // a code (or a session) is kept here but the board could not confirm it
         const again = el('button', 'btn', 'Try again');
         again.type = 'button'; again.addEventListener('click', () => location.reload());
@@ -12169,7 +12257,7 @@
       ttl.append(el('span', 'k', 'Your rank'), el('b', '', rk.title), el('span', 'sub', rk.next ? `${rk.next.at - passed} more ${rk.next.at - passed === 1 ? 'pass' : 'passes'} to ${rk.next.title}` : 'Every drive passed. The Hall of Fame.'));
       const num = el('div', 'phn');
       num.append(el('b', '', `${passed}/${n}`), el('span', 'k', 'passed'));
-      head.append(ttl, num, driveStrip(ds), el('p', 'note', `Pass a drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play\u2011callers, counting the calls and the result, and you have to win the game. Replay any drive as often as you like; your best grade counts.${played ? ` Played ${played} of ${n}.` : ''}`));
+      head.append(ttl, num, driveStrip(ds), el('p', 'note', `Win with an A (${PASS_AT}+) to pass.${played ? ` Played ${played} of ${n}.` : ''}`));
       box.append(head, el('h3', '', 'Historic drives'));
       const dl = el('div', 'days');
       pro.drives.forEach((d, k) => {
@@ -12202,7 +12290,7 @@
           el('span', `sc${rec && rec.w === rec.n ? ' champ' : ''}`, rec ? `${rec.w === rec.n ? '🏆 ' : ''}${rec.w}-${rec.l}` : 'Play'));
         rl.append(a);
       });
-      box.append(rl, el('p', 'note', 'Every game of the run in order, each from its spot with the most at stake, the game still in doubt. Lose one and the season is over, as it was for real; win them all.'));
+      box.append(rl, el('p', 'note', 'Lose one and the run is over.'));
     } else box.append(el('p', 'note', 'The playoff runs land here with the next build.'));
     }
     if (sec !== 'dailies') return;
@@ -12313,7 +12401,7 @@
     const a = el('a', 'scnentry'), n = Object.values(scenList()).filter((e) => e && !e.gone).length;
     a.href = '#custom';
     a.append(el('span', 'k', isPro() ? 'New · Build a scenario' : 'New in Pro · Build a scenario'), el('b', '', 'Your teams, your situation'),
-      el('span', 'm', `Any two teams from 2001 on, as they lined up that season. Set the game, the clock, the score and the ball, then call it.${n ? ` ${n} played.` : ''}`),
+      ...(n ? [el('span', 'm', `${n} played`)] : []),
       el('span', 'cta', 'Build one'));
     return a;
   }
@@ -12481,7 +12569,7 @@
           });
           body.append(row(lab, sel));
         });
-        body.append(el('p', 'lnote', 'Anyone of that season’s team: the quarterback’s passes go as his had, the kicker kicks as he did; the others are who is on the field and whom you can throw to.'));
+        body.append(el('p', 'lnote', 'Anyone from that season’s team.'));
         if (focused) { const x = document.getElementById(focused); if (x) x.focus(); }      // (the pick just made keeps the focus)
       };
       return d;
@@ -12598,7 +12686,7 @@
     }
     form.append(gN, gT, gL, gG, gS);
     box.append(el('h3', '', 'Start from'), pre, form, errs, sum, acts, posted, reset);
-    box.append(el('p', 'note', `Seasons ${first}–${last}: each team as it lined up in a game late in its regular season (the latest for this season, ${last}, through week ${ix.seasons[ix.seasons.length - 1].thru}), with every player rated as of then, its quarterback, kicker and punter, and its strength. Before ${first} nothing names who started on the line, so those seasons are left out. The overtime is the one of its time; the playoffs never end tied. Scenarios post to no leaderboard: they aren’t the same for everyone. Posted to Community, a scenario shows how many have played it and how many won.`));
+    box.append(moreEl('About the rosters', `Seasons ${first}–${last}: each team as it lined up in a game late in its regular season (the latest for this season, ${last}, through week ${ix.seasons[ix.seasons.length - 1].thru}), with every player rated as of then, its quarterback, kicker and punter, and its strength. Before ${first} nothing names who started on the line, so those seasons are left out. The overtime is the one of its time; the playoffs never end tied. Scenarios post to no leaderboard: they aren’t the same for everyone. Posted to Community, a scenario shows how many have played it and how many won.`));
     // My scenarios
     box.append(el('h3', '', 'My scenarios'));
     const mine = el('div', 'days');
@@ -12698,7 +12786,6 @@
     const a = el('a', 'scnentry comm');
     a.href = '#community';
     a.append(el('span', 'k', 'Community'), el('b', '', 'Scenarios players built'),
-      el('span', 'm', 'Play what other players set up and see how many have played each one and how many won. Post yours from the builder.'),
       el('span', 'cta', 'Browse'));
     return a;
   }
@@ -12744,7 +12831,7 @@
     box.textContent = '';
     const back = el('a', 'linkbtn', '← Pro');
     back.href = '#archive';
-    box.append(back, el('h2', '', 'Community scenarios'), el('p', 'lead', `Scenarios other players built: their teams, their situation. Tap one to play it${isPro() ? '' : ' (playing is part of Pro)'}.`));
+    box.append(back, el('h2', '', 'Community scenarios'), ...(isPro() ? [] : [el('p', 'lead', 'Playing them is part of Pro.')]));
     const build = el('a', 'linkbtn', 'Build and post your own');
     build.href = '#custom';
     box.append(build);
@@ -12825,7 +12912,7 @@
   // result to both phones, which animate it. The room keeps the play clock and the score, calls forfeits and rates
   // ranked matches; a phone only ever sends a call. Modes: ranked (the ladder: matched by rating), casual, a friend.
   const VS_TEAM_KEY = `${STORE}:vsteam`;
-  const VS_MODES = { ranked: 'Ranked', casual: 'Casual', friend: 'Friend match', cpu: 'Versus the computer' };
+  const VS_MODES = { ranked: 'Ranked', casual: 'Casual', friend: 'Friend match', cpu: 'Versus the computer', cup: 'The Invitational' };
   const VS_CPU_KEY = `${STORE}:vscpu`, VS_CPU_LEVELS = { rookie: 'Rookie', pro: 'Pro' };
   const vsCpuLevel = () => (VS_CPU_LEVELS[load(VS_CPU_KEY, 'pro')] ? load(VS_CPU_KEY, 'pro') : 'pro');
   const VS_CPU_DECIDE_MS = 10 * 60e3;       // against the computer: no play clock to speak of (match.js CPU_DECIDE_MS)
@@ -12837,7 +12924,7 @@
   const vsLink = (room) => `${location.origin}${location.pathname}#vs-${room}`;
   const vsMyTeam = () => { const t = load(VS_TEAM_KEY, ''); return TEAMS[t] ? t : ''; };
   async function vsLoadPool() {
-    if (!vs.pool) vs.pool = await fetch(asset('teams.json')).then((r) => { if (!r.ok) throw new Error('teams ' + r.status); return r.json(); });
+    if (!vs.pool) vs.pool = VSCore.boostPool(await fetch(asset('teams.json')).then((r) => { if (!r.ok) throw new Error('teams ' + r.status); return r.json(); }));     // (as the room plays them: VSCore.TEAM_BOOST)
     return vs.pool;
   }
   // where this phone was in the match (its saved decisions), to catch up from on connecting
@@ -13013,9 +13100,10 @@
     save(`${STORE}:vsintro`, seen + 1);
     if (seen >= 2) {          // (you know the rules: who chooses, and go)
       box.append(el('p', 'story', first === G.me ? 'You won the toss: offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`));
-    } else box.append(el('p', 'story', `Each team gets the ball at the other’s 25, no clock. From the second overtime, a touchdown has to go for two; from the third, it’s a two-point play each. Ahead after both teams have had it, you win. ${first === G.me ? 'You won the toss: you choose offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`} The choice alternates every overtime.`));
+    } else box.append(el('p', 'story', first === G.me ? 'You won the toss: you choose.' : `${teamName(op)} won the toss.`),
+      moreEl('Overtime rules', 'Each team gets the ball at the other’s 25, no clock. Ahead after both teams have had it, you win. From the second overtime, a touchdown has to go for two, and the team that went second goes first; from the third, it’s a two-point play each.'));
     if (seen < 2) box.append(el('div', 'who', vs.mode === 'cpu' ? 'You call your side: the offense when you have it, the defense when they do. No play clock against the computer: take your time.'
-      : 'You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap. You get 30 seconds a call; miss two in a row and you forfeit.'));
+      : 'You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap. The defense has 10 seconds to call (miss it and a standard defense goes in), the offense 20 (miss two in a row and you forfeit).'));
     const go = el('button', 'btn', 'Kick it off');
     go.type = 'button';
     go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
@@ -13128,6 +13216,67 @@
     track('vs_queue', { mode });
   }
   // the Versus screen (#vs): your team, then ranked, casual or a friend; the ladder
+  // The Cup (board/match.js CUP, GET /vs/cup): the top on the ranked ladder at the qualifying time play a bracket from
+  // the start; before it, where you stand; then the seeds, your match (its room: both seats are taken for you), the
+  // bracket and the champion (whose phone shows the claim code for the prize)
+  function vsCupBox() {
+    const box = el('div', 'vscup');
+    const when = (iso) => new Date(iso).toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit' });
+    fetch(`${BOARD.api}/vs/cup?key=${encodeURIComponent(deviceKey())}`).then((r) => (r.ok ? r.json() : null)).then((c) => {
+      if (!c || !box.isConnected || c.error) return;
+      const now = Date.now(), skew = c.now - now, at = (iso) => Date.parse(iso) - skew;
+      const done = !!c.champ, started = now >= at(c.startAt), you = c.you || {};
+      if (done && now - at(c.startAt) > 3 * 86400e3) return;          // (an old Cup: gone from the lobby after a few days)
+      box.append(el('div', 'hk', 'Two-Minute Drill Invitational'), el('b', 'cupb', `${c.prize} to the winner`));
+      if (!c.seeds) {
+        box.append(el('p', '', `Top ${c.size} on the ladder · ${when(c.startAt)}`));
+        box.append(el('p', 'note', you.seed ? `You’re #${you.seed}: in, if it holds.` : 'Not in yet: play Ranked.'));
+        // (the rules, a tap away)
+        const how = el('details', 'vscupb');
+        how.append(el('summary', '', 'How it works'), el('div', 'mt', `The top ${c.size} on the ranked ladder at ${when(c.qualifyAt)} (${c.minGames} ranked game${c.minGames === 1 ? '' : 's'} or more) play a bracket from ${when(c.startAt)}, live. Be in within 10 minutes of your match opening or it goes to your opponent.`));
+        box.append(how);
+      } else if (!done) {
+        box.append(el('p', '', you.qualified ? `You’re in: seed ${you.seed} of ${c.seeds.length}.` : `The ${c.seeds.length} are in. ${started ? 'Under way now.' : `It starts ${when(c.startAt)}.`}`));
+        const m = you.match;
+        if (you.qualified && m && m.room) {
+          const go = el('a', 'btn', `Play your Invitational match${m.opp ? ` vs ${m.opp}` : ''}`);
+          go.href = `#vs-${m.room}`;
+          go.addEventListener('click', () => { try { sessionStorage.setItem(`tmd:vsmode:${m.room}`, 'cup'); } catch (e) { /* none */ } });
+          box.append(go, el('p', 'note', 'Be in within 10 minutes.'));
+        } else if (you.qualified && m && m.won === false) box.append(el('p', 'note', `Out in round ${m.round}. Thanks for playing.`));
+        else if (you.qualified && !started) box.append(el('p', 'note', `Come back at ${when(c.startAt)}: your match opens here.`));
+        else if (you.qualified) box.append(el('p', 'note', 'Your next match opens here when your opponent is known.'));
+      } else {
+        box.append(el('p', '', `Champion: ${c.champ}`));
+        if (you.champ && you.claim) box.append(el('p', 'note', `That’s you! Claim code ${you.claim}: send it to the Two-Minute Drill team for your ${c.prize}.`));
+      }
+      // the bracket, round by round (who played whom, who went on)
+      const list = c.seeds || c.projection || [];
+      if (c.matches && c.seeds) {
+        const det = el('details', 'vscupb'), names = (n) => (n == null ? 'bye' : `${n} ${c.seeds[n - 1].name}`);
+        det.append(el('summary', '', 'The bracket'));
+        const rounds = Math.max(...c.matches.map((m) => m.round));
+        for (let r = 1; r <= rounds; r++) {
+          det.append(el('div', 'lab', r === rounds ? 'Final' : r === rounds - 1 ? 'Semifinals' : r === rounds - 2 ? 'Quarterfinals' : `Round ${r}`));
+          c.matches.filter((m) => m.round === r).forEach((m) => {
+            if (m.p[0] == null && m.p[1] == null) return;
+            const line = el('div', `mt${m.live ? ' live' : ''}`);
+            m.p.forEach((x, k) => { if (k) line.append(el('span', 'v', ' vs ')); line.append(el('span', m.w === k ? 'w' : '', names(x))); });
+            if (m.live) line.append(el('span', 'v', ' · live'));
+            if (m.score && m.by === 'score') line.append(el('span', 'v', ` · ${m.score[0]}–${m.score[1]}`));
+            det.append(line);
+          });
+        }
+        box.append(det);
+      } else if (list.length) {
+        const det = el('details', 'vscupb');
+        det.append(el('summary', '', `The top ${c.size} right now`));
+        list.forEach((x) => det.append(el('div', 'mt', `${x.seed}. ${x.name} · ${x.rating}`)));
+        box.append(det);
+      }
+    }).catch(() => { /* no Cup box */ });
+    return box;
+  }
   async function renderVsLobby() {
     show('arch');
     const box = $('arch');
@@ -13135,32 +13284,41 @@
     // (Versus as part of Pro: without it, what Versus is and the Pro pitch)
     if (VS_PRO && !isPro()) {
       track('versus_pitch', {});
-      box.append(el('h2', '', 'Versus'), el('p', 'lead', 'Play someone live, or the computer. College overtime: each team gets the ball at the other’s 25. You call your offense and your defense; both calls lock in before the snap. Versus is part of Pro.'));
+      box.append(el('h2', '', 'Versus'), el('p', 'lead', 'Play someone live. Part of Pro.'));
       box.append(...proNodes(), authNodes());
       return;
     }
-    box.append(el('h2', '', 'Versus'), el('p', 'lead', 'College overtime against another player, or the computer: each team gets the ball at the other’s 25, no clock. You call your offense and your defense; both calls lock in before the snap.'));
-    const pick = el('div', 'vspick');
-    // (your team in one line with Change, the 32 only when you pick: the Play keys were under them on a phone. A
-    // fanbase pick, Your team, is your Versus team until you choose another)
+    // the lobby, laid out as the Pro hub is (the owner: like the Pro tab, more to look at): you (your rating and team)
+    // in a card, the Invitational, then a tile a way to play (Play now the big one), the smaller things in a card, the
+    // ladder
+    box.append(el('h2', '', 'Versus'));
     const fan = load(FAN_KEY, null);
     if (!vsMyTeam() && fan && TEAMS[fan] && !COLLEGE.has(fan)) save(VS_TEAM_KEY, fan);
     let open = !vsMyTeam();
+    const hub = el('section', 'phub vshub'), rk = el('div', 'prank vsrank'), pick = el('div', 'vspick');
+    const rB = el('b', '', '1000'), rS = el('span', 'ps', 'Unranked'), rBar = el('span', 'pbar'), rF = el('i');
+    rF.style.width = '0%';
+    rBar.append(rF);
+    rk.append(el('span', 'pk', 'Your rating'), rB, rS, rBar);
+    const meLine = rS;                              // (filled in once the ladder answers, below)
     const drawPick = () => {
       pick.textContent = '';
       const t = vsMyTeam();
       if (t && !open) {
-        const row = el('div', 'vsteamrow'), sw = el('span', 'sw'), ch = el('button', 'chip', 'Change');
+        const row = el('div', 'vsteamrow'), sw = el('span', 'sw', t), tx = el('span', 'ptx'), ch = el('button', 'chip', 'Change');
         sw.style.background = color(t);
+        tx.append(el('span', 'pk', 'Your team'), el('b', '', teamName(t)));
         ch.type = 'button';
         ch.addEventListener('click', () => { open = true; drawPick(); });
-        row.append(sw, el('b', '', `Your team: ${teamName(t)}`), ch);
+        row.append(sw, tx, ch);
         pick.append(row);
         return;
       }
-      pick.append(el('h3', '', t ? `Your team: ${teamName(t)}` : 'Pick your team'), vsTeamPicker(() => { open = false; drawPick(); }));
+      pick.append(el('span', 'pk', t ? `Your team: ${teamName(t)}` : 'Pick your team'), vsTeamPicker(() => { open = false; drawPick(); }));
     };
-    const modes = el('div', 'vsmodes');
+    hub.append(rk, pick);
+    box.append(hub);
+    if (BOARD.api) box.append(vsCupBox());
     const go = (mode) => {
       if (!vsMyTeam()) { toast('Pick your team first'); return; }
       if (mode === 'ranked' && !myName()) { toast('Ranked needs a name: set it below'); nameIn.focus(); return; }
@@ -13173,20 +13331,22 @@
       }
       vsQueue(mode);
     };
-    // (casual first: a quick match, no rating; ranked's first 10 games are placement, a rating that moves faster)
-    [['casual', 'Play now', 'Quick match, no rating'], ['ranked', 'Ranked', 'Win to climb the ladder'], ['cpu', 'Computer', 'Starts right away, no rating'],
-      ['friend', 'Friend', 'Send a link']].forEach(([m, label, sub]) => {
-      const b = el('button', `btn${m === 'friend' || m === 'cpu' ? ' ghostbtn' : ''}`);
-      b.type = 'button';
-      b.append(document.createTextNode(label), el('small', '', sub));
+    // (casual first and biggest: a quick match, no rating; ranked's first 10 games are placement, a rating that moves faster)
+    const modes = el('div', 'ptiles vsmodes');
+    [['casual', 'play', 'Play now', 'Quick match, no rating', { big: true }], ['ranked', 'ranked', 'Ranked', '', {}],
+      ['cpu', 'cpu', 'Computer', '', {}], ['friend', 'friend', 'Play a friend', '', { wide: true }]].forEach(([m, kind, title, sub, o]) => {
+      const b = proCard(kind, title, sub, () => go(m), o);
+      if (o.wide) b.classList.add('wide');
+      b.dataset.mode = m;
       b.disabled = !BOARD.api;
-      b.addEventListener('click', () => go(m));
       modes.append(b);
     });
     drawPick();
-    const meLine = el('p', 'note vsme', '');
+    box.append(modes);
+    // the smaller things, one card: the computer's level, your name on the ladder, a friend's code
+    const more = el('section', 'phub vsmore');
     const lv = el('div', 'opts-row vslevel');
-    lv.append(el('span', 'lab', 'Computer'));
+    lv.append(el('span', 'pk', 'Computer'));
     const drawLv = () => {
       [...lv.querySelectorAll('button')].forEach((b) => b.remove());
       Object.entries(VS_CPU_LEVELS).forEach(([k, label]) => {
@@ -13198,13 +13358,11 @@
       });
     };
     drawLv();
-    box.append(pick, meLine, modes, lv);
-    const nameRow = el('div', 'row'), nameIn = el('input');
+    const nameRow = el('label', 'vsfield'), nameIn = el('input');
     nameIn.placeholder = 'Your name (for ranked)'; nameIn.maxLength = 24; nameIn.value = myName(); nameIn.setAttribute('aria-label', 'Your name');
     nameIn.addEventListener('change', () => { save(NAME_KEY, nameIn.value.trim().slice(0, 24)); track('name_set', { mode: 'versus' }); });
-    nameRow.append(nameIn);
-    box.append(nameRow);
-    const join = el('div', 'row'), inp = el('input'), jb = el('button', 'btn ghostbtn', 'Join');
+    nameRow.append(el('span', 'pk', 'Your name on the ladder'), nameIn);
+    const joinRow = el('div', 'vsfield'), join = el('div', 'row'), inp = el('input'), jb = el('button', 'btn ghostbtn', 'Join');
     inp.placeholder = 'Friend’s code'; inp.maxLength = 6; inp.autocapitalize = 'characters'; inp.spellcheck = false; inp.setAttribute('aria-label', 'Match code');
     jb.type = 'button';
     jb.addEventListener('click', () => {
@@ -13214,26 +13372,32 @@
       location.hash = `#vs-${c}`;
     });
     join.append(inp, jb);
-    box.append(join);
+    joinRow.append(el('span', 'pk', 'Got a code from a friend?'), join);
+    more.append(lv, nameRow, joinRow);
+    box.append(more);
     if (!BOARD.api) { box.append(el('p', 'note', 'Versus needs the website’s backend.')); return; }
     // straight back into the queue (a no-show's "find another match")
     let again = null;
     try { again = sessionStorage.getItem('tmd:vsqueue'); sessionStorage.removeItem('tmd:vsqueue'); } catch (e) { /* none */ }
     if ((again === 'ranked' || again === 'casual') && vsMyTeam()) { vsQueue(again); return; }
     // the ladder, and you on it
-    const lad = el('div', 'vsladder');
-    box.append(el('h3', '', 'Ranked ladder'), lad);
+    const lad = el('section', 'phub vsladder');
+    lad.append(el('span', 'pk', 'Ranked ladder'));
+    box.append(lad);
     try {
       await BOARD.ready;
       const [top, me] = await Promise.all([fetch(`${BOARD.api}/vs/ladder`).then((r) => r.json()), fetch(`${BOARD.api}/vs/me`, POST_JSON({ key: deviceKey() })).then((r) => r.json())]);
       const streak = me.streak > 1 ? ` · ${me.streak} wins in a row` : me.streak < -1 ? ` · ${-me.streak} losses in a row` : '';
-      const you = me.games ? `You: ${me.rating}${me.rank ? ` · #${me.rank}` : ''} · ${me.w}–${me.l}${streak}${me.provisional ? ` · placement (${me.games} of 10)` : ''}` : 'You: 1000 · no ranked games yet';
-      lad.append(el('p', 'note', you));
-      meLine.textContent = `Ranked: ${you.replace(/^You: /, '')}`;      // (up top too: the ladder is at the foot)
+      // (your rating up top, the Pro hub's rank card: a placement bar for the first 10, then your rank)
+      if (me.games) {
+        rB.textContent = String(me.rating);
+        meLine.textContent = `${me.rank ? `#${me.rank} on the ladder · ` : ''}${me.w}–${me.l}${streak}${me.provisional ? ` · placement ${me.games} of 10` : ''}`;
+        rF.style.width = `${Math.round(100 * Math.min(1, me.games / 10))}%`;
+      }
       const ol = el('ol', 'board');
-      (top.top || []).slice(0, 20).forEach((x) => { const li = el('li'); li.append(el('span', 'nm', x.name), el('span', 'n', `${x.rating}${x.provisional ? '?' : ''} · ${x.w}–${x.l}`)); ol.append(li); });
+      (top.top || []).slice(0, 20).forEach((x, i) => { const li = el('li', i < 3 ? `m${i + 1}` : ''); li.append(el('span', 'rk', String(x.rank || i + 1)), el('span', 'nm', x.name), el('span', 'n', `${x.rating}${x.provisional ? '?' : ''} · ${x.w}–${x.l}`)); ol.append(li); });
       if (!(top.top || []).length) lad.append(el('p', 'note', 'Nobody yet. Be the first.'));
-      else lad.append(ol, el('p', 'note', '? : still in placement (the first 10 ranked games move a rating faster)'));
+      else lad.append(ol, el('p', 'note', '? = still in placement'));
     } catch (e) { lad.append(el('p', 'note', 'The ladder did not load.')); }
   }
   function vsNote(text) {
@@ -13263,8 +13427,9 @@
     if (G && vs.oppLocked === G.vsN && vs.n === G.vsN) b.append(el('span', 'lock', 'Opponent locked in'));
     b.hidden = !b.childNodes.length;
   }
-  // your call's clock: 30 seconds from the moment the call is up (the room starts it on {t:'ready'} and says when it
-  // runs out; until it answers, the same 30 seconds here), never past the decision's last moment. Out of time: the
+  // your call's clock: 10 seconds on defense, 20 on offense (30 for a pick or a try) from the moment the call is up (the
+  // room starts it on {t:'ready'} and says when it runs out; until it answers, the same here), never past the decision's
+  // last moment. Out of time: the
   // room plays your default
   const vsDls = () => (vs.dl && vs.dl.length === 2 ? vs.dl.slice() : [vs.deadline, vs.deadline]);
   const vsMyDl = () => (vs.seat >= 0 ? vsDls()[vs.seat] : vs.deadline);
@@ -13273,7 +13438,8 @@
     vs.ui = 'prompt';
     if (vs.n === G.vsN && vs.seat >= 0) {
       vs.dl = vsDls();
-      vs.dl[vs.seat] = Math.min(vs.dl[vs.seat], vsNow() + (vs.mode === 'cpu' ? VS_CPU_DECIDE_MS : VS_DECIDE_MS));
+      const role = G.root && G.cot ? VSCore.role({ root: G.root, cot: G.cot, over: false }, vs.seat) : null;
+      vs.dl[vs.seat] = Math.min(vs.dl[vs.seat], vsNow() + (vs.mode === 'cpu' ? VS_CPU_DECIDE_MS : role === 'defense' ? VS_DEF_MS : role === 'offense' ? VS_OFF_MS : VS_DECIDE_MS));
       vsSend({ t: 'ready', n: G.vsN });
     }
     vs.timer = setInterval(() => {
@@ -13306,6 +13472,9 @@
     DRAW_ONLY.forEach((k) => { if (src[k] !== undefined) draw[k] = src[k]; });
     vs.drawn = Object.keys(draw).length ? { n, draw, call: half.action && half.action.call, dc: half.dc } : null;
     vs.last = { t: 'half', n, half: vsSealed(half) };
+    // (each side's last call, for Same play: a play called at a snap, not a try's kick or a timeout)
+    if (half.dc) vs.lastDef = { dc: { ...half.dc } };
+    else if (half.action && !half.action.pat && G.root && G.root.phase === SNAP && !G.root.try2 && G.root.pos === G.me) vs.lastOff = { half: { action: { ...half.action } }, local: local ? { ...local } : null };
     vsSend(vs.last);
     vs.ui = 'idle';
     status(vs.mode === 'cpu' ? 'Locked in. Snapping…' : 'Locked in. Waiting for your opponent…');
@@ -13493,7 +13662,11 @@
       q.addEventListener('click', () => { vs.closedByUs = true; try { sessionStorage.setItem('tmd:vsqueue', 'ranked'); } catch (e) { /* none */ } location.hash = '#vs'; });
       row.append(q);
     }
-    if (res.by === 'score' || res.by === 'forfeit') {
+    if (vs.mode === 'cup') {                     // (the Invitational: no rematch; back to the bracket)
+      const b = el('a', 'btn', 'Back to the Invitational');
+      b.href = '#vs';
+      row.append(b);
+    } else if (res.by === 'score' || res.by === 'forfeit') {
       const again = el('button', `btn${vs.mode === 'ranked' ? ' ghostbtn' : ''}`, vs.mode === 'ranked' ? 'Rematch (casual)' : 'Rematch');
       again.type = 'button'; again.id = 'vsAgain';
       again.addEventListener('click', () => { again.disabled = true; again.textContent = vs.mode === 'cpu' ? 'Setting up…' : 'Waiting for your opponent…'; vsSend({ t: 'rematch' }); });
@@ -13502,7 +13675,7 @@
     }
     const next = el('a', 'btn ghostbtn', 'New match');
     next.href = '#vs';
-    row.append(next);
+    if (vs.mode !== 'cup') row.append(next);
     card.append(row);
     // the result to a group chat (how a two-player game gets its next player): the score, who, and the way in
     if (res.by === 'score') {

@@ -8,7 +8,9 @@
  *
  * College overtime (the NCAA rule, as EA Sports College Football has it):
  *   - a coin toss: the winner chooses offense, defense or the end of the field (then the other team picks offense or
- *     defense); the choice alternates: the toss loser has it in the 2nd overtime, the winner in the 3rd, and so on
+ *     defense) for the 1st overtime; from then on the order flips each period: the team with the ball second in one
+ *     overtime has it first in the next (offense, defense | defense, offense | ...; the owner's call, Oct 22: a second
+ *     pick each period let a team have the ball second every time)
  *   - each team gets the ball at the opponent's 25 (1st and 2nd overtime), no game clock
  *   - from the 2nd overtime a touchdown must go for two
  *   - from the 3rd overtime, alternating two-point plays
@@ -44,8 +46,24 @@
   }
   const copy = (x) => JSON.parse(JSON.stringify(x));
 
-  // the engine's game record for two teams (teams.json: each team as it was in its last game)
+  // a team made stronger than it is in Versus: expected points a play added to its offense and taken from what its
+  // defense allows, pass and run. The owner's call (Oct 22): Denver about a third better than an average team, which
+  // is 0.12 (with both sides calling as the engine would, Denver wins about 64% against the other 31 over 1,000 games;
+  // overtime's luck keeps it from going much higher). Room and page both apply it (boostPool), once
+  const TEAM_BOOST = { DEN: 0.12 };
+  function boostPool(pool) {
+    if (!pool || pool.boosted) return pool;
+    const out = { ...pool, teams: { ...pool.teams }, boosted: true };
+    for (const [t, b] of Object.entries(TEAM_BOOST)) {
+      const x = out.teams[t];
+      if (!x || !x.base) continue;
+      out.teams[t] = { ...x, base: { ...x.base, off_pass: x.base.off_pass + b, off_rush: x.base.off_rush + b, def_pass: x.base.def_pass - b, def_rush: x.base.def_rush - b } };
+    }
+    return out;
+  }
+  // the engine's game record for two teams (teams.json: each team as it was in its last game, TEAM_BOOST on)
   function buildGame(pool, home, away) {
+    pool = boostPool(pool);
     const H = pool.teams[home], A = pool.teams[away];
     if (!H || !A) throw new Error(`no team ${H ? away : home}`);
     return { home: H, away: A, home_spread: 0, indoor: false, wind: 0, temp: undefined, league: pool.league,
@@ -166,9 +184,9 @@
     }
     if (sc[0] !== sc[1]) return end(ms, notes, 'score');
     c.round += 1; c.idx = 0; c.score0 = sc.slice();
-    c.pick = { team: chooser(c), end: false };
-    ms.root = possRoot(c.pick.team, c.round, sc, otTo(F, c.round, r.to, opt), opt);
-    notes.push({ k: 'round', round: c.round, score: sc, chooser: c.pick.team });
+    c.order = [c.order[1], c.order[0]];          // the order flips: second last period, first this one
+    ms.root = possRoot(c.order[0], c.round, sc, otTo(F, c.round, r.to, opt), opt);
+    notes.push({ k: 'round', round: c.round, score: sc, first: c.order[0] });
   }
 
   // one decision: the halves (by seat, already cleaned; missing or null: the default), the engine's step
@@ -254,6 +272,11 @@
     }
     return out;
   }
+  // a snap that has to convert (4th down, a two-point try) is never drawn as a throwaway (engine.js _noThrowaway draws
+  // the play again; the few its pressure draw keeps are an incompletion like any other: the same 0 yards and the ball over)
+  function noToss(e, root) {
+    if (e.ev === 'play' && e.evt === 'throwaway' && root && (root.down === 4 || root.phase === PAT || root.try2)) e.evt = '';
+  }
   // the snap as the defense called it, for the field and the play-by-play: its shell, its rush and its box (the real
   // play behind the outcome was run against that defense when enough of them were, engine.js sampleVsDefense)
   const SHELL = { c0: 'cover0', c1: 'cover1', '2man': '2man', c2: 'cover2', c3: 'cover3', c4: 'cover4', c6: 'cover6', prevent: 'prevent' };
@@ -278,6 +301,7 @@
       r.log.forEach((e) => {
         if (e.ev === 'play' && e.row >= 0) Object.assign(e, describe(eng.pb, e.row));
         if (e.ev === 'play' && action && action.dc) called(e, action.dc);
+        noToss(e, root);
       });
       return r;
     };
@@ -319,8 +343,8 @@
     return walk(JSON.parse(new TextDecoder().decode(u8.subarray(8, base))));
   }
 
-  const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, VS_OT, hash, rng, buildGame, possRoot, start, chooser, need, role,
-    cleanAction, cleanDef, cleanHalf, apply, after, describe, called, stepper, unpack };
+  const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, VS_OT, TEAM_BOOST, boostPool, hash, rng, buildGame, possRoot, start, chooser, need, role,
+    cleanAction, cleanDef, cleanHalf, apply, after, describe, called, noToss, stepper, unpack };
   if (typeof module !== 'undefined' && module && module.exports) module.exports = VSCore;
   if (global) global.VSCore = VSCore;       // (always: a page with some other script's global `module` still gets it)
 })(typeof self !== 'undefined' ? self : this);

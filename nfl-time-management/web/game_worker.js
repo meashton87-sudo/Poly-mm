@@ -152,6 +152,7 @@ self.onmessage = async (ev) => {
       r.log.forEach((e) => {
         if (e.ev === 'play' && e.row >= 0) Object.assign(e, describe(e.row));
         if (e.ev === 'play' && m.action && m.action.dc) VSCore.called(e, m.action.dc);
+        VSCore.noToss(e, m.root);
       });
       self.postMessage({ type: 'step', id: m.id, res: r });
     }

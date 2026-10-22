@@ -157,7 +157,8 @@ def live_spot(hist, games: pd.DataFrame, pbp: pd.DataFrame, d: dict) -> tuple:
 
 
 def versus_teams(hist, games: pd.DataFrame, pbp: pd.DataFrame, season: int) -> dict:
-    """Versus: every team as it lines up now, its lineup from its last game this season (history.History.teams), for
+    """Versus: every team as it lines up now at full strength (history.History.teams full: the season's most-used players
+    on the team now, injured or not; the owner: no Sutton, no Breece Hall), its last game for the rest, for
     web/teams.json: {season, week, league, teams: {code: team}}. A team with no game yet is left out."""
     played = games[(games["season"] == season) & games["home_score"].notna()].sort_values("week")
     week = int(played["week"].max()) + 1 if len(played) else 1
@@ -170,7 +171,7 @@ def versus_teams(hist, games: pd.DataFrame, pbp: pd.DataFrame, season: int) -> d
             continue
         side = "home" if last["home_team"] == team else "away"
         t = hist.teams(gid, season, week, float(snaps["play_id"].iloc[len(snaps) // 2]), last["home_team"], last["away_team"],
-                       {"home": last["home_coach"], "away": last["away_coach"]})
+                       {"home": last["home_coach"], "away": last["away_coach"]}, full=True)
         out[team], league = t["teams"][side], t["league"]
     return {"season": season, "week": week, "league": league, "teams": out}
 

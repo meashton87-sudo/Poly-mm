@@ -29,6 +29,7 @@ node web/motion_test.js               # daily game animation: player motion stay
 node board/worker_test.mjs            # the website's survivor leaderboard (Cloudflare Worker + Durable Object), storage in memory
 node board/match_test.mjs             # Versus: rooms, lobby, ladder in memory (board/vs_world.mjs), a stand-in engine (a second)
 node board/lazy_sim_test.mjs          # Versus: the room's lazily built simulator equals the engine's, table by table and play by play
+node board/cup_test.mjs               # Versus: the Invitational (the standings at the qualifying time, the bracket, its rooms, no-shows, the claim code)
 node board/vs_pairs_test.mjs          # Versus: every one of the 992 matchups (32 teams, home and away) played to the end, the rules on every snap
 node board/vs_balance_test.mjs        # Versus: the defense's effects as the game plays them; every defensive option is the answer to something
 node web/defense_calibration.js       # the full defense against real NFL plays: pressure, sacks, time to throw, yards... by rush, coverage, box
@@ -81,6 +82,16 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   the lobby, its quick match, ranked and the computer take Pro, anyone else gets the Pro pitch; a room's link, a Pro
   player's invite, plays for whoever has it); VS_AT (--vs-at: <meta name="vs-at">) holds it until a time, a reload after
   shows it. "pro" without PRO_ON is no Versus at all. The gate is the page's (isPro): the room never asks.
+- The Invitational (board/match.js CUP, the 'cup' object; shown as "Two-Minute Drill Invitational"): the top CUP.size
+  (16) on the ranked ladder at CUP.qualifyAt with CUP.minGames (10) rated games play a single-elimination bracket from
+  CUP.startAt, seeded by rating (cupBracket: the standard order; byes when fewer). The standings at the qualifying time
+  are worked out exactly at any time after it (/vs/standings: every rated game since taken back off; the games table
+  keeps each change as it moved). Each match's room (mode 'cup', both seats taken) opens when both its players are
+  known; not in within CUP.showMs: the other goes on, neither: the higher seed. Results come from the rooms only
+  (/vs/cup/report, never routed from outside). The admin settles a match by hand until the next one starts: POST
+  /vs/cup/admin { match: '1-3', winner: 0|1 } (Authorization: Bearer <ADMIN_TOKEN>; with no body it returns the whole
+  bracket, the champion's claim code included). The champion's phone shows that claim code. Another one: the worker
+  vars CUP_ID, CUP_QUALIFY_AT, CUP_START_AT, CUP_PRIZE, CUP_SIZE, CUP_MIN_GAMES (or a new CUP). cup_test.mjs checks it.
 - Versus (board/match.js): the room plays the football (web/vs_core.js holds the college-overtime rules, shared with the
   page); phones only send calls. Each snap's seed is drawn fresh by the room and never sent to a phone (a phone that
   knew it could see what a call does before making it). lazy_sim_test.mjs and vs_stress.mjs need board/assets/vs (the
