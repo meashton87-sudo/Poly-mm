@@ -50,6 +50,9 @@ export const CPU_AFTER_S = 20;             // waiting this long in the queue: th
 // against the computer nobody waits on you: no 30-second play clock (a call has this long, the room's clock only to
 // close a match left open), and a phone locked or away this long, not a minute, before it counts as leaving
 export const CPU_DECIDE_MS = 10 * 60_000;
+// the computer's own call: in at once (cpuTurn); if that ever fails (the engine still loading), the room's alarm puts it
+// in this soon after, never at the player's deadline (a load test's matches sat 10 minutes on the computer's toss)
+export const CPU_TURN_MS = 3000;
 // the computer's level: 'pro' calls as NFL play-callers do (the engine's own call); 'rookie' makes a rookie's calls (deep
 // shots on any down, field goals early, a soft defense with a light rush). vs_cpu_test.mjs measures both: the calls move
 // a match only a few points either way, so the rookie is only a little easier
@@ -192,6 +195,7 @@ export class Match {
     R.n = 0;
     R.deadline = now + (R.cpu != null ? CPU_DECIDE_MS : FIRST_MS);
     R.dl = [R.deadline, R.deadline];
+    if (R.cpu != null) R.dl[R.cpu] = now + CPU_TURN_MS;
     R.started = now;
     R.defaults = [0, 0];
     this.broadcast({ t: 'start', ms: R.ms, deadline: R.deadline, dl: R.dl, now });
@@ -289,6 +293,7 @@ export class Match {
     R.n = pend.n + 1;
     R.deadline = now + (R.cpu != null ? CPU_DECIDE_MS : PLAY_MS);
     R.dl = [R.deadline, R.deadline];
+    if (R.cpu != null) R.dl[R.cpu] = now + CPU_TURN_MS;
     let result = null;
     if (out.ms.over) {
       R.phase = 'over';
@@ -414,7 +419,10 @@ export class Match {
         let pend = await this.ctx.storage.get('pend');
         if (!pend || pend.n !== R2.n) pend = { n: R2.n, halves: {} };
         const late = out0(pend, dls(R2), R2);
-        for (const s of late) { pend.halves[s] = null; R2.defaults[s] += 1; }
+        for (const s of late) {
+          if (s === R2.cpu) { pend.halves[s] = R2.cpuLevel === 'rookie' ? this.rookieHalf(R2, E) : null; continue; }    // (the computer's own)
+          pend.halves[s] = null; R2.defaults[s] += 1;
+        }
         if (VSCore.need(R2.ms).every((s) => s in pend.halves)) return this.commit(R2, pend, E, Date.now());
         await this.ctx.storage.put('pend', pend);
         await this.save(R2);
