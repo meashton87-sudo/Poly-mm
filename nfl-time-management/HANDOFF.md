@@ -65,7 +65,8 @@ that folder first. It holds the project's rules and how every part works.
     then deletes that worker.
   - Locally against `wrangler dev`: 40 matches, 0 errors, 95% of answers within about 1.4 s.
   - Run 1 failed for lack of `web/teams.json` (fixed).
-  - Run 2 (id 39717865513) was in progress at handoff. Check it, and if it failed, read its job log.
+  - Run 2 (id 39717865513) passed: 160 bots, 100 matches (40 against the computer), all ended on the score, 0
+    errors. Answers p50 62 ms, p95 392 ms, p99 974 ms, max 6.5 s; first snap about 1 s. The test worker was deleted.
 - **Browser test:** a full match against the computer was played in a real browser against a local `wrangler dev`.
   It ended on the score with no script errors (before the last round of fixes).
 
