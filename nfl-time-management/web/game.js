@@ -6231,7 +6231,10 @@
     if (r.t > 1800) return lead >= 0 && th <= 120;
     // about 40 seconds a kneel, one fewer kneel's worth per timeout they have left
     const kneels = 5 - r.down - r.to[1 - G.me] - (r.clock_running ? 0 : 1);
-    return lead > 0 && th <= 40 * Math.max(kneels, 0) + 30;
+    if (lead > 0 && th <= 40 * Math.max(kneels, 0) + 30) return true;
+    // tied or down 1-2 in range of a likely kick: kneel to run the clock down, then kick it as time runs out (a player's
+    // friend at 1st and goal wanted to bleed the clock and kick with none left)
+    return lead <= 0 && lead >= -2 && th <= 120 && ((G.info && G.info.pFg) || 0) >= 0.5;
   }
   // the other team, ahead with the ball, can kneel out the half whatever you do: a kneel on each down left (about 2
   // seconds each) and the play clock between them (about 38), less one run-off for each timeout you have
@@ -6271,7 +6274,9 @@
     const late = r.t > 1800 ? th <= 120 : th <= 300;
     // (never as the game's last snap when it cannot win or tie it: a gold FIELD GOAL on an untimed down at 0:00, down 4)
     const lastKick = r.t <= 1800 && !r.ot && r.score[G.me] - r.score[1 - G.me] <= -4 && (r.untimed || th <= 5);
-    if (kickable && !lastKick && ((r.down === 4 && p >= 0.05) || (th <= 20 && p >= 0.2) || (r.down === 3 && th <= 40 && p >= 0.4) || (late && p >= 0.3))) specials.push('fg');
+    // and on any down in overtime once in decent range: a kick there can win it, and coaches take it on 1st and goal
+    // rather than risk a turnover (a player's friend at 1st and goal in overtime had no field goal to call)
+    if (kickable && !lastKick && ((r.down === 4 && p >= 0.05) || (th <= 20 && p >= 0.2) || (r.down === 3 && th <= 40 && p >= 0.4) || ((late || r.ot) && p >= 0.3))) specials.push('fg');
     // a punt hands the ball over for good when behind in the game's last 40 s (NFL 2016-25: no team trailing in the
     // last 0:40 punted; engine.js _fourthDown makes the computer go), and it never gets off when the clock runs out
     // before any snap (a gold PUNT at 0:02, down 4, beside the timeout)
