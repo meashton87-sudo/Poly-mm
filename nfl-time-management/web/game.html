@@ -503,8 +503,8 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
   body.bcast { overflow: hidden; overscroll-behavior: none; }
   body.bcast .top, body.bcast .modes, body.bcast #tiles, body.bcast .siteinfo, body.bcast .sitefoot, body.bcast #pbpBox { display: none !important; }
   body.bcast #play { position: fixed; inset: 0; z-index: 6; background: var(--turf); }
-  /* (an ad network's bar pinned to the bottom of the screen: the game stops above it, never under it; game.js adFloor) */
-  body.bcast #play { bottom: var(--adb, 0px); }
+  /* (an ad network's bar pinned to the bottom or top of the screen: the game stops short of it, never under it; game.js adFloor) */
+  body.bcast #play { bottom: var(--adb, 0px); top: var(--adt, 0px); }
   body.bcast .playgrid { display: block; height: 100%; }
   body.bcast .fieldbox { position: absolute; inset: 0; border-radius: 0; }
   body.bcast #bar { position: absolute; z-index: 3; top: calc(env(safe-area-inset-top, 0px) + 8px); left: 62px; right: 10px; width: auto;

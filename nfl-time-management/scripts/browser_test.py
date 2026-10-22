@@ -2000,6 +2000,64 @@ async def scenario_lineup(browser, base: str, shots: str = "") -> list[str]:
 SIZES = ((390, 844, True), (375, 667, True), (412, 839, True), (390, 664, True), (1280, 900, False))
 
 
+# an ad network's bar pinned to the screen (an anchor ad: Ezoic's, Google's) never covers the calls or the scoreboard
+# (game.js adFloor, --adb/--adt): a player saw one over the play buttons. Each kind the first guard missed: nested in a
+# wrapper, lifted off the edge (the home bar), expanded tall, pinned to the top. Each is put on the page as the calls are
+# up; the Snap key and the scoreboard must be clear of it within the guard's check (an ad arriving: at once)
+AD_KINDS = {
+    "nested at the bottom": "const w = document.createElement('div'); w.className = 'fakead'; const a = document.createElement('div'); a.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:52px;background:#c00;z-index:2147483000'; w.append(a); document.body.append(w); return a;",
+    "lifted off the bottom": "const a = document.createElement('div'); a.className = 'fakead'; a.style.cssText = 'position:fixed;left:0;right:0;bottom:34px;height:60px;background:#c00;z-index:2147483000'; document.body.append(a); return a;",
+    "expanded tall": "const a = document.createElement('div'); a.className = 'fakead'; a.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:280px;background:#c00;z-index:2147483000'; document.body.append(a); return a;",
+    "at the top": "const a = document.createElement('div'); a.className = 'fakead'; a.style.cssText = 'position:fixed;left:0;right:0;top:0;height:56px;background:#c00;z-index:2147483000'; document.body.append(a); return a;",
+}
+AD_CLEAR = """(make) => {
+  const a = new Function(make)();
+  return new Promise((done) => setTimeout(() => {
+    const r = a.getBoundingClientRect(), hit = (sel) => { const e = document.querySelector(sel); if (!e) return null; const q = e.getBoundingClientRect();
+      return q.height > 0 && q.bottom > r.top + 0.5 && q.top < r.bottom - 0.5 ? `${sel} under it (${Math.round(q.top)}-${Math.round(q.bottom)}, the ad ${Math.round(r.top)}-${Math.round(r.bottom)})` : null; };
+    const out = ['#snapGo', '#bar'].map(hit).filter(Boolean);
+    document.querySelectorAll('.fakead').forEach((x) => x.remove());
+    done(out);
+  }, 700));
+}"""
+
+
+async def ad_anchor(browser, base: str) -> list[str]:
+    out: list[str] = []
+    for w, h in ((390, 844), (375, 667)):
+        ctx = await browser.new_context(viewport={"width": w, "height": h}, is_mobile=True, has_touch=True)
+        page = await ctx.new_page()
+        try:
+            await page.goto(f"{base}/{PAGE}#survivor")
+            for _ in range(300):
+                await page.wait_for_timeout(100)
+                if await page.locator("#intro .btn:visible").count():
+                    await page.click("#intro .btn", timeout=3000)
+                elif await page.locator("#modal:not([hidden]) #mClose").count():
+                    await page.click("#mClose", timeout=3000)
+                elif await page.locator("#dock .key.big:visible", has_text="Pass").count():
+                    break
+            else:
+                out.append(f"{w}x{h}: the first call never came up")
+                continue
+            if await page.locator(".tipskip:visible").count():
+                await page.click(".tipskip", timeout=3000)
+            await page.locator("#dock .key.big:visible", has_text="Pass").first.click(timeout=3000)
+            await page.wait_for_timeout(1700)
+            # (no ad on the page: nothing kept clear for one, the game's own bars never taken for an ad)
+            held = await page.evaluate("() => ['--adb', '--adt'].map((k) => getComputedStyle(document.documentElement).getPropertyValue(k).trim())")
+            if any(x not in ("", "0px") for x in held):
+                out.append(f"{w}x{h}: room kept for an ad with none on the page (--adb {held[0]}, --adt {held[1]})")
+            for kind, make in AD_KINDS.items():
+                out.extend(f"{w}x{h}, an ad {kind}: {x}" for x in await page.evaluate(AD_CLEAR, make))
+                await page.wait_for_timeout(400)
+        except Exception as e:  # noqa: BLE001
+            out.append(f"{w}x{h}: {str(e).splitlines()[0]}")
+        finally:
+            await ctx.close()
+    return out
+
+
 async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
     """The snap needs no scrolling: on a phone (every size in SIZES) and a desktop, a pass's Snap key, the run keys and a
     drawn run's Run it, the defense's Call it (the full call and the three keys) and the kicks' keys are all on the screen
@@ -2872,6 +2930,10 @@ async def main(a) -> int:
         print("snap in reach (pass, every receiver with a long name, drawing on; run, defense, kicks at " + ", ".join(f"{w}x{h}" for w, h, _ in SIZES)
               + "; the go keys from their first frame on a phone): " + ("ok" if not reach else "FAIL")
               + "".join(f"\n      {x}" for x in reach), flush=True)
+        ads = await ad_anchor(browser, base)
+        print("an ad pinned to the screen (nested, lifted off the bottom, expanded tall, at the top) never over the Snap key or the scoreboard: "
+              + ("ok" if not ads else "FAIL") + "".join(f"\n      {x}" for x in ads), flush=True)
+        reach += ads
         taps = await play_taps(browser, base)
         print("taps meant for the play (the sheet as it starts, the scoreboard during it, a double tap's second, a drag on a dot): "
               + ("ok" if not taps else "FAIL") + "".join(f"\n      {x}" for x in taps), flush=True)

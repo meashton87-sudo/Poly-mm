@@ -9919,28 +9919,37 @@
     setTimeout(() => ezq((z) => { if (!ph.isConnected) return; if (again) z.destroyPlaceholders(id); z.showAds(id); }), 0);
     return box;
   }
-  // An ad bar pinned to the bottom of the screen (an anchor ad, any network's: it comes outside the game, on the body)
-  // never covers the calls: its height is measured and the playing screen ends above it (--adb, game.html). Players
-  // saw the anchor over the play buttons. Checked every second and a half, and on a resize
-  const AD_FLOOR_MAX = 200;
+  // An ad bar pinned to the bottom (or the top) of the screen (an anchor ad, any network's: it comes outside the game)
+  // never covers the calls or the scoreboard: its height is measured and the playing screen ends short of it (--adb and
+  // --adt, game.html). Players saw the anchor over the play buttons ("I can't call a play without an ad blocking the
+  // options"): an ad nested in a wrapper, lifted off the edge (the home bar), or expanded taller than the old limit got
+  // past the first version. Checked as the page changes (an ad arriving), on a resize, and every second and a half
+  const AD_FLOOR_MAX = 340, AD_EDGE = 80;
+  const adOurs = (el) => !!el.closest('#app, #play, header.top, .modal, .deep, .toast, #modal, .sheet');
   function adFloor() {
-    let h = 0;
+    let b = 0, t = 0;
     if (!noAds()) {
       const vh = innerHeight, vw = innerWidth;
-      for (const el of document.body.children) {
-        if (el.id === 'play' || el.closest('#app, .modal, .deep, .toast, #modal')) continue;
+      for (const el of document.querySelectorAll('body > *, body > * > *, body > * > * > *')) {
+        if (adOurs(el)) continue;
         const cs = getComputedStyle(el);
-        if (cs.position !== 'fixed' || cs.display === 'none' || cs.visibility === 'hidden') continue;
+        if ((cs.position !== 'fixed' && cs.position !== 'sticky') || cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) continue;
         const r = el.getBoundingClientRect();
-        if (r.height < 20 || r.height > AD_FLOOR_MAX || r.width < vw * 0.5 || Math.abs(r.bottom - vh) > 3) continue;
-        h = Math.max(h, Math.ceil(r.height));
+        if (r.height < 20 || r.height > AD_FLOOR_MAX || r.width < vw * 0.5) continue;
+        if (r.bottom >= vh - AD_EDGE && r.top > vh * 0.4) b = Math.max(b, Math.ceil(vh - r.top));          // (to its top: a gap under it too)
+        else if (r.top <= AD_EDGE && r.bottom < vh * 0.4) t = Math.max(t, Math.ceil(r.bottom));
       }
     }
-    const v = `${h}px`;
-    if (document.documentElement.style.getPropertyValue('--adb') !== v) document.documentElement.style.setProperty('--adb', v);
+    const root = document.documentElement.style;
+    if (root.getPropertyValue('--adb') !== `${b}px`) root.setProperty('--adb', `${b}px`);
+    if (root.getPropertyValue('--adt') !== `${t}px`) root.setProperty('--adt', `${t}px`);
   }
   setInterval(adFloor, 1500);
   addEventListener('resize', adFloor);
+  if (window.visualViewport) visualViewport.addEventListener('resize', adFloor);
+  // (an ad network adds its bar to the page's top level: checked then, and again as it renders and slides in; the
+  // field's own frames are never watched)
+  new MutationObserver(() => [0, 300, 1000, 2500].forEach((ms) => setTimeout(adFloor, ms))).observe(document.body, { childList: true });
   function adBox(kind) {
     if (noAds()) return null;
     if (EZ && EZ_KINDS.includes(kind)) ezBreak();
