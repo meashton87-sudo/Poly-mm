@@ -4254,7 +4254,8 @@
           const main = (p0, t1, h, d) => {
             const p = ground(p0);
             if (dist(p, p0) > 1e-6) out_.hard += 50;
-            out_.segs.push(['fly', tThrow, t1, B0, p, h, d, true]); out_.f = flightOf(p, t1, h, d); out_.t1 = t1; out_.land = p;
+            const [t0, a] = launch(t1, p);            // (at a pass's speed: launch)
+            out_.segs.push(['fly', t0, t1, a, p, h, d, true]); out_.f = flightOf(p, t1, h, d); out_.t1 = t1; out_.land = p;
           };
           // (a bounce on from where it really is: off the ground, from where its flight came down, never the spot it was
           // aimed at past the sideline)
@@ -4414,7 +4415,15 @@
       // where it ends is known: in the catcher's hands as he gets there, the picker's, or where the miss takes it
       const B0 = [qT[0] + 4 / XYD, qT[1]];
       const arcH = Math.min(2.4, 0.3 + Math.max(0, air) * 0.055), arcD = air >= 20 ? 0.22 : air > 0 ? 0.14 : 0.08;
-      const throwTo = (t1, p, h, d) => fly(tThrow, t1, px(B0[0]), B0[1], px(p[0]), p[1], h ?? arcH, d ?? arcD, true);
+      // (always at a pass's speed: where it ends up nearer the passer than the man it was timed for, a pick in front of
+      // him, he holds it a moment longer and it flies its own time; stretched to the catch, it hung in the air)
+      const launch = (t1, p) => {
+        const nat = Math.max(0.3, Math.hypot(p[0] - B0[0], p[1] - B0[1]) / ballSpeed(Math.abs(p[1] - B0[1]), arm));
+        if (t1 - tThrow <= Math.max(0.45, nat + 0.15)) return [tThrow, B0];
+        const q = Wd.posAt(passer.b, t1 - nat);
+        return [t1 - nat, [q[0] + 4 / XYD, q[1]]];
+      };
+      const throwTo = (t1, p, h, d) => { const [t0, a] = launch(t1, p); fly(t0, t1, px(a[0]), a[1], px(p[0]), p[1], h ?? arcH, d ?? arcD, true); };
       ring(tThrow, passer, false);
       leg(passer, tThrow + 0.15, 'go', { x: qT[0] + jit(1), y: qT[1] + dir * 1.2, eff: 0.25 });
       // the defense breaks on the ball a beat after it is out: the nearest two to where it is going
