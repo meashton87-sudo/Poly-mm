@@ -6443,8 +6443,9 @@
     const r = G.root, d = $('dock'), P = ui.pass, sc = scene;
     head.append(el('h2', '', 'Pass'));
     if (r.clock_running) head.append(el('span', 'sub', CLOCK[ui.tempo].short));
-    const back = el('button', 'chip', '◀ Back');
+    const back = el('button', 'chip', bcast() ? '◀' : '◀ Back');       // (a phone: the head's one line, as Undo and Draw)
     back.type = 'button';
+    back.setAttribute('aria-label', 'Back');
     back.addEventListener('click', () => { if (busy) return; ui.step = 'family'; drawField(); drawDock(); });
     head.append(back);
     if (P.hist && P.hist.length) {
