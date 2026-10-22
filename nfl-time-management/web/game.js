@@ -4516,6 +4516,25 @@
         const why = e.pressure ? 'Pressured' : pd <= 2.6 ? 'Hurried' : near <= 2.6 ? 'Tight window' : 'Off target';
         M.text = `${why}, ${M.text[0].toLowerCase()}${M.text.slice(1)}`;
       }
+      // nor anyone else on him: a rusher still coming as a screen or a quick throw is caught near him, a man sitting in
+      // his zone there. On a catch charted uncontested, who would be in reach of him with the ball takes his angle a few
+      // yards off instead, from just after the throw (players saw catches "in triple coverage": 5% of catches had 3 or
+      // more men on the receiver, every one charted uncontested)
+      if (caught && !e.incomplete && !e.contested && !M) {
+        const t1 = Wd.t, reach = Math.max(2.5, (sepd ? sepd.sep : 0) + 1.5) + 0.5;
+        Wd.run(Math.max(Wd.t, tCatch));
+        const Rc = here(tgt);
+        const near = K.def.filter((d) => d !== shadow && d !== picker && d !== broke && !busy.has(d) && dist(here(d), Rc) < reach)
+          .sort((x, y) => dist(here(x), Rc) - dist(here(y), Rc)).slice(1);          // (one more man near him is double coverage)
+        const tL = Math.max(REACT_DEF, tThrow + 0.15);
+        if (near.length) {
+          Wd.rewind(Math.min(t1, tL));
+          near.forEach((d, i) => {
+            const p = Wd.posAt(d.b, tL), [ux, uy] = unit(p[0] - Rc[0], p[1] - Rc[1]), keep = reach + 0.7 + i;
+            leg(d, tL, 'go', { x: inX(Rc[0] + ux * keep), y: Rc[1] + uy * keep, eff: 0.9 });
+          });
+        } else if (Wd.t > t1) Wd.rewind(t1);
+      }
       Wd.run(tCatch);
       const ballD = Math.min(...K.def.map((d) => dist(here(d), catchPt)));
       const late = !!(M && M.late);
