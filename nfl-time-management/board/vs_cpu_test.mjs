@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { World, FakeClient } from './vs_world.mjs';
-import { CPU_AFTER_S, CPU_SEAT, CPU_DECIDE_MS, loadEngine } from './match.js';
+import { CPU_AFTER_S, CPU_SEAT, CPU_DECIDE_MS, ENGINE_WAIT_MS, loadEngine, resetEngine } from './match.js';
 import VSCore from '../web/vs_core.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -17,7 +17,13 @@ if (!fs.existsSync(path.join(ASSETS, 'vs', 'engine_data.pack'))) { console.error
 const N = +(process.argv[2] || 60);
 const R = VSCore.rng(4242);
 const w = new World({ assetsDir: ASSETS });
+// an engine load another room started that never settles (on Cloudflare, its request gone): a room waits on it only
+// ENGINE_WAIT_MS, then loads the engine itself (the load test's computer matches hung on one for good)
+resetEngine(new Promise(() => {}));
+const t0 = performance.now();
 const E = await loadEngine(w.env);
+assert.ok(E && E.eng && E.pool, 'the engine loaded past a load that never settles');
+assert.ok(performance.now() - t0 < ENGINE_WAIT_MS + 20_000, 'and not long after the wait');
 const TEAMS = Object.keys(E.pool.teams), CALLS = E.eng.pb.calls.filter((c) => c.id !== 'hail_mary' && c.id !== 'qb_sneak');
 const DC = { pers: 'nickel', front: 'even', cover: 'c3', rush: 4 };
 const out = { won: 0, lost: 0, by: {}, snaps: 0 }, byLevel = { pro: [0, 0], rookie: [0, 0] };

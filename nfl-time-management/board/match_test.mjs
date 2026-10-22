@@ -3,7 +3,7 @@
 // (vs_stress.mjs plays thousands of whole matches with the real engine.)
 import assert from 'node:assert';
 import { World, FakeClient } from './vs_world.mjs';
-import { ROOM_RE, PLAY_MS, WATCH_MS, DECIDE_MS, FIRST_MS, FORFEIT_MS, AFK_LIMIT, NOSHOW_MS, ELO, MM, CPU_AFTER_S, CPU_SEAT } from './match.js';
+import { ROOM_RE, PLAY_MS, WATCH_MS, DECIDE_MS, FIRST_MS, FORFEIT_MS, AFK_LIMIT, NOSHOW_MS, ELO, MM, CPU_AFTER_S, CPU_SEAT, CPU_TURN_MS } from './match.js';
 import VSCore from '../web/vs_core.js';
 
 // the stand-in engine: a snap gains (seed % 15) - 3 yards; a call 'fg' kicks a field goal (good); 'td' scores
@@ -436,6 +436,41 @@ async function runAnswering(w, a, ms) {
   const nm = nowC.last('match');
   assert.ok(nm && nm.mode === 'cpu' && !nowC.last('queued'), 'the computer straight away');
   assert.strictEqual(w.obj('lobby').ctx.getWebSockets('q').length, 0, 'nobody left in the queue');
+  // the computer won the toss: its choice plays as the phone connects, and the phone's hello is the room after it (a
+  // hello from before it left the phone waiting on the computer, the room on the phone: load test runs 7-11)
+  let tossSeen = 0;
+  for (let tries = 0; tries < 16 && tossSeen < 3; tries++) {
+    const c = new FakeClient(w, K(40 + tries));
+    await c.queue({ mode: 'cpu', team: 'GB', name: `Toss${tries}` });
+    const C = new FakeClient(w, c.key);
+    await C.open(c.last('match').room, { mode: 'cpu' });
+    const hh = C.last('hello'), R = await state(w, c.last('match').room);
+    assert.deepStrictEqual([hh.n, JSON.stringify(hh.ms)], [R.n, JSON.stringify(R.ms)], 'the hello is the room as it is');
+    if (R.n > 0) {
+      tossSeen += 1;
+      assert.strictEqual(hh.decisions.length, R.n, "the computer's toss in the hello's decisions");
+      assert.ok(VSCore.need(hh.ms).includes(0), 'and the phone is told the next call is its own');
+    }
+  }
+  assert.ok(tossSeen > 0, 'the computer won a toss in the tries');
+  // the computer's own call missed (cpuTurn failing, as the engine loads under load): the room's alarm puts it in within
+  // CPU_TURN_MS, never at the player's 10-minute deadline (load test run 7: matches sat on the computer's toss)
+  for (let tries = 0; tries < 12; tries++) {
+    const c = new FakeClient(w, K(60 + tries));
+    await c.queue({ mode: 'cpu', team: 'GB', name: `Miss${tries}` });
+    const cm = c.last('match'), o = w.obj(`room:${cm.room}`), real = o.m.cpuTurn;
+    o.m.cpuTurn = async () => {};
+    const C = new FakeClient(w, c.key);
+    await C.open(cm.room, { mode: 'cpu' });
+    const R0 = await state(w, cm.room);
+    if (!VSCore.need(R0.ms).includes(CPU_SEAT)) { o.m.cpuTurn = real; continue; }      // (the player won the toss: try again)
+    assert.strictEqual(R0.n, 0, 'nothing played yet: the computer missed its call');
+    await w.advance(CPU_TURN_MS + 1500);
+    const R1 = await state(w, cm.room);
+    assert.ok(R1.n >= 1, `the computer's call put in by the alarm within ${CPU_TURN_MS} ms (n ${R1.n})`);
+    o.m.cpuTurn = real;
+    break;
+  }
   // a phone can't make a room the computer's
   const F = new FakeClient(w, K(71));
   await F.open('CPU234', { mode: 'cpu' });

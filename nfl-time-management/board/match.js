@@ -50,6 +50,9 @@ export const CPU_AFTER_S = 20;             // waiting this long in the queue: th
 // against the computer nobody waits on you: no 30-second play clock (a call has this long, the room's clock only to
 // close a match left open), and a phone locked or away this long, not a minute, before it counts as leaving
 export const CPU_DECIDE_MS = 10 * 60_000;
+// the computer's own call: in at once (cpuTurn); if that ever fails (the engine still loading), the room's alarm puts it
+// in this soon after, never at the player's deadline (a load test's matches sat 10 minutes on the computer's toss)
+export const CPU_TURN_MS = 3000;
 // the computer's level: 'pro' calls as NFL play-callers do (the engine's own call); 'rookie' makes a rookie's calls (deep
 // shots on any down, field goals early, a soft defense with a light rush). vs_cpu_test.mjs measures both: the calls move
 // a match only a few points either way, so the rookie is only a little easier
@@ -83,29 +86,42 @@ async function hashKey(k) {
   return Array.from(d.slice(0, 12), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// the engine and the teams, once per isolate: the worker's own assets (board/assets/vs, put there by the site workflow)
-let ENGINE = null;
-export function loadEngine(env) {
-  if (env.VS_ENGINE) return Promise.resolve(typeof env.VS_ENGINE === 'function' ? env.VS_ENGINE() : env.VS_ENGINE);    // the tests' own
-  if (!ENGINE) {
-    ENGINE = (async () => {
-      const get = async (p) => {
-        const r = await env.ASSETS.fetch(new Request(`https://assets.local/vs/${p}`));
-        if (!r.ok) throw new Error(`vs/${p} ${r.status}`);
-        return r;
-      };
-      const unz = async (r) => new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
-      const [eb, pbb, pool] = await Promise.all([get('engine_data.pack').then(unz), get('playbook.pack').then(unz), get('teams.json').then((r) => r.json())]);
-      const d = VSCore.unpack(eb), pb = VSCore.unpack(pbb, d);         // (the playbook's pack refers to the engine's)
-      const eng = new NFLClockEngine(d);
-      eng.loadPlaybook(pb);
-      return { eng, pool };
-    })();
-    ENGINE.catch(() => { ENGINE = null; });
-  }
-  return ENGINE;
+// the engine and the teams, once per isolate: the worker's own assets (board/assets/vs, put there by the site workflow).
+// The loaded engine is shared by every room in the isolate; a load still under way is waited on only ENGINE_WAIT_MS.
+// On Cloudflare a promise started by another room's request can never settle for this one (its continuations are
+// cancelled when that request ends): a load test's computer matches hung on it for good, the alarm's retry with them.
+// Past the wait, a room loads it itself.
+export const ENGINE_WAIT_MS = 10_000;
+let ENGINE = null, ENGINE_P = null;
+function buildEngine(env) {
+  const p = (async () => {
+    const get = async (f) => {
+      const r = await env.ASSETS.fetch(new Request(`https://assets.local/vs/${f}`));
+      if (!r.ok) throw new Error(`vs/${f} ${r.status}`);
+      return r;
+    };
+    const unz = async (r) => new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+    const [eb, pbb, pool] = await Promise.all([get('engine_data.pack').then(unz), get('playbook.pack').then(unz), get('teams.json').then((r) => r.json())]);
+    const d = VSCore.unpack(eb), pb = VSCore.unpack(pbb, d);         // (the playbook's pack refers to the engine's)
+    const eng = new NFLClockEngine(d);
+    eng.loadPlaybook(pb);
+    return (ENGINE = ENGINE || { eng, pool });
+  })();
+  ENGINE_P = p;
+  p.catch(() => { if (ENGINE_P === p) ENGINE_P = null; });
+  return p;
 }
-export function resetEngine() { ENGINE = null; }
+export async function loadEngine(env) {
+  if (env.VS_ENGINE) return typeof env.VS_ENGINE === 'function' ? env.VS_ENGINE() : env.VS_ENGINE;    // the tests' own
+  if (ENGINE) return ENGINE;
+  if (ENGINE_P) {
+    const v = await Promise.race([ENGINE_P.catch(() => null), new Promise((r) => setTimeout(() => r(null), ENGINE_WAIT_MS))]);
+    if (v) return v;
+  }
+  return buildEngine(env);
+}
+// (the tests: a fresh isolate, or one whose load in flight never settles)
+export function resetEngine(pending = null) { ENGINE = null; ENGINE_P = pending; }
 
 export class Match {
   constructor(ctx, env) {
@@ -134,7 +150,10 @@ export class Match {
     R.off[seat] = 0;
     if (R.phase === 'wait' && R.seen[0] && R.seen[1] && R.teams[0] && R.teams[1]) this.begin(R, now);
     await this.save(R);
-    if (R.cpu != null && R.phase === 'live') await this.cpuTurn();
+    // the computer's call now (a toss it won plays at once): the phone's hello is the room after it, with that step in
+    // its decisions (the step's own message went out before this socket was open; a hello from before it left the
+    // phone waiting on the computer while the room waited on the phone: the load test's stuck matches)
+    if (R.cpu != null && R.phase === 'live') { await this.cpuTurn(); R = (await this.room()) || R; }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     for (const old of this.ctx.getWebSockets(`s${seat}`)) { try { old.close(4000, 'replaced'); } catch (e) { /* gone */ } }
@@ -192,6 +211,7 @@ export class Match {
     R.n = 0;
     R.deadline = now + (R.cpu != null ? CPU_DECIDE_MS : FIRST_MS);
     R.dl = [R.deadline, R.deadline];
+    if (R.cpu != null) R.dl[R.cpu] = now + CPU_TURN_MS;
     R.started = now;
     R.defaults = [0, 0];
     this.broadcast({ t: 'start', ms: R.ms, deadline: R.deadline, dl: R.dl, now });
@@ -289,6 +309,7 @@ export class Match {
     R.n = pend.n + 1;
     R.deadline = now + (R.cpu != null ? CPU_DECIDE_MS : PLAY_MS);
     R.dl = [R.deadline, R.deadline];
+    if (R.cpu != null) R.dl[R.cpu] = now + CPU_TURN_MS;
     let result = null;
     if (out.ms.over) {
       R.phase = 'over';
@@ -414,7 +435,10 @@ export class Match {
         let pend = await this.ctx.storage.get('pend');
         if (!pend || pend.n !== R2.n) pend = { n: R2.n, halves: {} };
         const late = out0(pend, dls(R2), R2);
-        for (const s of late) { pend.halves[s] = null; R2.defaults[s] += 1; }
+        for (const s of late) {
+          if (s === R2.cpu) { pend.halves[s] = R2.cpuLevel === 'rookie' ? this.rookieHalf(R2, E) : null; continue; }    // (the computer's own)
+          pend.halves[s] = null; R2.defaults[s] += 1;
+        }
         if (VSCore.need(R2.ms).every((s) => s in pend.halves)) return this.commit(R2, pend, E, Date.now());
         await this.ctx.storage.put('pend', pend);
         await this.save(R2);
