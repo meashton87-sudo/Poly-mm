@@ -2074,6 +2074,16 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                             out.append(f"{at}: Mesh picked, the dock reads {got!r}")
                         await check("pass, a concept set", "#snapGo", 300)
                         await check("pass, a concept set", "#dock .ask .chip", 300)
+                        # its routes still yours to change: a tap on a man on the field gives him his next route, the
+                        # concept kept and marked changed (✎); the throw goes with the route as changed
+                        dot = await page.evaluate("() => { const D = window.__draw, { scene } = D.get(), a = D.eligibles(scene).find((x) => !x.g.closest('.blk')); if (!a) return null; const r = a.g.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2, D.eligibles(scene).indexOf(a)]; }")
+                        if dot:
+                            before = await page.evaluate("(i) => document.querySelectorAll('#dock .rcv')[i].querySelector('.rt').textContent", dot[2])
+                            await page.mouse.click(dot[0], dot[1])
+                            await page.wait_for_timeout(400)
+                            after = await page.evaluate("(i) => [document.querySelectorAll('#dock .rcv')[i].querySelector('.rt').textContent, document.getElementById('playsBtn').textContent, window.__draw.get().ui.pass.routes[i]]", dot[2])
+                            if after[0] == before or "✎" not in after[1] or "Mesh" not in after[1]:
+                                out.append(f"{at}: a route changed on a concept: {before!r} -> {after!r}")
                     # max protect: the back and a tight end kept in (their rows Blocking, no route on the field for
                     # them), the open man still one who goes out; back to standard after
                     mx = page.locator("#dock .prots .chip[data-prot='max']")

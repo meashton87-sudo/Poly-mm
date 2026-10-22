@@ -1541,7 +1541,11 @@
     }
     return roles.map((o) => c.r(o));
   }
-  const conceptNow = (sc) => { const P = ui.pass; return CONCEPTS.find((c) => P.concept === c.k && conceptRoutes(sc, c).every((r, i) => P.routes[i] === r && !(P.drawn && P.drawn[i]))) || null; };
+  // the concept set, and whether you have changed a route of it since (a tap on a man, or one drawn: your edit stands)
+  const conceptNow = (sc) => {
+    const P = ui.pass, c = CONCEPTS.find((x) => P.concept === x.k);
+    return c ? { c, edited: !conceptRoutes(sc, c).every((r, i) => P.routes[i] === r && !(P.drawn && P.drawn[i])) } : null;
+  };
   function applyConcept(c) {
     const sc = scene, P = ui.pass;
     if (busy || !passing() || !sc) return;
@@ -6429,9 +6433,9 @@
       undo.addEventListener('click', undoRoute);
       head.append(undo);
     }
-    const cn = !P.draw && sc ? conceptNow(sc) : null, plays = el('button', `chip plays${cn ? ' on' : ''}`, `📋 ${cn ? cn.name : 'Plays'}`);
+    const cn = !P.draw && sc ? conceptNow(sc) : null, plays = el('button', `chip plays${cn ? ' on' : ''}`, `📋 ${cn ? `${cn.c.name}${cn.edited ? ' ✎' : ''}` : 'Plays'}`);
     plays.type = 'button'; plays.id = 'playsBtn';
-    plays.setAttribute('aria-label', cn ? `Pass plays: ${cn.name} set` : 'Pass plays: pick a concept');
+    plays.setAttribute('aria-label', cn ? `Pass plays: ${cn.c.name} set${cn.edited ? ', with your route changes' : ''}` : 'Pass plays: pick a concept');
     plays.addEventListener('click', openConcepts);
     if (!P.draw) head.append(plays);
     const pen = el('button', `chip pen${P.draw ? ' on' : ''}`, P.draw ? '✓ Done' : bcast() ? '✏️' : '✏️ Draw');
