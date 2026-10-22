@@ -2473,8 +2473,13 @@
     pen.addEventListener('click', () => { if (!busy) setDraw(!on); });
     head.append(pen);
   }
+  const DRAW_HINTS = 8;               // screens with the drawing line before it goes (a few snaps' worth)
   function sketchPanel(d, ctx, go) {
     const sk = ui.sk, s = sketchRead(ctx), kind = ctx === 'st' ? ST_DRAW[ui.st] : ctx;
+    // (the line saying it can be drawn: the first few times only, then just the ✏️ key; what was drawn always)
+    const live = drawPref() || s || (sk && (sk.bad || sk.lines.length)), told = load(`${STORE}:drawhint`, 0);
+    if (!live && told >= DRAW_HINTS && go) return null;
+    if (!live) save(`${STORE}:drawhint`, told + 1);
     const p = el('p', `hint${drawPref() || s || (sk && sk.bad) ? ' draw' : ''}${sk && sk.bad ? ' bad' : ''}`, sk && sk.bad ? `${sk.bad}. Try again.` : s && !s.fault ? `✏️ Drawn: ${s.label || stLabel(s.key)}` : SKETCH_HINT[kind]);
     p.setAttribute('role', 'status');
     if (sk && sk.lines.length) {
@@ -6403,7 +6408,18 @@
     back.addEventListener('click', () => { ui.step = 'family'; drawField(); drawDock(); });
     head.append(back);
     const drawable = ui.fam === 'run' || ui.fam === 'rpo';
+    // the blocking (SCHEMES) behind More, as the pass screen's protection is (players: "it was better simpler"); shown
+    // anyway while one other than the zone default is on
+    const runMore = ui.fam === 'run' && !VS && (passMore() || (G.scheme && G.scheme !== 'zone'));
     if (ui.fam === 'run' && !VS) {
+      const mo = el('button', `chip more${passMore() ? ' on' : ''}`, bcast() ? '⋯' : passMore() ? 'Less' : 'More');
+      mo.type = 'button'; mo.id = 'runMore';
+      mo.setAttribute('aria-pressed', String(passMore()));
+      mo.setAttribute('aria-label', passMore() ? 'Fewer run options' : 'More run options: the blocking');
+      mo.addEventListener('click', () => { if (busy) return; save(PASS_MORE_KEY, !passMore()); track('run_more', { on: passMore() }); drawDock(); });
+      head.append(mo);
+    }
+    if (runMore) {
       // the blocking (SCHEMES): one tap, kept for the drive's next runs
       const cur = G.scheme || 'zone', row = el('div', 'opts-row schemes');
       row.append(el('span', 'lab', bcast() ? 'Block' : 'Blocking'));
@@ -6568,10 +6584,14 @@
     const E = eligibles(sc), selA = P.draw && P.sel != null ? E[P.sel] : null;
     // (the whole of it the first few times; after that one line, so the receivers and the Snap key fit under the field)
     if (!P.draw) {
-      const h = load(`${STORE}:passhint`, 0) < 3 && !bcast() ? el('p', 'hint', 'Snap throws to the open man, or tap a name to pick who gets the ball. Tap a man on the field for his next route, or drag him to draw one.')
+      // (the first few passes only: after that the screen is the receivers and the keys)
+      const told = load(`${STORE}:passhint`, 0);
+      const h = told >= 3 ? null : !bcast() ? el('p', 'hint', 'Snap throws to the open man, or tap a name to pick who gets the ball. Tap a man on the field for his next route, or drag him to draw one.')
         : el('p', 'hint one', 'Snap: the open man, or pick one. Tap a dot: his route.');
-      h.title = 'Snap throws to whoever gets open, or tap a name to pick who gets the ball (tap it again for the open man). Tap a receiver on the field to change his route, or drag him to draw your own (drag the quarterback for his drop or a rollout).';
-      d.append(h);
+      if (h) {
+        h.title = 'Snap throws to whoever gets open, or tap a name to pick who gets the ball (tap it again for the open man). Tap a receiver on the field to change his route, or drag him to draw your own (drag the quarterback for his drop or a rollout).';
+        d.append(h);
+      }
     } else {
       const h = el('p', 'hint draw', selA ? `Now drag from ${shortName(selA.p ? selA.p.name : '') || selA.label} to where he should go.`
         : 'Tap a receiver, then drag on the field where you want him to go. Each line plays as the real route it is closest to; drag the quarterback to the side to roll out.');
@@ -13515,6 +13535,16 @@
       spotInfo();
     });
     $('restartBtn').addEventListener('click', restartAsk);
+    // the field's options behind ⚙ (kept per device, shut at first): open, they stay open
+    const OPTS_KEY = `${STORE}:fieldopts`;
+    const fieldOpts = () => {
+      const open = load(OPTS_KEY, false) === true, b = $('optsBtn');
+      document.querySelector('.fieldbox').classList.toggle('opts-shut', !open);
+      b.textContent = open ? '✕' : '⚙ Options';
+      b.setAttribute('aria-expanded', String(open));
+    };
+    fieldOpts();
+    $('optsBtn').addEventListener('click', () => { save(OPTS_KEY, !(load(OPTS_KEY, false) === true)); track('field_opts', { open: load(OPTS_KEY, false) === true }); fieldOpts(); });
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
     applyFieldSize();
     $('sizeBtn').addEventListener('click', () => {

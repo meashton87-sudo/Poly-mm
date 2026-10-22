@@ -821,8 +821,14 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .fov { position: absolute; top: 6px; left: 6px; right: 6px; display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; line-height: 1.2; pointer-events: none; transition: opacity .2s ease; }
 .fov > * { pointer-events: auto; }
 .fov [hidden] { display: none; }
-.fieldbox:has(#field.playing) .fov { opacity: 0; pointer-events: none; }
+/* the field's options (speed, personnel, formation, ratings) behind one key till it is opened (game.js fieldOpts): the field
+   in view, not under a row of chips (players: "it was better simpler") */
+.fieldbox.opts-shut .fov .btns > :not(#optsBtn):not(#sizeBtn) { display: none !important; }   /* (the field size stays: desktop only, asked for) */
+/* during the play the down and distance stay up (a player: "it goes so fast it's hard to catch the situation"); the keys,
+   the color key and the clock's state before the snap go */
+.fieldbox:has(#field.playing) .fov { pointer-events: none; }
 .fieldbox:has(#field.playing) .fov > * { pointer-events: none; }
+.fieldbox:has(#field.playing) .fov .btns, .fieldbox:has(#field.playing) .fov .ramp, .fieldbox:has(#field.playing) .fov .dd .ck { opacity: 0; transition: opacity .2s ease; }
 .fovl { display: grid; gap: 4px; justify-items: start; min-width: 0; }
 .fov .dd { min-height: 0; text-align: left; background: rgba(10, 16, 12, .72); color: #fff; border-radius: 8px; padding: 4px 8px; font-size: 12px; }
 /* the chips go to the half of the screen away from the line of scrimmage (game.js drawField): the open grass */
@@ -1417,6 +1423,7 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
         <div class="fov">
           <div class="fovl"><div id="dd" class="dd"></div><span class="ramp" aria-label="Player dots: red is worse, green is better">worse <i></i> better</span></div>
           <span class="btns">
+          <button id="optsBtn" class="ghost" type="button" aria-expanded="false" aria-label="More options: play speed, personnel, formation, ratings">⚙</button>
           <button id="speedBtn" class="ghost" type="button" hidden aria-label="Play speed">1×</button>
           <button id="persBtn" class="ghost" type="button" hidden aria-label="Edit personnel"></button>
           <button id="formBtn" class="ghost" type="button" hidden aria-label="Pick the formation"></button>

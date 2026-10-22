@@ -3,6 +3,16 @@
   "notes": [
     {
       "date": "2026-10-22",
+      "title": "A cleaner screen",
+      "items": [
+        "The field is clear again: play speed, personnel, formation and ratings are under one ⚙ Options button (open it once and it stays open).",
+        "The run screen goes straight to the runs. The blocking choices are under ⋯, like the pass options.",
+        "The how-to lines show for your first few snaps, then get out of the way.",
+        "The down and distance stay on screen while the play runs, on offense and defense."
+      ]
+    },
+    {
+      "date": "2026-10-22",
       "title": "A bigger field on desktop",
       "items": [
         "On a computer the field is bigger now, and the new ⤢ button on the field switches between Standard, Large and Extra large. Your pick is kept on that computer."
