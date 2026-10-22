@@ -2336,6 +2336,10 @@ async def play_taps(browser, base: str) -> list[str]:
                     return True
                 elif await page.locator("#field.playing").count():
                     await page.click("#field", timeout=3000)
+                elif await page.locator("#dock .ask .chip:visible", has_text="◀").count():
+                    # (a tap on the first key while the Pass key was still popping up opened another call's sheet,
+                    # Run: back to the calls, where Pass is)
+                    await page.locator("#dock .ask .chip:visible", has_text="◀").first.click(timeout=3000)
                 elif await page.locator("#dock .key.big:visible").count():
                     await page.locator("#dock .key.big:visible").first.click(timeout=3000)
             out.append(f"{at}: no call to make came up ({(await page.evaluate(STATE))}: "
