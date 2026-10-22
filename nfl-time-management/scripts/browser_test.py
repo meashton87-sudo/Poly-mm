@@ -802,6 +802,9 @@ LOADED = """() => { const n = performance.getEntriesByType('navigation')[0] || {
 # frames the page took too long to draw (a gap between two animation frames over 200 ms while in view) and, where the
 # browser reports them (not Safari), tasks that held the main thread over 50 ms; added up over the tab's pages (its
 # sessionStorage: the drive reloads into itself)
+# the bot's own tap on a key that opens a screen (Pass plays, the Home tools, help, stats): that screen was asked for
+TAP_OPENS = """(() => { document.addEventListener('click', (e) => { const t = e.target && e.target.closest && e.target.closest('#playsBtn, .htool, #helpBtn, #statsBtn, #deepBtn');
+  if (t) window.__opensAt = performance.now(); }, true); })();"""
 JANK = """(() => { if (window.top !== window) return;
   let J = null; try { J = JSON.parse(sessionStorage.getItem('__jank') || 'null'); } catch (e) { /* no storage */ }
   J = window.__jank = J || { frames: 0, slow: 0, worst: 0, long: 0, longWorst: 0 };
@@ -836,6 +839,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     if quirk:
         await ctx.add_init_script(QUIRK[quirk])
     await ctx.add_init_script(JANK)
+    await ctx.add_init_script(TAP_OPENS)
     if mode == "scenario":
         await pro_context(ctx, base)
     page = await ctx.new_page()
@@ -988,7 +992,8 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     # (game.js openHelp, where the first drive's tour is not: a scenario, a Pro drive): a new player
                     # gets it once, and every time with storage off, private browsing)
                     welcome = st == "modal" and await page.evaluate("() => !!document.querySelector('#modal ol.quick')")
-                    if not asked and not (welcome and (not welcomed or quirk == "nostore")):
+                    tapped = await page.evaluate("() => window.__opensAt != null && performance.now() - window.__opensAt < 3000")
+                    if not asked and not tapped and not (welcome and (not welcomed or quirk == "nostore")):
                         friction["modals"].append(await page.evaluate("() => document.getElementById('modal').innerText.replace(/\\s+/g, ' ').slice(0, 80)")
                                                   if st == "modal" else "deep")
                     welcomed = welcomed or welcome
