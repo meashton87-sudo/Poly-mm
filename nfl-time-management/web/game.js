@@ -2915,7 +2915,14 @@
       t = Math.max(t, Wd.t);
       const b = a.b, s = Math.hypot(b.vx, b.vy), st = [[b.x, b.y]];
       if (s > 1.2) {
-        const k = Math.min(4, Math.max(1, s * 0.45)) / s, m = [b.x + b.vx * k, b.y + b.vy * k];
+        let k = Math.min(4, Math.max(1, s * 0.45)) / s, ux = b.vx, uy = b.vy;
+        // (a ball carrier bends his first steps toward where he is going: carried straight on, then turned at a corner,
+        // he all but stopped there for a second with nobody near; players saw backs and receivers slow for no reason)
+        if (o && o.lim && pts.length) {
+          const [tx, ty] = unit(pts[0][0] - b.x, pts[0][1] - b.y), [vx, vy] = unit(b.vx, b.vy), [hx, hy] = unit(vx + tx, vy + ty);
+          if (vx * tx + vy * ty > -0.85 && hx * hx + hy * hy > 0.5) { ux = hx * s; uy = hy * s; k *= 0.7; }
+        }
+        const m = [b.x + ux * k, b.y + uy * k];
         st.push(o && o.lim ? o.lim(m) : m);          // (lim: a ball carrier's momentum never takes him past the spot)
       }
       return follow(a, t, plan(a, st.concat(pts.map((p) => [o && o.past ? p[0] : inX(p[0]), p[1]])), { v0: s, ...(o || {}) }));     // (past: he may run out)
@@ -3225,7 +3232,10 @@
       // (not tackled and short of the goal line he would score at: slowing as he gets there, so his run out of bounds
       // at the 1 never carries the ball over it)
       const room = fd * ((car.off ? GOAL : OWN) - endPt[1]);
-      const runO = { eff: o.eff ?? 0.97, v1: tackled ? 3.4 : !o.td && room < 6 ? Math.max(1, room * 1.2) : undefined, lim, past: !!o.oob };
+      // he is met still running and the hit stops him (the pile below drives him to the spot); easing
+      // up to a jog before anyone got to him read as slowing for no reason, then the defense swarming (a player saw it)
+      const V_HIT = 5.5;
+      const runO = { eff: o.eff ?? 0.97, v1: tackled ? V_HIT : !o.td && room < 6 ? Math.max(1, room * 1.2) : undefined, lim, past: !!o.oob };
       let A = runFrom(car, t0, route, runO);
       let tC = t0 + A.T;
       // who gets there: the defender with the shortest time to the contact point, from where he is now
@@ -3319,12 +3329,12 @@
         (P.keys = P.keys || []).push({ a: tackler, t0 });
         if (reach[0].T > tC - t0 + 0.1) {            // still nobody (the field ran out): he slows in traffic
           slowed = reach[0].T - (tC - t0);
-          A = runFrom(car, t0, route, { T: reach[0].T + 0.1, v1: 3.4, lim });
+          A = runFrom(car, t0, route, { T: reach[0].T + 0.1, v1: V_HIT, lim });
           tC = t0 + A.T;
         }
         busy.add(tackler);
         // the pile: driven from the contact point to the spot
-        B = plan(car, [contact, endPt], { v0: 3.4, v1: 0, eff: 0.32 });
+        B = plan(car, [contact, endPt], { v0: V_HIT, v1: 0, eff: 0.32 });
         follow(car, tC, B);
         tEnd = tC + Math.max(B.T, 0.25);
         // he goes at the right moment (a lineman, slow off his block, goes at once)
@@ -3421,14 +3431,18 @@
       }
       // (tests: how close the nearest defender is when a tackled carrier goes down)
       // (tests: standing in the open. How long he moves under 2 yd/s with nobody within 3 yards, before the hit)
-      let stall = 0;
+      // (and jogging in space: under 60% of his sprint with nobody within 5 yards, after his first step; players saw a
+      // carrier slow for no reason in the open, then the defense swarm him. `jog` is how long, in seconds)
+      let stall = 0, jog = 0;
       if (tackled && window.__sepLog) {
+        const top = (Motion.ENV[car.b.g] || Motion.ENV.RB).top;
         for (let t = t0 + 0.05; t < tC - 0.25; t += 0.05) {
-          const a = Wd.posAt(car.b, t - 0.05), b = Wd.posAt(car.b, t);
-          if (dist(a, b) / 0.05 < 2 && Math.min(...foes(car).map((d) => dist(Wd.posAt(d.b, t), b))) > 3) stall += 0.05;
+          const a = Wd.posAt(car.b, t - 0.05), b = Wd.posAt(car.b, t), v = dist(a, b) / 0.05, nd = Math.min(...foes(car).map((d) => dist(Wd.posAt(d.b, t), b)));
+          if (v < 2 && nd > 3) stall += 0.05;
+          if (t > t0 + 0.6 && v < 0.6 * top && nd > 5) jog += 0.05;
         }
       }
-      if (tackled && window.__sepLog) (window.__tackleLog = window.__tackleLog || []).push({ stall: +stall.toFixed(2), nd: Math.min(...foes(car).map((d) => dist(here(d), here(car)))), free: free.length, tackler: !!tackler, slowed: +slowed.toFixed(2), ev: e.evt || '', yds: e.yards, call: e.call, from: o.from,
+      if (tackled && window.__sepLog) (window.__tackleLog = window.__tackleLog || []).push({ stall: +stall.toFixed(2), jog: +jog.toFixed(2), nd: Math.min(...foes(car).map((d) => dist(here(d), here(car)))), free: free.length, tackler: !!tackler, slowed: +slowed.toFixed(2), ev: e.evt || '', yds: e.yards, call: e.call, from: o.from,
         td: dist(tackler ? here(tackler) : [0, 0], here(car)), car: car.label, mine: !!car.off === !!(car.off && G.root.pos === G.me), span: dist(start, endPt), tC: tC - t0, reach: reach.length ? reach[0].T : null });
       if (tackled) leg(car, tEnd, 'stand');
       // (past the whistle: into the end zone on a touchdown; out of bounds, along the sideline no further than the spot)

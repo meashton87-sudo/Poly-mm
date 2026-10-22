@@ -2494,6 +2494,13 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     # pursuit, a beat of jog before the hit; fail only when this many would be unlikely, p < 0.01, at a 2% rate)
     if len(waited) > 1 and binom_tail(len(tk), len(waited), 0.02) < 0.01:
         fail("breakaway", f"FAIL: a carrier waited in the open for his tackler {waited[:5]}")
+    # nor jogs in space: under 60% of his sprint with nobody within 5 yards for half a second, after his first step
+    # (a player saw a carrier slow for no reason, then the defense swarm him; 4.8% of tackles before the fix, 2.9% after:
+    # fail only when this many would be unlikely at 5%, p < 0.01). `jog` is how long, in seconds
+    jogged = [x for x in tk if x.get("jog", 0) >= 0.5]
+    say(f"carriers jogging in space (0.5 s+): {len(jogged)} of {len(tk)}")
+    if jogged and binom_tail(len(tk), len(jogged), 0.05) < 0.01:
+        fail("jogging", f"FAIL: carriers jogging in the open {sorted(jogged, key=lambda x: -x['jog'])[:5]}")
     # forward progress: a carrier never has the ball past where it is spotted (beyond where he got it), so he is
     # never shown driven back from it
     fp = [x for r in results for x in r.get("fps", [])]
