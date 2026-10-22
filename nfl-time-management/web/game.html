@@ -725,7 +725,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
   body.bcast .toggle.urgent .lab small { display: none; }
   body.bcast .prow { padding: 2px 0; }
   body.bcast .prow .key { min-height: 38px; }
-  body.bcast .readchip { font: 800 12.5px var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+  body.bcast .readchip { font: 800 12.5px var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; width: 0; flex: 1 1 0; }   /* (no width of its own: it takes what the head's line has left, cut short, never widening the sheet) */
   body.bcast .readchip.blitz { color: var(--sq-r-ink); }
   body.bcast .ask:has(.readchip) { flex-wrap: nowrap; align-items: center; }
   body.bcast .ask:has(.readchip) > .chip { flex: none; }

@@ -4388,7 +4388,8 @@
       const qT = here(passer);
       // (a throwaway sails out past the sideline it is thrown to: 2.5 yards beyond it, never landing in bounds)
       // (over the sideline, on the drawn turf: never into the stands)
-      if (thrownAway) { const sx = sidelineX(qT[0] + side * 10); catchPt = [sx + Math.sign(sx - FW / 2) * 0.3, inL(fwd(L0, Math.max(3, air)))]; }
+      // (toward the man you picked: thrown away on his side, never looking like a throw to someone else)
+      if (thrownAway) { const aw = pick && pick !== passer ? Math.sign(here(pick)[0] - qT[0]) || side : side, sx = sidelineX(qT[0] + aw * 10); catchPt = [sx + Math.sign(sx - FW / 2) * 0.3, inL(fwd(L0, Math.max(3, air)))]; }
       // the ball's flight: from his hand (where he carries it, a step to his side) on a straight line over the ground,
       // in an arc above its shadow (a lofted ball higher and slowing more; a line drive, flatter). It goes out once
       // where it ends is known: in the catcher's hands as he gets there, the picker's, or where the miss takes it
@@ -5709,6 +5710,10 @@
         fumble_kept: `fumbles, but the offense recovers: ${gain}`,
         scramble: e.td ? `scrambles ${y} yards for a touchdown` : `pressure, scrambles: ${gain}`,
         throwaway: y < 0 ? `pressure, intentional grounding: ${gain}` : 'pressure, throws it away', drop: 'dropped, incomplete', near_pick: 'nearly intercepted, incomplete' }[e.evt];
+      // (your pick, and the rush got there first: said in so many words. A player read a throwaway as the
+      // quarterback going "off book" to someone else)
+      if (res && mine && act && act.targetName && !act.open && /^(sack|strip_sack|sack_fumble|scramble|throwaway)$/.test(e.evt || ''))
+        res = `${res} (never got it to ${shortName(act.targetName) || act.targetPos})`;
     }
     // a fumble he made only after crossing the goal line is just the touchdown (engine.js scores it that way)
     if (e.td && !e.turnover && /fumble|scoop|strip/.test(e.evt || '')) res = null;
@@ -6433,12 +6438,14 @@
     tg.append(lab, sw);
     return tg;
   }
+  const PASS_MORE_KEY = `${STORE}:passmore`, passMore = () => load(PASS_MORE_KEY, false) === true;
   function drawPassDock(head) {
     const r = G.root, d = $('dock'), P = ui.pass, sc = scene;
     head.append(el('h2', '', 'Pass'));
     if (r.clock_running) head.append(el('span', 'sub', CLOCK[ui.tempo].short));
-    const back = el('button', 'chip', '◀ Back');
+    const back = el('button', 'chip', bcast() ? '◀' : '◀ Back');       // (a phone: the head's one line, as Undo and Draw)
     back.type = 'button';
+    back.setAttribute('aria-label', 'Back');
     back.addEventListener('click', () => { if (busy) return; ui.step = 'family'; drawField(); drawDock(); });
     head.append(back);
     if (P.hist && P.hist.length) {
@@ -6459,10 +6466,22 @@
     pen.setAttribute('aria-pressed', String(!!P.draw));
     pen.addEventListener('click', () => { if (!busy) setDraw(!P.draw); });
     head.append(pen);
+    // the simple pass screen by default (a player: "getting way too complicated, can barely see the defense"): the
+    // receivers, the quick throws and Snap; the protection and the play action and rollout toggles behind More (kept
+    // per device), and shown anyway while one of them is on
+    const full = passMore() || (G.prot && G.prot !== 'std') || P.pa || P.roll;
+    if (!VS && !P.draw) {
+      const mo = el('button', `chip more${passMore() ? ' on' : ''}`, bcast() ? '⋯' : passMore() ? 'Less' : 'More');     // (a phone: the head's one line)
+      mo.type = 'button'; mo.id = 'passMore';
+      mo.setAttribute('aria-pressed', String(passMore()));
+      mo.setAttribute('aria-label', passMore() ? 'Fewer pass options' : 'More pass options: protection, play action, rollout');
+      mo.addEventListener('click', () => { if (busy) return; save(PASS_MORE_KEY, !passMore()); track('pass_more', { on: passMore() }); redrawPass(); });
+      head.append(mo);
+    }
     // (the broadcast view on a phone: the defense's look in the head's line, the receivers' room below it)
     if (G.look != null && bcast()) { const L = LOOKS[G.look], rc = el('span', `readchip${L.blitz ? ' blitz' : ''}`, `${L.loaded ? 'Loaded box' : 'Light box'}${L.blitz ? ' · blitz' : ''}`); rc.title = L.loaded ? '7 or more near the line' : '6 or fewer near the line'; head.insertBefore(rc, head.querySelector('#playsBtn') || pen); }
     else if (G.look != null) d.append(readLine(G.look));
-    if (!VS) {
+    if (!VS && full) {
       // the protection (PROTS): one tap, kept for the drive's next passes
       const cur = G.prot || 'std', row = el('div', 'opts-row prots');
       row.append(el('span', 'lab', 'Protection'));
@@ -6542,10 +6561,11 @@
     };
     const opts = el('div', 'opts-row');
     // (a toggle tapped takes back a rollout drawn: the quarterback's line goes with it)
-    opts.append(opt('Play action', 'Fake the handoff first: it freezes a loaded box.', P.pa, (v) => { P.pa = v; if (v) { P.roll = false; P.qb = null; P.rollSide = null; } }),
+    if (full || VS) opts.append(opt('Play action', 'Fake the handoff first: it freezes a loaded box.', P.pa, (v) => { P.pa = v; if (v) { P.roll = false; P.qb = null; P.rollSide = null; } }),
       opt(P.roll && P.rollSide ? `Roll out ${P.rollSide === 'strong' ? 'strong' : 'weak'}` : 'Roll out', 'Move the pocket toward your receiver’s side (or drag the quarterback the way to go).', P.roll, (v) => { P.roll = v; P.qb = null; P.rollSide = null; if (v) P.pa = false; }));
     if (oobMatters(r)) opts.append(opt('⏱ Out of bounds', 'Going out stops the clock now.', ui.oob, setOob, 'oobSwitch'));
-    d.append(opts, list);
+    if (opts.childElementCount) d.append(opts);
+    d.append(list);
     const avail = callOptions(r).calls, more = ['hail_mary'].filter((id) => avail.includes(id));
     // the screen in one tap: the back's route set to the screen and the ball to him (it was only a route on the
     // picker, which players didn't find, while the grade could still name the screen as the best call)

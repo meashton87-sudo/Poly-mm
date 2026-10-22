@@ -191,6 +191,24 @@ for (let k = 0; k < 100; k++) {
   const sk0 = dropOnly(false), sk1 = dropOnly(true);
   assert.ok(sk1 > sk0 * 0.75 && sk1 < sk0 * 1.25, `sacks with a receiver picked: ${sk1.toFixed(3)} against ${sk0.toFixed(3)}`);
   console.log(`sacks: ${(100 * sk0).toFixed(1)}% of the calls' real plays, ${(100 * sk1).toFixed(1)}% with a receiver and route picked`);
+  // one snap's draw (u) is everyone's on the daily: it must not make most picked passes on that snap sacks, scrambles
+  // or throwaways at once (engine.js ntU: each call and route its own luck there, at the same rate; before it, 4.5% of
+  // snaps did so for 3 or more of these 5 picks. A player: "an automatic sack on the first play even if I throw a screen")
+  {
+    const NT = /sack|scramble|throwaway/, picks = [['quick_strong', 'out', 3], ['deep_strong', 'go', 3], ['pa_deep', 'post', 3], ['quick_middle', 'slant', 3], ['screen', 'screen', 1]];
+    let snaps = 0, most = 0;
+    for (let fk = 0; fk < P.nFine; fk += 3) for (let k = 0; k < 100; k++) {
+      let h = 0;
+      for (const [id, rt, w] of picks) {
+        const r = S.samplePlaybook(0, P.callIndex[id], fk, (k + 0.5) / 100, false, 0, 0, rt, w);
+        if (r >= 0 && !(P.flags[r] & 1) && NT.test(P.eventNames[P.event[r]] || '')) h++;
+      }
+      snaps++; if (h >= 3) most++;
+    }
+    assert.ok(most < snaps * 0.01, `one draw a sack for 3+ of 5 picks in ${most} of ${snaps} snaps`);
+    console.log(`one draw a sack, scramble or throwaway for 3+ of 5 picks: ${(100 * most / snaps).toFixed(2)}% of snaps`);
+  }
+
   // a rollout's pools are mostly broken plays (every scramble out of the pocket is charted out of it): picked, at most
   // ROLL_NT of them, not the 65% that made a "76% caught" rollout a 19% one
   {

@@ -217,6 +217,16 @@
   // over the two rollouts), broken plays mostly: 50-70% of them are scrambles, sacks and throwaways. A rollout called
   // with a receiver picked has them at most this often (a player shown "76% caught" on a rollout saw 19%, Oct 22)
   const ROLL_NT = 0.15;
+  // whether a pick's snap is a sack, scramble or throwaway: its own uniform, from the snap's u and the call and route.
+  // The daily's draws are everyone's (one u a snap), so a low u made every pass call on that snap a sack at once ("an
+  // automatic sack on the first play even if I throw a screen", Oct 22); now each call and route has its own luck there,
+  // at the same rate. The route's play is still drawn from u
+  const ntU = (u, callIdx, route) => {
+    let h = (callIdx + 1) * 2654435761 >>> 0;
+    for (const ch of String(route || '')) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+    const v = u * 9973 + (h % 100003) / 100003;
+    return v - Math.floor(v);
+  };
   const DROPBACK_EV = new Set(['sack', 'strip_sack', 'sack_fumble', 'scramble', 'throwaway', 'interception', 'pick_six', 'near_pick', 'drop']);
   // daily game: your special-teams defense (act.st) when they kick. 'block' (field goal) or 'rush' (punt) sends
   // everyone: more blocks, but now and then a roughing flag (15 yards and a first down, an untimed down if time ran
@@ -915,8 +925,8 @@
         // (your protection, prot: the pressured plays drawn less often, _protMix)
         const X = this._protMix(cdf, pool, preDone === 2 ? null : this._noTarget(cdf, pool, looks, callIdx),
           this.routeSet(team, callIdx, fk, oob, looks, s, route, who, pers), prot);
-        if (X.N && u < X.share) return this._pickT(X.N, u / X.share);
-        if (X.N) u = (u - X.share) / (1 - X.share);
+        const v = ntU(u, callIdx, route);
+        if (X.N && v < X.share) return this._pickT(X.N, v / X.share);
         const r = this._pickT(X.T, u);
         if (r >= 0) return r;
       }
@@ -1268,8 +1278,8 @@
           // (your protection: as samplePlaybook's, the route's plays taken as pressured as the situation's)
           const X = this._protMix(cdf, pool, this._noTarget(cdf, pool, 0, callIdx), null, prot);
           pm = X.m;
-          if (X.N && u < X.share) return this._pickT(X.N, u / X.share);
-          if (X.N) u = (u - X.share) / (1 - X.share);
+          const v = ntU(u, callIdx, route);
+          if (X.N && v < X.share) return this._pickT(X.N, v / X.share);
           preDone = 2;
         }
         if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (!pools.includes(lp)) pools.push(lp); }
