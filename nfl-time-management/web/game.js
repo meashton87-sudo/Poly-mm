@@ -2530,7 +2530,7 @@
   // (browser tests only, window.__sepLog: the drawing and the play, for bots that draw thousands of lines and plays)
   if (window.__sepLog) {
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
-      DRAWN_RANGE, CALL, ROUTES, routeName, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, goalCheck, speedLog, get: () => ({ G, ui, scene, busy }),
+      DRAWN_RANGE, CALL, ROUTES, routeName, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, goalCheck, qbCheck, speedLog, get: () => ({ G, ui, scene, busy }),
       readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
       promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k),
       drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock(), crowdKey: (r, k) => crowdKey(r, k) };
@@ -2784,7 +2784,7 @@
     const ds = sc.actors.filter((d) => !d.off && d.trk);
     for (let t = t0 + 0.1; t <= Math.min(P.T, t0 + 1.2); t += 0.05) {
       const q = at(qb, t), rs = ds.map((d) => yd(at(d, t), q)), r = Math.min(...rs);
-      if (r < minR) { minR = r; const d = ds[rs.indexOf(r)]; who = { label: d.label, t: +(t - t0).toFixed(2), home: d.homeK || 0 }; }
+      if (r < minR) { minR = r; const d = ds[rs.indexOf(r)]; who = { label: d.label, t: +(t - t0).toFixed(2) }; }
       if (r < 1.0) on += 0.05;
     }
     return { on: +on.toFixed(2), minR: +minR.toFixed(2), evt: e.evt || '', press: !!e.pressure, call: e.call, who };
@@ -4054,7 +4054,7 @@
       if (wP) leg(wP, tWin, 'chase', { who: passer.b, gap: 1.1, eff: 1, lead: 0.3 });
       // (once the ball is out nobody stays on the passer: the man who beat his block and the blitzers ease off to a
       // couple of yards and pull up. A chaser left a yard off him after the throw read as a sack that never came)
-      [wP, ...blitzers].filter(Boolean).forEach((d) => { leg(d, tThrow + 0.4, 'chase', { who: passer.b, gap: 2.3, eff: 0.45, lead: 0 }); leg(d, tThrow + 1.3, 'stand'); });
+      [wP, ...blitzers].filter(Boolean).forEach((d) => { leg(d, tThrow + 0.15, 'chase', { who: passer.b, gap: 2.6, eff: 0.45, lead: 0 }); leg(d, tThrow + 1.2, 'stand'); });
       const cov = passShape({ kind, tgt, catchPt, tThrow, tCatch, rushers, shell: shellOf(), side, qbSpot, passer });
       // a man with a receiver of his own: running with a vertical, or on his man
       const onMan = (d) => cov.carry.has(d) || !!(cov.man && cov.assigned.get(d) && cov.assigned.get(d) !== tgt);
@@ -4456,20 +4456,29 @@
         const q = Wd.posAt(passer.b, tThrow);                // (where he throws from)
         Wd.rewind(tP);                                        // (the world may have been run on past it: back to then)
         const pool = stick ? rushers : K.def.filter((d) => d !== tgt);
-        const hr = (pool.map((d) => ({ d, T: Motion.minTime([here(d), q], d.b.g, { v0: vel(d), spd: d.b.spd }) })).sort((x, y) => x.T - y.T)[0] || {}).d || wP;
+        // (on him: the man who beat his block, when there is one; else the rusher who can be there first)
+        const hr = (stick && wP) || (pool.map((d) => ({ d, T: Motion.minTime([here(d), q], d.b.g, { v0: vel(d), spd: d.b.spd }) })).sort((x, y) => x.T - y.T)[0] || {}).d || wP;
         if (!hr) { Wd.run(t0); return; }
         const w = here(hr), [ux, uy] = unit(w[0] - q[0], w[1] - q[1]);
-        runFrom(hr, tP, [[q[0] + ux * k, q[1] + uy * k]], { T: tThrow + 0.05 - tP, v1: stick ? undefined : 0 });
+        runFrom(hr, tP, [[q[0] + ux * k, q[1] + uy * k]], { T: tThrow + 0.05 - tP, v1: 0 });
         // (with him a beat as the ball goes, then he pulls up: a rusher left on the passer after the throw read as a
         // sack that never came; the owner, Oct 22)
-        if (stick) { leg(hr, tThrow + 0.1, 'stick', { who: passer.b, dx: ux * k, dy: uy * k, ease: 0.2 }); leg(hr, tThrow + 0.3, 'go', { ...xy([q[0] + ux * 3.2, q[1] + uy * 3.2]), eff: 0.5 }); leg(hr, tThrow + 1.1, 'stand'); }
+        if (stick) { leg(hr, tThrow + 0.1, 'go', { ...xy([q[0] + ux * 2.8, q[1] + uy * 2.8]), eff: 0.4 }); leg(hr, tThrow + 1.0, 'stand'); }
         else leg(hr, tThrow + 0.3, 'stand');
         busy.add(hr);
-        hr.homeK = stick ? 2 : 1;                           // (the browser test's qbCheck: who got there)
         Wd.run(t0);
       };
       const pocketD = () => { Wd.run(Math.max(Wd.t, tThrow)); return Math.min(...K.def.map((d) => dist(Wd.posAt(d.b, tThrow), Wd.posAt(passer.b, tThrow)))); };
       if (wP && !thrownAway) rushHome(1.3, true);       // (a step off him, never on top of him: no sack drawn)
+      // (and a rusher the line lets near him, an edge ridden round the pocket: off him once the ball is out; a man left
+      // on the passer after the throw read as a sack that never came)
+      {
+        const t0 = Wd.t, ts = [0.2, 0.4, 0.6, 0.8].map((x) => tThrow + x);
+        if (Wd.t < ts[3]) Wd.run(ts[3]);
+        const near = front.filter((d) => d !== wP && !busy.has(d) && ts.some((t) => dist(Wd.posAt(d.b, t), Wd.posAt(passer.b, t)) < 2.2));
+        Wd.rewind(t0);
+        near.forEach((d) => { leg(d, tThrow + 0.15, 'chase', { who: passer.b, gap: 2.6, eff: 0.45, lead: 0 }); leg(d, tThrow + 1.2, 'stand'); });
+      }
       // the throw
       Wd.run(tThrow);
       const qT = here(passer);
