@@ -1034,6 +1034,7 @@
     if (b) { b.textContent = `⤢ ${FS_LABEL[v]}`; b.title = 'Field size: tap for the next size'; b.setAttribute('aria-label', `Field size: ${FS_LABEL[v]}`); }
   }
   if (document.body) applyFieldSize();                  // (before the field is first drawn: its width comes from the page's)
+  const PBP_ROOM = 50;           // (px: the Play-by-play line under the field beside the calls)
   function fieldHeight() {
     const svg = $('field');
     const wpx = svg.parentElement.clientWidth || 360;
@@ -1042,9 +1043,11 @@
     // header, the score bar) and the call's first row below it (DOCK_ROOM) fit on the screen with no scrolling
     const side = window.matchMedia && window.matchMedia('(min-width: 1000px)').matches;
     // (and as tall as the size picked lets it be: Standard leaves the most room around it)
-    const fs = fieldSize(), [room, lo, hi] = fs === 'xl' ? [140, 440, 1200] : fs === 'l' ? [200, 400, 1000] : [280, 360, 860];
-    if (side) return Math.round((360 * clip(window.innerHeight - room, lo, hi)) / wpx);
+    const fs = fieldSize(), [room, lo, hi] = fs === 'xl' ? [140, 440, 1200] : fs === 'l' ? [200, 400, 1000] : [280, 360, 1000];
     const top = svg.parentElement.getBoundingClientRect().top + window.scrollY;
+    // (beside the calls: at least down to the foot of the window, the Play-by-play line under it; the owner saw a band
+    // of empty page below a field that stopped short. The larger sizes may run on past it)
+    if (side) return Math.round((360 * clip(Math.max(window.innerHeight - room, window.innerHeight - clip(top, 60, 320) - PBP_ROOM), lo, hi)) / wpx);
     return Math.round((360 * clip(window.innerHeight - clip(top, 60, 260) - DOCK_ROOM, 300, 720)) / wpx);
   }
   // Before the snap the camera frames the play, true to scale (as many yards tall as the field is wide, in the
