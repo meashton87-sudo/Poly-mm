@@ -817,8 +817,11 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 /* the field's options (speed, personnel, formation, ratings) behind one key till it is opened (game.js fieldOpts): the field
    in view, not under a row of chips (players: "it was better simpler") */
 .fieldbox.opts-shut .fov .btns > :not(#optsBtn) { display: none !important; }
-.fieldbox:has(#field.playing) .fov { opacity: 0; pointer-events: none; }
+/* during the play the down and distance stay up (a player: "it goes so fast it's hard to catch the situation"); the keys,
+   the color key and the clock's state before the snap go */
+.fieldbox:has(#field.playing) .fov { pointer-events: none; }
 .fieldbox:has(#field.playing) .fov > * { pointer-events: none; }
+.fieldbox:has(#field.playing) .fov .btns, .fieldbox:has(#field.playing) .fov .ramp, .fieldbox:has(#field.playing) .fov .dd .ck { opacity: 0; transition: opacity .2s ease; }
 .fovl { display: grid; gap: 4px; justify-items: start; min-width: 0; }
 .fov .dd { min-height: 0; text-align: left; background: rgba(10, 16, 12, .72); color: #fff; border-radius: 8px; padding: 4px 8px; font-size: 12px; }
 /* the chips go to the half of the screen away from the line of scrimmage (game.js drawField): the open grass */
