@@ -157,17 +157,40 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .arch .vsteam .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .arch .vsteam.on { border: 2px solid var(--ink); padding: 5px 9px; }
 .arch .vspick { display: grid; gap: 8px; }
-.arch .vsmodes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.arch .vsteamrow { display: flex; align-items: center; gap: 10px; margin: 6px 0 10px; }
-.arch .vsteamrow .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
-.arch .vsteamrow b { flex: 1 1 auto; min-width: 0; }
+.arch .vsteamrow { display: flex; align-items: center; gap: 12px; }
+.arch .vsteamrow .sw { width: 46px; height: 46px; border-radius: 14px; flex: none; display: grid; place-items: center; color: #fff;
+  font: 900 15px var(--display); letter-spacing: .04em; box-shadow: 0 6px 16px -8px rgba(0, 0, 0, .5); text-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
+.arch .vsteamrow .ptx { display: grid; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.arch .vsteamrow b { font: 900 24px/1 var(--display); text-transform: uppercase; letter-spacing: .02em; overflow-wrap: anywhere; }
 .sharetext { display: none; }
-.arch .vsmodes .btn { padding-inline: 6px; }
-.arch .vsmodes .btn { display: grid; gap: 2px; justify-items: center; }
-.arch .vsmodes .btn small { font: 600 11px/1.3 var(--body); letter-spacing: 0; text-transform: none; opacity: .8; }
+/* the Versus lobby, as the Pro hub (game.js renderVsLobby): you in a card, a tile a way to play, the rest in cards */
+.arch .vshub, .arch .vsmore, .arch .vsladder { margin-top: 12px; }
+.arch .vshub .vspick { border-top: 1px solid var(--line); padding-top: 14px; }
+.arch .vsrank b { font-variant-numeric: tabular-nums; }
+.pcard.play { --c1: #34e0a1; --c2: #0f8a6a; } .pcard.ranked { --c1: #ffd54a; --c2: #c98a00; }
+.pcard.cpu { --c1: #5ab8ff; --c2: #2c5fd6; } .pcard.friend { --c1: #c18cff; --c2: #7a3fe0; }
+.pcard.big.play { background: linear-gradient(160deg, #1fc98e, #0b6b55 78%); }
+.pcard:disabled { opacity: .55; cursor: default; }
+.pcard.wide { grid-column: 1 / -1; aspect-ratio: auto; flex-direction: row; align-items: center; justify-content: flex-start; gap: 14px; }
+.arch .vsmore .vsfield .row { display: flex; flex-direction: row; flex-wrap: nowrap; align-items: stretch; gap: 8px; }
+.arch .vsmore .vsfield .row input { flex: 1 1 auto; min-width: 0; width: auto; }
+.arch .vsmore .vsfield .row .btn { flex: none; width: auto; min-width: 0; margin: 0; padding-inline: 22px; }
+.arch .vsmore { gap: 12px; }
+.arch .vsmore .vslevel { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.arch .vsmore .vslevel .pk { margin-right: 4px; }
+.arch .vsfield { display: grid; gap: 6px; }
+.arch .vsfield input { width: 100%; box-sizing: border-box; }
+.arch .vsfield .row { margin: 0; }
 .arch input[aria-label="Your name"] { text-transform: none; letter-spacing: 0; }
-.arch .vsladder .board { margin: 0; padding-left: 28px; }
-.arch .vsladder .board li { display: flex; justify-content: space-between; gap: 10px; }
+.arch .vsladder .board { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.arch .vsladder .board li { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+.arch .vsladder .board li:last-child { border-bottom: 0; }
+.arch .vsladder .board .rk { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; flex: none; font: 800 13px var(--body);
+  background: var(--line); color: var(--ink); font-variant-numeric: tabular-nums; }
+.arch .vsladder .board .m1 .rk { background: linear-gradient(140deg, #ffd54a, #c98a00); color: #fff; }
+.arch .vsladder .board .m2 .rk { background: linear-gradient(140deg, #dfe6ec, #8f9ba6); color: #fff; }
+.arch .vsladder .board .m3 .rk { background: linear-gradient(140deg, #f0a46a, #a0552a); color: #fff; }
+.arch .vsladder .board .nm { flex: 1 1 auto; min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
 .arch .vsladder .board .n { font-variant-numeric: tabular-nums; color: var(--muted); }
 .endcard .vsrating { font: 800 15px var(--body); margin: 4px 0; }
 .endcard .vsrating:empty { display: none; }
@@ -681,8 +704,15 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .concept small.tag { display: none; }
 .modal .box:has(.concepts) { width: min(700px, 100%); }
 /* (Versus: the Cup in the lobby) */
-.vscup:not(:empty) { border: 2px solid var(--chain); border-radius: 12px; padding: 10px 12px; margin: 10px 0; display: grid; gap: 6px; }
-.vscup .hk { font: 800 12px var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--chain); }
+.vscup:not(:empty) { border-radius: 16px; padding: 16px; margin: 12px 0 0; display: grid; gap: 8px; color: #241a00;
+  background: linear-gradient(150deg, #ffe27a, #f2b72e 60%, #d9940f); box-shadow: 0 10px 24px -14px rgba(160, 110, 0, .8); }
+.vscup .hk { font: 800 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: rgba(36, 26, 0, .75); }
+.vscup p { font-size: 14.5px; }
+.vscup .cupb { font: 900 30px/1 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.vscup .note { color: rgba(36, 26, 0, .8); }
+.vscup a.btn { background: #241a00; color: #ffe27a; border-color: #241a00; }
+.vscupb .lab, .vscupb .mt .v { color: rgba(36, 26, 0, .7) !important; }
+.vscupb .mt.live { color: #7a2a00 !important; font-weight: 700; }
 .vscup p { margin: 0; }
 .vscup a.btn { display: flex; align-items: center; justify-content: center; text-decoration: none; min-height: 48px; text-align: center; }
 .vscupb summary { cursor: pointer; font-weight: 700; }

@@ -4456,7 +4456,7 @@
         runFrom(hr, tP, [[q[0] + ux * k, q[1] + uy * k]], { T: tThrow + 0.05 - tP, v1: stick ? undefined : 0 });
         // (with him a beat as the ball goes, then he pulls up: a rusher left on the passer after the throw read as a
         // sack that never came; the owner, Oct 22)
-        if (stick) { leg(hr, tThrow + 0.1, 'stick', { who: passer.b, dx: ux * k, dy: uy * k, ease: 0.2 }); leg(hr, tThrow + 0.45, 'stand'); }
+        if (stick) { leg(hr, tThrow + 0.1, 'stick', { who: passer.b, dx: ux * k, dy: uy * k, ease: 0.2 }); leg(hr, tThrow + 0.3, 'go', { ...xy([q[0] + ux * 3.2, q[1] + uy * 3.2]), eff: 0.5 }); leg(hr, tThrow + 1.1, 'stand'); }
         else leg(hr, tThrow + 0.3, 'stand');
         busy.add(hr);
         Wd.run(t0);
@@ -12155,6 +12155,11 @@
     runs: ['M3.5 4.5h5v5h5v5h5M3.5 19.5h5v-5M20.5 14.5h-2'],
     build: ['M4 20l1.2-4.4L16 4.8a2.1 2.1 0 0 1 3 3L8.2 18.6zM14.5 6.3l3 3'],
     dailies: ['M4 6.5h16v14H4zM4 10.5h16M8.5 3.5v4M15.5 3.5v4M8 14h2M14 14h2M8 17h2'],
+    // (Versus: the lobby's tiles, vsLobbyTiles)
+    play: ['M13 2.5L5 13.5h6l-1 8 8-11h-6z'],
+    ranked: ['M6 3.5h12v5a6 6 0 0 1-12 0zM6 5H3.5v1.5A3.5 3.5 0 0 0 6.3 10M18 5h2.5v1.5a3.5 3.5 0 0 1-2.8 3.5M9 20.5h6M12 14.5v6'],
+    cpu: ['M7 7h10v10H7zM10 10h4v4h-4zM9.5 3.5V7M14.5 3.5V7M9.5 17v3.5M14.5 17v3.5M3.5 9.5H7M3.5 14.5H7M17 9.5h3.5M17 14.5h3.5'],
+    friend: ['M10 14a4 4 0 0 0 5.7 0l3.5-3.5a4 4 0 0 0-5.7-5.7l-1.2 1.2M14 10a4 4 0 0 0-5.7 0l-3.5 3.5a4 4 0 0 0 5.7 5.7l1.2-1.2'],
   };
   function proCard(kind, title, sub, go, o = {}) {
     const a = el(typeof go === 'string' ? 'a' : 'button', `pcard ${kind}${o.big ? ' big' : ''}`);
@@ -13211,7 +13216,7 @@
       const now = Date.now(), skew = c.now - now, at = (iso) => Date.parse(iso) - skew;
       const done = !!c.champ, started = now >= at(c.startAt), you = c.you || {};
       if (done && now - at(c.startAt) > 3 * 86400e3) return;          // (an old Cup: gone from the lobby after a few days)
-      box.append(el('div', 'hk', `Two-Minute Drill Invitational · ${c.prize} to the winner`));
+      box.append(el('div', 'hk', 'Two-Minute Drill Invitational'), el('b', 'cupb', `${c.prize} to the winner`));
       if (!c.seeds) {
         box.append(el('p', '', `The top ${c.size} on the ranked ladder at ${when(c.qualifyAt)} play a bracket from ${when(c.startAt)}, live. ${c.minGames} ranked game${c.minGames === 1 ? '' : 's'} to be in.`));
         box.append(el('p', 'note', you.seed ? `You’re #${you.seed} right now: in, if it holds. Keep winning ranked.` : `You’re not in the top ${c.size} right now: play Ranked to get in.`));
@@ -13268,29 +13273,37 @@
       box.append(...proNodes(), authNodes());
       return;
     }
-    box.append(el('h2', '', 'Versus'), el('p', 'lead', 'College overtime against another player, or the computer: each team gets the ball at the other’s 25, no clock. You call your offense and your defense; both calls lock in before the snap.'));
-    if (BOARD.api) box.append(vsCupBox());
-    const pick = el('div', 'vspick');
-    // (your team in one line with Change, the 32 only when you pick: the Play keys were under them on a phone. A
-    // fanbase pick, Your team, is your Versus team until you choose another)
+    // the lobby, laid out as the Pro hub is (the owner: like the Pro tab, more to look at): you (your rating and team)
+    // in a card, the Invitational, then a tile a way to play (Play now the big one), the smaller things in a card, the
+    // ladder
+    box.append(el('h2', '', 'Versus'), el('p', 'lead', 'College overtime, live: each team gets the ball at the other’s 25, no clock. You call your offense and your defense; both calls lock in before the snap.'));
     const fan = load(FAN_KEY, null);
     if (!vsMyTeam() && fan && TEAMS[fan] && !COLLEGE.has(fan)) save(VS_TEAM_KEY, fan);
     let open = !vsMyTeam();
+    const hub = el('section', 'phub vshub'), rk = el('div', 'prank vsrank'), pick = el('div', 'vspick');
+    const rB = el('b', '', '1000'), rS = el('span', 'ps', 'No ranked games yet: your first 10 place you'), rBar = el('span', 'pbar'), rF = el('i');
+    rF.style.width = '0%';
+    rBar.append(rF);
+    rk.append(el('span', 'pk', 'Your rating'), rB, rS, rBar);
+    const meLine = rS;                              // (filled in once the ladder answers, below)
     const drawPick = () => {
       pick.textContent = '';
       const t = vsMyTeam();
       if (t && !open) {
-        const row = el('div', 'vsteamrow'), sw = el('span', 'sw'), ch = el('button', 'chip', 'Change');
+        const row = el('div', 'vsteamrow'), sw = el('span', 'sw', t), tx = el('span', 'ptx'), ch = el('button', 'chip', 'Change');
         sw.style.background = color(t);
+        tx.append(el('span', 'pk', 'Your team'), el('b', '', teamName(t)));
         ch.type = 'button';
         ch.addEventListener('click', () => { open = true; drawPick(); });
-        row.append(sw, el('b', '', `Your team: ${teamName(t)}`), ch);
+        row.append(sw, tx, ch);
         pick.append(row);
         return;
       }
-      pick.append(el('h3', '', t ? `Your team: ${teamName(t)}` : 'Pick your team'), vsTeamPicker(() => { open = false; drawPick(); }));
+      pick.append(el('span', 'pk', t ? `Your team: ${teamName(t)}` : 'Pick your team'), vsTeamPicker(() => { open = false; drawPick(); }));
     };
-    const modes = el('div', 'vsmodes');
+    hub.append(rk, pick);
+    box.append(hub);
+    if (BOARD.api) box.append(vsCupBox());
     const go = (mode) => {
       if (!vsMyTeam()) { toast('Pick your team first'); return; }
       if (mode === 'ranked' && !myName()) { toast('Ranked needs a name: set it below'); nameIn.focus(); return; }
@@ -13303,20 +13316,22 @@
       }
       vsQueue(mode);
     };
-    // (casual first: a quick match, no rating; ranked's first 10 games are placement, a rating that moves faster)
-    [['casual', 'Play now', 'Quick match, no rating'], ['ranked', 'Ranked', 'Win to climb the ladder'], ['cpu', 'Computer', 'Starts right away, no rating'],
-      ['friend', 'Friend', 'Send a link']].forEach(([m, label, sub]) => {
-      const b = el('button', `btn${m === 'friend' || m === 'cpu' ? ' ghostbtn' : ''}`);
-      b.type = 'button';
-      b.append(document.createTextNode(label), el('small', '', sub));
+    // (casual first and biggest: a quick match, no rating; ranked's first 10 games are placement, a rating that moves faster)
+    const modes = el('div', 'ptiles vsmodes');
+    [['casual', 'play', 'Play now', 'Someone live, no rating', { k: 'Quick match', big: true }], ['ranked', 'ranked', 'Ranked', 'Win to climb the ladder', {}],
+      ['cpu', 'cpu', 'Computer', 'Starts right away', {}], ['friend', 'friend', 'Friend', 'Send them a link, play them now', { wide: true }]].forEach(([m, kind, title, sub, o]) => {
+      const b = proCard(kind, title, sub, () => go(m), o);
+      if (o.wide) b.classList.add('wide');
+      b.dataset.mode = m;
       b.disabled = !BOARD.api;
-      b.addEventListener('click', () => go(m));
       modes.append(b);
     });
     drawPick();
-    const meLine = el('p', 'note vsme', '');
+    box.append(modes);
+    // the smaller things, one card: the computer's level, your name on the ladder, a friend's code
+    const more = el('section', 'phub vsmore');
     const lv = el('div', 'opts-row vslevel');
-    lv.append(el('span', 'lab', 'Computer'));
+    lv.append(el('span', 'pk', 'Computer'));
     const drawLv = () => {
       [...lv.querySelectorAll('button')].forEach((b) => b.remove());
       Object.entries(VS_CPU_LEVELS).forEach(([k, label]) => {
@@ -13328,13 +13343,11 @@
       });
     };
     drawLv();
-    box.append(pick, meLine, modes, lv);
-    const nameRow = el('div', 'row'), nameIn = el('input');
+    const nameRow = el('label', 'vsfield'), nameIn = el('input');
     nameIn.placeholder = 'Your name (for ranked)'; nameIn.maxLength = 24; nameIn.value = myName(); nameIn.setAttribute('aria-label', 'Your name');
     nameIn.addEventListener('change', () => { save(NAME_KEY, nameIn.value.trim().slice(0, 24)); track('name_set', { mode: 'versus' }); });
-    nameRow.append(nameIn);
-    box.append(nameRow);
-    const join = el('div', 'row'), inp = el('input'), jb = el('button', 'btn ghostbtn', 'Join');
+    nameRow.append(el('span', 'pk', 'Your name on the ladder'), nameIn);
+    const joinRow = el('div', 'vsfield'), join = el('div', 'row'), inp = el('input'), jb = el('button', 'btn ghostbtn', 'Join');
     inp.placeholder = 'Friend’s code'; inp.maxLength = 6; inp.autocapitalize = 'characters'; inp.spellcheck = false; inp.setAttribute('aria-label', 'Match code');
     jb.type = 'button';
     jb.addEventListener('click', () => {
@@ -13344,24 +13357,30 @@
       location.hash = `#vs-${c}`;
     });
     join.append(inp, jb);
-    box.append(join);
+    joinRow.append(el('span', 'pk', 'Got a code from a friend?'), join);
+    more.append(lv, nameRow, joinRow);
+    box.append(more);
     if (!BOARD.api) { box.append(el('p', 'note', 'Versus needs the website’s backend.')); return; }
     // straight back into the queue (a no-show's "find another match")
     let again = null;
     try { again = sessionStorage.getItem('tmd:vsqueue'); sessionStorage.removeItem('tmd:vsqueue'); } catch (e) { /* none */ }
     if ((again === 'ranked' || again === 'casual') && vsMyTeam()) { vsQueue(again); return; }
     // the ladder, and you on it
-    const lad = el('div', 'vsladder');
-    box.append(el('h3', '', 'Ranked ladder'), lad);
+    const lad = el('section', 'phub vsladder');
+    lad.append(el('span', 'pk', 'Ranked ladder'));
+    box.append(lad);
     try {
       await BOARD.ready;
       const [top, me] = await Promise.all([fetch(`${BOARD.api}/vs/ladder`).then((r) => r.json()), fetch(`${BOARD.api}/vs/me`, POST_JSON({ key: deviceKey() })).then((r) => r.json())]);
       const streak = me.streak > 1 ? ` · ${me.streak} wins in a row` : me.streak < -1 ? ` · ${-me.streak} losses in a row` : '';
-      const you = me.games ? `You: ${me.rating}${me.rank ? ` · #${me.rank}` : ''} · ${me.w}–${me.l}${streak}${me.provisional ? ` · placement (${me.games} of 10)` : ''}` : 'You: 1000 · no ranked games yet';
-      lad.append(el('p', 'note', you));
-      meLine.textContent = `Ranked: ${you.replace(/^You: /, '')}`;      // (up top too: the ladder is at the foot)
+      // (your rating up top, the Pro hub's rank card: a placement bar for the first 10, then your rank)
+      if (me.games) {
+        rB.textContent = String(me.rating);
+        meLine.textContent = `${me.rank ? `#${me.rank} on the ladder · ` : ''}${me.w}–${me.l}${streak}${me.provisional ? ` · placement ${me.games} of 10` : ''}`;
+        rF.style.width = `${Math.round(100 * Math.min(1, me.games / 10))}%`;
+      }
       const ol = el('ol', 'board');
-      (top.top || []).slice(0, 20).forEach((x) => { const li = el('li'); li.append(el('span', 'nm', x.name), el('span', 'n', `${x.rating}${x.provisional ? '?' : ''} · ${x.w}–${x.l}`)); ol.append(li); });
+      (top.top || []).slice(0, 20).forEach((x, i) => { const li = el('li', i < 3 ? `m${i + 1}` : ''); li.append(el('span', 'rk', String(x.rank || i + 1)), el('span', 'nm', x.name), el('span', 'n', `${x.rating}${x.provisional ? '?' : ''} · ${x.w}–${x.l}`)); ol.append(li); });
       if (!(top.top || []).length) lad.append(el('p', 'note', 'Nobody yet. Be the first.'));
       else lad.append(ol, el('p', 'note', '? : still in placement (the first 10 ranked games move a rating faster)'));
     } catch (e) { lad.append(el('p', 'note', 'The ladder did not load.')); }
