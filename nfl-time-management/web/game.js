@@ -9332,7 +9332,6 @@
     }
     const dbox = dailyBox(p, today.map((_, i) => (state.spots[i] && state.spots[i].decisions || []).reduce((a, x) => a + x.wpa, 0)));
     box.append(dbox);
-    if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) box.append(practiceNodes());
     if (ARCH_DAY || RUN_N) { const a = el('a', 'btn', RUN_N ? 'More runs' : 'Back to the archive'); a.href = '#archive'; box.append(a); }
     box.append(homeBtn());                     // (everything else there is to play)
     if (!ARCH_DAY && !RUN_N && PRO_ON && !isPro() && BOARD.api) box.append(proValueCard());       // the website: what Pro adds, after the free drive
@@ -9416,6 +9415,8 @@
     if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) { const lg = el('p', 'lglink'); lg.hidden = true; box.insertBefore(lg, dbox); leagueNudge(); }
     badgeShow(box, state.badges || [], firstFinish);
     if (!DRIVE && !RUN_N && !CUSTOM) endSimplify(box);
+    // one clear thing to play next, right under Share (the owner: after the daily there was nothing that stood out)
+    if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) { const mo = box.querySelector(':scope > .endmore'); if (mo) mo.after(upNext()); else dbox.before(upNext()); }
     if (todayDaily()) {
       const inn = box.querySelector(':scope > .endmore > .in');
       if (inn) inn.append(fanLink());
@@ -9447,13 +9448,27 @@
   }
   // a new practice drive on the next visit (the finished one's card is kept until then)
   const practiceNext = () => { const st = load(PRACTICE_KEY, null); if (st && st.done) save(PRACTICE_KEY, { ...st, stale: true }); };
-  function practiceNodes() {
-    const w = el('div', 'keepplay');
-    const a = el('button', 'btn', 'Keep playing: practice drive');
-    a.type = 'button';
-    // (the hash change reloads the page into practice; scrolled up first, as the reload keeps the scroll)
-    a.addEventListener('click', () => { practiceNext(); track('practice_start', { from: 'daily' }); scrollTo(0, 0); location.hash = '#practice'; });
-    w.append(a, el('p', 'note', 'A random real drive, graded the same way. It doesn’t touch today’s score, your streak or the leaderboard.'));
+  // Up next on the daily's end card: Versus for whoever can play it (someone live, the computer if nobody is on), else
+  // Survivor (your run, or a new one); a practice drive a line below
+  function upNext() {
+    const w = el('section', 'upnext'), vs = VS_ON && !!BOARD.api && (!VS_PRO || isPro());
+    const a = el('a', `hcard unext ${vs ? 'hvs' : 'hsurv'}`);
+    if (vs) {
+      a.href = '#vs';
+      a.append(el('div', 'hk', 'Versus'), el('div', 'hpitch', 'Play someone live'), el('p', '', 'College overtime. Nobody on? The computer.'), el('span', 'cta', 'Play Versus'));
+    } else {
+      const sv = survStats(), run = load(`${STORE}:surv`, null);
+      const alive = !!(run && !run.out && (run.won > 0 || (run.spots && run.spots.some((x) => x && x.started))));
+      a.href = '#survivor';
+      a.append(el('div', 'hk', 'Survivor'),
+        el('div', 'hpitch', alive ? `Your run: ${run.won} win${run.won === 1 ? '' : 's'}` : sv.best ? `Beat your best: ${sv.best}` : 'How many in a row?'),
+        el('p', '', 'Real games back to back. One loss ends it.'), el('span', 'cta', alive ? 'Continue your run' : 'Play Survivor'));
+    }
+    a.addEventListener('click', () => { track('up_next', { to: vs ? 'versus' : 'survivor', day: dayN }); scrollTo(0, 0); });
+    const alt = el('a', 'unalt', 'or play a practice drive');
+    alt.href = '#practice';
+    alt.addEventListener('click', () => { practiceNext(); track('practice_start', { from: 'daily' }); scrollTo(0, 0); });
+    w.append(el('div', 'unk', 'Up next'), a, alt);
     return w;
   }
   function renderPractice() {
