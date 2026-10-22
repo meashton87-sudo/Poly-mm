@@ -270,7 +270,7 @@ def personnel_code(p: pd.Series) -> np.ndarray:
 
 
 def _extras(seasons=SEASONS) -> pd.DataFrame:
-    cols = ["game_id", "play_id", "run_location", "run_gap", "rusher_player_id", "passer_player_id", "receiver_player_id", "fumble",
+    cols = ["game_id", "play_id", "run_location", "run_gap", "rusher_player_id", "passer_player_id", "receiver_player_id",
             "pass_defense_1_player_id"]
     return pd.concat([pd.read_parquet(config.RAW_DIR / f"play_by_play_{s}.parquet", columns=cols) for s in seasons],
                      ignore_index=True)
