@@ -2712,7 +2712,7 @@
         sc.actors.forEach((d) => {
           if (!d.trk || d.off === car.off || keys.has(d) || seen.has(d)) return;
           const p = at(d, t), r = yd(p, c);
-          if (r >= 1) return;
+          if (r >= 1 || (P.sackAt != null && t >= P.sackAt - 0.6)) return;
           if (sc.actors.some((m) => m.off === car.off && m !== car && yd(at(m, t), p) < 1.2)) return;      // in a block
           seen.add(d);
           out.push({ who: d.label, car: car.label, r: +r.toFixed(2), t: +t.toFixed(2), ev: e.ev, evt: e.evt || '', call: e.call, yds: e.yards });
@@ -3392,14 +3392,19 @@
       }
       // nobody he goes by gets to him and lets him go (only the broken tackle does): a chaser who would come within
       // arm's reach before the tackle takes a deeper angle, held off further (players saw men run into the coverage)
-      const tHit = (tackler ? tC : tEnd) - 0.3, near = (d) => {
-        let m = 99;
-        for (let t = t0 + 0.3; t < tHit; t += 0.1) m = Math.min(m, dist(Wd.posAt(d.b, t), Wd.posAt(car.b, t)));
-        return m;
+      // (the man who covered him too, chasing after the catch: only the tackler, the second man in and the broken
+      // tackle's man get to him. A man in a block, one of the carrier's own on him, is held where he is)
+      const tHit = (tackler ? tC : tEnd) - 0.3, own = (car.off ? K.off : K.def).filter((m) => m !== car), mayHit = new Set([tackler, ...(P.misses || [])]);
+      const near = (d) => {
+        for (let t = t0 + 0.3; t < tHit; t += 0.1) {
+          const q = Wd.posAt(d.b, t);
+          if (dist(q, Wd.posAt(car.b, t)) < 1.4 && !own.some((m) => dist(Wd.posAt(m.b, t), q) < 1.2)) return true;
+        }
+        return false;
       };
-      for (let k = 0; k < 2; k++) {
+      for (let k = 0; k < 3; k++) {
         Wd.run(tHit);
-        const close = foes(car).filter((d) => !busy.has(d) && near(d) < 1.4);
+        const close = foes(car).filter((d) => !mayHit.has(d) && near(d));
         if (!close.length) break;
         Wd.rewind(t0);
         close.forEach((d) => leg(d, t0 + 0.15, 'chase', { who: car.b, gap: 3.5 + k * 1.5, eff: 0.8, lead: 0.5 }));
@@ -4719,6 +4724,7 @@
       // (he gets to where he goes down before he is down: a long way up from the back of his end zone takes longer)
       tS += runFrom(qb, tMove, [spot], { T: tS - tMove, v1: 0 }).late || 0;
       busy.add(rusher);
+      (P.misses = P.misses || []).push(rusher); P.sackAt = tS;          // (passCheck: the sack's pile is no pass-by)
       // he sheds his block when he has to, to get to the passer as he goes down (at 85% of flat out)
       Wd.run(Math.max(tMove, Math.min(tBeat, tS - 0.5)));
       const rp0 = here(rusher), need = Motion.minTime([rp0, spot], rusher.b.g, { spd: rusher.b.spd });
