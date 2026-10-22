@@ -330,7 +330,8 @@
   const FULLDEF = VS || !!document.querySelector('meta[name="fulldef"]');
   // a player can keep the defense to the three simple calls (asked for: the full one is a lot to take in)
   const simpleDef = () => !VS && !!load(`${STORE}:simpledef`, false);
-  const VS_DECIDE_MS = 30000;      // the play clock in Versus: 30 seconds a call (board/match.js DECIDE_MS)
+  const VS_DECIDE_MS = 30000;      // the play clock in Versus: 30 seconds a call (board/match.js DECIDE_MS: a pick, a try)
+  const VS_DEF_MS = 10000, VS_OFF_MS = 20000;     // ... at a snap: 10 seconds on defense, 20 on offense (match.js DEF_MS, OFF_MS)
   // spots whose data was corrected, and when the fix went live: a drive's try saved before it starts over
   // (the two overtime drives were played as a fourth quarter until their start carried the overtime: startRoot otOf)
   const SPOT_FIXED = { '2018_14_NE_MIA#4172': Date.parse('2026-10-16T22:50:00Z'), '2023_22_SF_KC#4561': Date.parse('2026-10-18T13:00:00Z'),
@@ -2746,6 +2747,21 @@
     });
     return out;
   }
+  // (browser tests) the passer after his throw: how long a defender is on him (within a yard) in the second after the
+  // ball goes. Anything but a sack is never drawn with a man on him after the throw (it read as a sack that never came:
+  // the owner, Oct 22)
+  function qbCheck(sc, P, e) {
+    const segs = P.segs.slice().sort((a, b) => a.t0 - b.t0), i = segs.findIndex((s, j) => s.kind === 'fly' && s.lift && j > 0 && segs[j - 1].kind === 'hold' && segs[j - 1].a && segs[j - 1].a.label === 'QB');
+    if (i < 0 || /sack/.test(e.evt || '')) return null;
+    const qb = segs[i - 1].a, t0 = segs[i].t0, yd = (p, q) => Math.hypot((p.x - q.x) / XYD, p.L - q.L);
+    let on = 0, minR = 99;
+    for (let t = t0 + 0.1; t <= Math.min(P.T, t0 + 1.2); t += 0.05) {
+      const q = at(qb, t), r = Math.min(...sc.actors.filter((d) => !d.off && d.trk).map((d) => yd(at(d, t), q)));
+      minR = Math.min(minR, r);
+      if (r < 1.0) on += 0.05;
+    }
+    return { on: +on.toFixed(2), minR: +minR.toFixed(2), evt: e.evt || '', press: !!e.pressure, call: e.call };
+  }
   function speedLog(sc, P, e, x) {
     (window.__speedLog = window.__speedLog || []).push({ ev: e.ev, call: e.call, evt: e.evt || '', yards: e.yards, td: !!(e.td || e.tdDef || e.retTd), air: e.air,
       ...(x || {}), ...speedCheck(sc, P) });
@@ -4414,13 +4430,15 @@
         if (!hr) { Wd.run(t0); return; }
         const w = here(hr), [ux, uy] = unit(w[0] - q[0], w[1] - q[1]);
         runFrom(hr, tP, [[q[0] + ux * k, q[1] + uy * k]], { T: tThrow + 0.05 - tP, v1: stick ? undefined : 0 });
-        if (stick) leg(hr, tThrow + 0.1, 'stick', { who: passer.b, dx: ux * k, dy: uy * k, ease: 0.2 });
+        // (with him a beat as the ball goes, then he pulls up: a rusher left on the passer after the throw read as a
+        // sack that never came; the owner, Oct 22)
+        if (stick) { leg(hr, tThrow + 0.1, 'stick', { who: passer.b, dx: ux * k, dy: uy * k, ease: 0.2 }); leg(hr, tThrow + 0.45, 'stand'); }
         else leg(hr, tThrow + 0.3, 'stand');
         busy.add(hr);
         Wd.run(t0);
       };
       const pocketD = () => { Wd.run(Math.max(Wd.t, tThrow)); return Math.min(...K.def.map((d) => dist(Wd.posAt(d.b, tThrow), Wd.posAt(passer.b, tThrow)))); };
-      if (wP && !thrownAway) rushHome(0.9, true);
+      if (wP && !thrownAway) rushHome(1.3, true);       // (a step off him, never on top of him: no sack drawn)
       // the throw
       Wd.run(tThrow);
       const qT = here(passer);
@@ -5451,6 +5469,8 @@
       // (the ball against the goal line and the sidelines: goalCheck)
       (window.__goalLog = window.__goalLog || []).push({ ...goalCheck(sc, P, drawnE, two), yl: two ? 2 : before.yl, mine: e.team === G.me });
       (window.__passLog = window.__passLog || []).push(...passCheck(sc, P, drawnE).slice(0, 3));
+      const qc = qbCheck(sc, P, drawnE);
+      if (qc) (window.__qbLog = window.__qbLog || []).push(qc);
       // (and the man with the ball goes past the sideline with it on the field just when the engine has the play out of
       // bounds, for its clock: a player saw the other team run out and the clock run on. After the whistle he may walk
       // back on)
@@ -6378,6 +6398,14 @@
       if (crowdOn()) crowdCounts();          // (the crowd's counts, in before this call's result card: crowdLine)
       head.append(el('h2', '', 'Your call'), el('span', 'sub', `${ddText(r)} · ${spotText(r)}`));
       sketchChips(head, 'play');
+      // Versus: your last play again in one tap (the owner: a way to run the same play on offense and defense)
+      if (VS && vs.lastOff && r.phase === SNAP && !r.try2) {
+        const a = vs.lastOff.half.action, nm = a.call && CALL[a.call] ? CALL[a.call].label : a.play === 'fg' ? 'Field goal' : a.play ? a.play[0].toUpperCase() + a.play.slice(1) : 'Last play';
+        const same = el('button', 'btn ghostbtn same', `↻ Same play: ${nm}`);
+        same.type = 'button'; same.id = 'samePlay';
+        same.addEventListener('click', () => { if (busy || ui.step !== 'family') return; track('vs_same', { side: 'offense' }); ui.step = 'snapped'; vsSubmit({ action: { ...vs.lastOff.half.action } }, vs.lastOff.local); });
+        d.append(same);
+      }
       if (G.look != null) d.append(readLine(G.look));
       if (r.clock_running) d.append(tempoPicker(r));
       const fam = el('div', 'keys fam');          // (fam: what the first drive's tour points at)
@@ -6630,7 +6658,7 @@
       // (the first few passes only: after that the screen is the receivers and the keys)
       const told = load(`${STORE}:passhint`, 0);
       const h = told >= 3 ? null : !bcast() ? el('p', 'hint', 'Snap throws to the open man, or tap a name to pick who gets the ball. Tap a man on the field for his next route, or drag him to draw one.')
-        : el('p', 'hint one', 'Snap: the open man, or pick one. Tap a dot: his route.');
+        : el('p', 'hint one', VS ? 'Pick a play. Snap: the open man, or tap a man on the field to throw to him.' : 'Snap: the open man, or pick one. Tap a dot: his route.');
       if (h) {
         h.title = 'Snap throws to whoever gets open, or tap a name to pick who gets the ball (tap it again for the open man). Tap a receiver on the field to change his route, or drag him to draw your own (drag the quarterback for his drop or a rollout).';
         d.append(h);
@@ -6693,7 +6721,22 @@
       opt(P.roll && P.rollSide ? `Roll out ${P.rollSide === 'strong' ? 'strong' : 'weak'}` : 'Roll out', 'Move the pocket toward your receiver’s side (or drag the quarterback the way to go).', P.roll, (v) => { P.roll = v; P.qb = null; P.rollSide = null; if (v) P.pa = false; }));
     if (oobMatters(r)) opts.append(opt('⏱ Out of bounds', 'Going out stops the clock now.', ui.oob, setOob, 'oobSwitch'));
     if (opts.childElementCount) d.append(opts);
-    d.append(list);
+    // Versus: the playbook on the sheet itself, a row of plays, the one set marked (the owner: players don't need a list
+    // of who to throw to, a tap on the man on the field picks him; the plays were behind a small chip)
+    if (VS && !P.draw && sc) {
+      const fitK = CONCEPT_FIT[spotKind(r)], row = el('div', 'concepts inline');
+      row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Pass plays');
+      CONCEPTS.slice().sort((a, b) => (b.k === fitK) - (a.k === fitK)).forEach((c) => {
+        const b = conceptCard(sc, c, c.k === fitK);
+        if (P.concept === c.k) { b.classList.add('on'); b.setAttribute('aria-pressed', 'true'); }
+        row.append(b);
+      });
+      d.append(row);
+      if (P.target != null && E[P.target]) {
+        const a = E[P.target], who = el('p', 'hint one', `Throwing to ${shortName(a.p ? a.p.name : '') || a.label} (${routeName(a.label, P.routes[P.target])}). Tap him again for the open man.`);
+        d.append(who);
+      }
+    } else d.append(list);
     const avail = callOptions(r).calls, more = ['hail_mary'].filter((id) => avail.includes(id));
     // the screen in one tap: the back's route set to the screen and the ball to him (it was only a route on the
     // picker, which players didn't find, while the grade could still name the screen as the best call)
@@ -7463,6 +7506,12 @@
       if (VS) vsSubmit({ dc: { ...sk.dc } }, sk.draw);
       else decideDefense({ ...sk.dc }, sk.draw);
     });
+    if (VS && vs.lastDef && !r.try2) {
+      const same = el('button', 'btn ghostbtn same', `↻ Same defense: ${vdefText(vs.lastDef.dc)}`);
+      same.type = 'button'; same.id = 'sameDef';
+      same.addEventListener('click', () => { if (busy || ui.step !== 'vdef') return; track('vs_same', { side: 'defense' }); ui.step = 'sent'; vsSubmit({ dc: { ...vs.lastDef.dc } }); });
+      d.append(same);
+    }
     const presets = el('div', 'vpresets');
     presets.setAttribute('aria-label', 'Quick calls');
     const box = el('div', 'vdef');
@@ -8213,7 +8262,10 @@
       else if (x.k === 'two') addLog('Going for two', VSCore.COT_T, mine(x.team));
       else if (x.k === 'must2') addLog('Second overtime on: a touchdown has to go for two', VSCore.COT_T, mine(x.team));
       else if (x.k === 'poss') addLog(`${tn(x.team)} ball${x.round >= 3 ? ': a two-point play' : ' at the 25'}`, VSCore.COT_T, mine(x.team));
-      else if (x.k === 'round') addLog(`${ordinal(x.round)} overtime, tied ${x.score[G.me]}–${x.score[1 - G.me]}${x.round === 2 ? ': a touchdown has to go for two' : x.round >= 3 ? ': a two-point play each' : ''}. ${tn(x.chooser)} chooses`, VSCore.COT_T, mine(x.chooser));
+      else if (x.k === 'round') {
+        const f = x.first != null ? x.first : x.chooser;          // (an old match's note: who chose)
+        addLog(`${ordinal(x.round)} overtime, tied ${x.score[G.me]}–${x.score[1 - G.me]}${x.round === 2 ? ': a touchdown has to go for two' : x.round >= 3 ? ': a two-point play each' : ''}. ${x.first != null ? `${tn(f)} has the ball first` : `${tn(f)} chooses`}`, VSCore.COT_T, mine(f));
+      }
     }
   }
   // A college game tied at the end goes to college overtime (web/vs_core.js, the rules Versus plays by): a coin toss,
@@ -12831,7 +12883,7 @@
   const vsLink = (room) => `${location.origin}${location.pathname}#vs-${room}`;
   const vsMyTeam = () => { const t = load(VS_TEAM_KEY, ''); return TEAMS[t] ? t : ''; };
   async function vsLoadPool() {
-    if (!vs.pool) vs.pool = await fetch(asset('teams.json')).then((r) => { if (!r.ok) throw new Error('teams ' + r.status); return r.json(); });
+    if (!vs.pool) vs.pool = VSCore.boostPool(await fetch(asset('teams.json')).then((r) => { if (!r.ok) throw new Error('teams ' + r.status); return r.json(); }));     // (as the room plays them: VSCore.TEAM_BOOST)
     return vs.pool;
   }
   // where this phone was in the match (its saved decisions), to catch up from on connecting
@@ -13009,7 +13061,7 @@
       box.append(el('p', 'story', first === G.me ? 'You won the toss: offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`));
     } else box.append(el('p', 'story', `Each team gets the ball at the other’s 25, no clock. From the second overtime, a touchdown has to go for two; from the third, it’s a two-point play each. Ahead after both teams have had it, you win. ${first === G.me ? 'You won the toss: you choose offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`} The choice alternates every overtime.`));
     if (seen < 2) box.append(el('div', 'who', vs.mode === 'cpu' ? 'You call your side: the offense when you have it, the defense when they do. No play clock against the computer: take your time.'
-      : 'You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap. You get 30 seconds a call; miss two in a row and you forfeit.'));
+      : 'You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap. The defense has 10 seconds to call, the offense 20; miss two in a row and you forfeit.'));
     const go = el('button', 'btn', 'Kick it off');
     go.type = 'button';
     go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
@@ -13250,8 +13302,9 @@
     if (G && vs.oppLocked === G.vsN && vs.n === G.vsN) b.append(el('span', 'lock', 'Opponent locked in'));
     b.hidden = !b.childNodes.length;
   }
-  // your call's clock: 30 seconds from the moment the call is up (the room starts it on {t:'ready'} and says when it
-  // runs out; until it answers, the same 30 seconds here), never past the decision's last moment. Out of time: the
+  // your call's clock: 10 seconds on defense, 20 on offense (30 for a pick or a try) from the moment the call is up (the
+  // room starts it on {t:'ready'} and says when it runs out; until it answers, the same here), never past the decision's
+  // last moment. Out of time: the
   // room plays your default
   const vsDls = () => (vs.dl && vs.dl.length === 2 ? vs.dl.slice() : [vs.deadline, vs.deadline]);
   const vsMyDl = () => (vs.seat >= 0 ? vsDls()[vs.seat] : vs.deadline);
@@ -13260,7 +13313,8 @@
     vs.ui = 'prompt';
     if (vs.n === G.vsN && vs.seat >= 0) {
       vs.dl = vsDls();
-      vs.dl[vs.seat] = Math.min(vs.dl[vs.seat], vsNow() + (vs.mode === 'cpu' ? VS_CPU_DECIDE_MS : VS_DECIDE_MS));
+      const role = G.root && G.cot ? VSCore.role({ root: G.root, cot: G.cot, over: false }, vs.seat) : null;
+      vs.dl[vs.seat] = Math.min(vs.dl[vs.seat], vsNow() + (vs.mode === 'cpu' ? VS_CPU_DECIDE_MS : role === 'defense' ? VS_DEF_MS : role === 'offense' ? VS_OFF_MS : VS_DECIDE_MS));
       vsSend({ t: 'ready', n: G.vsN });
     }
     vs.timer = setInterval(() => {
@@ -13293,6 +13347,9 @@
     DRAW_ONLY.forEach((k) => { if (src[k] !== undefined) draw[k] = src[k]; });
     vs.drawn = Object.keys(draw).length ? { n, draw, call: half.action && half.action.call, dc: half.dc } : null;
     vs.last = { t: 'half', n, half: vsSealed(half) };
+    // (each side's last call, for Same play: a play called at a snap, not a try's kick or a timeout)
+    if (half.dc) vs.lastDef = { dc: { ...half.dc } };
+    else if (half.action && !half.action.pat && G.root && G.root.phase === SNAP && !G.root.try2 && G.root.pos === G.me) vs.lastOff = { half: { action: { ...half.action } }, local: local ? { ...local } : null };
     vsSend(vs.last);
     vs.ui = 'idle';
     status(vs.mode === 'cpu' ? 'Locked in. Snapping…' : 'Locked in. Waiting for your opponent…');

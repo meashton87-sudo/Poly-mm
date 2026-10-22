@@ -1748,10 +1748,10 @@
         if (dcValid(act.dc)) {
           const m = dcEffect(this.e.pb.dcEff, act.call, act.dc, act.pers, act.seen);
           why = m.why.slice(0, 3);
-          row = this.sampleVsDefense(o, callIdx, fineKey(MODE_NORMAL, 3, R.twoYl, R.twoYl), u[2], false, act.dc, m.s, route, who, persForm(act), protOf(act));
+          row = this._noThrowaway((v) => this.sampleVsDefense(o, callIdx, fineKey(MODE_NORMAL, 3, R.twoYl, R.twoYl), v, false, act.dc, m.s, route, who, persForm(act), protOf(act)), u[2], true);
         } else {
           const match = this.matchOf(callIdx, this.defOfLooks(act.looks));
-          row = this.samplePlaybook(o, callIdx, fineKey(MODE_NORMAL, 3, R.twoYl, R.twoYl), u[2], false, act.looks, match, route, who, persForm(act), undefined, protOf(act));
+          row = this._noThrowaway((v) => this.samplePlaybook(o, callIdx, fineKey(MODE_NORMAL, 3, R.twoYl, R.twoYl), v, false, act.looks, match, route, who, persForm(act), undefined, protOf(act)), u[2], true);
         }
         if (row >= 0) {
           const f = P.flags[row];
@@ -1978,10 +1978,10 @@
           if (dcValid(act.dc)) {
             const m = dcEffect(this.e.pb.dcEff, act.call, act.dc, act.pers, act.seen);
             match = m.s + repeatS(act) + schemeS(act, act.call, dcDef(act.dc)); why = m.why.slice(0, 3);
-            pbRow = this.sampleVsDefense(o, callIdx, fk, u[2], mineOob, act.dc, match, route, who, persForm(act), protOf(act));
+            pbRow = this._noThrowaway((v) => this.sampleVsDefense(o, callIdx, fk, v, mineOob, act.dc, match, route, who, persForm(act), protOf(act)), u[2], down === 4);
           } else {
             match = this.matchOf(callIdx, this.defOfLooks(act.looks)) + repeatS(act) + schemeS(act, act.call, this.defOfLooks(act.looks));
-            pbRow = this.samplePlaybook(o, callIdx, fk, u[2], mineOob, act.looks, match, route, who, persForm(act), undefined, protOf(act));
+            pbRow = this._noThrowaway((v) => this.samplePlaybook(o, callIdx, fk, v, mineOob, act.looks, match, route, who, persForm(act), undefined, protOf(act)), u[2], down === 4);
           }
         } else if (act && dcValid(act.dc) && this.pbCdf && (kind === RUN || kind === PASS)) {
           // no call from the offense: a call of the kind it chose, as often as play-callers make it here, against the
@@ -1993,7 +1993,7 @@
           if (callIdx >= 0) {
             const m = dcEffect(this.e.pb.dcEff, this.e.pb.calls[callIdx].id, act.dc);
             match = m.s; why = m.why.slice(0, 3);
-            pbRow = this.sampleVsDefense(o, callIdx, fk, u[2], oobWant, act.dc, match);
+            pbRow = this._noThrowaway((v) => this.sampleVsDefense(o, callIdx, fk, v, oobWant, act.dc, match), u[2], down === 4);
           }
         } else if (act && act.def && DEF_LOOKS[act.def] && this.pbCdf && (kind === RUN || kind === PASS)) {
           // daily game: you called the defense; the offense runs a play of the kind it chose, a call as often as
@@ -2003,7 +2003,7 @@
           callIdx = this.pickCall(kind === PASS ? 'pass' : 'run', fk, u[4], act.def);
           fkP = fk;
           match = this.matchOf(callIdx, act.def);
-          if (callIdx >= 0) pbRow = this.samplePlaybook(o, callIdx, fk, u[2], half === 2 && tHalf <= 300 && margin > 0 ? -1 : 0, DEF_LOOKS[act.def], match);
+          if (callIdx >= 0) pbRow = this._noThrowaway((v) => this.samplePlaybook(o, callIdx, fk, v, half === 2 && tHalf <= 300 && margin > 0 ? -1 : 0, DEF_LOOKS[act.def], match), u[2], down === 4);
         }
         this._cov = 0;
         // a foul during the play (not before the snap): the play under it, as it would have gone (a real play of the
@@ -2015,6 +2015,16 @@
         }
         this._scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match, why, runningAtSnap, alt, act && act.penAs);
       }
+    }
+    // a snap that has to convert (4th down, a two-point try): no quarterback throws it away there, it is the ball over
+    // all the same (the owner saw one on a fourth down in Versus; the pools widen past the down to have plays enough).
+    // A real play drawn as a throwaway is drawn again, a fixed step on from the snap's u (the same seed plays the same)
+    _noThrowaway(draw, u, must) {
+      let row = draw(u);
+      if (!must) return row;
+      const P = this.e.pb;
+      for (let k = 1; k <= 60 && row >= 0 && (P.eventNames[P.event[row]] || '') === 'throwaway'; k++) row = draw((u + k * 0.6180339887) % 1);
+      return row;
     }
     // a real play of call callIdx in situation fk with no flag (the weights as drawn: the call's pool), for a foul's
     // declined option

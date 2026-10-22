@@ -680,6 +680,17 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .chip.plays.on { border-color: var(--chain); }
 .concept small.tag { display: none; }
 .modal .box:has(.concepts) { width: min(700px, 100%); }
+/* (Versus: your last call again, one tap) */
+.btn.same { width: 100%; margin: 4px 0 6px; min-height: 40px; font-size: 14px; text-transform: none; letter-spacing: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* (Versus: the plays on the pass sheet, a row to swipe; the one set marked) */
+.concepts.inline { display: flex; overflow-x: auto; gap: 8px; margin: 6px 0 4px; padding-bottom: 4px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+.concepts.inline .concept { flex: 0 0 128px; scroll-snap-align: start; padding: 6px; }
+.concepts.inline .concept.fit { padding: 5px; }
+.concepts.inline .concept.on { background: var(--chain); color: #fff; border-color: var(--chain); }
+.concepts.inline .concept.on small, .concepts.inline .concept.on .fitTag { color: #fff; }
+.concepts.inline .concept small.long { display: none; }
+.concepts.inline .concept small.tag { display: block; }
+.concepts.inline .cdiag { height: 64px; }
 @media (max-width: 600px) {
   .concepts { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
   .concept { padding: 5px; gap: 2px; }

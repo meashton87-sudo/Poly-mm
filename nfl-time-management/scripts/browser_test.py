@@ -1413,12 +1413,13 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             goals = await page.evaluate("() => window.__goalLog || []")
             cams = await page.evaluate("() => window.__camLog || []")
             passes = await page.evaluate("() => window.__passLog || []")
+            qbs = await page.evaluate("() => window.__qbLog || []")
             kept = await page.evaluate("() => (window.__drawLog || []).length")
             snaps = await page.evaluate("() => window.__drawSnaps || []")
             jank = await page.evaluate("() => window.__jank || null")
         except Exception:
             seps, tackles, fps, offs, oobs, speeds, goals, kept, snaps, jank = [], [], [], [], [], [], [], 0, [], None
-            cams, passes = [], []
+            cams, passes, qbs = [], [], []
         shot = None
         if problems:
             status = "fail"
@@ -1429,7 +1430,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 shot = None
         await ctx.close()
     return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
-            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "oobs": oobs, "speeds": speeds, "goals": goals, "cams": cams, "passes": passes, "trail": trail if problems else [],
+            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "oobs": oobs, "speeds": speeds, "goals": goals, "cams": cams, "passes": passes, "qbs": qbs, "trail": trail if problems else [],
             "day": day, "side": picked, "timing": timing, "friction": friction, "jank": jank, "shot": shot.name if shot else None}
 
 
@@ -2589,6 +2590,13 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     # the broken tackle's man get to him (players saw defenders run right by a back)
     pb = [x for r in results for x in r.get("passes", [])]
     say(f"defenders by the man with the ball within a yard, no tackle: {len(pb)} in {len(gl)} plays" + (f" {pb[:6]}" if pb else ""))
+    # the passer after the throw: a man on him (within a yard) for 0.4 s or more reads as a sack that never came (the
+    # owner saw it, Oct 22); never on a pass that was not a sack (game.js qbCheck)
+    qb = [x for r in results for x in r.get("qbs", [])]
+    qb_on = [x for x in qb if x.get("on", 0) >= 0.4]
+    say(f"passes thrown: {len(qb)}, a defender on the passer 0.4 s+ after the throw: {len(qb_on)} (pressured {sum(1 for x in qb if x.get('press'))})" + (f" {qb_on[:5]}" if qb_on else ""))
+    if qb_on:
+        fail("qb-after-throw", f"FAIL: a defender on the passer after the throw (it looks like a sack) {qb_on[:5]}")
     tos = {}
     for r in results:
         for k, v in ((r.get("friction") or {}).get("timeouts") or {}).items():

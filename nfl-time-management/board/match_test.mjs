@@ -3,7 +3,15 @@
 // (vs_stress.mjs plays thousands of whole matches with the real engine.)
 import assert from 'node:assert';
 import { World, FakeClient } from './vs_world.mjs';
-import { ROOM_RE, PLAY_MS, WATCH_MS, DECIDE_MS, FIRST_MS, FORFEIT_MS, AFK_LIMIT, NOSHOW_MS, ELO, MM, CPU_AFTER_S, CPU_SEAT, CPU_TURN_MS } from './match.js';
+import { ROOM_RE, PLAY_MS, WATCH_MS, DECIDE_MS, OFF_MS, DEF_MS, decideMs, FIRST_MS, FORFEIT_MS, AFK_LIMIT, NOSHOW_MS, ELO, MM, CPU_AFTER_S, CPU_SEAT, CPU_TURN_MS } from './match.js';
+
+// the play clock by role: the defense 10 seconds, the offense 20, a pick or a try 30 (the owner, Oct 22)
+{
+  const snap = { over: false, root: { phase: 0, pos: 0 }, cot: { pick: null } }, pat = { over: false, root: { phase: 1, pos: 1 }, cot: { pick: null } };
+  assert.deepStrictEqual([decideMs(snap, 0), decideMs(snap, 1), decideMs(pat, 1), decideMs({ over: false, root: { phase: 0, pos: 0 }, cot: { pick: { team: 1 } } }, 1)],
+    [OFF_MS, DEF_MS, DECIDE_MS, DECIDE_MS], 'offense 20 s, defense 10 s, a try or a pick 30 s');
+  assert.deepStrictEqual([OFF_MS, DEF_MS], [20000, 10000]);
+}
 import VSCore from '../web/vs_core.js';
 
 // the stand-in engine: a snap gains (seed % 15) - 3 yards; a call 'fg' kicks a field goal (good); 'td' scores
@@ -119,23 +127,31 @@ assert.ok(ROOM_RE.test('ABC234') && !ROOM_RE.test('ABCD10') && !ROOM_RE.test('ab
   assert.strictEqual(a.last('step').n, 2, 'not before the deadline');
   await w.advance(1000);
   assert.deepStrictEqual([a.last('step').n, a.last('step').halves[1 - first]], [3, null], 'the defense defaulted');
-  // the play clock: 30 seconds from the moment the call is up on the phone (ready), for each seat on its own
+  // the play clock: the offense's 20 seconds from the moment the call is up on the phone (ready), for each seat on its own
   const t4 = w.now;
   await w.advance(4000);
   off.send({ t: 'ready', n: 4 });
   await w.settle();
-  assert.deepStrictEqual([off.last('clock').n, off.last('clock').deadline], [4, t4 + 4000 + DECIDE_MS], 'the clock starts when the call is up');
+  assert.deepStrictEqual([off.last('clock').n, off.last('clock').deadline], [4, t4 + 4000 + OFF_MS], 'the clock starts when the call is up');
   assert.strictEqual(def.last('clock'), undefined, 'the other phone is not told');
   off.send({ t: 'ready', n: 4 });                                     // again: the clock does not start over
   await w.advance(2000);
-  assert.strictEqual(off.last('clock').deadline, t4 + 4000 + DECIDE_MS, 'a second ready changes nothing');
+  assert.strictEqual(off.last('clock').deadline, t4 + 4000 + OFF_MS, 'a second ready changes nothing');
   def.send({ t: 'half', n: 4, half: { dc: DCALL } });
-  await w.advance(DECIDE_MS - 2000 - 100);
-  assert.strictEqual(a.last('step').n, 3, 'not before its 30 seconds');
+  await w.advance(OFF_MS - 2000 - 100);
+  assert.strictEqual(a.last('step').n, 3, 'not before its 20 seconds');
   await w.advance(200);
   const s4 = a.last('step');
-  assert.deepStrictEqual([s4.n, s4.halves[first], s4.halves[1 - first]], [4, null, { dc: DCALL }], '30 seconds and no call: the default, well before the decision\'s last moment');
-  assert.ok(s4.at <= t4 + 4000 + DECIDE_MS + 100);
+  assert.deepStrictEqual([s4.n, s4.halves[first], s4.halves[1 - first]], [4, null, { dc: DCALL }], '20 seconds and no call: the default, well before the decision\'s last moment');
+  assert.ok(s4.at <= t4 + 4000 + OFF_MS + 100);
+  // the defense's clock: 10 seconds (match.js DEF_MS)
+  {
+    const t5 = w.now;
+    def.send({ t: 'ready', n: 5 });
+    await w.settle();
+    if (def.last('clock') && def.last('clock').n === 5) assert.strictEqual(def.last('clock').deadline, Math.min(t5 + DEF_MS, def.last('clock').deadline), 'the defense: 10 seconds');
+    if (def.last('clock') && def.last('clock').n === 5) assert.ok(def.last('clock').deadline <= t5 + DEF_MS, 'the defense: 10 seconds at most');
+  }
   // a ready late in the watch window: the clock never runs past the decision's last moment
   await w.advance(WATCH_MS + 10000);
   // (the snaps' gains are random: snap 5 can be a try after a touchdown, or the other side's ball: ask whoever is up)

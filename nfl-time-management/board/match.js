@@ -7,7 +7,8 @@
 // (web/vs_core.js), and sends the result and the new state to both. Nothing a phone says can change the score: it
 // only ever sends a call, and the room checks that call against the playbook.
 //
-// The room keeps the play clock: each player has DECIDE_MS to call, from the moment the call comes up on the phone
+// The room keeps the play clock: each player has decideMs to call (the defense DEF_MS, the offense OFF_MS, a pick or
+// a try DECIDE_MS), from the moment the call comes up on the phone
 // ({t:'ready'}), and never past PLAY_MS after the last snap (WATCH_MS to watch it, then the clock); a half not in by
 // its seat's deadline is played as the default (null: the engine's own call). A player who misses AFK_LIMIT
 // decisions in a row, or whose phone is gone for FORFEIT_MS, forfeits. A ranked match is rated by the room when it ends (the ladder object), never by a phone.
@@ -62,7 +63,11 @@ export const CPU_LEVELS = ['rookie', 'pro'];
 const ROOKIE_CALLS = ['deep_strong', 'deep_weak', 'deep_middle', 'pa_deep', 'deep_middle'];
 const ROOKIE_DEF = [{ pers: 'dime', front: 'light', cover: 'prevent', rush: 3 }, { pers: 'dime', front: 'light', cover: 'c4', rush: 3 }, { pers: 'nickel', front: 'light', cover: 'prevent', rush: 4 }];
 export const WATCH_MS = 15_000;            // after a snap: the play to watch (at most) before the play clock runs anyway
-export const DECIDE_MS = 30_000;           // the play clock: 30 seconds to call, from the moment the call comes up
+export const DECIDE_MS = 30_000;           // the play clock: 30 seconds to call, from the moment the call comes up (a pick, a try)
+export const DEF_MS = 10_000;              // ... at a snap the defense has 10 seconds to commit (the owner, Oct 22)
+export const OFF_MS = 20_000;              // ... and the offense 20 to call its play
+// a seat's play clock for the decision in play: by its role (offense, defense, the pick or the try)
+export const decideMs = (ms, seat) => { const r = VSCore.role(ms, seat); return r === 'defense' ? DEF_MS : r === 'offense' ? OFF_MS : DECIDE_MS; };
 export const PLAY_MS = WATCH_MS + DECIDE_MS;    // a decision's last moment after the last snap
 export const FIRST_MS = 75_000;            // the first decision (the coin toss): the intro too, then the clock
 export const FORFEIT_MS = 60_000;          // a phone gone this long in a live match: that side forfeits
@@ -268,10 +273,11 @@ export class Match {
     }
     if (m.t === 'rematch') return this.rematch(R, seat);
     if (m.t === 'ready') {
-      // the call is up on this phone: its 30 seconds start (never later than the decision's last moment)
+      // the call is up on this phone: its clock starts (decideMs: 10 seconds on defense, 20 on offense; never later than
+      // the decision's last moment)
       if (R.phase !== 'live' || m.n !== R.n || !VSCore.need(R.ms).includes(seat)) return;
       R.dl = dls(R);
-      R.dl[seat] = Math.min(R.dl[seat], now + (R.cpu != null ? CPU_DECIDE_MS : DECIDE_MS));
+      R.dl[seat] = Math.min(R.dl[seat], now + (R.cpu != null ? CPU_DECIDE_MS : decideMs(R.ms, seat)));
       await this.save(R);
       try { ws.send(JSON.stringify({ t: 'clock', n: R.n, deadline: R.dl[seat], now })); } catch (e) { /* closing */ }
       await this.schedule(R);

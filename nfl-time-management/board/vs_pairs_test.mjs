@@ -84,7 +84,10 @@ for (const h of T) {
       }
       if (ms.cot.round > before.cot.round) {
         assert.strictEqual(before.root.score[0] + 0, before.root.score[0]);
-        assert.strictEqual(ms.cot.pick.team, ms.cot.round % 2 ? ms.cot.toss : 1 - ms.cot.toss, `${h}-${a}: the choice alternates`);
+        // (no choice after the 1st overtime: the order flips, second last period first this one)
+        assert.ok(!ms.cot.pick, `${h}-${a}: no pick after the 1st overtime`);
+        assert.deepStrictEqual(ms.cot.order, [before.cot.order[1], before.cot.order[0]], `${h}-${a}: the order flips each overtime`);
+        assert.strictEqual(ms.root.pos, before.cot.order[1], `${h}-${a}: second last overtime, first this one`);
         assert.strictEqual(ms.root.score[0], ms.root.score[1], `${h}-${a}: a new overtime only from a tie`);
       }
     }
