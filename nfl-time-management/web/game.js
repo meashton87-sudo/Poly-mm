@@ -4462,7 +4462,7 @@
         runFrom(hr, tP, [[q[0] + ux * k, q[1] + uy * k]], { T: tThrow + 0.05 - tP, v1: stick ? undefined : 0 });
         // (with him a beat as the ball goes, then he pulls up: a rusher left on the passer after the throw read as a
         // sack that never came; the owner, Oct 22)
-        if (stick) { leg(hr, tThrow + 0.1, 'stick', { who: passer.b, dx: ux * k, dy: uy * k, ease: 0.2 }); leg(hr, tThrow + 0.3, 'chase', { who: passer.b, gap: 2.4, eff: 0.5, lead: 0 }); leg(hr, tThrow + 1.3, 'stand'); }
+        if (stick) { leg(hr, tThrow + 0.1, 'stick', { who: passer.b, dx: ux * k, dy: uy * k, ease: 0.2 }); leg(hr, tThrow + 0.3, 'go', { ...xy([q[0] + ux * 3.2, q[1] + uy * 3.2]), eff: 0.5 }); leg(hr, tThrow + 1.1, 'stand'); }
         else leg(hr, tThrow + 0.3, 'stand');
         busy.add(hr);
         hr.homeK = stick ? 2 : 1;                           // (the browser test's qbCheck: who got there)
@@ -4492,7 +4492,9 @@
       };
       const throwTo = (t1, p, h, d) => { const [t0, a] = launch(t1, p); fly(t0, t1, px(a[0]), a[1], px(p[0]), p[1], h ?? arcH, d ?? arcD, true); };
       ring(tThrow, passer, false);
-      leg(passer, tThrow + 0.15, 'go', { x: qT[0] + jit(1), y: qT[1] + dir * 1.2, eff: 0.25 });
+      // (his follow-through: a step up into the space, or, hit as he threw, a fade back off the man on him; stepping
+      // up into the rusher read as a sack)
+      leg(passer, tThrow + 0.15, 'go', { x: qT[0] + jit(1), y: qT[1] + dir * (wP ? -0.5 : 1.2), eff: 0.25 });
       // the defense breaks on the ball a beat after it is out: the nearest two to where it is going
       // (not a man running with another receiver, deep or in man, unless he is right there: pulled off to the ball,
       // his own man ran free downfield as it arrived)
