@@ -101,7 +101,20 @@
   // it 11.5), and a deep shot's swing stays a deep shot's
   const MATCH_SD = 0.2;              // a full matchup (s = +-1) moves a call's mean EPA by this share of its own spread
   const MATCH_EPA_CAP = 3;
-  const MATCH_AUDIBLE = 0.9;          // when you call their defense, the offense checks into calls that beat it
+  const MATCH_AUDIBLE = 0.9;
+  // daily game: a pass you keep calling (act.rep: the same route or call this many times in your last 4 snaps, game.js
+  // repOf) is one the defense sits on: from the third time on, each repeat moves the matchup by this much (a full
+  // matchup moves the mean by MATCH_SD of the call's spread). The defense's habit, not the real plays: they stay real
+  const REPEAT_S = 0.4;
+  const repeatS = (act) => -REPEAT_S * Math.max(0, Math.min(act.rep | 0, 4) - 1);
+  // daily game: a back's run blocked your way (act.scheme, game.js SCHEMES) against the defense's call: football logic,
+  // as the trick plays' (no charting says which scheme a real run used), a few tenths of a matchup at most. Power and
+  // duo bring an extra hat to a loaded box; a blitz gets in before a puller; a trap punishes the penetration;
+  // counter's misdirection works on a light box
+  const SCHEME_M = { power: { soft: 0, load: 0.3, blitz: -0.2 }, counter: { soft: 0.2, load: 0.1, blitz: -0.3 },
+    duo: { soft: -0.2, load: 0.3, blitz: 0 }, trap: { soft: 0, load: -0.3, blitz: 0.4 } };
+  const schemeS = (act, id, def) => (act.scheme && SCHEME_M[act.scheme] && def && /^rb_/.test(id || '') ? SCHEME_M[act.scheme][def] || 0 : 0);
+  const dcDef = (dc) => (dc.front === 'loaded' ? 'load' : +dc.rush >= 5 ? 'blitz' : 'soft');          // when you call their defense, the offense checks into calls that beat it
   const RUN_M = { blitz: 0, load: -1, soft: 1 }, DEEP_M = { blitz: -1, load: 0.5, soft: 0 };
   const MATCH = {
     rb_out_strong: RUN_M, rb_out_weak: RUN_M, rb_tackle_strong: RUN_M, rb_tackle_weak: RUN_M, rb_inside_strong: RUN_M,
@@ -190,6 +203,8 @@
   // nor across short yardage (2 yards or less to go: a 2-yard gain there is a first down, not a failed play)
   const dcShort = (f) => Math.floor(f / N_ZONE) % N_YTG === 0;
   const DC_NEAR = [[1, 0, false], [1, 1, false], [0, null, false], [2, 1, false], [null, 0, false], [1, null, true], [null, 1, false], [null, null, false]];
+  // a dropback that was never thrown to anyone (a picked receiver's route says nothing about it: _noTarget)
+  const NO_TARGET_EV = new Set(['sack', 'strip_sack', 'sack_fumble', 'scramble', 'throwaway']);
   const DROPBACK_EV = new Set(['sack', 'strip_sack', 'sack_fumble', 'scramble', 'throwaway', 'interception', 'pick_six', 'near_pick', 'drop']);
   // daily game: your special-teams defense (act.st) when they kick. 'block' (field goal) or 'rush' (punt) sends
   // everyone: more blocks, but now and then a roughing flag (15 yards and a first down, an untimed down if time ran
@@ -204,14 +219,17 @@
   // in the shotgun, under center or in the pistol. A pick rides with the personnel in one number, pf = pers | form << 8
   const FORM_CODE = { gun: 1, under: 2, pistol: 3 };
   // what an action picked: its personnel (act.pers) and formation (act.form: a FORM_CODE name or its code) as one
-  const persForm = (act) => ((act.pers || 0) & 255) | ((typeof act.form === 'string' ? FORM_CODE[act.form] || 0 : act.form || 0) << 8);
+  // and the backs in the backfield (act.bf: 0 empty, 1, 2, 3; playbook.py _backfield's code, n + 1, in bits 12-14)
+  const persForm = (act) => ((act.pers || 0) & 255) | ((typeof act.form === 'string' ? FORM_CODE[act.form] || 0 : act.form || 0) << 8)
+    | (Number.isInteger(act.bf) && act.bf >= 0 ? (Math.min(act.bf, 3) + 1) << 12 : 0);
   // a real play run with the personnel and the formation picked (pf; either part 0: not picked). lenient: a play whose
   // personnel or formation was not charted passes (the defense's draws, as before); strict: it does not (a group's own
   // plays only)
   function pfOk(P, r, pf, lenient) {
-    const pg = pf & 255, fm = pf >> 8;
+    const pg = pf & 255, fm = (pf >> 8) & 15, bf = (pf >> 12) & 7;
     if (pg) { const v = P.ngs.pers[r]; if (lenient ? v && v !== pg : v !== pg) return false; }
     if (fm) { const v = P.look ? P.look[r] & 3 : 0; if (lenient ? v && v !== fm : v !== fm) return false; }
+    if (bf && P.bf) { const v = P.bf[r]; if (lenient ? v && v !== bf : v !== bf) return false; }
     return true;
   }
   // the route an action asks for: the receiver's route, at the depth it was drawn to when it was drawn (act.depth)
@@ -501,6 +519,7 @@
         air: R.air ? decode(R.air) : null, carry: R.carry ? decode(R.carry) : null,    // the animation: air yards, carrier, broken tackle
         ball: R.ball ? decode(R.ball) : null,          // and how the ball got there (playbook.py _ball: FTN catchable, contested, defended)
         // the animation: NGS route, coverage, pass rush, time to throw (playbook.py _charting)
+        bf: R.bf ? decode(R.bf) : null,               // backs in the backfield (playbook.py _backfield): an empty set, two backs
         ngs: R.route ? { route: decode(R.route), cover: decode(R.cover), rush: decode(R.rush), ttt: decode(R.ttt), pers: R.pers ? decode(R.pers) : null,
           dpers: R.dpers ? decode(R.dpers) : null } : null,
         routeNames: pb.routes || [], shellNames: pb.shells || [],
@@ -878,7 +897,13 @@
         if (B) { u = (u - B.share) / (1 - B.share); pre = true; }
       }
       if (route && P.ngs) {
-        const r = this._pickT(this.routeSet(team, callIdx, fk, oob, looks, s, route, who), u);
+        // a sack, a scramble, a throwaway with nobody charted as the target: no route to filter them by, so a pick left
+        // every one out (a picked pass was never sacked: 0% against the real 5%). They come first, as often as in
+        // the situation's own plays (against the look the defense showed, when there are enough)
+        const N = preDone === 2 ? null : this._noTarget(cdf, pool, looks);
+        if (N && u < N.share) return this._pickT(N, u / N.share);
+        if (N) u = (u - N.share) / (1 - N.share);
+        const r = this._pickT(this.routeSet(team, callIdx, fk, oob, looks, s, route, who, pers), u);
         if (r >= 0) return r;
       }
       if (pers && P.ngs && P.ngs.pers) {
@@ -886,7 +911,9 @@
         if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (!pools.includes(lp)) pools.push(lp); }
         // (only with enough plays with it, PB_LOOK_MIN: fewer, and the grouping is dropped; both picked, the grouping
         // alone goes next, then the formation alone)
-        const pg = pers & 255, fm = pers >> 8, picks = pg && fm ? [pers, pg, fm << 8] : [pers];
+        // (with the backfield picked too: all of it, the grouping with the backfield, the grouping, then the formation)
+        const pg = pers & 255, fm = pers >> 8, picks = [pers, pg && fm >> 4 ? pg | ((fm >> 4) << 12) : 0, pg && fm ? pg : 0, pg && fm ? fm << 8 : 0]
+          .filter((x, i, a) => x && a.indexOf(x) === i);
         for (const pf of picks) for (const lk of looks && P.lookB ? [looks, 0] : [0]) {
           for (const pl of pools) {
             const r = this._sampleLook(cdf, pl, u, lk, s, 0, 0, true, pf);
@@ -928,13 +955,20 @@
     // the real plays a pick (a receiver's route) draws from, with their weights: the route always; then the position,
     // then the look the defense showed, before the situation: the situation's pool, the call's coarser pools, every
     // situation of this call, then of every call of its kind (a dropback, play action, a rollout). null: none
-    routeSet(team, callIdx, fk, oob, looks, s, route, who) {
+    // (pers: the personnel and formation picked, kept first where the situation's pools have enough such plays)
+    routeSet(team, callIdx, fk, oob, looks, s, route, who, pers) {
       const P = this.e.pb, cdf = this._cdfOf(team, oob);
       const ri0 = P.ngs ? this._ri(route) : -1;
       if (!(ri0 > 0)) return null;
       const pool = P.poolOf[callIdx * P.nFine + fk], coarse = [];
       if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (lp !== pool && !coarse.includes(lp)) coarse.push(lp); }
       const sets = [this._callRows(callIdx), this._groupRows(callIdx)];
+      if (pers) {
+        for (const ri of ri0 >= 16 ? [ri0, ri0 & 15] : [ri0]) for (const lk of looks ? [looks, 0] : [0]) {
+          for (const pl of [pool, ...coarse]) { const T = this._lookT(cdf, pl, lk, s, ri, 0, true, pers); if (T) return T; }
+          for (const set of sets) { const T = this._setT(set, lk, s, ri, 0, callIdx, oob, pers); if (T) return T; }
+        }
+      }
       for (const ri of ri0 >= 16 ? [ri0, ri0 & 15] : [ri0]) for (const w of who ? [who, 0] : [0]) for (const lk of looks ? [looks, 0] : [0]) {
         for (const pl of [pool, ...coarse]) { const T = this._lookT(cdf, pl, lk, s, ri, w, true); if (T) return T; }
         for (const set of sets) { const T = this._setT(set, lk, s, ri, w, callIdx, oob); if (T) return T; }
@@ -1027,6 +1061,12 @@
     _sampleLook(cdf, pool, u, looks, s, ri, who, need, pers, noPre) {
       return this._pickT(this._lookT(cdf, pool, looks, s, ri, who, need, pers, noPre), u);
     }
+    // the coverage a motion showed (this._cov, from act.cov while a play is drawn: 1 man, 2 zone): a play charted in
+    // it (NGS: the cover byte's high bits), or one nothing was charted on (a flag; most sacks, scrambles)
+    _covOk(r, cv) {
+      const N = this.e.pb.ngs, m = N && N.cover ? N.cover[r] >> 4 : 0;
+      return !m || m === cv;
+    }
     // a foul before the snap, or another flag nothing was charted for (no look: what a pick filters on says nothing
     // about it); and a pool's such plays, by its weights, with their share of the pool (null: none)
     _isPreSnap(r) { const P = this.e.pb; return (P.flags[r] & 1) !== 0 && P.lookB[r] === 255; }
@@ -1047,6 +1087,38 @@
       byPool.set(pool, T);
       return T;
     }
+    // the dropbacks of a pool with no target charted (sacks, scrambles, most throwaways), against the look when
+    // PB_LOOK_MIN plays of the pool were run against it, else the whole pool; share: their weight in its plays after
+    // the snap
+    _noTarget(cdf, pool, looks) {
+      const P = this.e.pb;
+      if (!P.ngs || !P.ngs.route) return null;
+      this._nt = this._nt || new WeakMap();
+      let byPool = this._nt.get(cdf);
+      if (!byPool) { byPool = new Map(); this._nt.set(cdf, byPool); }
+      const key = `${pool}|${looks || 0}`;
+      let T = byPool.get(key);
+      if (T !== undefined) return T;
+      const lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
+      const build = (lk) => {
+        const items = [], cum = [];
+        let tot = 0, all = 0, n = 0;
+        for (let i = lo; i <= hi; i++) {
+          const r = P.items[i];
+          if (this._isPreSnap(r)) continue;
+          if (lk && P.lookB && !(P.lookB[r] < 4 && (lk >> P.lookB[r]) & 1)) continue;
+          const w = cdf[i] - (i > lo ? cdf[i - 1] : pool);
+          all += w; n++;
+          if ((P.flags[r] & 1) || P.ngs.route[r] !== 0 || !NO_TARGET_EV.has(P.eventNames[P.event[r]] || '')) continue;
+          tot += w; items.push(r); cum.push(tot);
+        }
+        return (n >= PB_LOOK_MIN || !lk) && all > 0 ? { items, cum, tot, share: tot / all } : null;
+      };
+      T = (looks && build(looks)) || build(0);
+      if (T && !(T.tot > 0 && T.share < 0.9)) T = null;
+      byPool.set(key, T);
+      return T;
+    }
     _pickT(T, u) {
       if (!T) return -1;
       const target = u * T.tot, c = T.cum;
@@ -1056,7 +1128,8 @@
     }
     // (noPre: without the fouls before the snap, drawn on their own: samplePlaybook)
     _lookT(cdf, pool, looks, s, ri, who, need, pers, noPre) {
-      const key = `${pool}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${pers || 0}|${need ? 1 : 0}${noPre ? '|x' : ''}`;
+      const cv = this._cov || 0;
+      const key = `${pool}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${pers || 0}|${need ? 1 : 0}${noPre ? '|x' : ''}${cv ? `|c${cv}` : ''}`;
       this._pick = this._pick || new WeakMap();
       let byKey = this._pick.get(cdf);
       if (!byKey) { byKey = new Map(); this._pick.set(cdf, byKey); }
@@ -1072,6 +1145,7 @@
           if (ri && !this._rOk(r, ri)) continue;
           if (who && (P.carry[r] & 7) !== who) continue;
           if (pers && !pfOk(P, r, pers, false)) continue;
+          if (cv && !this._covOk(r, cv)) continue;
           let w = cdf[i] - (i > lo ? cdf[i - 1] : pool);
           if (k) { const e = P.epa[r]; if (Number.isFinite(e)) w *= Math.exp(k * clip(e, -MATCH_EPA_CAP, MATCH_EPA_CAP)); }
           tot += w; sq += w * w; items.push(r); cum.push(tot);
@@ -1105,6 +1179,14 @@
           if (B && u < B.share) return this._pickT(B, u / B.share);
           if (B) u = (u - B.share) / (1 - B.share);
           preDone = true;
+        }
+        // (and a pick's sacks, scrambles and throwaways, samplePlaybook's, as often as in the situation's plays;
+        // preDone 2: samplePlaybook, if it comes to that, has them drawn)
+        if (route && P.calls[callIdx].kind !== 'run') {
+          const N = this._noTarget(cdf, pool, 0);
+          if (N && u < N.share) return this._pickT(N, u / N.share);
+          if (N) u = (u - N.share) / (1 - N.share);
+          preDone = 2;
         }
         if (P.lookPool) for (let b = 0; b < 4; b++) { const lp = P.lookPool[(callIdx * P.nFine + fk) * 4 + b]; if (!pools.includes(lp)) pools.push(lp); }
         const ri0 = route ? this._ri(route) : 0;
@@ -1404,9 +1486,10 @@
       const fam = om < 0 ? (P.stayOdds ? P.stayOdds[c] : 1) : P.oobOdds[c];
       return t && rt ? (r) => t[rt[r]] ?? fam : () => fam;
     }
-    _setT(set, looks, s, ri, who, c, oob) {
+    _setT(set, looks, s, ri, who, c, oob, pers) {
       const om = c >= 0 ? oobMode(oob) : 0, P0 = this.e.pb;
-      const key = `${set.id}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${om ? `${P0.oobKey[c]}:${om}` : ''}`;
+      const cv = this._cov || 0;
+      const key = `${set.id}|${looks}|${s || 0}|${ri || 0}|${who || 0}|${om ? `${P0.oobKey[c]}:${om}` : ''}${cv ? `|c${cv}` : ''}${pers ? `|p${pers}` : ''}`;
       this._setPick = this._setPick || new Map();
       let T = this._setPick.get(key);
       if (T === undefined) {
@@ -1415,6 +1498,8 @@
           if (looks) { const b = P.lookB[r]; if (!(b < 8 && (looks >> b) & 1)) continue; }
           if (ri && !this._rOk(r, ri)) continue;
           if (who && (P.carry[r] & 7) !== who) continue;
+          if (cv && !this._covOk(r, cv)) continue;
+          if (pers && !pfOk(P, r, pers, false)) continue;
           rows.push(r);
         }
         let k = 0;
@@ -1783,7 +1868,7 @@
       if (kind === FG) this._fieldGoal(S, g, u, o, fire, act && act.st);
       else if (kind === PUNT) this._punt(S, g, u, o, act && act.st);
       else {
-        let pbRow = -1, callIdx = -1, match = 0, why = null;
+        let pbRow = -1, callIdx = -1, match = 0, why = null, fkP = -1;
         const oobWant = half === 2 && tHalf <= 300 && margin > 0 ? -1 : 0;
         // your own call without "get out of bounds": the carrier plays to stay in. Real late-game plays are full of
         // carriers stepping out on purpose; a player who didn't ask for it saw his man walk out in open field, and a
@@ -1793,12 +1878,15 @@
           // your call, against the look the defense showed (Versus: the defense's whole call): the matchup tilts the draw
           callIdx = this.e.pb.callIndex[act.call];
           const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl), who = act.route ? (WHO_CODE[act.who] || 0) : undefined, route = routeOfAct(act);
+          fkP = fk;
+          // a motion's read (act.cov, game.js motion): the pass is a real play run against that coverage
+          this._cov = kind === PASS && (act.cov === 'man' || act.cov === 'zone') ? (act.cov === 'man' ? 1 : 2) : 0;
           if (dcValid(act.dc)) {
             const m = dcEffect(this.e.pb.dcEff, act.call, act.dc, act.pers, act.seen);
-            match = m.s; why = m.why.slice(0, 3);
+            match = m.s + repeatS(act) + schemeS(act, act.call, dcDef(act.dc)); why = m.why.slice(0, 3);
             pbRow = this.sampleVsDefense(o, callIdx, fk, u[2], mineOob, act.dc, match, route, who, persForm(act));
           } else {
-            match = this.matchOf(callIdx, this.defOfLooks(act.looks));
+            match = this.matchOf(callIdx, this.defOfLooks(act.looks)) + repeatS(act) + schemeS(act, act.call, this.defOfLooks(act.looks));
             pbRow = this.samplePlaybook(o, callIdx, fk, u[2], mineOob, act.looks, match, route, who, persForm(act));
           }
         } else if (act && dcValid(act.dc) && this.pbCdf && (kind === RUN || kind === PASS)) {
@@ -1807,6 +1895,7 @@
           // daily game (act.read: the computer's offense reads your defense) checks into calls that beat it
           const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl);
           callIdx = this.pickCall(kind === PASS ? 'pass' : 'run', fk, u[4], null, act.read ? act.dc : null, readOf(act));
+          fkP = fk;
           if (callIdx >= 0) {
             const m = dcEffect(this.e.pb.dcEff, this.e.pb.calls[callIdx].id, act.dc);
             match = m.s; why = m.why.slice(0, 3);
@@ -1818,11 +1907,41 @@
           // of that call against the look you called, tilted by the matchup
           const fk = fineKey(gameMode(half, tHalf, margin), down, S.ytg, yl);
           callIdx = this.pickCall(kind === PASS ? 'pass' : 'run', fk, u[4], act.def);
+          fkP = fk;
           match = this.matchOf(callIdx, act.def);
           if (callIdx >= 0) pbRow = this.samplePlaybook(o, callIdx, fk, u[2], half === 2 && tHalf <= 300 && margin > 0 ? -1 : 0, DEF_LOOKS[act.def], match);
         }
-        this._scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match, why, runningAtSnap);
+        this._cov = 0;
+        // a foul during the play (not before the snap): the play under it, as it would have gone (a real play of the
+        // same call here with no flag), for the offended team to take instead (_scrimmage: accept or decline)
+        let alt = -1;
+        const P = this.e.pb;
+        if (pbRow >= 0 && fkP >= 0 && callIdx >= 0 && (P.flags[pbRow] & 1) && P.lookB && !this._isPreSnap(pbRow)) {
+          alt = this._livePlay(o, callIdx, fkP, (u[2] * 7919.13 + 0.37) % 1);
+        }
+        this._scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match, why, runningAtSnap, alt, act && act.penAs);
       }
+    }
+    // a real play of call callIdx in situation fk with no flag (the weights as drawn: the call's pool), for a foul's
+    // declined option
+    _livePlay(team, callIdx, fk, u) {
+      const P = this.e.pb, cdf = this._cdfOf(team, 0), pool = P.poolOf[callIdx * P.nFine + fk];
+      this._live = this._live || new WeakMap();
+      let byPool = this._live.get(cdf);
+      if (!byPool) { byPool = new Map(); this._live.set(cdf, byPool); }
+      let T = byPool.get(pool);
+      if (T === undefined) {
+        const lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1, items = [], cum = [];
+        let tot = 0;
+        for (let i = lo; i <= hi; i++) {
+          const r = P.items[i];
+          if (P.flags[r] & 1) continue;
+          tot += cdf[i] - (i > lo ? cdf[i - 1] : pool); items.push(r); cum.push(tot);
+        }
+        T = tot > 0 ? { items, cum, tot } : null;
+        byPool.set(pool, T);
+      }
+      return this._pickT(T, u);
     }
 
     _coachChoice(S, g, o, margin, tHalf, pFg, u5, cm) {
@@ -1921,11 +2040,11 @@
       S.credit = S.running ? credit : 0;
     }
 
-    _scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match, why, runningAtSnap) {
+    _scrimmage(S, g, u, o, kind, margin, aware, closing, pbRow, callIdx, match, why, runningAtSnap, alt = -1, penAs) {
       const d = 1 - o, L = this.e.lib, R = this.R;
       const yl0 = S.yl, ytg0 = S.ytg, down0 = S.down;
       let yards = 0, penalty = false, autoFd = false, incomplete = false, oob = false, tdOff = false, tdDef = false,
-        turnover = false, toRel = 0, safety = false, dur = 0;
+        turnover = false, toRel = 0, safety = false, dur = 0, penOpt = null;
       if (pbRow >= 0) {   // a specific call from the playbook (daily game)
         const P = this.e.pb, f = P.flags[pbRow];
         yards = P.yards[pbRow]; penalty = !!(f & 1); autoFd = !!(f & 2); incomplete = !!(f & 4); oob = !!(f & 8);
@@ -1933,6 +2052,28 @@
         // of the way (PB_TD_SHARE), a safety only if the loss reaches the end zone (from the spot, below)
         tdOff = !!(f & 16) && yards >= PB_TD_SHARE * yl0; tdDef = !!(f & 32); turnover = !!(f & 64);
         toRel = P.toRel[pbRow]; dur = P.dur10[pbRow] / 10;
+        // a foul during the play: the offended team takes the yards or the play (alt, the play as it would have gone).
+        // penAs: your choice (the daily game asks when the foul is theirs); else the better of the two for them: the
+        // offense keeps a play that scores or gains more than the flag (and its first down when the flag gives none);
+        // the defense keeps a turnover, a stop on third or fourth down, or a loss worse than the flag
+        if (penalty && alt >= 0) {
+          const fa = P.flags[alt], aY = P.yards[alt], aTo = !!(fa & 64), aInc = !!(fa & 4);
+          const pY = yards > 0 ? (yards >= 15 ? Math.min(yards, yl0 - 1) : Math.min(yards, yl0 / 2)) : -Math.min(-yards, (100 - yl0) / 2);
+          const aTd = !aTo && ((!!(fa & 16) && aY >= PB_TD_SHARE * yl0) || yl0 - aY <= 0), aFd = aY >= ytg0 || !!(fa & 2);
+          const pFd = pY >= ytg0 || autoFd, offended = pY > 0 ? o : 1 - o;
+          let dec;
+          if (penAs === 'accept' || penAs === 'decline') dec = penAs === 'decline';
+          else if (offended === o) dec = aTd || (!aTo && aY > pY && (aFd || !pFd));
+          else dec = aTo || (!aTd && ((!aFd && down0 >= 3) || aY <= pY));
+          penOpt = { offended, pen: P.pen ? P.penNames[P.pen[pbRow]] || 'Penalty' : 'Penalty', declined: dec,
+            accept: { yards: pY, fd: pFd }, decline: { yards: aY, fd: aFd && !aTo, inc: aInc, to: aTo, td: aTd, evt: P.eventNames[P.event[alt]] || '' } };
+          if (dec) {
+            pbRow = alt;
+            yards = aY; penalty = false; autoFd = !!(fa & 2); incomplete = aInc; oob = !!(fa & 8);
+            tdOff = !!(fa & 16) && yards >= PB_TD_SHARE * yl0; tdDef = !!(fa & 32); turnover = aTo;
+            toRel = P.toRel[alt]; dur = P.dur10[alt] / 10;
+          }
+        }
       } else if (kind === RUN || kind === PASS) {
         // running the clock down for a kick: the clock-killing play mix
         const fk = fineKey(closing ? MODE_KILL : gameMode(g.half, S.t - g.halfEnd, margin), down0, ytg0, yl0);
@@ -2019,7 +2160,8 @@
         S.log.push({ ev: 'play', team: o, kind, call: callIdx === undefined ? -1 : callIdx, yards, down: down0, ytg: ytg0,
           yl: yl0, oob: oob && !penalty, incomplete, penalty, td: tdOff, tdDef, turnover, safety, fd: fd && !change,
           onDowns, dur, t: untimed ? g.halfEnd : S.t, running: S.running, row: pbRow === undefined ? -1 : pbRow, match: match || 0, ...(why ? { why } : {}),
-          ...(untimed ? { untimed } : {}), ...(fdStop && !oob && !penalty && !rc ? { fdStop: true } : {}), ...(ro10 ? { runoff10: true } : {}) });
+          ...(untimed ? { untimed } : {}), ...(fdStop && !oob && !penalty && !rc ? { fdStop: true } : {}), ...(ro10 ? { runoff10: true } : {}),
+          ...(penOpt ? { penOpt } : {}) });
       }
       this._endHalfCheck(S, g);
     }

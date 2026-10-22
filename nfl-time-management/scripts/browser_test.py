@@ -84,8 +84,8 @@ SESSION = "ab" * 32
 ACCT: dict = {"stats": None}
 # the social stub (board/worker.js /challenge*, /calls, /fans, /daily): the challenges by id (each { day, name, score,
 # rows }), what the page made and played, its /daily posts, the crowd's counts (a situation key -> { n, c }) and the
-# day's fanbases it answers with
-SOCIAL: dict = {"chal": {}, "made": [], "plays": [], "daily": [], "calls": {}, "fans": None}
+# day's fanbases it answers with, and the /tally posts' kinds (a finished Survivor game, Pro drive, run game or scenario)
+SOCIAL: dict = {"chal": {}, "made": [], "plays": [], "daily": [], "calls": {}, "fans": None, "tally": []}
 TRACE_HALF = False          # what else the pages asked the stub (printed at the end)
 # the game's page under the base address (daily_check.py --live: "", the site's front door, as players open it)
 PAGE = "index.html"
@@ -163,6 +163,9 @@ async def board_stub(route, path: str, comm: bool = False, headers: dict | None 
         await ok({"n": 1, "hist": hist, "nr": 0, "spots": [{"n": 1, "avg": w, "hist": [0] * 101} for w in body.get("spots") or [0]], "top": [],
                   "counted": len(SOCIAL["daily"]) == 1, "you": {"p": body.get("p"), "spots": body.get("spots")},
                   "week": {"from": "2026-10-15", "to": "2026-10-21", "best": 5, "n": 0, "top": []}})
+    elif path == "/tally" and route.request.method == "POST":
+        SOCIAL["tally"].append(body.get("kind"))
+        await ok({"ok": True})
     else:                     # (accounts off: no way to sign in; nothing else is asked of it on these pages)
         STUB_ASKED.add(path)
         await ok({})
@@ -970,6 +973,16 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     problems.append("the page's error bar: " + await page.evaluate("() => document.getElementById('errBar').innerText.slice(0, 300)"))
                 elif st == "error":
                     problems.append(f"error shown to the player: {key[1][:300]!r}")
+                elif st == "modal" and await page.evaluate("() => !!document.querySelector('#modal .penacts')"):
+                    # a flag on the other team during the play: accept or decline, either one (game.js penaltyAsk),
+                    # or close it (the better one for the player)
+                    k = rnd.choice(["accept", "decline", "close"])
+                    friction.setdefault("penalties", []).append(k)
+                    act("penalty " + k)
+                    if k == "close":
+                        await page.click("#mClose", timeout=3000)
+                    else:
+                        await page.locator("#modal .penpick").nth(0 if (k == "accept") == await page.evaluate("() => /^Accept/.test(document.querySelector('#modal .penpick b').textContent)") else 1).click(timeout=3000)
                 elif st in ("modal", "deep"):
                     # (something came up over the game that the bot never asked for. Not the first visit's welcome
                     # (game.js openHelp, where the first drive's tour is not: a scenario, a Pro drive): a new player
@@ -1598,7 +1611,7 @@ WORKER_SPY = """(() => {
   const pm = Worker.prototype.postMessage;
   Worker.prototype.postMessage = function (m, t) {
     try { if (m && m.scen && m.type !== 'init') (window.__scenIds = window.__scenIds || []).push(`${m.type}|${m.scen.id}`); } catch (e) { /* not the game's */ }
-    try { if (m && m.type === 'step' && m.action && m.action.call != null) (window.__stepActs = window.__stepActs || []).push({ call: m.action.call, pers: m.action.pers ?? null, form: m.action.form ?? null }); } catch (e) { /* not the game's */ }
+    try { if (m && m.type === 'step' && m.action && m.action.call != null) (window.__stepActs = window.__stepActs || []).push({ call: m.action.call, pers: m.action.pers ?? null, form: m.action.form ?? null, bf: m.action.bf ?? null }); } catch (e) { /* not the game's */ }
     return pm.call(this, m, t);
   };
 })();"""
@@ -1813,8 +1826,9 @@ async def formation_pick(browser, base: str, shots: str = "") -> list[str]:
         if shots:
             await page.screenshot(path=str(Path(shots) / "formation-empty.png"))
         a = await snap_pass()
-        if a is None or a["form"] is not None:
-            out.append(f"the formation: Empty (the lineup only) picked, but the snap went with {a and a['form']!r}")
+        # (an empty set is charted: the shotgun with nobody in the backfield, engine.js persForm)
+        if a is None or a["form"] != "gun" or a.get("bf") != 0:
+            out.append(f"the formation: Empty picked, but the snap went with {a and a['form']!r}, backs {a and a.get('bf')!r}")
         if not await next_snap():
             return out + errs
         now = await pick("Bunch")
@@ -2367,9 +2381,13 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     # thrown to makes the tackle). `slowed` is how long the carrier had to wait at the spot, in seconds
     waited = [x for x in tk if x.get("slowed", 0) > 0.6]
     say(f"carriers slowed for the tackler: {sum(1 for x in tk if x.get('slowed', 0) > 0)} (over 0.6 s: {len(waited)})")
-    # (one in a run passes: about one play in ten thousand still has the field run out on the pursuit, a beat of jog
-    # before the hit; two or more is a regression)
-    if len(waited) > 1:
+    # a carrier never stands in the open: under 2 yd/s with nobody within 3 yards, before the hit (players saw a
+    # receiver catch it and wait for the tackler). `stall` is how long, in seconds
+    stood = [x for x in tk if x.get("stall", 0) >= 0.5]
+    say(f"carriers standing in the open (0.5 s+): {len(stood)} of {len(tk)}" + (f" {sorted(stood, key=lambda x: -x['stall'])[:8]}" if stood else ""))
+    # (a rare one passes, as the tackles' check above: about one play in ten thousand still has the field run out on the
+    # pursuit, a beat of jog before the hit; fail only when this many would be unlikely, p < 0.01, at a 2% rate)
+    if len(waited) > 1 and binom_tail(len(tk), len(waited), 0.02) < 0.01:
         fail("breakaway", f"FAIL: a carrier waited in the open for his tackler {waited[:5]}")
     # forward progress: a carrier never has the ball past where it is spotted (beyond where he got it), so he is
     # never shown driven back from it
@@ -2804,7 +2822,7 @@ async def main(a) -> int:
               + ("ok" if not qb else "FAIL") + "".join(f"\n      {x}" for x in qb), flush=True)
         reach += qb
         fp = await formation_pick(browser, base, a.shots)
-        print("the formation (the chip beside Personnel, Pistol lines up and snaps as pistol, Empty is the lineup only, a look, back to the real lineup): "
+        print("the formation (the chip beside Personnel, Pistol lines up and snaps as pistol, Empty snaps as an empty set, a look, back to the real lineup): "
               + ("ok" if not fp else "FAIL") + "".join(f"\n      {x}" for x in fp), flush=True)
         reach += fp
         pg = await pers_group(browser, base)

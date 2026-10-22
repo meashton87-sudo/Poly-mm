@@ -165,6 +165,50 @@ for (let k = 0; k < 100; k++) {
     assert.ok(lo < mid - 0.08 && hi > mid + 0.08, `matchup tilt ${id}: ${lo.toFixed(2)} / ${mid.toFixed(2)} / ${hi.toFixed(2)}`);
     console.log(`matchup ${id.padEnd(17)} losing ${lo.toFixed(2)}  real ${mid.toFixed(2)}  winning ${hi.toFixed(2)} EPA`);
   });
+  // a pass you keep calling (game.js repOf, engine.js REPEAT_S): the same hitch a third, fourth and fifth time in four
+  // snaps is drawn worse each time, still from real hitches
+  const hitch = (s) => {
+    let t = 0, n = 0;
+    for (let fk = 0; fk < P.nFine; fk += 7) for (let k = 0; k < 200; k++) {
+      const r = S.samplePlaybook(0, P.callIndex.quick_strong, fk, (k + 0.5) / 200, false, 0, s, 'hitch', 0);
+      t += P.epa[r]; n++;
+    }
+    return t / n;
+  };
+  const hs = [0, -0.4, -0.8, -1.2].map(hitch);
+  assert.ok(hs[2] < hs[0] && hs[3] < hs[2] && hs[3] < hs[0] - 0.1, `repeated hitch: ${hs.map((x) => x.toFixed(2))}`);
+  // a pass to a receiver you picked is sacked (and scrambles, throws it away) as often as the call's real plays: those
+  // have no target charted, so the route filter alone left every one out (engine.js _noTarget)
+  const dropOnly = (route) => {
+    let n = 0, k0 = 0;
+    for (const id of ['quick_strong', 'deep_strong', 'pa_deep', 'roll_strong']) for (let fk = 0; fk < P.nFine; fk += 5) for (let k = 0; k < 60; k++) {
+      const r = route ? S.samplePlaybook(0, P.callIndex[id], fk, (k + 0.5) / 60, false, 0, 0, 'out', 3) : S.samplePlaybook(0, P.callIndex[id], fk, (k + 0.5) / 60, false, 0, 0);
+      if (r < 0 || P.flags[r] & 1) continue;
+      n++; k0 += /sack/.test(P.eventNames[P.event[r]] || '') ? 1 : 0;
+    }
+    return k0 / n;
+  };
+  const sk0 = dropOnly(false), sk1 = dropOnly(true);
+  assert.ok(sk1 > sk0 * 0.75 && sk1 < sk0 * 1.25, `sacks with a receiver picked: ${sk1.toFixed(3)} against ${sk0.toFixed(3)}`);
+  console.log(`sacks: ${(100 * sk0).toFixed(1)}% of the calls' real plays, ${(100 * sk1).toFixed(1)}% with a receiver and route picked`);
+  // a motion's read (game.js setMotion, act.cov): the pass is a real play run in the coverage the defense showed
+  {
+    const N = P.ngs, inCov = (cv) => {
+      let ok = 0, n = 0;
+      for (let fk = 0; fk < P.nFine; fk += 5) for (let k = 0; k < 40; k++) {
+        S._cov = cv;
+        const r = S.samplePlaybook(0, P.callIndex.quick_strong, fk, (k + 0.5) / 40, false, 0, 0, 'slant', 3);
+        S._cov = 0;
+        const m = r >= 0 ? N.cover[r] >> 4 : 0;
+        if (m) { n++; ok += m === cv ? 1 : 0; }
+      }
+      return ok / n;
+    };
+    const cm = inCov(1), cz = inCov(2);
+    assert.ok(cm > 0.9 && cz > 0.9, `motion's read: man ${cm.toFixed(2)}, zone ${cz.toFixed(2)}`);
+    console.log(`a motion's read: ${(100 * cm).toFixed(0)}% of passes after a man read run in man, ${(100 * cz).toFixed(0)}% after a zone read in zone`);
+  }
+  console.log(`the hitch called again and again: ${hs.map((x) => x.toFixed(2)).join(' / ')} EPA (first or second time, third, fourth, fifth)`);
 }
 // personnel: a call with 12 (or 21, 13) personnel draws only real plays run with it, where there are enough (PB_LOOK_MIN
 // of them, by their weights: fewer, and the situation's own plays are drawn, whatever their grouping, rather than the
@@ -202,6 +246,17 @@ for (let k = 0; k < 100; k++) {
     }
     console.log(`  formation ${form} on ${id}: ${hit} of ${n} plays drawn ran from it`);
     assert.ok(n && hit / n >= want, `formation ${form}: ${hit} of ${n}`);
+  }
+  // the backs in the backfield (act.bf, playbook.py _backfield: an empty set, two backs): passes to a picked receiver too
+  if (P.bf) for (const [label, act0, code, want] of [['empty', { form: 'gun', bf: 0 }, 1, 0.8], ['two backs (21, the I)', { pers: 21, form: 'under', bf: 2 }, 3, 0.8]]) {
+    let n = 0, hit = 0;
+    for (let k = 0; k < 60; k++) {
+      const e = sim.step(at, { action: { to_off: false, play: 'pass', call: 'quick_strong', route: 'out', who: 'WR', ...act0 }, seed: 5300 + k }).log.find((x) => x.ev === 'play');
+      if (!e || !(e.row >= 0) || e.penalty || !P.bf[e.row]) continue;
+      n++; if (P.bf[e.row] === code) hit++;
+    }
+    console.log(`  backfield ${label}: ${hit} of ${n} passes drawn ran from it`);
+    assert.ok(n && hit / n >= want, `backfield ${label}: ${hit} of ${n}`);
   }
   const r = sim.step(at, { action: { to_off: false, play: 'run', call: 'rb_inside_strong', looks: 0, pers: 21 }, seed: 777 });
   const pe = r.log.find((e) => e.ev === 'play');

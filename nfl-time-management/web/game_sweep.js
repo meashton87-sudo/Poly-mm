@@ -145,7 +145,10 @@ function honored(before, action, r, tag) {
   else if (action.call !== undefined && e.call !== P.callIndex[action.call]) flag('a different call was run', `${tag} called ${action.call}, ran ${calls[e.call]}`);
   else if (action.route && !e.penalty) {      // the route you picked, by a receiver at the position you picked
     const ran = P.routeNames[P.ngs.route[e.row]], pos = ['', 'QB', 'RB', 'WR', 'TE'][P.carry[e.row] & 7];
-    if (ran !== action.route) flag('picked route not run', `${tag} picked ${action.route}, ran ${ran}`); else count('picked route run');
+    // (a sack, a scramble, a throwaway: no target charted, drawn as often as the situation's real plays have them)
+    const noTarget = !ran && /sack|scramble|throwaway/.test(P.eventNames[P.event[e.row]] || '');
+    if (noTarget) { count('picked route: sacked, scrambled or thrown away'); return; }
+    if (ran !== action.route) flag('picked route not run', `${tag} picked ${action.route}, ran ${ran} (${P.eventNames[P.event[e.row]] || 'play'}${e.penOpt ? ', a flag declined' : ''})`); else count('picked route run');
     if (pos === action.who) count('picked position run'); else count('picked position: another (incomplete, uncharted)');
   }
   if (e && e.ev === 'play' && e.team !== o) flag('the wrong team ran the play', `${tag}`);

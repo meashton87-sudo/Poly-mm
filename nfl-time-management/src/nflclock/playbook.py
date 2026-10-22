@@ -99,7 +99,7 @@ GAP = {"end": "out", "tackle": "tackle", "guard": "inside"}
 FTN_URL = "https://github.com/nflverse/nflverse-data/releases/download/ftn_charting/ftn_charting_{season}.parquet"
 FTN_FLAGS = ["is_play_action", "is_screen_pass", "is_qb_out_of_pocket", "is_qb_sneak", "is_throw_away", "is_rpo",
              "is_trick_play", "is_motion", "is_drop", "is_interception_worthy", "is_catchable_ball", "is_contested_ball"]
-FTN_LOOK = ["starting_hash", "qb_location", "n_defense_box", "n_blitzers"]
+FTN_LOOK = ["starting_hash", "qb_location", "n_defense_box", "n_blitzers", "n_offense_backfield"]
 # Next Gen Stats charting per play (nflverse pbp_participation): the animation runs the targeted receiver's real
 # route against the real coverage, with the real number of pass rushers, pressure and time to throw
 PART_URL = ("https://github.com/nflverse/nflverse-data/releases/download/pbp_participation/"
@@ -439,6 +439,7 @@ def labeled_plays(seasons=SEASONS, seed: int = 11) -> pd.DataFrame:
         "event": _events(s, pen, aborted, td_def),
         "pen_name": np.where(pen, s["penalty_type"].fillna("Penalty").to_numpy(), ""),
         "look": _look(s),
+        "bf": _backfield(s),
         "air": air, "carrier": carrier, "caught": caught, "ball": _ball(s, thrown),
         **{f"ngs_{k}": v for k, v in _charting(s).items()},
     })
@@ -497,6 +498,14 @@ def _events(s: pd.DataFrame, pen: np.ndarray, aborted: np.ndarray, td_def: np.nd
     for name, m in reversed(list(conds.items())):   # first match wins: assign in reverse priority
         ev[np.asarray(m, bool) & (~pen | aborted)] = EVENTS.index(name)
     return ev
+
+
+def _backfield(s: pd.DataFrame) -> np.ndarray:
+    """Backs in the backfield as FTN charted them (the quarterback not counted), plus one: 1 empty, 2 one back, 3 two,
+    4 three or more; 0 not charted (no FTN row, or a snap with no quarterback alignment)."""
+    n = pd.to_numeric(s["n_offense_backfield"], errors="coerce").to_numpy()
+    ok = ~np.isnan(n) & s["qb_location"].isin(list(FORMATIONS)).to_numpy()
+    return np.where(ok, np.clip(np.nan_to_num(n), 0, 3) + 1, 0).astype(np.uint8)
 
 
 def _look(s: pd.DataFrame) -> np.ndarray:
@@ -846,6 +855,8 @@ def export(lib: pd.DataFrame, path) -> dict:
             "event": _b64(lib["event"].to_numpy().astype(np.uint8)),
             "pen": _b64(pen_code.astype(np.uint8)),
             "look": _b64(lib["look"].to_numpy().astype(np.uint8)),
+            # backs in the backfield (_backfield): an empty set, two backs (game.js formation picks)
+            "bf": _b64(lib["bf"].to_numpy().astype(np.uint8)),
             # for the animation only: air yards (-128 = not thrown), carrier group (bits 0-2) and broken tackle (bit 3)
             "air": _b64(np.where(lib["air"].isna(), -128, np.clip(lib["air"].fillna(0), -20, 100)).astype(np.int8)),
             "carry": _b64((lib["who"].to_numpy().astype(np.uint8) | (lib["bt"].to_numpy().astype(np.uint8) << np.uint8(3)))),

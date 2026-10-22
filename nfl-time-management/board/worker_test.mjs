@@ -132,6 +132,25 @@ assert.strictEqual(b.days[0].date, '2026-01-02'); assert.strictEqual(b.days[0].n
 assert.ok(Math.abs(b.days[0].avg - 0.6) < 1e-9); assert.strictEqual(b.days[0].best, 0.8);
 assert.strictEqual(b.days[b.days.length - 1].date, today); assert.strictEqual(b.days[b.days.length - 1].n, 5);
 assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
+// the other games finished (/tally): a count by kind on the board's UTC day, nothing else kept; /days carries them
+{
+  const T = new Date().toISOString().slice(0, 10), tl = (body, o = {}) => call('POST', body, { path: '/tally', ...o });
+  for (const kind of ['survivor', 'survivor', 'drive', 'run', 'scenario']) assert.strictEqual((await tl({ kind })).status, 200, kind);
+  for (const kind of ['daily', 'versus', 'practice', '', 'SURVIVOR', 'toString', null]) assert.strictEqual((await tl({ kind })).status, 400, `kind ${kind} refused`);
+  assert.strictEqual((await tl({})).status, 400); assert.strictEqual((await call('GET', null, { path: '/tally' })).status, 405);
+  assert.deepStrictEqual(store.get(`tally:${T}`), { survivor: 2, drive: 1, run: 1, scenario: 1 }, 'only the counts are stored');
+  store.set('tally:2026-01-01', { drive: 3 });          // a day with tallies and no daily posts still counts
+  const dd = await (await call('GET', null, { path: '/days' })).json();
+  assert.deepStrictEqual(dd.tally[T], { survivor: 2, drive: 1, run: 1, scenario: 1 });
+  assert.deepStrictEqual(dd.tally['2026-01-01'], { survivor: 0, drive: 3, run: 0, scenario: 0 });
+  assert.ok(!dd.days.some((d) => d.date === '2026-01-01'), 'the daily list is the daily players only');
+  const one = { ip: '9.9.9.9' };
+  let last;
+  for (let i = 0; i < 31; i++) last = await tl({ kind: 'drive' }, one);
+  assert.strictEqual(last.status, 429, 'rate limited like the other posts');
+  assert.strictEqual(store.get(`tally:${T}`).drive, 31, 'the refused one not counted');
+  store.delete('tally:2026-01-01');
+}
 // the fair score (g: 2): a post graded the fair way also counts in the day's fair set; posts made the old way stay as
 // they were; nothing replaces a result (a device's first counts, whatever g it says later); g alone earns no trust
 {
