@@ -10,6 +10,31 @@
     },
     {
       "date": "2026-10-22",
+      "title": "No spoilers at the snap",
+      "items": [
+        "The camera follows the play as it happens instead of zooming out to where it ends at the snap, so a deep ball's zoom no longer gives the catch away.",
+        "A play's line in the play-by-play shows once the play is over, not while it runs."
+      ]
+    },
+    {
+      "date": "2026-10-22",
+      "title": "A cleaner screen",
+      "items": [
+        "The field is clear again: play speed, personnel, formation and ratings are under one ⚙ Options button (open it once and it stays open).",
+        "The run screen goes straight to the runs. The blocking choices are under ⋯, like the pass options.",
+        "The how-to lines show for your first few snaps, then get out of the way.",
+        "The down and distance stay on screen while the play runs, on offense and defense."
+      ]
+    },
+    {
+      "date": "2026-10-22",
+      "title": "A bigger field on desktop",
+      "items": [
+        "On a computer the field is bigger now, and the new ⤢ button on the field switches between Standard, Large and Extra large. Your pick is kept on that computer."
+      ]
+    },
+    {
+      "date": "2026-10-22",
       "title": "No more floating passes",
       "items": [
         "A short pass picked off near the quarterback, or a missed screen, no longer hangs in the air: he holds it a moment longer and it goes at a pass's speed."

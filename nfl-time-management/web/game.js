@@ -1015,6 +1015,17 @@
     const bot = sh.classList.contains('down') ? 66 : clip(sh.offsetHeight || vh * 0.45, 66, vh * 0.6);      // (a pass's sheet: up to 58%, game.html)
     return { top: 104, bot };
   }
+  // the field's size on a desktop (a player: "it feels condensed"): Standard, Large (the default) or Extra large, kept
+  // per device; the page wider and the field's column with it (game.html body.fs-*), and taller (fieldHeight)
+  const FS_KEY = `${STORE}:fieldsize`, FS = ['m', 'l', 'xl'], FS_LABEL = { m: 'Standard', l: 'Large', xl: 'Extra large' };
+  const fieldSize = () => { const v = load(FS_KEY, 'l'); return FS.includes(v) ? v : 'l'; };
+  function applyFieldSize() {
+    const v = fieldSize();
+    FS.forEach((k) => document.body.classList.toggle(`fs-${k}`, k === v));
+    const b = $('sizeBtn');
+    if (b) { b.textContent = `⤢ ${FS_LABEL[v]}`; b.title = 'Field size: tap for the next size'; b.setAttribute('aria-label', `Field size: ${FS_LABEL[v]}`); }
+  }
+  if (document.body) applyFieldSize();                  // (before the field is first drawn: its width comes from the page's)
   function fieldHeight() {
     const svg = $('field');
     const wpx = svg.parentElement.clientWidth || 360;
@@ -1022,7 +1033,9 @@
     // room left for the field: on wide screens the calls sit beside it (game.html); on a phone, what is above it (the
     // header, the score bar) and the call's first row below it (DOCK_ROOM) fit on the screen with no scrolling
     const side = window.matchMedia && window.matchMedia('(min-width: 1000px)').matches;
-    if (side) return Math.round((360 * clip(window.innerHeight - 280, 360, 860)) / wpx);
+    // (and as tall as the size picked lets it be: Standard leaves the most room around it)
+    const fs = fieldSize(), [room, lo, hi] = fs === 'xl' ? [140, 440, 1200] : fs === 'l' ? [200, 400, 1000] : [280, 360, 860];
+    if (side) return Math.round((360 * clip(window.innerHeight - room, lo, hi)) / wpx);
     const top = svg.parentElement.getBoundingClientRect().top + window.scrollY;
     return Math.round((360 * clip(window.innerHeight - clip(top, 60, 260) - DOCK_ROOM, 300, 720)) / wpx);
   }
@@ -2460,8 +2473,13 @@
     pen.addEventListener('click', () => { if (!busy) setDraw(!on); });
     head.append(pen);
   }
+  const DRAW_HINTS = 8;               // screens with the drawing line before it goes (a few snaps' worth)
   function sketchPanel(d, ctx, go) {
     const sk = ui.sk, s = sketchRead(ctx), kind = ctx === 'st' ? ST_DRAW[ui.st] : ctx;
+    // (the line saying it can be drawn: the first few times only, then just the ✏️ key; what was drawn always)
+    const live = drawPref() || s || (sk && (sk.bad || sk.lines.length)), told = load(`${STORE}:drawhint`, 0);
+    if (!live && told >= DRAW_HINTS && go) return null;
+    if (!live) save(`${STORE}:drawhint`, told + 1);
     const p = el('p', `hint${drawPref() || s || (sk && sk.bad) ? ' draw' : ''}${sk && sk.bad ? ' bad' : ''}`, sk && sk.bad ? `${sk.bad}. Try again.` : s && !s.fault ? `✏️ Drawn: ${s.label || stLabel(s.key)}` : SKETCH_HINT[kind]);
     p.setAttribute('role', 'status');
     if (sk && sk.lines.length) {
@@ -5281,18 +5299,55 @@
       });
       const old = frame(Ls);
       let [lo, hi] = frame(Ls.concat(keyLs));
-      if (window.__sepLog && keyLs.length) {
-        const outOf = ([a, b]) => keyLs.filter((L) => L < a || L > b).length / keyLs.length;
-        (window.__camLog = window.__camLog || []).push({ before: +outOf(old).toFixed(2), after: +outOf([lo, hi]).toFixed(2), span0: +(old[1] - old[0]).toFixed(1), span: +(hi - lo).toFixed(1) });
-      }
       // (the broadcast view: the calls' sheet is away for the play, so the whole play is framed in what shows,
       // under the scoreboard and above the skip note: the quarterback's drop and throw included)
-      if (bcast()) {
-        const u = 360 / (sc.svg.parentElement.clientWidth || 360), ct = PLAY_COVER.top * u, cb = PLAY_COVER.bot * u;
-        const K = (sc.H - 6 - ct - cb) / (hi - lo);
-        lo -= cb / K; hi += ct / K;
+      const u = 360 / (sc.svg.parentElement.clientWidth || 360), ct = PLAY_COVER.top * u, cb = PLAY_COVER.bot * u;
+      const shown = ([l, h]) => {
+        if (!bcast()) return { lo: l, hi: h };
+        const K = (sc.H - 6 - ct - cb) / (h - l);
+        return { lo: l - cb / K, hi: h + ct / K };
+      };
+      P.cam = shown([lo, hi]);            // the whole play's frame (where the camera ends up)
+      // The camera follows the play: at each moment it frames where the ball and the men around it have been so far
+      // (and a beat ahead), widening as the play goes and never narrowing. A player: the zoom out to the whole play at
+      // the snap told him a deep ball was caught before it was thrown. Before the throw a pass frames the routes as
+      // they are run, a run the men near the ball
+      const DT = 0.1, LEAD = 0.35, TAU = 0.25, reach = e.kind === PASS ? 25 : 12, n = Math.ceil(P.T / DT) + 1;
+      P.segs.sort((a, b) => a.t0 - b.t0);           // (ballAt reads them in order)
+      const raw = [];
+      let bl = L0, bh = L0, cl = Infinity, ch = -Infinity;
+      for (let i = 0; i < n; i++) {
+        const t = Math.min(i * DT + LEAD, P.T), bL = ballAt(sc, P, t).L;
+        bl = Math.min(bl, bL); bh = Math.max(bh, bL);
+        cl = Math.min(cl, bL); ch = Math.max(ch, bL);
+        sc.actors.forEach((a) => {
+          if (!a.trk) return;
+          const L = clip(at(a, t).L, bl - reach, bh + reach);
+          cl = Math.min(cl, L); ch = Math.max(ch, L);
+        });
+        (P.keys || []).forEach(({ a, t0 }) => { if (a.trk && t >= t0) { const L = at(a, t).L; cl = Math.min(cl, L); ch = Math.max(ch, L); } });
+        raw.push(frame([cl, ch]));
       }
-      P.cam = { lo, hi };
+      const cams = [raw[0]], w = 1 - Math.exp(-DT / TAU);        // (eased, never a jump)
+      for (let i = 1; i < n; i++) cams.push([lerp(cams[i - 1][0], raw[i][0], w), lerp(cams[i - 1][1], raw[i][1], w)]);
+      const track = cams.map(shown);
+      P.camAt = (t) => {
+        const f = clip(t / DT, 0, n - 1), i = Math.floor(f), j = Math.min(i + 1, n - 1);
+        return { lo: lerp(track[i].lo, track[j].lo, f - i), hi: lerp(track[i].hi, track[j].hi, f - i) };
+      };
+      if (window.__sepLog && keyLs.length) {
+        // the tackler in the frame from the moment he goes for the carrier, the frame as it is at each moment
+        let out = 0, all = 0;
+        (P.keys || []).forEach(({ a, t0 }) => {
+          if (!a.trk) return;
+          for (let t = t0; t <= P.T; t += DT) {
+            const c = cams[Math.min(n - 1, Math.round(t / DT))], L = at(a, t).L;
+            all++; if (L < c[0] || L > c[1]) out++;
+          }
+        });
+        const outOf = ([p, q]) => keyLs.filter((L) => L < p || L > q).length / keyLs.length;
+        (window.__camLog = window.__camLog || []).push({ before: +outOf(old).toFixed(2), after: all ? +(out / all).toFixed(2) : 0, span0: +(old[1] - old[0]).toFixed(1), span: +(hi - lo).toFixed(1) });
+      }
       P.segs.sort((a, b) => a.t0 - b.t0);
       return P;
     }
@@ -5337,7 +5392,8 @@
         // (reduced motion: the play's frame from the start, held still; no zoom in or out)
         const k = still ? 1 : EASE.io(clip(tt / ZI, 0, 1)) * (P.stay ? 1 : 1 - EASE.io(clip((tt - ZI - P.T - P.hold) / ZO, 0, 1)));
         const c0 = sc.cam0 || FULL;            // from the pre-snap frame into the play's, and back
-        sc.cam = { lo: lerp(c0.lo, P.cam.lo, k), hi: lerp(c0.hi, P.cam.hi, k) };
+        const pc = still || !P.camAt ? P.cam : P.camAt(clip(tt - ZI, 0, P.T));   // (following the play: finishCamera)
+        sc.cam = { lo: lerp(c0.lo, pc.lo, k), hi: lerp(c0.hi, pc.hi, k) };
         const tp = clip(tt - ZI, 0, P.T);
         if (ck) {
           const gt = t < PRE ? lerp(clk.t0, clk.snap, EASE.io(t / PRE)) : lerp(clk.snap, clk.end, clip((tt - ZI) / (P.T + P.hold), 0, 1));
@@ -5592,6 +5648,9 @@
     ezDrive(which === 'play');
   }
 
+  // a snap's lines in the play-by-play wait for its play on the field (a player read there whether a pass was caught
+  // before it was thrown); a skipped or unanimated play shows them at once
+  const holdLines = (lis) => { lis.forEach((li) => { li.hidden = true; }); return () => lis.forEach((li) => { li.hidden = false; }); };
   function addLog(text, t, mine) {
     const li = el('li');
     li.append(el('span', 't', t == null || G.cot ? '' : clockOf(t).text), el('span', mine ? 'me' : '', text));
@@ -6128,17 +6187,19 @@
     if (action && action.philly) res.log.forEach((x) => { if (x.ev === 'pat') x.philly = true; });
     const pe0 = res.log.find((x) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(x.ev));
     let reelLi = null;
-    narrate(res.log, action).forEach(([text, t, mine]) => { const li = addLog(text, t, mine); if (!reelLi && pe0 && t === pe0.t) reelLi = li; });
+    const lines = [];
+    narrate(res.log, action).forEach(([text, t, mine]) => { const li = addLog(text, t, mine); lines.push(li); if (!reelLi && pe0 && t === pe0.t) reelLi = li; });
     G.root = res.root;
     if (res.done) G.root.phase = DONE;
     // a half that ends on the play itself (a kneel, a last snap, a kick) says so, as one run out between snaps does
-    if (G.root.phase === DONE && !G.root.ot && !res.log.some((x) => x.ev === 'end')) addLog(G.root.t >= 1800 ? 'Halftime' : 'End of regulation', G.root.t, false);
+    if (G.root.phase === DONE && !G.root.ot && !res.log.some((x) => x.ev === 'end')) lines.push(addLog(G.root.t >= 1800 ? 'Halftime' : 'End of regulation', G.root.t, false));
     if (res.log.some((x) => x.untimed)) G.root.untimed = true;        // a defensive foul as time ran out: one more snap at 0:00
     persist();
     const pe = res.log.find((x) => x.ev === 'play');
     const look = before.pos === G.me ? G.look : action && (action.def || action.dc) && pe && pe.look && pe.look.box ? (pe.look.box >= 7 ? 2 : 0) + (pe.look.blitz ? 1 : 0) : null;
     G.lastPlay = { before, res, side, look };
-    res.animated = await animatePlay(before, res, side, false, look);
+    const showLines = holdLines(lines);
+    try { res.animated = await animatePlay(before, res, side, false, look); } finally { showLines(); }
     if (res.animated && reelLi && reelLi.isConnected) reelKey(reelLi, G.lastPlay);
     G.look = null;
     return res;
@@ -6390,7 +6451,18 @@
     back.addEventListener('click', () => { ui.step = 'family'; drawField(); drawDock(); });
     head.append(back);
     const drawable = ui.fam === 'run' || ui.fam === 'rpo';
+    // the blocking (SCHEMES) behind More, as the pass screen's protection is (players: "it was better simpler"); shown
+    // anyway while one other than the zone default is on
+    const runMore = ui.fam === 'run' && !VS && (passMore() || (G.scheme && G.scheme !== 'zone'));
     if (ui.fam === 'run' && !VS) {
+      const mo = el('button', `chip more${passMore() ? ' on' : ''}`, bcast() ? '⋯' : passMore() ? 'Less' : 'More');
+      mo.type = 'button'; mo.id = 'runMore';
+      mo.setAttribute('aria-pressed', String(passMore()));
+      mo.setAttribute('aria-label', passMore() ? 'Fewer run options' : 'More run options: the blocking');
+      mo.addEventListener('click', () => { if (busy) return; save(PASS_MORE_KEY, !passMore()); track('run_more', { on: passMore() }); drawDock(); });
+      head.append(mo);
+    }
+    if (runMore) {
       // the blocking (SCHEMES): one tap, kept for the drive's next runs
       const cur = G.scheme || 'zone', row = el('div', 'opts-row schemes');
       row.append(el('span', 'lab', bcast() ? 'Block' : 'Blocking'));
@@ -6555,10 +6627,14 @@
     const E = eligibles(sc), selA = P.draw && P.sel != null ? E[P.sel] : null;
     // (the whole of it the first few times; after that one line, so the receivers and the Snap key fit under the field)
     if (!P.draw) {
-      const h = load(`${STORE}:passhint`, 0) < 3 && !bcast() ? el('p', 'hint', 'Snap throws to the open man, or tap a name to pick who gets the ball. Tap a man on the field for his next route, or drag him to draw one.')
+      // (the first few passes only: after that the screen is the receivers and the keys)
+      const told = load(`${STORE}:passhint`, 0);
+      const h = told >= 3 ? null : !bcast() ? el('p', 'hint', 'Snap throws to the open man, or tap a name to pick who gets the ball. Tap a man on the field for his next route, or drag him to draw one.')
         : el('p', 'hint one', 'Snap: the open man, or pick one. Tap a dot: his route.');
-      h.title = 'Snap throws to whoever gets open, or tap a name to pick who gets the ball (tap it again for the open man). Tap a receiver on the field to change his route, or drag him to draw your own (drag the quarterback for his drop or a rollout).';
-      d.append(h);
+      if (h) {
+        h.title = 'Snap throws to whoever gets open, or tap a name to pick who gets the ball (tap it again for the open man). Tap a receiver on the field to change his route, or drag him to draw your own (drag the quarterback for his drop or a rollout).';
+        d.append(h);
+      }
     } else {
       const h = el('p', 'hint draw', selA ? `Now drag from ${shortName(selA.p ? selA.p.name : '') || selA.label} to where he should go.`
         : 'Tap a receiver, then drag on the field where you want him to go. Each line plays as the real route it is closest to; drag the quarterback to the side to roll out.');
@@ -13238,13 +13314,13 @@
       const res = d.res, side = G.side, dw = vs.drawn;
       // your own drawing, on the call the room played (not the default, when the call came in too late)
       if (dw && dw.n === d.n && res.action && (dw.call ? res.action.call === dw.call : !!dw.dc && sameDc(res.action.dc, dw.dc))) res.action = { ...dw.draw, ...res.action };
-      narrate(res.log, res.action).forEach(([text, t, m]) => addLog(text, t, m));
+      const showLines = holdLines(narrate(res.log, res.action).map(([text, t, m]) => addLog(text, t, m)));
       G.root = { ...res.root };
       if (res.done) G.root.phase = DONE;
       const pe = res.log.find((x) => x.ev === 'play');
       const look = pe && pe.look && pe.look.box && res.action && (res.action.dc || (before.pos !== G.me && res.action.def)) ? (pe.look.box >= 7 ? 2 : 0) + (pe.look.blitz ? 1 : 0) : null;
       G.lastPlay = { before, res, side, look };
-      res.animated = await animatePlay(before, res, side, false, look);
+      try { res.animated = await animatePlay(before, res, side, false, look); } finally { showLines(); }
       out = { res, d };
     } else if (d.kind === 'timeout') out = { res: { log: [], action: { to_off: true } }, head: 'Timeout', d };
     cotLog(d.notes);
@@ -13506,7 +13582,25 @@
       spotInfo();
     });
     $('restartBtn').addEventListener('click', restartAsk);
+    // the field's options behind ⚙ (kept per device, shut at first): open, they stay open
+    const OPTS_KEY = `${STORE}:fieldopts`;
+    const fieldOpts = () => {
+      const open = load(OPTS_KEY, false) === true, b = $('optsBtn');
+      document.querySelector('.fieldbox').classList.toggle('opts-shut', !open);
+      b.textContent = open ? '✕' : '⚙ Options';
+      b.setAttribute('aria-expanded', String(open));
+    };
+    fieldOpts();
+    $('optsBtn').addEventListener('click', () => { save(OPTS_KEY, !(load(OPTS_KEY, false) === true)); track('field_opts', { open: load(OPTS_KEY, false) === true }); fieldOpts(); });
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
+    applyFieldSize();
+    $('sizeBtn').addEventListener('click', () => {
+      const v = FS[(FS.indexOf(fieldSize()) + 1) % FS.length];
+      save(FS_KEY, v);
+      track('field_size', { size: v });
+      applyFieldSize();
+      window.dispatchEvent(new Event('resize'));          // (the field drawn again at its new size: the resize handler)
+    });
     $('persBtn').addEventListener('click', openPers);
     $('formBtn').addEventListener('click', openForm);
     speedBtn();
