@@ -2115,8 +2115,16 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                 if mob:
                     # everything on the sheet in view with no scrolling (game.html: phones, the calls' sheet), every
                     # phone size: each receiver's row, the protection, the options, Back
-                    for sel in ("#dock .rcv", "#dock .prots .chip", "#dock .opts-row:not(.prots) .chip", "#dock .ask .chip"):
+                    # (the simple screen first, the default: the receivers, More, no protection or option rows; then
+                    # More: every row in view too)
+                    for sel in ("#dock .rcv", "#passMore", "#dock .ask .chip"):
                         await check("pass", sel, 300)
+                    if await page.locator("#dock .prots").count():
+                        out.append(f"{at}: the pass screen opened with the protection row (it is behind More)")
+                    await page.click("#passMore", timeout=3000)
+                    await page.wait_for_timeout(300)
+                    for sel in ("#dock .rcv", "#dock .prots .chip", "#dock .opts-row:not(.prots) .chip", "#dock .ask .chip"):
+                        await check("pass, More", sel, 300)
                     # the pass plays (game.js CONCEPTS): the picker whole on the screen with no scrolling in it, a tap sets
                     # every route (Mesh: crossers) and the Plays chip names it
                     if await page.locator("#playsBtn").count():
