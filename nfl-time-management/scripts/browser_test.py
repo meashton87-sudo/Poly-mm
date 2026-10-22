@@ -1127,19 +1127,31 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     chaos_done.add("restart"); act("START OVER")
                     # (a deliberate tap, past the moment after a play when nothing on the field takes one: game.js
                     # AFTER_PLAY_MS)
-                    await page.wait_for_timeout(600)
-                    if mobile:
-                        await page.click("#menuBtn", timeout=3000)
-                        item = page.locator("#bmenu [data-restart]")
-                        if not await item.is_visible():
-                            problems.append("the ☰ menu has no Start over during the daily"); continue
-                        await item.click(timeout=3000)
-                    else:
-                        if not await page.locator("#restartBtn").is_visible():
-                            problems.append("no Start over under the field during the daily"); continue
-                        await page.click("#restartBtn", timeout=3000)
-                    await page.wait_for_timeout(200)
-                    txt = await page.evaluate("() => document.getElementById('modal').hidden ? '' : document.getElementById('modal').innerText")
+                    # (while a play runs, theirs between your calls included, the page says to wait for it: game.js
+                    # restartAsk. The tap is tried again once it is over)
+                    txt, missing = "", False
+                    for _ in range(6):
+                        await page.wait_for_timeout(600)
+                        for _ in range(40):
+                            if not await page.evaluate("() => document.getElementById('field').classList.contains('playing')"):
+                                break
+                            await page.wait_for_timeout(250)
+                        if mobile:
+                            await page.click("#menuBtn", timeout=3000)
+                            item = page.locator("#bmenu [data-restart]")
+                            if not await item.is_visible():
+                                problems.append("the ☰ menu has no Start over during the daily"); missing = True; break
+                            await item.click(timeout=3000)
+                        else:
+                            if not await page.locator("#restartBtn").is_visible():
+                                problems.append("no Start over under the field during the daily"); missing = True; break
+                            await page.click("#restartBtn", timeout=3000)
+                        await page.wait_for_timeout(200)
+                        txt = await page.evaluate("() => document.getElementById('modal').hidden ? '' : document.getElementById('modal').innerText")
+                        if txt:
+                            break
+                    if missing:
+                        continue
                     if ("fresh luck" if mode == "scenario" else "leaderboard") not in txt.lower():
                         problems.append(f"Start over did not ask first with the {'new try' if mode == 'scenario' else 'leaderboard'} note: {txt[:160]!r}"); continue
                     async with page.expect_event("load"):

@@ -5299,18 +5299,55 @@
       });
       const old = frame(Ls);
       let [lo, hi] = frame(Ls.concat(keyLs));
-      if (window.__sepLog && keyLs.length) {
-        const outOf = ([a, b]) => keyLs.filter((L) => L < a || L > b).length / keyLs.length;
-        (window.__camLog = window.__camLog || []).push({ before: +outOf(old).toFixed(2), after: +outOf([lo, hi]).toFixed(2), span0: +(old[1] - old[0]).toFixed(1), span: +(hi - lo).toFixed(1) });
-      }
       // (the broadcast view: the calls' sheet is away for the play, so the whole play is framed in what shows,
       // under the scoreboard and above the skip note: the quarterback's drop and throw included)
-      if (bcast()) {
-        const u = 360 / (sc.svg.parentElement.clientWidth || 360), ct = PLAY_COVER.top * u, cb = PLAY_COVER.bot * u;
-        const K = (sc.H - 6 - ct - cb) / (hi - lo);
-        lo -= cb / K; hi += ct / K;
+      const u = 360 / (sc.svg.parentElement.clientWidth || 360), ct = PLAY_COVER.top * u, cb = PLAY_COVER.bot * u;
+      const shown = ([l, h]) => {
+        if (!bcast()) return { lo: l, hi: h };
+        const K = (sc.H - 6 - ct - cb) / (h - l);
+        return { lo: l - cb / K, hi: h + ct / K };
+      };
+      P.cam = shown([lo, hi]);            // the whole play's frame (where the camera ends up)
+      // The camera follows the play: at each moment it frames where the ball and the men around it have been so far
+      // (and a beat ahead), widening as the play goes and never narrowing. A player: the zoom out to the whole play at
+      // the snap told him a deep ball was caught before it was thrown. Before the throw a pass frames the routes as
+      // they are run, a run the men near the ball
+      const DT = 0.1, LEAD = 0.35, TAU = 0.25, reach = e.kind === PASS ? 25 : 12, n = Math.ceil(P.T / DT) + 1;
+      P.segs.sort((a, b) => a.t0 - b.t0);           // (ballAt reads them in order)
+      const raw = [];
+      let bl = L0, bh = L0, cl = Infinity, ch = -Infinity;
+      for (let i = 0; i < n; i++) {
+        const t = Math.min(i * DT + LEAD, P.T), bL = ballAt(sc, P, t).L;
+        bl = Math.min(bl, bL); bh = Math.max(bh, bL);
+        cl = Math.min(cl, bL); ch = Math.max(ch, bL);
+        sc.actors.forEach((a) => {
+          if (!a.trk) return;
+          const L = clip(at(a, t).L, bl - reach, bh + reach);
+          cl = Math.min(cl, L); ch = Math.max(ch, L);
+        });
+        (P.keys || []).forEach(({ a, t0 }) => { if (a.trk && t >= t0) { const L = at(a, t).L; cl = Math.min(cl, L); ch = Math.max(ch, L); } });
+        raw.push(frame([cl, ch]));
       }
-      P.cam = { lo, hi };
+      const cams = [raw[0]], w = 1 - Math.exp(-DT / TAU);        // (eased, never a jump)
+      for (let i = 1; i < n; i++) cams.push([lerp(cams[i - 1][0], raw[i][0], w), lerp(cams[i - 1][1], raw[i][1], w)]);
+      const track = cams.map(shown);
+      P.camAt = (t) => {
+        const f = clip(t / DT, 0, n - 1), i = Math.floor(f), j = Math.min(i + 1, n - 1);
+        return { lo: lerp(track[i].lo, track[j].lo, f - i), hi: lerp(track[i].hi, track[j].hi, f - i) };
+      };
+      if (window.__sepLog && keyLs.length) {
+        // the tackler in the frame from the moment he goes for the carrier, the frame as it is at each moment
+        let out = 0, all = 0;
+        (P.keys || []).forEach(({ a, t0 }) => {
+          if (!a.trk) return;
+          for (let t = t0; t <= P.T; t += DT) {
+            const c = cams[Math.min(n - 1, Math.round(t / DT))], L = at(a, t).L;
+            all++; if (L < c[0] || L > c[1]) out++;
+          }
+        });
+        const outOf = ([p, q]) => keyLs.filter((L) => L < p || L > q).length / keyLs.length;
+        (window.__camLog = window.__camLog || []).push({ before: +outOf(old).toFixed(2), after: all ? +(out / all).toFixed(2) : 0, span0: +(old[1] - old[0]).toFixed(1), span: +(hi - lo).toFixed(1) });
+      }
       P.segs.sort((a, b) => a.t0 - b.t0);
       return P;
     }
@@ -5355,7 +5392,8 @@
         // (reduced motion: the play's frame from the start, held still; no zoom in or out)
         const k = still ? 1 : EASE.io(clip(tt / ZI, 0, 1)) * (P.stay ? 1 : 1 - EASE.io(clip((tt - ZI - P.T - P.hold) / ZO, 0, 1)));
         const c0 = sc.cam0 || FULL;            // from the pre-snap frame into the play's, and back
-        sc.cam = { lo: lerp(c0.lo, P.cam.lo, k), hi: lerp(c0.hi, P.cam.hi, k) };
+        const pc = still || !P.camAt ? P.cam : P.camAt(clip(tt - ZI, 0, P.T));   // (following the play: finishCamera)
+        sc.cam = { lo: lerp(c0.lo, pc.lo, k), hi: lerp(c0.hi, pc.hi, k) };
         const tp = clip(tt - ZI, 0, P.T);
         if (ck) {
           const gt = t < PRE ? lerp(clk.t0, clk.snap, EASE.io(t / PRE)) : lerp(clk.snap, clk.end, clip((tt - ZI) / (P.T + P.hold), 0, 1));
@@ -5610,6 +5648,9 @@
     ezDrive(which === 'play');
   }
 
+  // a snap's lines in the play-by-play wait for its play on the field (a player read there whether a pass was caught
+  // before it was thrown); a skipped or unanimated play shows them at once
+  const holdLines = (lis) => { lis.forEach((li) => { li.hidden = true; }); return () => lis.forEach((li) => { li.hidden = false; }); };
   function addLog(text, t, mine) {
     const li = el('li');
     li.append(el('span', 't', t == null || G.cot ? '' : clockOf(t).text), el('span', mine ? 'me' : '', text));
@@ -6146,17 +6187,19 @@
     if (action && action.philly) res.log.forEach((x) => { if (x.ev === 'pat') x.philly = true; });
     const pe0 = res.log.find((x) => ['play', 'fg', 'punt', 'pat', 'kickoff'].includes(x.ev));
     let reelLi = null;
-    narrate(res.log, action).forEach(([text, t, mine]) => { const li = addLog(text, t, mine); if (!reelLi && pe0 && t === pe0.t) reelLi = li; });
+    const lines = [];
+    narrate(res.log, action).forEach(([text, t, mine]) => { const li = addLog(text, t, mine); lines.push(li); if (!reelLi && pe0 && t === pe0.t) reelLi = li; });
     G.root = res.root;
     if (res.done) G.root.phase = DONE;
     // a half that ends on the play itself (a kneel, a last snap, a kick) says so, as one run out between snaps does
-    if (G.root.phase === DONE && !G.root.ot && !res.log.some((x) => x.ev === 'end')) addLog(G.root.t >= 1800 ? 'Halftime' : 'End of regulation', G.root.t, false);
+    if (G.root.phase === DONE && !G.root.ot && !res.log.some((x) => x.ev === 'end')) lines.push(addLog(G.root.t >= 1800 ? 'Halftime' : 'End of regulation', G.root.t, false));
     if (res.log.some((x) => x.untimed)) G.root.untimed = true;        // a defensive foul as time ran out: one more snap at 0:00
     persist();
     const pe = res.log.find((x) => x.ev === 'play');
     const look = before.pos === G.me ? G.look : action && (action.def || action.dc) && pe && pe.look && pe.look.box ? (pe.look.box >= 7 ? 2 : 0) + (pe.look.blitz ? 1 : 0) : null;
     G.lastPlay = { before, res, side, look };
-    res.animated = await animatePlay(before, res, side, false, look);
+    const showLines = holdLines(lines);
+    try { res.animated = await animatePlay(before, res, side, false, look); } finally { showLines(); }
     if (res.animated && reelLi && reelLi.isConnected) reelKey(reelLi, G.lastPlay);
     G.look = null;
     return res;
@@ -13267,13 +13310,13 @@
       const res = d.res, side = G.side, dw = vs.drawn;
       // your own drawing, on the call the room played (not the default, when the call came in too late)
       if (dw && dw.n === d.n && res.action && (dw.call ? res.action.call === dw.call : !!dw.dc && sameDc(res.action.dc, dw.dc))) res.action = { ...dw.draw, ...res.action };
-      narrate(res.log, res.action).forEach(([text, t, m]) => addLog(text, t, m));
+      const showLines = holdLines(narrate(res.log, res.action).map(([text, t, m]) => addLog(text, t, m)));
       G.root = { ...res.root };
       if (res.done) G.root.phase = DONE;
       const pe = res.log.find((x) => x.ev === 'play');
       const look = pe && pe.look && pe.look.box && res.action && (res.action.dc || (before.pos !== G.me && res.action.def)) ? (pe.look.box >= 7 ? 2 : 0) + (pe.look.blitz ? 1 : 0) : null;
       G.lastPlay = { before, res, side, look };
-      res.animated = await animatePlay(before, res, side, false, look);
+      try { res.animated = await animatePlay(before, res, side, false, look); } finally { showLines(); }
       out = { res, d };
     } else if (d.kind === 'timeout') out = { res: { log: [], action: { to_off: true } }, head: 'Timeout', d };
     cotLog(d.notes);

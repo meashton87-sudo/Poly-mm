@@ -3,6 +3,14 @@
   "notes": [
     {
       "date": "2026-10-22",
+      "title": "No spoilers at the snap",
+      "items": [
+        "The camera follows the play as it happens instead of zooming out to where it ends at the snap, so a deep ball's zoom no longer gives the catch away.",
+        "A play's line in the play-by-play shows once the play is over, not while it runs."
+      ]
+    },
+    {
+      "date": "2026-10-22",
       "title": "A cleaner screen",
       "items": [
         "The field is clear again: play speed, personnel, formation and ratings are under one ⚙ Options button (open it once and it stays open).",
