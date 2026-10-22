@@ -20,6 +20,7 @@ from __future__ import annotations
 import urllib.error
 import urllib.request
 from collections import Counter
+from functools import cmp_to_key
 
 import numpy as np
 import pandas as pd
@@ -246,6 +247,81 @@ class History:
         if len(dfn):
             grp = [R.role.get(p) or DEF_POS.get(ps, "LB") for p, ps in zip(dfn["pfr_player_id"], dfn["position"])]
             dfn = dfn.assign(grp=grp)
+            alloc = PL._allocate(dfn.groupby("grp")["defense_pct"].sum().div(100).to_dict(), 11, dfn["grp"].value_counts().to_dict())
+            picks = []
+            for gr in ("EDGE", "DL", "LB", "CB", "S"):
+                picks += [(r.pfr_player_id, gr) for r in dfn[dfn["grp"] == gr].head(alloc.get(gr, 0)).itertuples()]
+            out["def"] = [(to_gsis.get(p, "pfr:" + p), gr) for p, gr in picks]
+        return out
+
+    # a man's last weekly-roster line that takes him off a team (cut, retired, traded, exempt)
+    GONE = ("CUT", "RET", "TRD", "TRT", "EXE")
+
+    def _on_team_now(self, season: int, team: str) -> set:
+        """Everyone on the team now, hurt or not (Versus: the full team, the owner's call): each man whose latest line
+        in the season's weekly rosters is with this team and not a cut, retirement or trade; as gsis ids and pfr ids
+        (a man out hurt for weeks keeps his last line with the team). Empty when the weekly rosters are not published."""
+        if ("onteam", season) not in self.jerseys:
+            cols = ["week", "team", "status", "gsis_id", "pfr_id"]
+            p = PL._get("weekly_rosters", f"roster_weekly_{season}.parquet", optional=True)
+            f = pd.read_parquet(p, columns=cols) if p is not None else pd.DataFrame(columns=cols)
+            f = f[f["gsis_id"].notna()].sort_values("week").groupby("gsis_id").tail(1)
+            self.jerseys[("onteam", season)] = f[~f["status"].isin(self.GONE)]
+        f = self.jerseys[("onteam", season)]
+        f = f[f["team"].isin(rcodes(team))]
+        return set(f["gsis_id"]) | set(f["pfr_id"].dropna())
+
+    def _season_units(self, R: PL.Ratings, season: int, team: str) -> dict:
+        """The team at full strength (Versus): its starters of the season so far at each position (the biggest share of
+        the snaps in the games each played), everyone on the team now counted whether he played the last game or not (an
+        injured starter is in), in the personnel it uses most; _snapcount_units' picks over the season instead of a game."""
+        sn = R.T["snaps"]
+        g = sn[sn["game_id"].astype(str).str.startswith(f"{season}_") & sn["team"].isin(codes(team))]
+        if not len(g):
+            return {}
+        n = max(1, g["game_id"].nunique())
+        now = self._on_team_now(season, team)
+        to_gsis = {v: k for k, v in R.gsis_to_pfr.items()}
+        if now:
+            g = g[g["pfr_player_id"].map(lambda p: p in now or to_gsis.get(p) in now)]
+        agg = g.groupby("pfr_player_id").agg(position=("position", lambda x: x.mode().iloc[0]), offense_snaps=("offense_snaps", "sum"), defense_snaps=("defense_snaps", "sum"),
+                                             offense_pct=("offense_pct", "sum"), defense_pct=("defense_pct", "sum"),
+                                             og=("offense_snaps", lambda x: int((x > 0).sum())), dg=("defense_snaps", lambda x: int((x > 0).sum()))).reset_index()
+        # (who starts: his share of the snaps in the games he played, so a starter out hurt for weeks is still the
+        # starter; the team's mix of positions: the season's shares over all its games)
+        agg["off_share"] = agg["offense_pct"] / agg["og"].clip(lower=1)
+        agg["def_share"] = agg["defense_pct"] / agg["dg"].clip(lower=1)
+        agg["offense_pct"] /= n
+        agg["defense_pct"] /= n
+        # who starts between two men: their shares in the games both played (Breece Hall out-snapped Braelon Allen in
+        # two of the three they shared; Allen's big weeks were the ones Hall missed), else each one's in his own games
+        games_of = {k: {p: dict(zip(x["game_id"], x[k + "_pct"])) for p, x in g[g[k + "_snaps"] > 0].groupby("pfr_player_id")} for k in ("offense", "defense")}
+
+        def ranked(df, k):
+            gs, share = games_of[k], dict(zip(df["pfr_player_id"], df["off_share" if k == "offense" else "def_share"]))
+
+            def cmp(a, b):
+                ga, gb = gs.get(a, {}), gs.get(b, {})
+                both = set(ga) & set(gb)
+                sa, sb = ((sum(ga[c] for c in both) / len(both), sum(gb[c] for c in both) / len(both)) if both else (share[a], share[b]))
+                return -1 if sa > sb else 1 if sa < sb else (-1 if a < b else 1)
+            order = sorted(df["pfr_player_id"], key=cmp_to_key(cmp))
+            return df.set_index("pfr_player_id").loc[order].reset_index()
+        out = {}
+        off = ranked(agg[agg["offense_snaps"] > 0], "offense")
+        if len(off):
+            picks = []
+            pos = off["position"].map(OFF_POS).fillna("WR")
+            picks += [(r.pfr_player_id, "QB") for r in off[pos == "QB"].head(1).itertuples()]
+            picks += [(r.pfr_player_id, OFF_POS[r.position]) for r in off[pos.isin(["T", "G", "C"])].head(5).itertuples()]
+            skill = off[pos.isin(["RB", "WR", "TE"])].assign(grp=pos[pos.isin(["RB", "WR", "TE"])])
+            alloc = PL._allocate(skill.groupby("grp")["offense_pct"].sum().div(100).to_dict(), 11 - len(picks), skill["grp"].value_counts().to_dict())
+            for grp in ("RB", "WR", "TE"):
+                picks += [(r.pfr_player_id, grp) for r in skill[skill["grp"] == grp].head(alloc.get(grp, 0)).itertuples()]
+            out["off"] = [(to_gsis.get(p, "pfr:" + p), pos_) for p, pos_ in picks]
+        dfn = ranked(agg[agg["defense_snaps"] > 0], "defense")
+        if len(dfn):
+            dfn = dfn.assign(grp=[R.role.get(p) or DEF_POS.get(ps, "LB") for p, ps in zip(dfn["pfr_player_id"], dfn["position"])])
             alloc = PL._allocate(dfn.groupby("grp")["defense_pct"].sum().div(100).to_dict(), 11, dfn["grp"].value_counts().to_dict())
             picks = []
             for gr in ("EDGE", "DL", "LB", "CB", "S"):
@@ -703,7 +779,10 @@ class History:
                 before = own[own["week"] <= week]
                 ids = (before[before["week"] == before["week"].max()] if len(before) else own[own["week"] == own["week"].min()])[col]
             pid = Counter(ids).most_common(1)[0][0] if len(ids) else None
-            return pid, rate(pid, tab, key, col == "kicker_player_id")
+            rec = rate(pid, tab, key, col == "kicker_player_id")
+            if isinstance(rec, dict) and pid:           # his jersey number, for his dot (game.js specDot)
+                rec = {**rec, "num": self._jersey(season, week, team, pid, self.ratings(season).gsis_to_pfr.get(pid))[0]}
+            return pid, rec
         kr, pr = self.specialist_ratings(season)
         k_id, kicker = specialist("kicker_player_id", kr, "kicker_player_id")
         out = {
@@ -772,12 +851,14 @@ class History:
         return self.jerseys[("weekly_qb", season)]
 
     def teams(self, game_id: str, season: int, week: int, play_id: float, home: str, away: str, coaches: dict,
-              drive: bool = False, only: str | None = None, whole_season: bool = False) -> dict:
+              drive: bool = False, only: str | None = None, whole_season: bool = False, full: bool = False) -> dict:
         """{'home': team, 'away': team} in the daily game's team format, as of that game. drive (a historic drive: Pro):
         the lineups of the drive that starts at the snap, everyone who touched the ball on it on the field (the
         offense's and the defense's), the line in its depth chart's slots. only ('home' or 'away'): that team alone.
         Each lineup has its other quarterbacks (qbs: _qb_room, each rated as the one playing is, with the adjustment
-        he would bring: adj); whole_season (a team-season: Pro's scenarios), the season's, and its other kickers."""
+        he would bring: adj); whole_season (a team-season: Pro's scenarios), the season's, and its other kickers. full
+        (Versus): each team at full strength, its season's most-used players on the team now (_season_units), injured or
+        not, in place of the game's."""
         R = self.ratings(season)
         rt = R.week(season, week)
         card = self.card(season, week)
@@ -792,6 +873,14 @@ class History:
             if len(units) < 2:              # before snap counts: the depth chart's starters, then who the box score credits
                 box = self._boxscore_units(game_id, season, team)
                 units = {**box, **self._depth_units(season, week, team), **units, "bench": box.get("bench", [])}
+            if full:                        # (Versus: the team at full strength, whoever missed this game)
+                su = self._season_units(R, season, team)
+                if len(su.get("off", [])) == 11 and len(su.get("def", [])) == 11:
+                    # (a man in the game's lineup keeps the spot he played there: two centers, one at tackle)
+                    # (and his place in its order: the line's slots are given in that order, the two centers as they lined up)
+                    was = {k: dict(units.get(k, [])) for k in ("off", "def")}
+                    pos_in = {k: {i: j for j, (i, _) in enumerate(units.get(k, []))} for k in ("off", "def")}
+                    units = {**units, **{k: sorted([(i, was[k].get(i, p)) for i, p in su[k]], key=lambda x, k=k: pos_in[k].get(x[0], 99)) for k in ("off", "def")}}
             bench = self._bench(R, game_id, team, units.get("off", [])) or units.get("bench", [])
             off, dfn = units.get("off", []), units.get("def", [])
             fixed = self.starters.get((game_id, team))

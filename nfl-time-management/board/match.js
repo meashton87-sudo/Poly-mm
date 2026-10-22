@@ -334,7 +334,9 @@ export class Match {
     if (!pend || pend.n !== R.n) pend = { n: R.n, halves: {} };
     if (seat in pend.halves) return;                                   // a call, once locked, stays
     pend.halves[seat] = VSCore.cleanHalf(R.ms, seat, m.half, E.eng.pb);
-    R.defaults[seat] = pend.halves[seat] ? 0 : R.defaults[seat] + 1;   // nothing usable (the phone's clock ran out): a default
+    // nothing usable (the phone's clock ran out): a default, counted toward a forfeit except on defense (10 seconds is
+    // short, and the defense's default is a real call: the engine's own)
+    R.defaults[seat] = pend.halves[seat] ? 0 : VSCore.role(R.ms, seat) === 'defense' ? R.defaults[seat] : R.defaults[seat] + 1;
     // (the computer's call in here too: cpuTurn's own write of it, racing this one, could be lost under it, and the
     // match then waited out CPU_DECIDE_MS)
     if (R.cpu != null && VSCore.need(R.ms).includes(R.cpu) && !(R.cpu in pend.halves)) pend.halves[R.cpu] = R.cpuLevel === 'rookie' ? this.rookieHalf(R, E) : null;
@@ -507,7 +509,8 @@ export class Match {
         const late = out0(pend, dls(R2), R2);
         for (const s of late) {
           if (s === R2.cpu) { pend.halves[s] = R2.cpuLevel === 'rookie' ? this.rookieHalf(R2, E) : null; continue; }    // (the computer's own)
-          pend.halves[s] = null; R2.defaults[s] += 1;
+          pend.halves[s] = null;
+          if (VSCore.role(R2.ms, s) !== 'defense') R2.defaults[s] += 1;      // (a missed defense: its default, no forfeit count)
         }
         if (VSCore.need(R2.ms).every((s) => s in pend.halves)) return this.commit(R2, pend, E, Date.now());
         await this.ctx.storage.put('pend', pend);

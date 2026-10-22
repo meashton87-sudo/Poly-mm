@@ -1347,6 +1347,24 @@
   // Kickoff alignment (the 2024 rules): the kicker at the ball, his ten teammates at the receiving 40 (25 yards
   // ahead of the ball), nine of the receiving team in the setup zone 30-35 yards ahead, and two returners deep.
   // Special-teams units are drawn in team colors: who covers kicks is not in the lineups.
+  // a kick's specialist on the dot that plays him (a field goal's kicker, a punt's punter): his number, his rating's
+  // colour and his name, as every other man's (the owner: numbers and ratings on the kickers and punters too), else the
+  // letter. teams.json and the spots carry each one's num and ovr (history.py specialist)
+  function specDot(a, rec, letter) {
+    if (!a) return;
+    const has = !!(rec && rec.name);
+    let j = a.g.querySelector('text.jn');
+    if (!j) { j = S('text', { class: 'jn', y: 2.6 }); a.g.append(j); }
+    j.textContent = has && rec.num != null ? String(rec.num) : letter;
+    a.g.querySelectorAll('text.nm').forEach((n) => n.remove());
+    if (!has) return;
+    const c = a.g.querySelector('circle.c');
+    if (c && rec.ovr != null) c.setAttribute('fill', rate(rec.ovr));
+    const t = S('text', { class: 'nm', x: 0, y: 16 });
+    t.textContent = `${shortName(rec.name)} · ${letter}`;
+    a.g.append(t);
+    a.g.setAttribute('aria-label', `${teamName(a.team)} ${letter === 'K' ? 'kicker' : 'punter'} ${rec.num != null ? `#${rec.num} ` : ''}${rec.name}${rec.ovr != null ? `, rated ${rec.ovr}` : ''}`);
+  }
   function kickoffUnits(sc, r, L, dir) {
     const kt = r.pos, goal = dir > 0 ? 100 : 0;
     const row = (n, pad) => Array.from({ length: n }, (_, i) => SX0 + pad + (i * (SX1 - SX0 - 2 * pad)) / (n - 1));
@@ -2915,7 +2933,7 @@
       const slots = [-1.1, 1.1, -2.2, 2.2, -3.3, 3.3];
       others.forEach((a, i) => { if (i < slots.length) at_(a, slots[i], fwd(L0, -0.4)); else at_(a, (i % 2 ? 1 : -1) * 4.3, fwd(L0, -1.2)); });
       at_(holder, 0, fwd(L0, -7)); tag(holder, 'H');
-      if (kicker) { at_(kicker, -2.2, fwd(L0, -9.6)); tag(kicker, 'K'); }
+      if (kicker) { at_(kicker, -2.2, fwd(L0, -9.6)); specDot(kicker, teamOf(kicker.teamI).kicker, 'K'); }
       const deep = K.def.filter((a) => a.label === 'S').slice(0, 1), front = K.def.filter((a) => !deep.includes(a));
       front.forEach((a, i) => at_(a, (i - (front.length - 1) / 2) * 1.35, fwd(L0, 0.6)));
       deep.forEach((a) => at_(a, 0, fwd(L0, 13)));
@@ -5097,6 +5115,7 @@
       const back = dir > 0 ? L0 - FULL.lo : FULL.hi - L0;
       const T0 = 0.8, pL = fwd(L0, -Math.min(14, back - 1.2)), Lnew = clip(losOf(res.root), -9, 109);
       const punter = qb || K.off[0], upback = K.rb && K.rb !== punter ? K.rb : null;
+      specDot(punter, punter && teamOf(punter.teamI).punter, 'P');
       const gunners = K.recv.filter((a) => a.label === 'WR').slice(0, 2);
       const line = K.off.filter((a) => a !== punter && a !== upback && !gunners.includes(a));
       const lineX = [0, -15, 15, -30, 30, -45, 45, -60, 60];
@@ -13068,7 +13087,7 @@
       box.append(el('p', 'story', first === G.me ? 'You won the toss: offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`));
     } else box.append(el('p', 'story', `Each team gets the ball at the other’s 25, no clock. From the second overtime, a touchdown has to go for two; from the third, it’s a two-point play each. Ahead after both teams have had it, you win. ${first === G.me ? 'You won the toss: you choose offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`} The choice alternates every overtime.`));
     if (seen < 2) box.append(el('div', 'who', vs.mode === 'cpu' ? 'You call your side: the offense when you have it, the defense when they do. No play clock against the computer: take your time.'
-      : 'You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap. The defense has 10 seconds to call, the offense 20; miss two in a row and you forfeit.'));
+      : 'You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap. The defense has 10 seconds to call (miss it and a standard defense goes in), the offense 20 (miss two in a row and you forfeit).'));
     const go = el('button', 'btn', 'Kick it off');
     go.type = 'button';
     go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
