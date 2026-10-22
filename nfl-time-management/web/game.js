@@ -12652,6 +12652,9 @@
   // ranked matches; a phone only ever sends a call. Modes: ranked (the ladder: matched by rating), casual, a friend.
   const VS_TEAM_KEY = `${STORE}:vsteam`;
   const VS_MODES = { ranked: 'Ranked', casual: 'Casual', friend: 'Friend match', cpu: 'Versus the computer' };
+  const VS_CPU_KEY = `${STORE}:vscpu`, VS_CPU_LEVELS = { rookie: 'Rookie', pro: 'Pro' };
+  const vsCpuLevel = () => (VS_CPU_LEVELS[load(VS_CPU_KEY, 'pro')] ? load(VS_CPU_KEY, 'pro') : 'pro');
+  const VS_CPU_DECIDE_MS = 10 * 60e3;       // against the computer: no play clock to speak of (match.js CPU_DECIDE_MS)
   const VS_FORFEIT = 60;             // seconds a phone can be gone before its side forfeits (match.js FORFEIT_MS)
   const vs = { ws: null, seat: -1, mode: 'friend', teams: [null, null], taken: '', names: ['', ''], full: false, online: [false, false], off: [0, 0],
     phase: 'wait', n: 0, ms: null, ms0: null, got: {}, waiting: -1, last: null, deadline: 0, skew: 0, result: null, rated: null, started: false,
@@ -12755,6 +12758,9 @@
   // the opponent's connection: gone, and how long until it is a forfeit
   function vsPeer() {
     clearInterval(vs.peerTimer);
+    // (the match over: their leaving ends the rematch, said on its key, not left waiting for nobody)
+    const rk = $('vsAgain');
+    if (rk && vs.phase === 'over' && vs.mode !== 'cpu' && vs.online && !vs.online[1 - vs.seat]) { rk.disabled = true; rk.textContent = 'They left'; rk.classList.remove('ask'); }
     const o = 1 - vs.seat, gone = vs.seat >= 0 && vs.phase === 'live' && !vs.online[o] && vs.off[o];
     if (!gone) { if (vs.banner.startsWith('Your opponent')) vsBanner(''); return; }
     const tick = () => {
@@ -12829,8 +12835,13 @@
     const oppName = vs.names[1 - vs.seat];
     box.append(el('div', 'cat', `${VS_MODES[vs.mode] || 'Versus'} · College overtime`),
       el('div', 'game', `Your ${teamName(me)} vs ${oppName ? `${oppName}’s` : 'their'} ${teamName(op)}`), el('div', 'big', 'Overtime'));
-    box.append(el('p', 'story', `Each team gets the ball at the other’s 25, no clock. From the second overtime, a touchdown has to go for two; from the third, it’s a two-point play each. Ahead after both teams have had it, you win. ${first === G.me ? 'You won the toss: you choose offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`} The choice alternates every overtime.`));
-    box.append(el('div', 'who', 'You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap. You get 30 seconds a call; miss two in a row and you forfeit.'));
+    const seen = load(`${STORE}:vsintro`, 0);
+    save(`${STORE}:vsintro`, seen + 1);
+    if (seen >= 2) {          // (you know the rules: who chooses, and go)
+      box.append(el('p', 'story', first === G.me ? 'You won the toss: offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`));
+    } else box.append(el('p', 'story', `Each team gets the ball at the other’s 25, no clock. From the second overtime, a touchdown has to go for two; from the third, it’s a two-point play each. Ahead after both teams have had it, you win. ${first === G.me ? 'You won the toss: you choose offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`} The choice alternates every overtime.`));
+    if (seen < 2) box.append(el('div', 'who', vs.mode === 'cpu' ? 'You call your side: the offense when you have it, the defense when they do. No play clock against the computer: take your time.'
+      : 'You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap. You get 30 seconds a call; miss two in a row and you forfeit.'));
     const go = el('button', 'btn', 'Kick it off');
     go.type = 'button';
     go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
@@ -12902,7 +12913,7 @@
       if (!ws || ws.readyState !== 1) return;          // (ws: the queue's socket, below)
       cpu.disabled = true;
       track('vs_cpu', { mode, secs: Math.round((Date.now() - t0) / 1000) });
-      try { ws.send(JSON.stringify({ t: 'cpu' })); } catch (e) { cpu.disabled = false; }
+      try { ws.send(JSON.stringify({ t: 'cpu', level: vsCpuLevel() })); } catch (e) { cpu.disabled = false; }
     });
     box.append(el('h2', '', VS_MODES[mode]), el('p', 'note', `Your team: ${teamName(vsMyTeam())}`), line, info, cpu, cancel);
     let ws, closed = false, tries = 0, size = 0, rating = 0;
@@ -12917,7 +12928,7 @@
     cancel.addEventListener('click', () => { done(); track('vs_queue_cancel', { mode, secs: Math.round((Date.now() - t0) / 1000) }); renderVsLobby(); });
     const open = () => {
       if (closed) return;
-      const q = new URLSearchParams({ key: deviceKey(), mode, team: vsMyTeam(), name: myName() });
+      const q = new URLSearchParams({ key: deviceKey(), mode, team: vsMyTeam(), name: myName(), ...(mode === 'cpu' ? { level: vsCpuLevel() } : {}) });
       try { ws = new WebSocket(`${BOARD.api.replace(/^http/, 'ws')}/vs/queue?${q}`); } catch (e) { return setTimeout(open, 2000); }
       vs.q = ws;
       ws.onmessage = (ev) => {
@@ -12947,7 +12958,7 @@
     show('arch');
     const box = $('arch');
     box.textContent = '';
-    box.append(el('h2', '', 'Versus'), el('p', 'lead', 'College overtime against another player: each team gets the ball at the other’s 25, no clock. You call your offense and your defense; both calls lock in before the snap, and the same play runs on both phones.'));
+    box.append(el('h2', '', 'Versus'), el('p', 'lead', 'College overtime against another player, or the computer: each team gets the ball at the other’s 25, no clock. You call your offense and your defense; both calls lock in before the snap.'));
     const pick = el('div', 'vspick');
     // (your team in one line with Change, the 32 only when you pick: the Play keys were under them on a phone. A
     // fanbase pick, Your team, is your Versus team until you choose another)
@@ -12992,7 +13003,21 @@
       modes.append(b);
     });
     drawPick();
-    box.append(pick, modes);
+    const meLine = el('p', 'note vsme', '');
+    const lv = el('div', 'opts-row vslevel');
+    lv.append(el('span', 'lab', 'Computer'));
+    const drawLv = () => {
+      [...lv.querySelectorAll('button')].forEach((b) => b.remove());
+      Object.entries(VS_CPU_LEVELS).forEach(([k, label]) => {
+        const b = el('button', `chip opt${vsCpuLevel() === k ? ' on' : ''}`, label);
+        b.type = 'button'; b.setAttribute('aria-pressed', String(vsCpuLevel() === k));
+        b.title = k === 'rookie' ? 'Deep shots on any down and a soft defense: a good first opponent' : 'Calls plays the way NFL play-callers do';
+        b.addEventListener('click', () => { save(VS_CPU_KEY, k); track('vs_cpu_level', { level: k }); drawLv(); });
+        lv.append(b);
+      });
+    };
+    drawLv();
+    box.append(pick, meLine, modes, lv);
     const nameRow = el('div', 'row'), nameIn = el('input');
     nameIn.placeholder = 'Your name (for ranked)'; nameIn.maxLength = 24; nameIn.value = myName(); nameIn.setAttribute('aria-label', 'Your name');
     nameIn.addEventListener('change', () => { save(NAME_KEY, nameIn.value.trim().slice(0, 24)); track('name_set', { mode: 'versus' }); });
@@ -13021,7 +13046,9 @@
       await BOARD.ready;
       const [top, me] = await Promise.all([fetch(`${BOARD.api}/vs/ladder`).then((r) => r.json()), fetch(`${BOARD.api}/vs/me`, POST_JSON({ key: deviceKey() })).then((r) => r.json())]);
       const streak = me.streak > 1 ? ` · ${me.streak} wins in a row` : me.streak < -1 ? ` · ${-me.streak} losses in a row` : '';
-      lad.append(el('p', 'note', me.games ? `You: ${me.rating}${me.rank ? ` · #${me.rank}` : ''} · ${me.w}–${me.l}${streak}${me.provisional ? ` · placement (${me.games} of 10)` : ''}` : 'You: 1000 · no ranked games yet'));
+      const you = me.games ? `You: ${me.rating}${me.rank ? ` · #${me.rank}` : ''} · ${me.w}–${me.l}${streak}${me.provisional ? ` · placement (${me.games} of 10)` : ''}` : 'You: 1000 · no ranked games yet';
+      lad.append(el('p', 'note', you));
+      meLine.textContent = `Ranked: ${you.replace(/^You: /, '')}`;      // (up top too: the ladder is at the foot)
       const ol = el('ol', 'board');
       (top.top || []).slice(0, 20).forEach((x) => { const li = el('li'); li.append(el('span', 'nm', x.name), el('span', 'n', `${x.rating}${x.provisional ? '?' : ''} · ${x.w}–${x.l}`)); ol.append(li); });
       if (!(top.top || []).length) lad.append(el('p', 'note', 'Nobody yet. Be the first.'));
@@ -13048,7 +13075,7 @@
     }
     b.textContent = '';
     if (vs.banner) b.append(el('span', 'warn', vs.banner));
-    if (vs.ui === 'prompt' && vsMyDl()) {
+    if (vs.ui === 'prompt' && vsMyDl() && vs.mode !== 'cpu') {          // (the computer: take your time)
       const s = Math.max(0, Math.ceil((vsMyDl() - vsNow()) / 1000));
       b.append(el('span', `clk${s <= 10 ? ' low' : ''}`, `Play clock ${s}`));
     }
@@ -13065,7 +13092,7 @@
     vs.ui = 'prompt';
     if (vs.n === G.vsN && vs.seat >= 0) {
       vs.dl = vsDls();
-      vs.dl[vs.seat] = Math.min(vs.dl[vs.seat], vsNow() + VS_DECIDE_MS);
+      vs.dl[vs.seat] = Math.min(vs.dl[vs.seat], vsNow() + (vs.mode === 'cpu' ? VS_CPU_DECIDE_MS : VS_DECIDE_MS));
       vsSend({ t: 'ready', n: G.vsN });
     }
     vs.timer = setInterval(() => {
@@ -13184,7 +13211,8 @@
     vs.ui = 'card';
     // the play clock runs whether or not Next is tapped: the card gives way when the clock would start anyway (WATCH_MS after the snap)
     clearTimeout(vs.cardTimer);
-    vs.cardTimer = setTimeout(go, vs.result ? 8000 : Math.max(4000, vs.deadline - VS_DECIDE_MS - vsNow()));     // the last play: then the final
+    // (the computer: no clock behind the card, so it gives way after a moment, as a play's card does)
+    vs.cardTimer = setTimeout(go, vs.result ? 8000 : vs.mode === 'cpu' ? 9000 : Math.max(4000, vs.deadline - VS_DECIDE_MS - vsNow()));     // the last play: then the final
   }
   // the next decision of the match: one the room already played, yours (a prompt, on the play clock) or theirs (wait)
   async function vsAdvance(r) {
@@ -13287,7 +13315,8 @@
     if (res.by === 'score' || res.by === 'forfeit') {
       const again = el('button', `btn${vs.mode === 'ranked' ? ' ghostbtn' : ''}`, vs.mode === 'ranked' ? 'Rematch (casual)' : 'Rematch');
       again.type = 'button'; again.id = 'vsAgain';
-      again.addEventListener('click', () => { again.disabled = true; again.textContent = 'Waiting for your opponent…'; vsSend({ t: 'rematch' }); });
+      again.addEventListener('click', () => { again.disabled = true; again.textContent = vs.mode === 'cpu' ? 'Setting up…' : 'Waiting for your opponent…'; vsSend({ t: 'rematch' }); });
+      if (vs.mode !== 'cpu' && vs.online && !vs.online[1 - vs.seat]) { again.disabled = true; again.textContent = 'They left'; }
       row.append(again);
     }
     const next = el('a', 'btn ghostbtn', 'New match');

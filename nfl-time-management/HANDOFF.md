@@ -81,17 +81,34 @@ that folder first. It holds the project's rules and how every part works.
    - confirm `#dock` never scrolls (scrollHeight minus clientHeight should be 0).
 4. Open the PR (base `main`). The branch already has `origin/main` merged in.
 
-## Multiplayer issues still open (from the hater review)
+## Multiplayer: the hater review
 
-| Issue | Status |
+**Fixed** on `claude/versus-launch`:
+- The lobby's Play buttons now sit at the top, with your team on one line and a Change button.
+- Against the computer the status no longer says "waiting for your opponent".
+- A match's calls fit on a phone with no scrolling.
+- The score on the end card stays on one line.
+- There's a "Share the result" button.
+- **Computer levels:** Rookie and Pro.
+  - Rookie throws deep on any down and plays a soft defense with a light rush.
+  - `vs_cpu_test.mjs` measures a random-calling player beating the Rookie 53% of the time and the Pro 42%.
+- **No play clock against the computer:** each call has 10 minutes, and locking the phone for under 10 minutes
+  never forfeits (`CPU_DECIDE_MS`).
+- The match intro shows the full rules only for your first two matches.
+- Your ranked rating now shows at the top of the lobby.
+- "Rematch" says "They left" when the opponent has gone, instead of waiting forever.
+- The ranked name was already fixed: it falls back to the account username.
+
+**Checked:** a full match against the computer in a real browser, against `wrangler dev`, ended "You win 13–0", with
+no screen needing to scroll and no script errors. `match_test`, `vs_cpu_test 120` and `vs_stress 200` all pass.
+
+**Still open:**
+
+| Issue | Idea |
 |---|---|
-| The computer has one difficulty and always chooses defense at the toss | Open. Idea: "Easy / Pro" levels by blending a worse or better call into its default. |
-| Ranked at launch will have few players | Open. The computer covers casual only; consider showing "players online" in the lobby. |
-| iOS locking the phone or switching apps for 60 s forfeits the match | `FORFEIT_MS` is 60 s. Consider 90 s, plus a reconnect banner. |
-| No in-match emotes | Low priority. |
-| The match intro is long ("Kick it off" with three paragraphs) | Shorten after the first match. |
-| The ladder is only at the bottom of the lobby | Open. |
-| Ranked asking for a name | Already fixed: it falls back to the account username (`myName`). |
+| Ranked will have few players at launch (the computer covers casual only) | Show "players online" in the lobby |
+| No in-match emotes | Low priority |
+| The 60 s away-forfeit against human players is harsh on iOS app switching | Consider 90 s |
 
 ## Other open tasks
 

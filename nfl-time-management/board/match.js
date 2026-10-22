@@ -47,6 +47,15 @@ const TEAM_RE = /^[A-Z]{2,3}$/;
 const MODES = ['ranked', 'casual', 'friend', 'cpu'];
 export const CPU_SEAT = 1, CPU_KEY = 'cpu', CPU_NAME = 'Computer';
 export const CPU_AFTER_S = 20;             // waiting this long in the queue: the computer is offered (casual or ranked)
+// against the computer nobody waits on you: no 30-second play clock (a call has this long, the room's clock only to
+// close a match left open), and a phone locked or away this long, not a minute, before it counts as leaving
+export const CPU_DECIDE_MS = 10 * 60_000;
+// the computer's level: 'pro' calls as NFL play-callers do (the engine's own call); 'rookie' makes a rookie's calls (deep
+// shots on any down, a soft defense with a light rush), a beatable first opponent (vs_cpu_test.mjs measures both)
+export const CPU_LEVELS = ['rookie', 'pro'];
+// (what a rookie play-caller does: throws deep on any down, sits back soft with three or four rushing)
+const ROOKIE_CALLS = ['deep_strong', 'deep_weak', 'deep_middle', 'pa_deep', 'deep_middle'];
+const ROOKIE_DEF = [{ pers: 'dime', front: 'light', cover: 'prevent', rush: 3 }, { pers: 'dime', front: 'light', cover: 'c4', rush: 3 }, { pers: 'nickel', front: 'light', cover: 'prevent', rush: 4 }];
 export const WATCH_MS = 15_000;            // after a snap: the play to watch (at most) before the play clock runs anyway
 export const DECIDE_MS = 30_000;           // the play clock: 30 seconds to call, from the moment the call comes up
 export const PLAY_MS = WATCH_MS + DECIDE_MS;    // a decision's last moment after the last snap
@@ -134,7 +143,7 @@ export class Match {
     for (let i = since; i < R.n; i++) { const d = await this.ctx.storage.get(`d:${i}`); delete d.seed; decisions.push(d); }
     server.send(JSON.stringify({ t: 'hello', seat, mode: R.mode, room: R.room, teams: R.teams, names: R.names, full: R.seen[0] && R.seen[1],
       online: this.online(), off: R.off, phase: R.phase, n: R.n, ms: R.ms, ms0: since === 0 ? R.ms0 || null : null, decisions, deadline: R.deadline, dl: dls(R), now,
-      result: R.result, rated: R.rated }));
+      result: R.result, rated: R.rated, level: R.cpuLevel || null }));
     this.broadcast({ t: 'peer', online: this.online(), off: R.off, full: R.seen[0] && R.seen[1], now });
     const pend = await this.ctx.storage.get('pend');
     if (pend && pend.n === R.n) for (const s of Object.keys(pend.halves)) server.send(JSON.stringify({ t: 'locked', n: pend.n, seat: Number(s) }));
@@ -166,7 +175,7 @@ export class Match {
     const now = Date.now(), R = this.fresh(b.room, MODES.includes(b.mode) ? b.mode : 'casual', now);
     R.pre = true;
     R.seats = [b.seats[0], b.seats[1]];
-    if (R.mode === 'cpu') { R.cpu = CPU_SEAT; R.seats[CPU_SEAT] = CPU_KEY; R.seen[CPU_SEAT] = true; this.cpuSeat = CPU_SEAT; }
+    if (R.mode === 'cpu') { R.cpu = CPU_SEAT; R.seats[CPU_SEAT] = CPU_KEY; R.seen[CPU_SEAT] = true; this.cpuSeat = CPU_SEAT; R.cpuLevel = CPU_LEVELS.includes(b.level) ? b.level : 'pro'; }
     R.teams = [TEAM_RE.test(b.teams && b.teams[0]) ? b.teams[0] : null, TEAM_RE.test(b.teams && b.teams[1]) ? b.teams[1] : null];
     if (R.teams[0] && R.teams[0] === R.teams[1]) R.teams[1] = null;
     R.names = [clean(b.names && b.names[0]), clean(b.names && b.names[1])];
@@ -179,7 +188,7 @@ export class Match {
     R.ms = R.ms0 = VSCore.start(rand() & 1);
     R.phase = 'live';
     R.n = 0;
-    R.deadline = now + FIRST_MS;
+    R.deadline = now + (R.cpu != null ? CPU_DECIDE_MS : FIRST_MS);
     R.dl = [R.deadline, R.deadline];
     R.started = now;
     R.defaults = [0, 0];
@@ -192,7 +201,7 @@ export class Match {
     if (R.phase === 'live') {
       const pend = await this.ctx.storage.get('pend'), dl = dls(R);
       for (const s of VSCore.need(R.ms)) if (!(pend && pend.n === R.n && s in pend.halves)) t.push(dl[s]);    // the calls still out
-      for (const s of [0, 1]) if (R.off[s]) t.push(R.off[s] + FORFEIT_MS);
+      for (const s of [0, 1]) if (R.off[s]) t.push(R.off[s] + (R.cpu != null ? CPU_DECIDE_MS : FORFEIT_MS));
     }
     if (R.phase === 'wait' && R.pre) t.push(R.created + NOSHOW_MS);
     if (R.phase === 'over' && R.mode === 'ranked' && R.result && R.result.winner >= 0 && !R.rated) t.push(Date.now() + 5000);
@@ -212,7 +221,7 @@ export class Match {
     if (!m || typeof m !== 'object') return;
     const att = ws.deserializeAttachment() || {}, { seat } = att;
     if (m.t === 'ping') { try { ws.send('{"t":"pong"}'); } catch (e) { /* closing */ } return; }
-    if (att.q) return m.t === 'cpu' ? this.cpuMatch(ws, att) : undefined;
+    if (att.q) return m.t === 'cpu' ? this.cpuMatch(ws, att, m.level) : undefined;
     if (seat !== 0 && seat !== 1) return;
     // the engine first (a fetch the first time): everything after it is this room's storage only, so no other
     // message gets in between reading the room and saving it
@@ -240,7 +249,7 @@ export class Match {
       // the call is up on this phone: its 30 seconds start (never later than the decision's last moment)
       if (R.phase !== 'live' || m.n !== R.n || !VSCore.need(R.ms).includes(seat)) return;
       R.dl = dls(R);
-      R.dl[seat] = Math.min(R.dl[seat], now + DECIDE_MS);
+      R.dl[seat] = Math.min(R.dl[seat], now + (R.cpu != null ? CPU_DECIDE_MS : DECIDE_MS));
       await this.save(R);
       try { ws.send(JSON.stringify({ t: 'clock', n: R.n, deadline: R.dl[seat], now })); } catch (e) { /* closing */ }
       await this.schedule(R);
@@ -273,7 +282,7 @@ export class Match {
     await this.ctx.storage.put(`d:${pend.n}`, { ...d, seed });            // the seed stays here (a replay); no phone sees it
     R.ms = out.ms;
     R.n = pend.n + 1;
-    R.deadline = now + PLAY_MS;
+    R.deadline = now + (R.cpu != null ? CPU_DECIDE_MS : PLAY_MS);
     R.dl = [R.deadline, R.deadline];
     let result = null;
     if (out.ms.over) {
@@ -302,7 +311,7 @@ export class Match {
     let pend = await this.ctx.storage.get('pend');
     if (!pend || pend.n !== R.n) pend = { n: R.n, halves: {} };
     if (R.cpu in pend.halves) return;
-    pend.halves[R.cpu] = null;
+    pend.halves[R.cpu] = R.cpuLevel === 'rookie' ? this.rookieHalf(R, E) : null;
     if (VSCore.need(R.ms).every((s) => s in pend.halves)) return this.commit(R, pend, E, Date.now());
     await this.ctx.storage.put('pend', pend);
     this.broadcast({ t: 'locked', n: pend.n, seat: R.cpu });
@@ -354,7 +363,7 @@ export class Match {
         for (let i = 0; i < 5; i++) {
           const code = roomCode();
           const r = await this.env.MATCH.get(this.env.MATCH.idFromName(`room:${code}`)).fetch(new Request('https://room/vs/init', {
-            method: 'POST', body: JSON.stringify({ room: code, mode: R2.mode === 'friend' || R2.mode === 'cpu' ? R2.mode : 'casual', seats: R2.seats, teams: R2.teams, names: R2.names }) }));
+            method: 'POST', body: JSON.stringify({ room: code, mode: R2.mode === 'friend' || R2.mode === 'cpu' ? R2.mode : 'casual', seats: R2.seats, teams: R2.teams, names: R2.names, level: R2.cpuLevel }) }));
           if (r.ok) { R2.next = code; await this.save(R2); return code; }
         }
         return null;
@@ -376,7 +385,7 @@ export class Match {
     }
     if (R.phase === 'live') {
       // a phone gone too long: that side forfeits (both gone: the one who left first; at the same time: nobody wins)
-      const late = [0, 1].filter((s) => R.off[s] && now >= R.off[s] + FORFEIT_MS);
+      const late = [0, 1].filter((s) => R.off[s] && now >= R.off[s] + (R.cpu != null ? CPU_DECIDE_MS : FORFEIT_MS));
       if (late.length === 2) {
         const first = R.off[0] === R.off[1] ? -1 : R.off[0] < R.off[1] ? 0 : 1;
         return this.finish(R, first < 0 ? { winner: -1, by: 'abandoned' } : { winner: 1 - first, by: 'forfeit', loser: first, why: 'left' });
@@ -461,7 +470,7 @@ export class Match {
       this.ctx.acceptWebSocket(server, ['cpuq']);
       const t = { q: true, kh, mode: 'casual', team, name, rating, since: Date.now(), now: true };
       server.serializeAttachment(t);
-      await this.cpuMatch(server, t);
+      await this.cpuMatch(server, t, url.searchParams.get('level'));
       return new Response(null, { status: 101, webSocket: client });
     }
     this.ctx.acceptWebSocket(server, ['q']);
@@ -508,25 +517,36 @@ export class Match {
       }
     }
   }
+  // the rookie: any play at random (a run or a pass the page offers, the defense's four parts each at random); the
+  // toss, the try: the default
+  rookieHalf(R, E) {
+    const role = VSCore.role(R.ms, R.cpu), pick = (a) => a[rand() % a.length];
+    let h = null;
+    if (role === 'offense') {
+      const id = pick(ROOKIE_CALLS), c = E.eng.pb.calls.find((x) => x.id === id);
+      if (c) h = { action: { call: c.id, play: c.kind === 'run' ? 'run' : 'pass' } };
+    } else if (role === 'defense') h = { dc: { ...pick(ROOKIE_DEF) } };
+    return h ? VSCore.cleanHalf(R.ms, R.cpu, h, E.eng.pb) : null;
+  }
   // a ticket that has waited CPU_AFTER_S asks for the computer: a room of its own against a team other than its own
   // (never rated), and it leaves the queue
-  async cpuMatch(ws, t) {
+  async cpuMatch(ws, t, level) {
     if (!t.q || t.paired || (!t.now && Date.now() - t.since < CPU_AFTER_S * 1000 - 2000)) return;
     let E;
     try { E = await loadEngine(this.env); } catch (e) { return; }
     const teams = Object.keys(E.pool.teams).filter((c) => c !== t.team && TEAM_RE.test(c));
     if (!teams.length) return;
     const other = teams[rand() % teams.length];
-    const room = await this.makeRoom('cpu', t, { kh: CPU_KEY, team: other, name: CPU_NAME });
+    const room = await this.makeRoom('cpu', t, { kh: CPU_KEY, team: other, name: CPU_NAME }, CPU_LEVELS.includes(level) ? level : 'pro');
     if (!room) return;
     ws.serializeAttachment({ ...t, paired: room });
     try { ws.send(JSON.stringify({ t: 'match', room, mode: 'cpu' })); ws.close(1000, 'matched'); } catch (e) { /* gone: the room calls it off */ }
   }
-  async makeRoom(mode, a, b) {
+  async makeRoom(mode, a, b, level) {
     for (let i = 0; i < 5; i++) {
       const room = roomCode();
       const r = await this.env.MATCH.get(this.env.MATCH.idFromName(`room:${room}`)).fetch(new Request('https://room/vs/init', {
-        method: 'POST', body: JSON.stringify({ room, mode, seats: [a.kh, b.kh], teams: [a.team, b.team], names: [a.name, b.name] }) }));
+        method: 'POST', body: JSON.stringify({ room, mode, seats: [a.kh, b.kh], teams: [a.team, b.team], names: [a.name, b.name], level }) }));
       if (r.ok) return room;
     }
     return null;
