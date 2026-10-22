@@ -2705,6 +2705,8 @@
     const out = [];
     segs.forEach((s, i) => {
       if (s.kind !== 'hold' || !s.a) return;
+      // (the passer in his pocket, the ball thrown after: the rush on him is pressure, not a man going by)
+      if (s.a.label === 'QB' && segs[i + 1] && segs[i + 1].kind === 'fly') return;
       const car = s.a, t1 = (i + 1 < segs.length ? segs[i + 1].t0 : P.T) - 0.3, seen = new Set();
       const yd = (p, q) => Math.hypot((p.x - q.x) / XYD, p.L - q.L);
       for (let t = s.t0 + 0.3; t < t1; t += 0.05) {
