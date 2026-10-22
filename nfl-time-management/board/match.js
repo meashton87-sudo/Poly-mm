@@ -86,29 +86,42 @@ async function hashKey(k) {
   return Array.from(d.slice(0, 12), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// the engine and the teams, once per isolate: the worker's own assets (board/assets/vs, put there by the site workflow)
-let ENGINE = null;
-export function loadEngine(env) {
-  if (env.VS_ENGINE) return Promise.resolve(typeof env.VS_ENGINE === 'function' ? env.VS_ENGINE() : env.VS_ENGINE);    // the tests' own
-  if (!ENGINE) {
-    ENGINE = (async () => {
-      const get = async (p) => {
-        const r = await env.ASSETS.fetch(new Request(`https://assets.local/vs/${p}`));
-        if (!r.ok) throw new Error(`vs/${p} ${r.status}`);
-        return r;
-      };
-      const unz = async (r) => new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
-      const [eb, pbb, pool] = await Promise.all([get('engine_data.pack').then(unz), get('playbook.pack').then(unz), get('teams.json').then((r) => r.json())]);
-      const d = VSCore.unpack(eb), pb = VSCore.unpack(pbb, d);         // (the playbook's pack refers to the engine's)
-      const eng = new NFLClockEngine(d);
-      eng.loadPlaybook(pb);
-      return { eng, pool };
-    })();
-    ENGINE.catch(() => { ENGINE = null; });
-  }
-  return ENGINE;
+// the engine and the teams, once per isolate: the worker's own assets (board/assets/vs, put there by the site workflow).
+// The loaded engine is shared by every room in the isolate; a load still under way is waited on only ENGINE_WAIT_MS.
+// On Cloudflare a promise started by another room's request can never settle for this one (its continuations are
+// cancelled when that request ends): a load test's computer matches hung on it for good, the alarm's retry with them.
+// Past the wait, a room loads it itself.
+export const ENGINE_WAIT_MS = 10_000;
+let ENGINE = null, ENGINE_P = null;
+function buildEngine(env) {
+  const p = (async () => {
+    const get = async (f) => {
+      const r = await env.ASSETS.fetch(new Request(`https://assets.local/vs/${f}`));
+      if (!r.ok) throw new Error(`vs/${f} ${r.status}`);
+      return r;
+    };
+    const unz = async (r) => new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+    const [eb, pbb, pool] = await Promise.all([get('engine_data.pack').then(unz), get('playbook.pack').then(unz), get('teams.json').then((r) => r.json())]);
+    const d = VSCore.unpack(eb), pb = VSCore.unpack(pbb, d);         // (the playbook's pack refers to the engine's)
+    const eng = new NFLClockEngine(d);
+    eng.loadPlaybook(pb);
+    return (ENGINE = ENGINE || { eng, pool });
+  })();
+  ENGINE_P = p;
+  p.catch(() => { if (ENGINE_P === p) ENGINE_P = null; });
+  return p;
 }
-export function resetEngine() { ENGINE = null; }
+export async function loadEngine(env) {
+  if (env.VS_ENGINE) return typeof env.VS_ENGINE === 'function' ? env.VS_ENGINE() : env.VS_ENGINE;    // the tests' own
+  if (ENGINE) return ENGINE;
+  if (ENGINE_P) {
+    const v = await Promise.race([ENGINE_P.catch(() => null), new Promise((r) => setTimeout(() => r(null), ENGINE_WAIT_MS))]);
+    if (v) return v;
+  }
+  return buildEngine(env);
+}
+// (the tests: a fresh isolate, or one whose load in flight never settles)
+export function resetEngine(pending = null) { ENGINE = null; ENGINE_P = pending; }
 
 export class Match {
   constructor(ctx, env) {
