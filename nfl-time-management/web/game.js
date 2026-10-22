@@ -1539,7 +1539,8 @@
   }
   // each receiver's odds on his current route, from the real plays it would draw (worker 'odds'), cached per snap
   const routeAt = (a) => (Number.isFinite(a.depth) ? `${a.route}@${a.depth}` : a.route);     // (engine.js routeOfAct)
-  function pickKey(a) { return `${a.call}|${routeAt(a)}|${a.who}|${a.looks}`; }
+  // (with what else the snap draws by: the repeats, personnel, formation, backs and motion read, engine.js routeOdds)
+  function pickKey(a) { return `${a.call}|${routeAt(a)}|${a.who}|${a.looks}|${a.rep || 0}|${a.pers || 0}|${a.form || ''}|${a.bf ?? ''}|${a.cov || ''}|${a.oob ? 1 : 0}`; }
   async function fetchOdds() {
     if (!passing() || !scene) return;
     G.odds = G.odds || {};
@@ -1547,7 +1548,7 @@
     if (!picks.length) return;
     picks.forEach((a) => { G.odds[pickKey(a)] = null; });
     try {
-      const res = await send({ type: 'odds', scen: simScen(), root: G.root, picks: picks.map((a) => ({ call: a.call, route: routeAt(a), who: a.who, looks: a.looks })) }, true);
+      const res = await send({ type: 'odds', scen: simScen(), root: G.root, picks: picks.map((a) => ({ call: a.call, route: routeAt(a), who: a.who, looks: a.looks, rep: a.rep, pers: a.pers, form: a.form, bf: a.bf, cov: a.cov, oob: a.oob })) }, true);
       picks.forEach((a, k) => { G.odds[pickKey(a)] = res.out[k]; });
     } catch (e) { picks.forEach((a) => { delete G.odds[pickKey(a)]; }); return; }      // asked again on the next redraw
     // into the cards already up, not a redrawn dock: a redraw between a finger's down and up would eat the throw
@@ -1560,12 +1561,13 @@
       snapLine();
     }
   }
-  const oddsText = (o) => (o ? `${Math.round(o.caught * 100)}% caught · ${o.yds.toFixed(1)} yds a throw${o.picks >= 0.03 ? ` · ${Math.round(o.picks * 100)}% picked` : ''}` : '');
+  // (per snap, as the snap draws it: the sacks, scrambles and throwaways count, engine.js routeOdds)
+  const oddsText = (o) => (o ? `${Math.round(o.caught * 100)}% caught · ${o.yds.toFixed(1)} yds a play${o.picks >= 0.03 ? ` · ${Math.round(o.picks * 100)}% picked` : ''}${o.nt >= 0.05 ? ` · ${Math.round(o.nt * 100)}% sacked, scrambles or thrown away` : ''}` : '');
   // on a receiver's row: in full, or on a phone the numbers only ("58% · 9.1 yds", game.html), the words in its title
   function oddsEl(o) {
     const s = el('span', 'od');
     s.title = oddsText(o);
-    s.append(el('b', '', `${Math.round(o.caught * 100)}%`), el('i', '', ' caught'), ` · ${o.yds.toFixed(1)} yds`, el('i', '', ' a throw'));
+    s.append(el('b', '', `${Math.round(o.caught * 100)}%`), el('i', '', ' caught'), ` · ${o.yds.toFixed(1)} yds`, el('i', '', ' a play'));
     if (o.picks >= 0.03) s.append(el('span', 'pk', ` · ${Math.round(o.picks * 100)}% picked`));
     return s;
   }

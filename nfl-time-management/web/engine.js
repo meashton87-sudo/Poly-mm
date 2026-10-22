@@ -205,6 +205,10 @@
   const DC_NEAR = [[1, 0, false], [1, 1, false], [0, null, false], [2, 1, false], [null, 0, false], [1, null, true], [null, 1, false], [null, null, false]];
   // a dropback that was never thrown to anyone (a picked receiver's route says nothing about it: _noTarget)
   const NO_TARGET_EV = new Set(['sack', 'strip_sack', 'sack_fumble', 'scramble', 'throwaway']);
+  // a rollout's pools hold every dropback the quarterback left the pocket on (playbook.py spreads the untargeted ones
+  // over the two rollouts), broken plays mostly: 50-70% of them are scrambles, sacks and throwaways. A rollout called
+  // with a receiver picked has them at most this often (a player shown "76% caught" on a rollout saw 19%, Oct 22)
+  const ROLL_NT = 0.15;
   const DROPBACK_EV = new Set(['sack', 'strip_sack', 'sack_fumble', 'scramble', 'throwaway', 'interception', 'pick_six', 'near_pick', 'drop']);
   // daily game: your special-teams defense (act.st) when they kick. 'block' (field goal) or 'rush' (punt) sends
   // everyone: more blocks, but now and then a roughing flag (15 yards and a first down, an untimed down if time ran
@@ -900,7 +904,7 @@
         // a sack, a scramble, a throwaway with nobody charted as the target: no route to filter them by, so a pick left
         // every one out (a picked pass was never sacked: 0% against the real 5%). They come first, as often as in
         // the situation's own plays (against the look the defense showed, when there are enough)
-        const N = preDone === 2 ? null : this._noTarget(cdf, pool, looks);
+        const N = preDone === 2 ? null : this._noTarget(cdf, pool, looks, callIdx);
         if (N && u < N.share) return this._pickT(N, u / N.share);
         if (N) u = (u - N.share) / (1 - N.share);
         const r = this._pickT(this.routeSet(team, callIdx, fk, oob, looks, s, route, who, pers), u);
@@ -975,20 +979,34 @@
       }
       return null;
     }
-    // what a pick tends to do here: the share of throws caught, yards a throw, interceptions (weighted real plays)
-    routeOdds(team, callIdx, fk, looks, route, who, toGoal) {
-      const P = this.e.pb, s = this.matchOf(callIdx, this.defOfLooks(looks));
-      const T = this.routeSet(team, callIdx, fk, false, looks, s, route, WHO_CODE[who] || 0);
+    // what a pick tends to do here: the share of snaps caught, yards a snap, interceptions (weighted real plays), drawn
+    // as the snap draws them (samplePlaybook): the sacks, scrambles and throwaways first (nt, as often as the
+    // situation's plays have them), then the route's plays, with the pick's own count of repeats (act.rep), personnel,
+    // formation, motion read and sideline. Shown as the chance per throw, it said 76% on picks that were caught 74% of
+    // the time at best, and on a hitch thrown four times running 80% for 70% (a player: "told 70% or higher and get
+    // screwed every time", Oct 22)
+    routeOdds(team, callIdx, fk, looks, route, who, toGoal, act = {}) {
+      const P = this.e.pb, s = this.matchOf(callIdx, this.defOfLooks(looks)) + repeatS(act), oob = act.oob ? 1 : -1;
+      const cov0 = this._cov;
+      this._cov = act.cov === 'man' ? 1 : act.cov === 'zone' ? 2 : 0;
+      let T;
+      try { T = this.routeSet(team, callIdx, fk, oob, looks, s, route, WHO_CODE[who] || 0, persForm(act)); } finally { this._cov = cov0; }
       if (!T) return null;
+      const gain = (r) => (toGoal > 0 ? Math.min(P.yards[r], toGoal) : P.yards[r]);   // a play gains at most the goal line
       let w0 = 0, caught = 0, yds = 0, picks = 0;
       T.items.forEach((r, i) => {
         const w = T.cum[i] - (i ? T.cum[i - 1] : 0), f = P.flags[r], ev = P.eventNames[P.event[r]] || '';
         if (f & 1) return;                                             // penalties aside
-        w0 += w; yds += w * (toGoal > 0 ? Math.min(P.yards[r], toGoal) : P.yards[r]);   // a throw gains at most the goal line
+        w0 += w; yds += w * gain(r);
         if (!(f & 4) && !(f & 64) && !/sack|scramble|throwaway/.test(ev)) caught += w;
         if ((f & 64) && /interception|pick_six/.test(ev)) picks += w;
       });
-      return w0 > 0 ? { caught: caught / w0, yds: yds / w0, picks: picks / w0, n: T.items.length } : null;
+      if (!(w0 > 0)) return null;
+      const N = this._noTarget(this._cdfOf(team, oob), P.poolOf[callIdx * P.nFine + fk], looks, callIdx), nt = N ? N.share : 0;
+      let ntY = 0;
+      if (N) N.items.forEach((r, i) => { ntY += (N.cum[i] - (i ? N.cum[i - 1] : 0)) * gain(r); });
+      if (N) ntY /= N.tot;
+      return { caught: (1 - nt) * caught / w0, yds: (1 - nt) * yds / w0 + nt * ntY, picks: (1 - nt) * picks / w0, nt, n: T.items.length };
     }
 
     // daily game: a call of this kind ('run' or 'pass'), as often as NFL play-callers make each in situation fk; against
@@ -1090,13 +1108,14 @@
     // the dropbacks of a pool with no target charted (sacks, scrambles, most throwaways), against the look when
     // PB_LOOK_MIN plays of the pool were run against it, else the whole pool; share: their weight in its plays after
     // the snap
-    _noTarget(cdf, pool, looks) {
+    _noTarget(cdf, pool, looks, callIdx) {
       const P = this.e.pb;
       if (!P.ngs || !P.ngs.route) return null;
       this._nt = this._nt || new WeakMap();
       let byPool = this._nt.get(cdf);
       if (!byPool) { byPool = new Map(); this._nt.set(cdf, byPool); }
-      const key = `${pool}|${looks || 0}`;
+      const cap = callIdx >= 0 && /^roll_/.test(P.calls[callIdx].id) ? ROLL_NT : 0.9;
+      const key = `${pool}|${looks || 0}|${cap}`;
       let T = byPool.get(key);
       if (T !== undefined) return T;
       const lo = P.offsets[pool], hi = P.offsets[pool + 1] - 1;
@@ -1116,6 +1135,7 @@
       };
       T = (looks && build(looks)) || build(0);
       if (T && !(T.tot > 0 && T.share < 0.9)) T = null;
+      if (T && T.share > cap) T = { ...T, share: cap };
       byPool.set(key, T);
       return T;
     }
@@ -1183,7 +1203,7 @@
         // (and a pick's sacks, scrambles and throwaways, samplePlaybook's, as often as in the situation's plays;
         // preDone 2: samplePlaybook, if it comes to that, has them drawn)
         if (route && P.calls[callIdx].kind !== 'run') {
-          const N = this._noTarget(cdf, pool, 0);
+          const N = this._noTarget(cdf, pool, 0, callIdx);
           if (N && u < N.share) return this._pickT(N, u / N.share);
           if (N) u = (u - N.share) / (1 - N.share);
           preDone = 2;

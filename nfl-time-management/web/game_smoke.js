@@ -181,7 +181,7 @@ for (let k = 0; k < 100; k++) {
   // have no target charted, so the route filter alone left every one out (engine.js _noTarget)
   const dropOnly = (route) => {
     let n = 0, k0 = 0;
-    for (const id of ['quick_strong', 'deep_strong', 'pa_deep', 'roll_strong']) for (let fk = 0; fk < P.nFine; fk += 5) for (let k = 0; k < 60; k++) {
+    for (const id of ['quick_strong', 'deep_strong', 'pa_deep']) for (let fk = 0; fk < P.nFine; fk += 5) for (let k = 0; k < 60; k++) {
       const r = route ? S.samplePlaybook(0, P.callIndex[id], fk, (k + 0.5) / 60, false, 0, 0, 'out', 3) : S.samplePlaybook(0, P.callIndex[id], fk, (k + 0.5) / 60, false, 0, 0);
       if (r < 0 || P.flags[r] & 1) continue;
       n++; k0 += /sack/.test(P.eventNames[P.event[r]] || '') ? 1 : 0;
@@ -191,6 +191,36 @@ for (let k = 0; k < 100; k++) {
   const sk0 = dropOnly(false), sk1 = dropOnly(true);
   assert.ok(sk1 > sk0 * 0.75 && sk1 < sk0 * 1.25, `sacks with a receiver picked: ${sk1.toFixed(3)} against ${sk0.toFixed(3)}`);
   console.log(`sacks: ${(100 * sk0).toFixed(1)}% of the calls' real plays, ${(100 * sk1).toFixed(1)}% with a receiver and route picked`);
+  // a rollout's pools are mostly broken plays (every scramble out of the pocket is charted out of it): picked, at most
+  // ROLL_NT of them, not the 65% that made a "76% caught" rollout a 19% one
+  {
+    let n = 0, nt = 0;
+    for (const id of ['roll_strong', 'roll_weak']) for (let fk = 0; fk < P.nFine; fk += 5) for (let k = 0; k < 60; k++) {
+      const r = S.samplePlaybook(0, P.callIndex[id], fk, (k + 0.5) / 60, false, 0, 0, 'out', 3);
+      if (r < 0 || P.flags[r] & 1) continue;
+      n++; nt += /sack|scramble|throwaway/.test(P.eventNames[P.event[r]] || '') ? 1 : 0;
+    }
+    assert.ok(nt / n <= 0.2, `a picked rollout sacked, scrambling or thrown away ${(100 * nt / n).toFixed(1)}%`);
+  }
+  // a receiver's odds on his chip (game.js oddsEl) are what the snap draws: caught per snap, the sacks, scrambles and
+  // throwaways and a route thrown again and again counted (a player: "told 70% or higher and get screwed every time")
+  {
+    let worst = 0, k = 0;
+    for (const id of ['quick_strong', 'deep_middle', 'pa_short', 'roll_weak', 'screen']) for (const fk of [5, 61, 150]) for (const route of ['hitch', 'out', 'go']) for (const rep of [0, 3]) {
+      const ci = P.callIndex[id], s0 = S.matchOf(ci, S.defOfLooks(0)) - 0.4 * Math.max(0, Math.min(rep, 4) - 1);
+      const o = S.routeOdds(0, ci, fk, 0, route, 'WR', 99, { rep });
+      if (!o || o.n < 30) continue;
+      let c = 0, m = 0;
+      for (let i = 0; i < 2000; i++) {
+        const r = S.samplePlaybook(0, ci, fk, (i + 0.5) / 2000, -1, 0, s0, route, 3, 0), f = P.flags[r];
+        if (f & 1) continue;
+        m++; if (!(f & 4) && !(f & 64) && !/sack|scramble|throwaway/.test(P.eventNames[P.event[r]] || '')) c++;
+      }
+      worst = Math.max(worst, Math.abs(c / m - o.caught)); k++;
+    }
+    assert.ok(k > 20 && worst < 0.04, `shown odds against the draw: ${k} picks, off by ${worst.toFixed(3)} at worst`);
+    console.log(`route odds: ${k} picks, shown within ${(100 * worst).toFixed(1)} points of what the snap draws`);
+  }
   // a motion's read (game.js setMotion, act.cov): the pass is a real play run in the coverage the defense showed
   {
     const N = P.ngs, inCov = (cv) => {
