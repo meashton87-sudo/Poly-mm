@@ -1419,18 +1419,23 @@
     };
     requestAnimationFrame(step);
   }
+  const setTr = (g, t) => { if (g.__tr !== t) { g.__tr = t; g.setAttribute('transform', t); } };
   function place(sc) {
     const Y = camY(sc);
-    sc.parts.forEach((f) => f(Y));
+    // the field's lines, numbers and stands move only with the camera: placed again only when it moved (or a part came,
+    // the flag). Set every frame of a play, Safari repainted the whole field each frame (iPhones stuttered)
+    const pk = `${sc.cam.lo}|${sc.cam.hi}|${sc.H}|${sc.parts.length}`;
+    if (sc.partsAt !== pk) { sc.parts.forEach((f) => f(Y)); sc.partsAt = pk; }
     // (on the field, inside both end lines: never drawn over the stands behind them)
     const yIn = [Y(FULL.hi - 0.5), Y(FULL.lo + 0.5)];
-    sc.actors.forEach((a) => a.g.setAttribute('transform', `translate(${a.x.toFixed(1)},${clip(Y(a.L) + a.side * GAP * a.w, yIn[0], yIn[1]).toFixed(1)})`));
+    // (a man standing still is not written again: setTr skips an unchanged transform)
+    sc.actors.forEach((a) => setTr(a.g, `translate(${a.x.toFixed(1)},${clip(Y(a.L) + a.side * GAP * a.w, yIn[0], yIn[1]).toFixed(1)})`));
     const b = sc.ball;
     if (b) {
       // (on the ground where it is; in the air, the ball over its shadow by its height, and bigger as it comes up)
       const up = b.up || 0;
-      b.g.setAttribute('transform', `translate(${b.x.toFixed(1)},${Y(b.L).toFixed(1)})`);
-      b.lift.setAttribute('transform', `translate(0,${(-up).toFixed(1)}) scale(${(1 + 0.35 * b.z).toFixed(2)})`);
+      setTr(b.g, `translate(${b.x.toFixed(1)},${Y(b.L).toFixed(1)})`);
+      setTr(b.lift, `translate(0,${(-up).toFixed(1)}) scale(${(1 + 0.35 * b.z).toFixed(2)})`);
       b.shadow.setAttribute('opacity', up > 0.4 ? clip(0.45 - up * 0.012, 0.25, 0.45).toFixed(2) : 0);
       b.g.style.opacity = b.show ? 1 : 0;
     }
@@ -1449,7 +1454,7 @@
         x = clip(x, c.w / 2 + 6, 354 - c.w / 2);
       }
       y = clip(y, top, sc.H - 18);
-      c.g.setAttribute('transform', `translate(${x.toFixed(1)},${y.toFixed(1)})`);
+      setTr(c.g, `translate(${x.toFixed(1)},${y.toFixed(1)})`);
     });
   }
   // a call-out on the field: "SACKED!", "TOUCHDOWN!", "FLAG: HOLDING"...; one per slot
@@ -6972,7 +6977,7 @@
     });
     if (!moves.length) return;
     const id = ++persAnim, T = 1100, t0 = performance.now();
-    const set = (m, u) => m.g.setAttribute('transform', `translate(${lerp(m.start[0], m.end[0], u).toFixed(1)},${lerp(m.start[1], m.end[1], u).toFixed(1)})`);
+    const set = (m, u) => setTr(m.g, `translate(${lerp(m.start[0], m.end[0], u).toFixed(1)},${lerp(m.start[1], m.end[1], u).toFixed(1)})`);
     moves.forEach((m) => set(m, 0));
     const step = (t) => {
       if (id !== persAnim || scene !== sc) { moves.forEach((m) => (m.drop ? m.g.remove() : set(m, 1))); return; }
