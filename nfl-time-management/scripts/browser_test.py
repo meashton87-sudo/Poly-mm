@@ -1392,11 +1392,14 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             oobs = await page.evaluate("() => window.__oobLog || []")
             speeds = speeds_kept + await page.evaluate("() => window.__speedLog || []")
             goals = await page.evaluate("() => window.__goalLog || []")
+            cams = await page.evaluate("() => window.__camLog || []")
+            passes = await page.evaluate("() => window.__passLog || []")
             kept = await page.evaluate("() => (window.__drawLog || []).length")
             snaps = await page.evaluate("() => window.__drawSnaps || []")
             jank = await page.evaluate("() => window.__jank || null")
         except Exception:
             seps, tackles, fps, offs, oobs, speeds, goals, kept, snaps, jank = [], [], [], [], [], [], [], 0, [], None
+            cams, passes = [], []
         shot = None
         if problems:
             status = "fail"
@@ -1407,7 +1410,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 shot = None
         await ctx.close()
     return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
-            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "oobs": oobs, "speeds": speeds, "goals": goals, "trail": trail if problems else [],
+            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "oobs": oobs, "speeds": speeds, "goals": goals, "cams": cams, "passes": passes, "trail": trail if problems else [],
             "day": day, "side": picked, "timing": timing, "friction": friction, "jank": jank, "shot": shot.name if shot else None}
 
 
@@ -2051,8 +2054,49 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
             await watch("#snapGo")
             if await tap("PASS"):
                 await check("pass", "#snapGo")
-                if mob and h >= 800:
-                    await check("pass", "#dock .rcv")
+                if mob:
+                    # everything on the sheet in view with no scrolling (game.html: phones, the calls' sheet), every
+                    # phone size: each receiver's row, the protection, the options, Back
+                    for sel in ("#dock .rcv", "#dock .prots .chip", "#dock .opts-row:not(.prots) .chip", "#dock .ask .chip"):
+                        await check("pass", sel, 300)
+                    # the pass plays (game.js CONCEPTS): the picker whole on the screen with no scrolling in it, a tap sets
+                    # every route (Mesh: crossers) and the Plays chip names it
+                    if await page.locator("#playsBtn").count():
+                        await page.click("#playsBtn", timeout=3000)
+                        await page.wait_for_timeout(400)
+                        fit = await page.evaluate("() => { const b = document.querySelector('#modal .box'), r = b.getBoundingClientRect(); return [b.scrollHeight - b.clientHeight, Math.round(r.top), Math.round(r.bottom), innerHeight, document.querySelectorAll('#modal .concept').length]; }")
+                        if fit[0] > 1 or fit[1] < 0 or fit[2] > fit[3] or fit[4] < 9:
+                            out.append(f"{at}: the pass plays picker does not fit: {fit!r}")
+                        await page.click(".concept[data-concept='mesh']", timeout=3000)
+                        await page.wait_for_timeout(400)
+                        got = await page.evaluate("() => [document.getElementById('playsBtn').textContent, [...document.querySelectorAll('#dock .rcv .rt')].map((e) => e.textContent)]")
+                        if "Mesh" not in got[0] or sum(1 for x in got[1] if "Crosser" in x) < 2:
+                            out.append(f"{at}: Mesh picked, the dock reads {got!r}")
+                        await check("pass, a concept set", "#snapGo", 300)
+                        await check("pass, a concept set", "#dock .ask .chip", 300)
+                        # its routes still yours to change: a tap on a man on the field gives him his next route, the
+                        # concept kept and marked changed (✎); the throw goes with the route as changed
+                        dot = await page.evaluate("() => { const D = window.__draw, { scene } = D.get(), a = D.eligibles(scene).find((x) => !x.g.closest('.blk')); if (!a) return null; const r = a.g.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2, D.eligibles(scene).indexOf(a)]; }")
+                        if dot:
+                            before = await page.evaluate("(i) => document.querySelectorAll('#dock .rcv')[i].querySelector('.rt').textContent", dot[2])
+                            await page.mouse.click(dot[0], dot[1])
+                            await page.wait_for_timeout(400)
+                            after = await page.evaluate("(i) => [document.querySelectorAll('#dock .rcv')[i].querySelector('.rt').textContent, document.getElementById('playsBtn').textContent, window.__draw.get().ui.pass.routes[i]]", dot[2])
+                            if after[0] == before or "✎" not in after[1] or "Mesh" not in after[1]:
+                                out.append(f"{at}: a route changed on a concept: {before!r} -> {after!r}")
+                    # max protect: the back and a tight end kept in (their rows Blocking, no route on the field for
+                    # them), the open man still one who goes out; back to standard after
+                    mx = page.locator("#dock .prots .chip[data-prot='max']")
+                    if await mx.count():
+                        await mx.click(timeout=3000)
+                        await page.wait_for_timeout(300)
+                        blk = await page.evaluate("() => [...document.querySelectorAll('#dock .rcv.blk .pos')].map((e) => e.textContent)")
+                        if not blk or any(x not in ("RB", "TE") for x in blk):
+                            out.append(f"{at}: max protect kept in {blk!r}")
+                        await check("pass, max protect", "#snapGo", 300)
+                        await check("pass, max protect", "#dock .rcv", 300)
+                        await page.click("#dock .prots .chip[data-prot='std']", timeout=3000)
+                        await page.wait_for_timeout(300)
                 # nobody picked: the open man (the Snap key and what it says aloud); a row tapped: him; tapped again:
                 # the open man again
                 snap_txt = "() => { const g = document.getElementById('snapGo'); return g ? [g.querySelector('.go').textContent, g.getAttribute('aria-label')] : null; }"
@@ -2090,6 +2134,9 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                 await page.wait_for_timeout(400)
             if await tap("RUN"):
                 await check("run", "#dock .prow .key")
+                if mob:
+                    for sel in ("#dock .schemes .chip", "#dock .ask .chip") + (("#oobSwitch",) if await page.locator("#oobSwitch").count() else ()):
+                        await check("run", sel, 200)
                 sk = await page.evaluate(SKETCH)
                 rb = [m for m in (sk or {}).get("men", []) if m[2] in ("RB", "FB")]
                 for k in range(4 if rb else 0):
@@ -2431,6 +2478,18 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
         f"not as they went: {len(gbad)}")
     if gbad:
         fail("goal-line", f"FAIL: the ball against the goal line or the sideline not as the play went {gbad[:5]}")
+    # the tackler in the camera's frame from the moment he goes for the carrier (game.js finishCamera: a runner in the
+    # open field was stopped by a man off the screen). `before`: the share of his way in the old frame left out
+    cm = [x for r in results for x in r.get("cams", [])]
+    cm_out = [x for x in cm if x.get("after", 0) > 0.02]
+    say(f"tackles framed: {len(cm)}, the tackler off the screen on his way in: {len(cm_out)} (the old frame: "
+        f"{sum(1 for x in cm if x.get('before', 0) > 0.02)})")
+    if cm_out:
+        fail("tackler-framed", f"FAIL: the tackler off the screen on his way in {cm_out[:5]}")
+    # nobody goes by the man with the ball within arm's reach and lets him go (game.js passCheck): only the tackler and
+    # the broken tackle's man get to him (players saw defenders run right by a back)
+    pb = [x for r in results for x in r.get("passes", [])]
+    say(f"defenders by the man with the ball within a yard, no tackle: {len(pb)} in {len(gl)} plays" + (f" {pb[:6]}" if pb else ""))
     tos = {}
     for r in results:
         for k, v in ((r.get("friction") or {}).get("timeouts") or {}).items():

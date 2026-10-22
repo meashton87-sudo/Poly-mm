@@ -236,6 +236,19 @@
     ['counter', 'Counter', 'The back steps the other way, then the guard and tackle pull back across: misdirection that works on a light box, slow against a blitz.'],
     ['duo', 'Duo', 'Double teams driving straight ahead, downhill: built for a loaded box, less to gain against a light one.'],
     ['trap', 'Trap', 'A defensive lineman is let in, then a pulling guard traps him: punishes a blitz, struggles against a loaded box.']];
+  // pass protection (engine.js PROT_N): who stays in to block. Each blocker more counts as a pass rusher fewer against
+  // the real plays' pressure; the men who stay in run no route and can't be thrown to
+  const PROTS = [['std', 'Standard', 'Five linemen; the back checks the blitz and releases.'],
+    ['back', 'Back stays in', 'Six block: the back stays in. Less pressure, one receiver fewer.'],
+    ['max', 'Max protect', 'Seven block: the back and a tight end stay in. The least pressure, only the rest go out.']];
+  const PROT_SHORT = { std: 'Standard', back: 'RB in', max: 'Max protect' };
+  const protOn = () => (!VS && G.prot && G.prot !== 'std' ? G.prot : null);
+  // the men a protection keeps in: the back, then the tight end nearest the ball (none on the roster: nobody more)
+  function protMen(sc, prot) {
+    const E = eligibles(sc), rb = E.find((a) => a.label === 'RB'), bx = sc.bx ?? 0;
+    const te = E.filter((a) => a.label === 'TE').sort((a, b) => Math.abs(a.x0 - bx) - Math.abs(b.x0 - bx))[0];
+    return (prot === 'max' ? [rb, te] : prot === 'back' ? [rb] : []).filter(Boolean);
+  }
   const schemeOn = () => !VS && G.scheme && G.scheme !== 'zone' ? G.scheme : null;
   const DEEP_ROUTES = new Set(['go', 'post', 'corner', 'wheel']);
   const YAC_IN = new Set(['slant', 'in', 'cross', 'post', 'angle', 'drag']), YAC_OUT = new Set(['out', 'deep_out', 'corner', 'flat', 'wheel']);
@@ -1486,6 +1499,101 @@
     const R = SITU_ROUTES[spotKind(G.root)];
     return E.map((a) => (a.label === 'WR' ? R.WR[wr.indexOf(a)] || 'hitch' : a.label === 'TE' ? R.TE : R.RB));
   }
+  // Pass concepts: a playbook's names for routes run together, one tap for every receiver's route by where he lines up
+  // (the widest receiver on each side first, then the slots inside him, the tight end, the back). A player said the
+  // passes all felt like one concept and drawing your own was beyond most players. The throw plays as always: the real
+  // throws on the route of the man it goes to; the line under each is what the concept is built to beat (its men's
+  // routes are the reason, nothing is added to the odds)
+  const CONCEPTS = [
+    { k: 'verts', tag: 'vs Cover 3', name: 'Four Verticals', beats: 'Cover 3: four deep threats for three deep defenders',
+      r: (o) => (o.pos === 'RB' ? 'flat' : 'go') },
+    { k: 'smash', tag: 'vs Cover 2', name: 'Smash', beats: 'Cover 2: a hitch under a corner route, the cornerback can take one',
+      r: (o) => (o.pos === 'RB' ? 'flat' : o.pos === 'TE' ? 'corner' : o.rank === 0 ? 'hitch' : 'corner') },
+    { k: 'flood', tag: 'vs Cover 3', name: 'Flood', beats: 'Cover 3: deep, middle and flat to one sideline, three men against two',
+      r: (o) => (o.pos === 'RB' ? 'flat' : !o.strong ? (o.pos === 'TE' ? 'cross' : 'in') : o.pos === 'TE' ? 'out' : o.rank === 0 ? 'go' : 'deep_out') },
+    { k: 'mesh', tag: 'vs man', name: 'Mesh', beats: 'Man coverage: two shallow crossers rub their defenders off each other',
+      r: (o) => (o.pos === 'RB' ? 'angle' : o.pos === 'TE' || o.rank > 0 || o.crosser ? 'cross' : 'go') },
+    { k: 'slants', tag: 'vs blitz', name: 'Slants', beats: 'Press and the blitz: out quick, inside the cornerback',
+      r: (o) => (o.pos === 'RB' ? 'flat' : o.pos === 'TE' ? 'hitch' : 'slant') },
+    { k: 'stick', tag: 'short yardage', name: 'Stick', beats: 'Zone, short yardage: a quick stop at 5 with the flat beside it',
+      r: (o) => (o.pos === 'RB' ? 'flat' : o.pos === 'TE' || o.rank > 0 ? 'hitch' : 'go') },
+    { k: 'dagger', tag: 'vs Cover 2/3', name: 'Dagger', beats: 'Cover 3 and 2: the seam clears the middle, the dig comes in under it',
+      r: (o) => (o.pos === 'RB' ? 'angle' : o.pos === 'TE' ? 'cross' : !o.strong ? 'hitch' : o.rank === 0 ? 'in' : 'go') },
+    { k: 'shot', tag: 'vs one safety', name: 'Post-Wheel', beats: 'One deep safety: a post down the middle, the back wheels up the sideline',
+      r: (o) => (o.pos === 'RB' ? 'wheel' : o.pos === 'TE' ? 'in' : o.rank === 0 && o.strong ? 'post' : o.rank === 0 ? 'go' : 'in') },
+    { k: 'outs', tag: 'stops the clock', name: 'Sideline', beats: 'The clock: every route ends at the sideline, out of bounds after the catch',
+      r: (o) => (o.pos === 'RB' ? 'flat' : o.pos === 'TE' ? 'out' : o.rank === 0 ? 'out' : 'corner') },
+  ];
+  // the concept that fits the spot (spotKind), first in the list
+  const CONCEPT_FIT = { goal: 'slants', sideline: 'outs', short: 'stick', long: 'dagger' };
+  function conceptRoutes(sc, c) {
+    const E = eligibles(sc), st = sc.s * sc.dir;
+    const wr = E.filter((a) => a.label === 'WR');
+    const roleOf = (a) => {
+      const sd = Math.sign(a.x0 - sc.bx) || st, same = wr.filter((w) => (Math.sign(w.x0 - sc.bx) || st) === sd).sort((x, y) => Math.abs(y.x0 - sc.bx) - Math.abs(x.x0 - sc.bx));
+      return { pos: a.label, strong: sd === st, rank: Math.max(0, same.indexOf(a)), inside: same.length > 1 };
+    };
+    const roles = E.map(roleOf);
+    // (Mesh: two crossers; a set with one man inside sends the backside's widest across too)
+    if (c.k === 'mesh' && roles.filter((o) => o.pos === 'TE' || (o.pos === 'WR' && o.rank > 0)).length < 2) {
+      const w = roles.find((o) => o.pos === 'WR' && o.rank === 0 && !o.strong) || roles.find((o) => o.pos === 'WR' && o.rank === 0);
+      if (w) w.crosser = true;
+    }
+    return roles.map((o) => c.r(o));
+  }
+  // the concept set, and whether you have changed a route of it since (a tap on a man, or one drawn: your edit stands)
+  const conceptNow = (sc) => {
+    const P = ui.pass, c = CONCEPTS.find((x) => P.concept === x.k);
+    return c ? { c, edited: !conceptRoutes(sc, c).every((r, i) => P.routes[i] === r && !(P.drawn && P.drawn[i])) } : null;
+  };
+  function applyConcept(c) {
+    const sc = scene, P = ui.pass;
+    if (busy || !passing() || !sc) return;
+    const rs = conceptRoutes(sc, c);
+    (P.hist = P.hist || []).push(...rs.map((_, i) => [i, P.routes[i], (P.drawn && P.drawn[i]) || null]).filter((h, i) => h[1] !== rs[i] || h[2]));
+    P.routes = rs; P.drawn = []; P.concept = c.k; P.draw = false;
+    track('pass_concept', { concept: c.k });
+    closeModal();
+    redrawPass();
+  }
+  // each concept drawn small from where your receivers line up now
+  function conceptCard(sc, c, fit) {
+    const b = el('button', `concept${fit ? ' fit' : ''}`);
+    b.type = 'button'; b.dataset.concept = c.k;
+    const W = 150, H = 92, L0 = sc.losL, top = 26, xs = (x) => ((x - SX0) / XYD / 53.333) * W;
+    const ys = (L) => H - 14 - (sc.dir * (L - L0) / top) * (H - 20);
+    const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, 'aria-hidden': 'true', class: 'cdiag' });
+    svg.append(S('line', { x1: 0, x2: W, y1: ys(L0), y2: ys(L0), class: 'los' }));
+    const rs = conceptRoutes(sc, c), stay = protOn() ? protMen(sc, G.prot) : [];
+    eligibles(sc).forEach((a, i) => {
+      const x0 = xs(a.x0), y0 = ys(a.L0);
+      svg.append(S('circle', { cx: x0.toFixed(1), cy: y0.toFixed(1), r: 3.2, class: a.label === 'WR' ? 'wr' : 'oth' }));
+      if (stay.includes(a)) return;
+      const r = Motion.routeOnField(rs[i], ROUTE_DEPTH[rs[i]], (a.x0 - SX0) / XYD, outOf(sc, a), sc.dir, L0, Math.abs(a.L0 - L0), 0.5);
+      const pts = [[x0, y0]].concat(r.pts.map((q) => [clip((q[0] / 53.333) * W, 2, W - 2), clip(ys(q[1]), 2, H - 2)]));
+      svg.append(S('path', { d: pts.map((q, k) => `${k ? 'L' : 'M'}${q[0].toFixed(1)} ${q[1].toFixed(1)}`).join(''), class: 'rt' }));
+    });
+    b.append(svg, el('b', '', c.name), el('small', 'long', c.beats), el('small', 'tag', c.tag));
+    b.title = c.beats;
+    if (fit) b.append(el('span', 'fitTag', 'Fits now'));
+    b.setAttribute('aria-label', `${c.name}: ${rs.map((r, i) => `${eligibles(sc)[i].label} ${routeName(eligibles(sc)[i].label, r)}`).join(', ')}. Beats ${c.beats}`);
+    b.addEventListener('click', () => applyConcept(c));
+    return b;
+  }
+  function openConcepts() {
+    const sc = scene;
+    if (busy || !passing() || !sc) return;
+    const fitK = CONCEPT_FIT[spotKind(G.root)], list = CONCEPTS.slice().sort((a, b) => (b.k === fitK) - (a.k === fitK));
+    const grid = el('div', 'concepts');
+    list.forEach((c) => grid.append(conceptCard(sc, c, c.k === fitK)));
+    const own = el('button', 'concept own');
+    own.type = 'button';
+    own.append(el('b', '', '✏️ Draw your own'), el('small', 'long', 'Drag a receiver on the field where he should go'), el('small', 'tag', 'on the field'));
+    own.addEventListener('click', () => { closeModal(); setDraw(true); });
+    grid.append(own);
+    track('concepts_open', {});
+    openModal('Pass plays', [el('p', 'note', 'One tap sets every route. Then throw to the open man, or pick who gets it.'), grid]);
+  }
   // toward his own sideline; the same on the field and in the animation
   const outOf = (sc, a) => Math.sign(a.x0 - sc.bx) || sc.s * sc.dir || 1;
   // ... but the back's route on a rollout goes the way the quarterback rolls (players saw the flat run away from him,
@@ -1494,8 +1602,16 @@
   function drawRoutes(sc) {
     const P = ui.pass, E = eligibles(sc), Y = camY(sc), g = S('g', { class: 'routes' });
     sc.routePts = [];
+    const st = protOn() ? protMen(sc, G.prot) : [];
     E.forEach((a, i) => {
       const rt = P.routes[i], dr = P.drawn && P.drawn[i];
+      if (st.includes(a)) {                // (kept in to block: a short T toward the line, no route)
+        const x = a.x0, y0 = Y(a.L0), y1 = Y(a.L0 + sc.dir * 1.6);
+        sc.routePts[i] = [[x, y0], [x, y1]];
+        g.append(S('path', { class: 'route block', d: `M${x.toFixed(1)} ${y0.toFixed(1)}L${x.toFixed(1)} ${y1.toFixed(1)}M${(x - 6).toFixed(1)} ${y1.toFixed(1)}L${(x + 6).toFixed(1)} ${y1.toFixed(1)}` }));
+        a.g.setAttribute('aria-label', `${a.g.getAttribute('aria-label')}: blocking`);
+        return;
+      }
       const r = Motion.routeOnField(dr || rt, ROUTE_DEPTH[rt], (a.x0 - SX0) / XYD, routeOut(sc, a), sc.dir, sc.losL, Math.abs(a.L0 - sc.losL), 0.5);
       const pts = r.pts.map((q) => [clip(SX0 + q[0] * XYD, SX0 + 2, SX1 - 2), Y(clip(q[1], -9, 109))]);
       sc.routePts[i] = [[a.x0, Y(a.L0)], ...pts];
@@ -1517,7 +1633,7 @@
   function passTap(a) {
     if (busy || !passing() || !scene || !a.off) return false;
     const i = eligibles(scene).indexOf(a);
-    if (i < 0) return false;
+    if (i < 0 || blocks(scene, i)) return false;
     const list = ROUTES[a.label], P = ui.pass;
     if (P.draw) { P.sel = P.sel === i ? null : i; redrawPass(); return true; }
     P.drawn = P.drawn || [];
@@ -1539,15 +1655,16 @@
   }
   // each receiver's odds on his current route, from the real plays it would draw (worker 'odds'), cached per snap
   const routeAt = (a) => (Number.isFinite(a.depth) ? `${a.route}@${a.depth}` : a.route);     // (engine.js routeOfAct)
-  function pickKey(a) { return `${a.call}|${routeAt(a)}|${a.who}|${a.looks}`; }
+  // (with what else the snap draws by: the repeats, personnel, formation, backs and motion read, engine.js routeOdds)
+  function pickKey(a) { return `${a.call}|${routeAt(a)}|${a.who}|${a.looks}|${a.rep || 0}|${a.pers || 0}|${a.form || ''}|${a.bf ?? ''}|${a.cov || ''}|${a.oob ? 1 : 0}|${a.prot || ''}`; }
   async function fetchOdds() {
     if (!passing() || !scene) return;
     G.odds = G.odds || {};
-    const picks = eligibles(scene).map((_, i) => passOption(scene, i, false).action).filter((a) => !(pickKey(a) in G.odds));
+    const picks = eligibles(scene).map((_, i) => (blocks(scene, i) ? null : passOption(scene, i, false).action)).filter((a) => a && !(pickKey(a) in G.odds));
     if (!picks.length) return;
     picks.forEach((a) => { G.odds[pickKey(a)] = null; });
     try {
-      const res = await send({ type: 'odds', scen: simScen(), root: G.root, picks: picks.map((a) => ({ call: a.call, route: routeAt(a), who: a.who, looks: a.looks })) }, true);
+      const res = await send({ type: 'odds', scen: simScen(), root: G.root, picks: picks.map((a) => ({ call: a.call, route: routeAt(a), who: a.who, looks: a.looks, rep: a.rep, pers: a.pers, form: a.form, bf: a.bf, cov: a.cov, oob: a.oob, prot: a.prot })) }, true);
       picks.forEach((a, k) => { G.odds[pickKey(a)] = res.out[k]; });
     } catch (e) { picks.forEach((a) => { delete G.odds[pickKey(a)]; }); return; }      // asked again on the next redraw
     // into the cards already up, not a redrawn dock: a redraw between a finger's down and up would eat the throw
@@ -1560,12 +1677,13 @@
       snapLine();
     }
   }
-  const oddsText = (o) => (o ? `${Math.round(o.caught * 100)}% caught · ${o.yds.toFixed(1)} yds a throw${o.picks >= 0.03 ? ` · ${Math.round(o.picks * 100)}% picked` : ''}` : '');
+  // (per snap, as the snap draws it: the sacks, scrambles and throwaways count, engine.js routeOdds)
+  const oddsText = (o) => (o ? `${Math.round(o.caught * 100)}% caught · ${o.yds.toFixed(1)} yds a play${o.picks >= 0.03 ? ` · ${Math.round(o.picks * 100)}% picked` : ''}${o.nt >= 0.05 ? ` · ${Math.round(o.nt * 100)}% sacked, scrambles or thrown away` : ''}` : '');
   // on a receiver's row: in full, or on a phone the numbers only ("58% · 9.1 yds", game.html), the words in its title
   function oddsEl(o) {
     const s = el('span', 'od');
     s.title = oddsText(o);
-    s.append(el('b', '', `${Math.round(o.caught * 100)}%`), el('i', '', ' caught'), ` · ${o.yds.toFixed(1)} yds`, el('i', '', ' a throw'));
+    s.append(el('b', '', `${Math.round(o.caught * 100)}%`), el('i', '', ' caught'), ` · ${o.yds.toFixed(1)} yds`, el('i', '', ' a play'));
     if (o.picks >= 0.03) s.append(el('span', 'pk', ` · ${Math.round(o.picks * 100)}% picked`));
     return s;
   }
@@ -2372,16 +2490,18 @@
   // address bar)
   // (his row tapped again: back to the open man)
   function passPick(i) {
-    if (busy || !passing() || !scene || !eligibles(scene)[i]) return;
+    if (busy || !passing() || !scene || !eligibles(scene)[i] || blocks(scene, i)) return;
     ui.pass.target = ui.pass.target === i ? null : i;
     redrawPass();
   }
   // No receiver picked: the throw goes to the open man. The engine plays exactly what the Snap key always sent before
-  // a pick (the first receiver's call, route and position: OPEN_I), graded the same; only the field reads act.open and
-  // draws the ball to whoever is open there among the men whose routes make that same call (choreograph openPick)
-  const OPEN_I = 0;
+  // a pick (the first receiver's call, route and position: openI, the first who goes out: not one your protection keeps
+  // in), graded the same; only the field reads act.open and draws the ball to whoever is open there among the men whose
+  // routes make that same call (choreograph openPick)
+  const openI = (sc) => { const st = protOn() && sc ? protMen(sc, G.prot) : []; return Math.max(0, sc ? eligibles(sc).findIndex((a) => !st.includes(a)) : 0); };
+  const blocks = (sc, i) => !!(protOn() && sc && protMen(sc, G.prot).includes(eligibles(sc)[i]));
   function openOption(sc, oob) {
-    const o = passOption(sc, OPEN_I, oob), P = ui.pass;
+    const o = passOption(sc, openI(sc), oob), P = ui.pass;
     o.label = `Pass to the open man${P.pa ? ', play action' : P.roll ? ', rollout' : ''}${oob ? ', get out of bounds' : ''}`;
     o.action.open = true;
     return o;
@@ -2437,7 +2557,7 @@
     sc.svg.parentElement.classList.toggle('chipsdown', camY(sc)(spotGeom(G.root).L) < sc.H / 2);
     if (passing()) {
       if (!ui.pass.routes || ui.pass.routes.length !== eligibles(sc).length) { ui.pass.routes = defaultRoutes(sc); ui.pass.drawn = []; ui.pass.sel = null; ui.pass.target = null; }
-      // (no target picked: the Snap key throws to the open man, OPEN_I's call for the engine: openOption)
+      // (no target picked: the Snap key throws to the open man, openI's call for the engine: openOption)
       drawRoutes(sc);
     }
     drawSketch(sc);
@@ -2577,6 +2697,32 @@
     const r = (x) => +x.toFixed(2);
     return { v1: r(top1.v), who1: top1.who, t1: r(top1.t), v4: r(top4.v), who4: top4.who, t4: r(top4.t), jump: r(jump.v), jwho: jump.who, jt: r(jump.t) };
   }
+  // (browser tests) a defender who goes by the man with the ball within arm's reach and lets him go: not the tackler,
+  // not the broken tackle's man, not a man in a block (one of the offense on him). Every 0.05 s of each hold, from 0.3 s
+  // after he has it to 0.3 s before it ends (players saw men run right by a back with no missed tackle called)
+  function passCheck(sc, P, e) {
+    const segs = P.segs.slice().sort((a, b) => a.t0 - b.t0), keys = new Set((P.keys || []).map((k) => k.a).concat(P.misses || []));
+    const out = [];
+    segs.forEach((s, i) => {
+      if (s.kind !== 'hold' || !s.a) return;
+      // (the passer in his pocket, the ball thrown after: the rush on him is pressure, not a man going by)
+      if (s.a.label === 'QB' && segs[i + 1] && segs[i + 1].kind === 'fly') return;
+      const car = s.a, t1 = (i + 1 < segs.length ? segs[i + 1].t0 : P.T) - 0.3, seen = new Set();
+      const yd = (p, q) => Math.hypot((p.x - q.x) / XYD, p.L - q.L);
+      for (let t = s.t0 + 0.3; t < t1; t += 0.05) {
+        const c = at(car, t);
+        sc.actors.forEach((d) => {
+          if (!d.trk || d.off === car.off || keys.has(d) || seen.has(d)) return;
+          const p = at(d, t), r = yd(p, c);
+          if (r >= 1 || (P.sackAt != null && t >= P.sackAt - 0.6)) return;
+          if (sc.actors.some((m) => m.off === car.off && m !== car && yd(at(m, t), p) < 1.2)) return;      // in a block
+          seen.add(d);
+          out.push({ who: d.label, car: car.label, r: +r.toFixed(2), t: +t.toFixed(2), ev: e.ev, evt: e.evt || '', call: e.call, yds: e.yards });
+        });
+      }
+    });
+    return out;
+  }
   function speedLog(sc, P, e, x) {
     (window.__speedLog = window.__speedLog || []).push({ ev: e.ev, call: e.call, evt: e.evt || '', yards: e.yards, td: !!(e.td || e.tdDef || e.retTd), air: e.air,
       ...(x || {}), ...speedCheck(sc, P) });
@@ -2668,7 +2814,7 @@
     let best = act.target, bs = -Infinity;
     E.forEach((a, i) => {
       const rt = act.routes[i], dr = act.drawn && act.drawn[i] && Number.isFinite(act.drawn[i].depth) ? act.drawn[i] : null;
-      if (!rt || a.label === 'QB' || !a.trk) return;
+      if (!rt || a.label === 'QB' || !a.trk || (i !== act.target && act.prot && protMen(sc, act.prot).includes(a))) return;
       if (i !== act.target && passCallOf(sc, a, rt, act.pa, act.roll, dr, side) !== act.call) return;
       const depth = dr ? dr.depth : ROUTE_DEPTH[rt] ?? 6;
       const s = Math.min(6, (sep(a, o.tThrow) + sep(a, t2)) / 2) - 0.2 * Math.abs(depth - air);
@@ -3170,6 +3316,7 @@
       };
       if (tackled && reach.length) {
         tackler = reach[0].d;
+        (P.keys = P.keys || []).push({ a: tackler, t0 });
         if (reach[0].T > tC - t0 + 0.1) {            // still nobody (the field ran out): he slows in traffic
           slowed = reach[0].T - (tC - t0);
           A = runFrom(car, t0, route, { T: reach[0].T + 0.1, v1: 3.4, lim });
@@ -3189,6 +3336,7 @@
         const two_ = reach.find((r) => r.d !== tackler && r.T < tEnd - t0 + 0.6);
         if (two_) {
           busy.add(two_.d);
+          (P.misses = P.misses || []).push(two_.d);        // (in on the tackle: passCheck)
           const q = here(two_.d), [qx, qy] = unit(endPt[0] - q[0], endPt[1] - q[1]);
           const T2 = Math.max(0.4, tEnd - t0 + 0.12);
           trail(two_.d, t0, runFrom(two_.d, t0, [[endPt[0] - qx * 1.0, endPt[1] - qy * 1.0]], { T: T2 }), t0 + T2, [-qx, -qy]);
@@ -3209,6 +3357,7 @@
         const miss = nearest(foes(car).filter((d) => !busy.has(d)), [pc[0], pc[1]]);
         if (miss) {
           busy.add(miss);
+          (P.misses = P.misses || []).push(miss);
           runFrom(miss, t0, [[pc[0] + vy * 0.9, pc[1] - vx * 0.9]], { T: tb - t0 });
           leg(miss, tb + 0.05, 'go', { x: pc[0] + vy * 1.6 - vx * 1.5, y: pc[1] - vx * 1.6 - vy * 1.5, eff: 0.5 });
           leg(miss, tb + 0.6, 'stand');
@@ -3245,14 +3394,19 @@
       }
       // nobody he goes by gets to him and lets him go (only the broken tackle does): a chaser who would come within
       // arm's reach before the tackle takes a deeper angle, held off further (players saw men run into the coverage)
-      const tHit = (tackler ? tC : tEnd) - 0.3, near = (d) => {
-        let m = 99;
-        for (let t = t0 + 0.3; t < tHit; t += 0.1) m = Math.min(m, dist(Wd.posAt(d.b, t), Wd.posAt(car.b, t)));
-        return m;
+      // (the man who covered him too, chasing after the catch: only the tackler, the second man in and the broken
+      // tackle's man get to him. A man in a block, one of the carrier's own on him, is held where he is)
+      const tHit = (tackler ? tC : tEnd) - 0.3, own = (car.off ? K.off : K.def).filter((m) => m !== car), mayHit = new Set([tackler, ...(P.misses || [])]);
+      const near = (d) => {
+        for (let t = t0 + 0.3; t < tHit; t += 0.1) {
+          const q = Wd.posAt(d.b, t);
+          if (dist(q, Wd.posAt(car.b, t)) < 1.4 && !own.some((m) => dist(Wd.posAt(m.b, t), q) < 1.2)) return true;
+        }
+        return false;
       };
-      for (let k = 0; k < 2; k++) {
+      for (let k = 0; k < 3; k++) {
         Wd.run(tHit);
-        const close = foes(car).filter((d) => !busy.has(d) && near(d) < 1.4);
+        const close = foes(car).filter((d) => !mayHit.has(d) && near(d));
         if (!close.length) break;
         Wd.rewind(t0);
         close.forEach((d) => leg(d, t0 + 0.15, 'chase', { who: car.b, gap: 3.5 + k * 1.5, eff: 0.8, lead: 0.5 }));
@@ -3383,13 +3537,15 @@
       const man = Motion.MAN[shell];
       // (a second back you gave a route runs it too)
       const backs = mine && act && act.routes ? eligibles(sc).filter((a) => a.label === 'RB' && a !== K.rb) : [];
+      // your protection (act.prot, PROTS): the men it keeps in block and run no route
+      const stays = new Set(mine && act && act.prot ? protMen(sc, act.prot) : []), stayIn = (a) => stays.has(a);
       const others = K.recv.concat(backs).filter((a) => a !== tgt && a !== o.passer);
       const runners = [];                     // [actor, route plan] for coverage to read
       const drewFor = (a) => { const k = mine && act && act.drawn ? eligibles(sc).indexOf(a) : -1; return k >= 0 ? act.drawn[k] : null; };
       others.forEach((a, i) => {
         const yours = mine && act && act.routes && eligibles(sc).indexOf(a) >= 0;    // you gave him a route: he runs it
         // a tight end stays in to block against six or more (and now and then otherwise); one you drew a route for runs it
-        if (a.label === 'TE' && !drewFor(a) && (rushers.length >= 6 || (!yours && R() < 0.3))) {
+        if (a.label === 'TE' && (stayIn(a) || (!drewFor(a) && (rushers.length >= 6 || (!yours && R() < 0.3))))) {
           const edge = nearest(K.rush, here(a)), at = edge && passRush.get(edge);
           // (on a rusher in the pocket: beside his blocker, on the outside of him)
           if (at) {
@@ -3414,7 +3570,7 @@
       });
       // the back: blocks when they send five or more (unless you drew him a route), else checks out into the flat
       if (K.rb && K.rb !== tgt && kind !== 'pa' && kind !== 'flea' && !(kind === 'tpass' && (o.passer === K.rb || e.philly))) {
-        if (rushers.length >= 5 && !drewFor(K.rb)) {
+        if ((rushers.length >= 5 && !drewFor(K.rb)) || stayIn(K.rb)) {
           const blitzer = rushers[rushers.length - 1];
           leg(K.rb, REACT_OFF, 'track', { gain: 2.6, eff: 0.85, fn: (t) => {
             const q = Wd.posAt(blitzer.b, t), Q = qbSpot(t);
@@ -3431,7 +3587,7 @@
       }
       // coverage: man (trail him a beat behind, a cushion deep) or zone (drop to the landmark), then break on the ball
       const cover = K.def.filter((d) => !rushers.includes(d));
-      const rbOut = K.rb && K.rb !== tgt && (rushers.length < 5 || drewFor(K.rb));
+      const rbOut = K.rb && K.rb !== tgt && !stayIn(K.rb) && (rushers.length < 5 || drewFor(K.rb));
       const recvs = K.recv.concat(rbOut ? [K.rb] : []).concat(K.rb === tgt ? [K.rb] : []).concat(backs.filter((a) => a !== o.passer));
       const S_ = Motion.SHELLS[shell] || Motion.SHELLS.cover3, mark = markIn(S_);
       const assigned = new Map(), carry = new Map();         // carry: a deep man running with a vertical
@@ -4570,6 +4726,7 @@
       // (he gets to where he goes down before he is down: a long way up from the back of his end zone takes longer)
       tS += runFrom(qb, tMove, [spot], { T: tS - tMove, v1: 0 }).late || 0;
       busy.add(rusher);
+      (P.misses = P.misses || []).push(rusher); P.sackAt = tS;          // (passCheck: the sack's pile is no pass-by)
       // he sheds his block when he has to, to get to the passer as he goes down (at 85% of flat out)
       Wd.run(Math.max(tMove, Math.min(tBeat, tS - 0.5)));
       const rp0 = here(rusher), need = Motion.minTime([rp0, spot], rusher.b.g, { spd: rusher.b.spd });
@@ -5050,13 +5207,29 @@
         const n = Math.min(k.n, Math.ceil(P.T / k.dt) + 1);
         for (let i = 0; i < n; i += 4) Ls.push(clip(k.L[i], blo, bhi));
       });
-      let lo = Math.min(...Ls) - 5, hi = Math.max(...Ls) + 5;
-      const span = clip(hi - lo, 36, 120), mid = (lo + hi) / 2;
-      lo = mid - span / 2; hi = mid + span / 2;
       const elo = FULL.lo - EDGE, ehi = FULL.hi + EDGE;
-      if (lo < elo) { hi += elo - lo; lo = elo; }
-      if (hi > ehi) { lo -= hi - ehi; hi = ehi; }
-      lo = Math.max(lo, elo); hi = Math.min(hi, ehi);
+      const frame = (Ls) => {
+        let lo = Math.min(...Ls) - 5, hi = Math.max(...Ls) + 5;
+        const span = clip(hi - lo, 36, 120), mid = (lo + hi) / 2;
+        lo = mid - span / 2; hi = mid + span / 2;
+        if (lo < elo) { hi += elo - lo; lo = elo; }
+        if (hi > ehi) { lo -= hi - ehi; hi = ehi; }
+        return [Math.max(lo, elo), Math.min(hi, ehi)];
+      };
+      // the man who makes the tackle in the frame from the moment he goes for the carrier (Shane on X: a runner in the
+      // open field "stopped" by someone off the screen)
+      const keyLs = [];
+      (P.keys || []).forEach(({ a, t0 }) => {
+        const k = a.trk;
+        if (!k) return;
+        for (let j = Math.floor(t0 / k.dt); j < Math.min(k.n, Math.ceil(P.T / k.dt) + 1); j += 2) keyLs.push(k.L[j]);
+      });
+      const old = frame(Ls);
+      let [lo, hi] = frame(Ls.concat(keyLs));
+      if (window.__sepLog && keyLs.length) {
+        const outOf = ([a, b]) => keyLs.filter((L) => L < a || L > b).length / keyLs.length;
+        (window.__camLog = window.__camLog || []).push({ before: +outOf(old).toFixed(2), after: +outOf([lo, hi]).toFixed(2), span0: +(old[1] - old[0]).toFixed(1), span: +(hi - lo).toFixed(1) });
+      }
       // (the broadcast view: the calls' sheet is away for the play, so the whole play is framed in what shows,
       // under the scoreboard and above the skip note: the quarterback's drop and throw included)
       if (bcast()) {
@@ -5166,6 +5339,7 @@
       if (bad.length) (window.__offLog = window.__offLog || []).push({ ev: e.ev, call: e.call, yl: before.yl, mine: e.team === G.me, bad: bad.slice(0, 5) });
       // (the ball against the goal line and the sidelines: goalCheck)
       (window.__goalLog = window.__goalLog || []).push({ ...goalCheck(sc, P, drawnE, two), yl: two ? 2 : before.yl, mine: e.team === G.me });
+      (window.__passLog = window.__passLog || []).push(...passCheck(sc, P, drawnE).slice(0, 3));
       // (and the man with the ball goes past the sideline with it on the field just when the engine has the play out of
       // bounds, for its clock: a player saw the other team run out and the clock run on. After the whistle he may walk
       // back on)
@@ -6155,7 +6329,7 @@
     if (ui.fam === 'run' && !VS) {
       // the blocking (SCHEMES): one tap, kept for the drive's next runs
       const cur = G.scheme || 'zone', row = el('div', 'opts-row schemes');
-      row.append(el('span', 'lab', 'Blocking'));
+      row.append(el('span', 'lab', bcast() ? 'Block' : 'Blocking'));
       SCHEMES.forEach(([k, label, tip]) => {
         const b = el('button', `chip opt${cur === k ? ' on' : ''}`, label);
         b.type = 'button'; b.title = tip; b.dataset.scheme = k;
@@ -6261,23 +6435,49 @@
     back.addEventListener('click', () => { if (busy) return; ui.step = 'family'; drawField(); drawDock(); });
     head.append(back);
     if (P.hist && P.hist.length) {
-      const undo = el('button', 'chip', '↶ Undo');
+      const undo = el('button', 'chip', bcast() ? '↶' : '↶ Undo');
       undo.type = 'button';
       undo.setAttribute('aria-label', 'Undo the last route change');
       undo.addEventListener('click', undoRoute);
       head.append(undo);
     }
-    const pen = el('button', `chip pen${P.draw ? ' on' : ''}`, P.draw ? '✓ Done' : '✏️ Draw');
+    const cn = !P.draw && sc ? conceptNow(sc) : null, plays = el('button', `chip plays${cn ? ' on' : ''}`, `📋 ${cn ? `${cn.c.name}${cn.edited ? ' ✎' : ''}` : 'Plays'}`);
+    plays.type = 'button'; plays.id = 'playsBtn';
+    plays.setAttribute('aria-label', cn ? `Pass plays: ${cn.c.name} set${cn.edited ? ', with your route changes' : ''}` : 'Pass plays: pick a concept');
+    plays.addEventListener('click', openConcepts);
+    if (!P.draw) head.append(plays);
+    const pen = el('button', `chip pen${P.draw ? ' on' : ''}`, P.draw ? '✓ Done' : bcast() ? '✏️' : '✏️ Draw');
     pen.type = 'button'; pen.id = 'drawBtn';
     pen.setAttribute('aria-label', P.draw ? 'Done drawing routes' : 'Draw routes');
     pen.setAttribute('aria-pressed', String(!!P.draw));
     pen.addEventListener('click', () => { if (!busy) setDraw(!P.draw); });
     head.append(pen);
-    if (G.look != null) d.append(readLine(G.look));
+    // (the broadcast view on a phone: the defense's look in the head's line, the receivers' room below it)
+    if (G.look != null && bcast()) { const L = LOOKS[G.look], rc = el('span', `readchip${L.blitz ? ' blitz' : ''}`, `${L.loaded ? 'Loaded box' : 'Light box'}${L.blitz ? ' · blitz' : ''}`); rc.title = L.loaded ? '7 or more near the line' : '6 or fewer near the line'; head.insertBefore(rc, head.querySelector('#playsBtn') || pen); }
+    else if (G.look != null) d.append(readLine(G.look));
+    if (!VS) {
+      // the protection (PROTS): one tap, kept for the drive's next passes
+      const cur = G.prot || 'std', row = el('div', 'opts-row prots');
+      row.append(el('span', 'lab', 'Protection'));
+      PROTS.forEach(([k, label, tip]) => {
+        const b = el('button', `chip opt${cur === k ? ' on' : ''}`, bcast() ? PROT_SHORT[k] : label);
+        b.type = 'button'; b.title = tip; b.dataset.prot = k;
+        b.setAttribute('aria-pressed', String(cur === k));
+        b.addEventListener('click', () => {
+          if (busy || !sc) return;
+          G.prot = k;
+          if (P.target != null && blocks(sc, P.target)) P.target = null;
+          track('pass_prot', { prot: k });
+          redrawPass();
+        });
+        row.append(b);
+      });
+      d.append(row);
+    }
     const E = eligibles(sc), selA = P.draw && P.sel != null ? E[P.sel] : null;
     // (the whole of it the first few times; after that one line, so the receivers and the Snap key fit under the field)
     if (!P.draw) {
-      const h = load(`${STORE}:passhint`, 0) < 3 ? el('p', 'hint', 'Snap throws to the open man, or tap a name to pick who gets the ball. Tap a man on the field for his next route, or drag him to draw one.')
+      const h = load(`${STORE}:passhint`, 0) < 3 && !bcast() ? el('p', 'hint', 'Snap throws to the open man, or tap a name to pick who gets the ball. Tap a man on the field for his next route, or drag him to draw one.')
         : el('p', 'hint one', 'Snap: the open man, or pick one. Tap a dot: his route.');
       h.title = 'Snap throws to whoever gets open, or tap a name to pick who gets the ball (tap it again for the open man). Tap a receiver on the field to change his route, or drag him to draw your own (drag the quarterback for his drop or a rollout).';
       d.append(h);
@@ -6302,6 +6502,14 @@
     list.setAttribute('role', 'group');
     list.setAttribute('aria-label', 'Who gets the ball');
     E.forEach((a, i) => {
+      if (blocks(sc, i)) {                    // (kept in by your protection: no route, no ball)
+        const b = el('button', 'rcv blk');
+        b.type = 'button'; b.disabled = true;
+        b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label), el('span', 'rt', 'Blocking'));
+        b.setAttribute('aria-label', `${a.p ? a.p.name : a.label}: staying in to block`);
+        list.append(b);
+        return;
+      }
       const b = el('button', `rcv${P.target === i ? ' on' : ''}`);
       b.type = 'button';
       b.setAttribute('aria-pressed', String(P.target === i));
@@ -6356,7 +6564,7 @@
     go.firstChild.replaceWith(line);
     go.id = 'snapGo';
     go.setAttribute('aria-label', ta ? `Snap: throw it to ${ta.p ? ta.p.name : ta.label}, ${routeName(ta.label, P.routes[t])}` : 'Snap: throw it to the open man');
-    go.addEventListener('click', () => { if (!busy && passing()) decideCall(t == null ? { pass: OPEN_I, open: true } : { pass: t }); });
+    go.addEventListener('click', () => { if (!busy && passing()) decideCall(t == null ? { pass: openI(scene), open: true } : { pass: t }); });
     foot.append(go);
     d.append(foot);
     snapLine();
@@ -6376,7 +6584,7 @@
     if (!g || !passing() || !scene) return;
     const a = eligibles(scene)[P.target];
     if (!a) {             // the open man: the throw's odds as the engine plays it
-      const op = passOption(scene, OPEN_I, false), od = G.odds && G.odds[pickKey(op.action)];
+      const op = passOption(scene, openI(scene), false), od = G.odds && G.odds[pickKey(op.action)];
       g.querySelector('small').textContent = `whoever gets open${od ? ` · ${oddsText(od)}` : ''}`;
       return;
     }
@@ -6992,7 +7200,8 @@
     const backs = (lineup(G.me).off || []).filter((p) => p.pos === 'RB' || p.pos === 'FB').length;
     const b = fq && (FORM_ENGINE[fq] || fq === 'empty') ? { ...b0, form: FORM_ENGINE[fq] ? fq : 'gun', bf: fq === 'empty' ? 0 : Math.min(backs, 3) } : b0;
     const rp = repOf(b), c0 = rp ? { ...b, rep: rp } : b;
-    const c1 = schemeOn() && G.root.pos === G.me && c0.play === 'run' && /^rb_/.test(c0.call || '') ? { ...c0, scheme: G.scheme } : c0;
+    const cp = protOn() && G.root.pos === G.me && c0.play === 'pass' && c0.call !== 'hail_mary' && c0.call !== 'screen' ? { ...c0, prot: G.prot } : c0;
+    const c1 = schemeOn() && G.root.pos === G.me && cp.play === 'run' && /^rb_/.test(cp.call || '') ? { ...cp, scheme: G.scheme } : cp;
     const mo = G.root.pos === G.me ? curMotion(G.root) : null, c = mo && c1.play === 'pass' ? { ...c1, cov: mo.cov } : c1;
     return G.root.clock_running && ui && ui.tempo ? { ...c, tempo: engineTempo(ui.tempo, G.root) } : c;
   };
