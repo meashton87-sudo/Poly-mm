@@ -4406,7 +4406,14 @@
         picker = shadow || breakers[0] || nearest(K.def, catchPt);
         busy.add(picker);
         const pl = runFrom(picker, tThrow + 0.2, [[catchPt[0] - out * 0.4, catchPt[1] - dir * 0.6]], { T: tCatch - tThrow - 0.2 });
-        if (pl.late > 0.05) tCatch += pl.late;
+        // (late to the spot: the ball waits for him only as long as a real throw that far could take, 10.5 yards a
+        // second at the slowest; past that it gets to him where he is, a step short. The flight stretched any longer hung
+        // the ball in the air over the line)
+        if (pl.late > 0.05) {
+          const t0 = tCatch;
+          tCatch += pl.late;
+          for (let i = 0; i < 3; i++) tCatch = Math.min(tCatch, Math.max(t0, tThrow + Math.max(0.45, dist(B0, hands(picker, tCatch)) / 10.5)));
+        }
       }
       // an incompletion has to read as what it was (missOf): broken up, the cover man gets to the ball and gets a hand
       // on it; a bad ball misses where you can see it. Never a dead-open man and a ball that just falls (players called
