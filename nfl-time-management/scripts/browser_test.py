@@ -1392,11 +1392,13 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
             oobs = await page.evaluate("() => window.__oobLog || []")
             speeds = speeds_kept + await page.evaluate("() => window.__speedLog || []")
             goals = await page.evaluate("() => window.__goalLog || []")
+            cams = await page.evaluate("() => window.__camLog || []")
             kept = await page.evaluate("() => (window.__drawLog || []).length")
             snaps = await page.evaluate("() => window.__drawSnaps || []")
             jank = await page.evaluate("() => window.__jank || null")
         except Exception:
             seps, tackles, fps, offs, oobs, speeds, goals, kept, snaps, jank = [], [], [], [], [], [], [], 0, [], None
+            cams = []
         shot = None
         if problems:
             status = "fail"
@@ -1407,7 +1409,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                 shot = None
         await ctx.close()
     return {"name": name, "status": status, "finished": finished, "reloads": reloads, "steps": steps,
-            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "oobs": oobs, "speeds": speeds, "goals": goals, "trail": trail if problems else [],
+            "secs": round(time.time() - t_start), "rundowns": rundowns, "drawn": drawn, "kept": kept, "sketched": sketched, "snaps": snaps, "problems": problems[:5], "seps": seps, "tackles": tackles, "fps": fps, "offs": offs, "oobs": oobs, "speeds": speeds, "goals": goals, "cams": cams, "trail": trail if problems else [],
             "day": day, "side": picked, "timing": timing, "friction": friction, "jank": jank, "shot": shot.name if shot else None}
 
 
@@ -2431,6 +2433,14 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
         f"not as they went: {len(gbad)}")
     if gbad:
         fail("goal-line", f"FAIL: the ball against the goal line or the sideline not as the play went {gbad[:5]}")
+    # the tackler in the camera's frame from the moment he goes for the carrier (game.js finishCamera: a runner in the
+    # open field was stopped by a man off the screen). `before`: the share of his way in the old frame left out
+    cm = [x for r in results for x in r.get("cams", [])]
+    cm_out = [x for x in cm if x.get("after", 0) > 0.02]
+    say(f"tackles framed: {len(cm)}, the tackler off the screen on his way in: {len(cm_out)} (the old frame: "
+        f"{sum(1 for x in cm if x.get('before', 0) > 0.02)})")
+    if cm_out:
+        fail("tackler-framed", f"FAIL: the tackler off the screen on his way in {cm_out[:5]}")
     tos = {}
     for r in results:
         for k, v in ((r.get("friction") or {}).get("timeouts") or {}).items():

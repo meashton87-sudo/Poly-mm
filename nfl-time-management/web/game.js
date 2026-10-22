@@ -3172,6 +3172,7 @@
       };
       if (tackled && reach.length) {
         tackler = reach[0].d;
+        (P.keys = P.keys || []).push({ a: tackler, t0 });
         if (reach[0].T > tC - t0 + 0.1) {            // still nobody (the field ran out): he slows in traffic
           slowed = reach[0].T - (tC - t0);
           A = runFrom(car, t0, route, { T: reach[0].T + 0.1, v1: 3.4, lim });
@@ -5052,13 +5053,29 @@
         const n = Math.min(k.n, Math.ceil(P.T / k.dt) + 1);
         for (let i = 0; i < n; i += 4) Ls.push(clip(k.L[i], blo, bhi));
       });
-      let lo = Math.min(...Ls) - 5, hi = Math.max(...Ls) + 5;
-      const span = clip(hi - lo, 36, 120), mid = (lo + hi) / 2;
-      lo = mid - span / 2; hi = mid + span / 2;
       const elo = FULL.lo - EDGE, ehi = FULL.hi + EDGE;
-      if (lo < elo) { hi += elo - lo; lo = elo; }
-      if (hi > ehi) { lo -= hi - ehi; hi = ehi; }
-      lo = Math.max(lo, elo); hi = Math.min(hi, ehi);
+      const frame = (Ls) => {
+        let lo = Math.min(...Ls) - 5, hi = Math.max(...Ls) + 5;
+        const span = clip(hi - lo, 36, 120), mid = (lo + hi) / 2;
+        lo = mid - span / 2; hi = mid + span / 2;
+        if (lo < elo) { hi += elo - lo; lo = elo; }
+        if (hi > ehi) { lo -= hi - ehi; hi = ehi; }
+        return [Math.max(lo, elo), Math.min(hi, ehi)];
+      };
+      // the man who makes the tackle in the frame from the moment he goes for the carrier (Shane on X: a runner in the
+      // open field "stopped" by someone off the screen)
+      const keyLs = [];
+      (P.keys || []).forEach(({ a, t0 }) => {
+        const k = a.trk;
+        if (!k) return;
+        for (let j = Math.floor(t0 / k.dt); j < Math.min(k.n, Math.ceil(P.T / k.dt) + 1); j += 2) keyLs.push(k.L[j]);
+      });
+      const old = frame(Ls);
+      let [lo, hi] = frame(Ls.concat(keyLs));
+      if (window.__sepLog && keyLs.length) {
+        const outOf = ([a, b]) => keyLs.filter((L) => L < a || L > b).length / keyLs.length;
+        (window.__camLog = window.__camLog || []).push({ before: +outOf(old).toFixed(2), after: +outOf([lo, hi]).toFixed(2), span0: +(old[1] - old[0]).toFixed(1), span: +(hi - lo).toFixed(1) });
+      }
       // (the broadcast view: the calls' sheet is away for the play, so the whole play is framed in what shows,
       // under the scoreboard and above the skip note: the quarterback's drop and throw included)
       if (bcast()) {
