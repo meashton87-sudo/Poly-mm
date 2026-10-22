@@ -1419,18 +1419,23 @@
     };
     requestAnimationFrame(step);
   }
+  const setTr = (g, t) => { if (g.__tr !== t) { g.__tr = t; g.setAttribute('transform', t); } };
   function place(sc) {
     const Y = camY(sc);
-    sc.parts.forEach((f) => f(Y));
+    // the field's lines, numbers and stands move only with the camera: placed again only when it moved (or a part came,
+    // the flag). Set every frame of a play, Safari repainted the whole field each frame (iPhones stuttered)
+    const pk = `${sc.cam.lo}|${sc.cam.hi}|${sc.H}|${sc.parts.length}`;
+    if (sc.partsAt !== pk) { sc.parts.forEach((f) => f(Y)); sc.partsAt = pk; }
     // (on the field, inside both end lines: never drawn over the stands behind them)
     const yIn = [Y(FULL.hi - 0.5), Y(FULL.lo + 0.5)];
-    sc.actors.forEach((a) => a.g.setAttribute('transform', `translate(${a.x.toFixed(1)},${clip(Y(a.L) + a.side * GAP * a.w, yIn[0], yIn[1]).toFixed(1)})`));
+    // (a man standing still is not written again: setTr skips an unchanged transform)
+    sc.actors.forEach((a) => setTr(a.g, `translate(${a.x.toFixed(1)},${clip(Y(a.L) + a.side * GAP * a.w, yIn[0], yIn[1]).toFixed(1)})`));
     const b = sc.ball;
     if (b) {
       // (on the ground where it is; in the air, the ball over its shadow by its height, and bigger as it comes up)
       const up = b.up || 0;
-      b.g.setAttribute('transform', `translate(${b.x.toFixed(1)},${Y(b.L).toFixed(1)})`);
-      b.lift.setAttribute('transform', `translate(0,${(-up).toFixed(1)}) scale(${(1 + 0.35 * b.z).toFixed(2)})`);
+      setTr(b.g, `translate(${b.x.toFixed(1)},${Y(b.L).toFixed(1)})`);
+      setTr(b.lift, `translate(0,${(-up).toFixed(1)}) scale(${(1 + 0.35 * b.z).toFixed(2)})`);
       b.shadow.setAttribute('opacity', up > 0.4 ? clip(0.45 - up * 0.012, 0.25, 0.45).toFixed(2) : 0);
       b.g.style.opacity = b.show ? 1 : 0;
     }
@@ -1449,7 +1454,7 @@
         x = clip(x, c.w / 2 + 6, 354 - c.w / 2);
       }
       y = clip(y, top, sc.H - 18);
-      c.g.setAttribute('transform', `translate(${x.toFixed(1)},${y.toFixed(1)})`);
+      setTr(c.g, `translate(${x.toFixed(1)},${y.toFixed(1)})`);
     });
   }
   // a call-out on the field: "SACKED!", "TOUCHDOWN!", "FLAG: HOLDING"...; one per slot
@@ -4525,6 +4530,25 @@
         const why = e.pressure ? 'Pressured' : pd <= 2.6 ? 'Hurried' : near <= 2.6 ? 'Tight window' : 'Off target';
         M.text = `${why}, ${M.text[0].toLowerCase()}${M.text.slice(1)}`;
       }
+      // nor anyone else on him: a rusher still coming as a screen or a quick throw is caught near him, a man sitting in
+      // his zone there. On a catch charted uncontested, who would be in reach of him with the ball takes his angle a few
+      // yards off instead, from just after the throw (players saw catches "in triple coverage": 5% of catches had 3 or
+      // more men on the receiver, every one charted uncontested)
+      if (caught && !e.incomplete && !e.contested && !M) {
+        const t1 = Wd.t, reach = Math.max(2.5, (sepd ? sepd.sep : 0) + 1.5) + 0.5;
+        Wd.run(Math.max(Wd.t, tCatch));
+        const Rc = here(tgt);
+        const near = K.def.filter((d) => d !== shadow && d !== picker && d !== broke && !busy.has(d) && dist(here(d), Rc) < reach)
+          .sort((x, y) => dist(here(x), Rc) - dist(here(y), Rc)).slice(1);          // (one more man near him is double coverage)
+        const tL = Math.max(REACT_DEF, tThrow + 0.15);
+        if (near.length) {
+          Wd.rewind(Math.min(t1, tL));
+          near.forEach((d, i) => {
+            const p = Wd.posAt(d.b, tL), [ux, uy] = unit(p[0] - Rc[0], p[1] - Rc[1]), keep = reach + 0.7 + i;
+            leg(d, tL, 'go', { x: inX(Rc[0] + ux * keep), y: Rc[1] + uy * keep, eff: 0.9 });
+          });
+        } else if (Wd.t > t1) Wd.rewind(t1);
+      }
       Wd.run(tCatch);
       const ballD = Math.min(...K.def.map((d) => dist(here(d), catchPt)));
       const late = !!(M && M.late);
@@ -6216,7 +6240,10 @@
     if (r.t > 1800) return lead >= 0 && th <= 120;
     // about 40 seconds a kneel, one fewer kneel's worth per timeout they have left
     const kneels = 5 - r.down - r.to[1 - G.me] - (r.clock_running ? 0 : 1);
-    return lead > 0 && th <= 40 * Math.max(kneels, 0) + 30;
+    if (lead > 0 && th <= 40 * Math.max(kneels, 0) + 30) return true;
+    // tied or down 1-2 in range of a likely kick: kneel to run the clock down, then kick it as time runs out (a player's
+    // friend at 1st and goal wanted to bleed the clock and kick with none left)
+    return lead <= 0 && lead >= -2 && th <= 120 && ((G.info && G.info.pFg) || 0) >= 0.5;
   }
   // the other team, ahead with the ball, can kneel out the half whatever you do: a kneel on each down left (about 2
   // seconds each) and the play clock between them (about 38), less one run-off for each timeout you have
@@ -6256,7 +6283,9 @@
     const late = r.t > 1800 ? th <= 120 : th <= 300;
     // (never as the game's last snap when it cannot win or tie it: a gold FIELD GOAL on an untimed down at 0:00, down 4)
     const lastKick = r.t <= 1800 && !r.ot && r.score[G.me] - r.score[1 - G.me] <= -4 && (r.untimed || th <= 5);
-    if (kickable && !lastKick && ((r.down === 4 && p >= 0.05) || (th <= 20 && p >= 0.2) || (r.down === 3 && th <= 40 && p >= 0.4) || (late && p >= 0.3))) specials.push('fg');
+    // and on any down in overtime once in decent range: a kick there can win it, and coaches take it on 1st and goal
+    // rather than risk a turnover (a player's friend at 1st and goal in overtime had no field goal to call)
+    if (kickable && !lastKick && ((r.down === 4 && p >= 0.05) || (th <= 20 && p >= 0.2) || (r.down === 3 && th <= 40 && p >= 0.4) || ((late || r.ot) && p >= 0.3))) specials.push('fg');
     // a punt hands the ball over for good when behind in the game's last 40 s (NFL 2016-25: no team trailing in the
     // last 0:40 punted; engine.js _fourthDown makes the computer go), and it never gets off when the clock runs out
     // before any snap (a gold PUNT at 0:02, down 4, beside the timeout)
@@ -6962,7 +6991,7 @@
     });
     if (!moves.length) return;
     const id = ++persAnim, T = 1100, t0 = performance.now();
-    const set = (m, u) => m.g.setAttribute('transform', `translate(${lerp(m.start[0], m.end[0], u).toFixed(1)},${lerp(m.start[1], m.end[1], u).toFixed(1)})`);
+    const set = (m, u) => setTr(m.g, `translate(${lerp(m.start[0], m.end[0], u).toFixed(1)},${lerp(m.start[1], m.end[1], u).toFixed(1)})`);
     moves.forEach((m) => set(m, 0));
     const step = (t) => {
       if (id !== persAnim || scene !== sc) { moves.forEach((m) => (m.drop ? m.g.remove() : set(m, 1))); return; }

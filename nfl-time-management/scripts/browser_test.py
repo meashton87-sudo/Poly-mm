@@ -802,6 +802,9 @@ LOADED = """() => { const n = performance.getEntriesByType('navigation')[0] || {
 # frames the page took too long to draw (a gap between two animation frames over 200 ms while in view) and, where the
 # browser reports them (not Safari), tasks that held the main thread over 50 ms; added up over the tab's pages (its
 # sessionStorage: the drive reloads into itself)
+# the bot's own tap on a key that opens a screen (Pass plays, the Home tools, help, stats): that screen was asked for
+TAP_OPENS = """(() => { document.addEventListener('click', (e) => { const t = e.target && e.target.closest && e.target.closest('#playsBtn, .htool, #helpBtn, #statsBtn, #deepBtn');
+  if (t) window.__opensAt = performance.now(); }, true); })();"""
 JANK = """(() => { if (window.top !== window) return;
   let J = null; try { J = JSON.parse(sessionStorage.getItem('__jank') || 'null'); } catch (e) { /* no storage */ }
   J = window.__jank = J || { frames: 0, slow: 0, worst: 0, long: 0, longWorst: 0 };
@@ -836,6 +839,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     if quirk:
         await ctx.add_init_script(QUIRK[quirk])
     await ctx.add_init_script(JANK)
+    await ctx.add_init_script(TAP_OPENS)
     if mode == "scenario":
         await pro_context(ctx, base)
     page = await ctx.new_page()
@@ -988,7 +992,8 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     # (game.js openHelp, where the first drive's tour is not: a scenario, a Pro drive): a new player
                     # gets it once, and every time with storage off, private browsing)
                     welcome = st == "modal" and await page.evaluate("() => !!document.querySelector('#modal ol.quick')")
-                    if not asked and not (welcome and (not welcomed or quirk == "nostore")):
+                    tapped = await page.evaluate("() => window.__opensAt != null && performance.now() - window.__opensAt < 3000")
+                    if not asked and not tapped and not (welcome and (not welcomed or quirk == "nostore")):
                         friction["modals"].append(await page.evaluate("() => document.getElementById('modal').innerText.replace(/\\s+/g, ' ').slice(0, 80)")
                                                   if st == "modal" else "deep")
                     welcomed = welcomed or welcome
@@ -2581,6 +2586,14 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     say(f"cover man too far to break it up (shown as a bad ball instead): {late} of {len(inc)} incompletions")
     # the pass looks like what happened, on every real pass of the run (pass_look_problems): a catch in his hands, a
     # miss gone where its kind says and never into his hands
+    # a clean catch (charted uncontested) is not made in "triple coverage": three or more men in reach of him as the ball
+    # gets there (players saw it; 5.4% of such catches before the fix, 3.4% after: fail only when this many would be
+    # unlikely at 6%, p < 0.01)
+    cl = [x for r in results for x in r.get("seps", []) if x.get("caught") and not x.get("intc") and "x" not in (x.get("data") or "")]
+    crowded = [x for x in cl if x.get("crowd", 0) >= 3]
+    say(f"clean catches with 3+ men on the receiver: {len(crowded)} of {len(cl)}")
+    if crowded and binom_tail(len(cl), len(crowded), 0.06) < 0.01:
+        fail("crowded", f"FAIL: clean catches made in a crowd {crowded[:4]}")
     allseps = [x for r in results for x in r.get("seps", [])]
     kinds = {}
     for x in allseps:
