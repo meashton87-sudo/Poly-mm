@@ -48,7 +48,8 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
 - Patch notes (web/patch_notes.json -> /patch-notes, site.py patch_notes_html; the game's Home links it): **every PR that
   changes the game adds its notes at the top** in the same PR (the date it merges, Eastern; a short title; one plain line
   a change, as a player would say it). Game changes only: never ads, analytics, payments, the site's address, tests or
-  tooling, nor anything not live (Coach mode, the full defense) until it is. tests/test_patch_notes.py checks the
+  tooling, nor anything not live (Coach mode, the full defense) until it is. Never the league's name or marks either (NFL,
+  Super Bowl, a trademarked play's name: "real plays", "real play-callers"; tests/test_patch_notes.py MARKS). tests/test_patch_notes.py checks the
   order and the wording; tests/test_names.py the team names.
 - NFL rules are encoded explicitly (clock stops, two-minute warning, out-of-bounds windows, play clock,
   timeouts). Keep a one-line rationale next to every policy constant at the top of `sim.py`.
