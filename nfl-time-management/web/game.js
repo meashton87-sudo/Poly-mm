@@ -12877,7 +12877,7 @@
   // result to both phones, which animate it. The room keeps the play clock and the score, calls forfeits and rates
   // ranked matches; a phone only ever sends a call. Modes: ranked (the ladder: matched by rating), casual, a friend.
   const VS_TEAM_KEY = `${STORE}:vsteam`;
-  const VS_MODES = { ranked: 'Ranked', casual: 'Casual', friend: 'Friend match', cpu: 'Versus the computer', cup: 'The Cup' };
+  const VS_MODES = { ranked: 'Ranked', casual: 'Casual', friend: 'Friend match', cpu: 'Versus the computer', cup: 'The Invitational' };
   const VS_CPU_KEY = `${STORE}:vscpu`, VS_CPU_LEVELS = { rookie: 'Rookie', pro: 'Pro' };
   const vsCpuLevel = () => (VS_CPU_LEVELS[load(VS_CPU_KEY, 'pro')] ? load(VS_CPU_KEY, 'pro') : 'pro');
   const VS_CPU_DECIDE_MS = 10 * 60e3;       // against the computer: no play clock to speak of (match.js CPU_DECIDE_MS)
@@ -13191,7 +13191,7 @@
       const now = Date.now(), skew = c.now - now, at = (iso) => Date.parse(iso) - skew;
       const done = !!c.champ, started = now >= at(c.startAt), you = c.you || {};
       if (done && now - at(c.startAt) > 3 * 86400e3) return;          // (an old Cup: gone from the lobby after a few days)
-      box.append(el('div', 'hk', `The Cup · ${c.prize} to the winner`));
+      box.append(el('div', 'hk', `Two-Minute Drill Invitational · ${c.prize} to the winner`));
       if (!c.seeds) {
         box.append(el('p', '', `The top ${c.size} on the ranked ladder at ${when(c.qualifyAt)} play a bracket from ${when(c.startAt)}, live. ${c.minGames} ranked games to be in.`));
         box.append(el('p', 'note', you.seed ? `You’re #${you.seed} right now: in, if it holds. Keep winning ranked.` : `You’re not in the top ${c.size} right now: play Ranked to get in.`));
@@ -13199,7 +13199,7 @@
         box.append(el('p', '', you.qualified ? `You’re in: seed ${you.seed} of ${c.seeds.length}.` : `The ${c.seeds.length} are in. ${started ? 'Under way now.' : `It starts ${when(c.startAt)}.`}`));
         const m = you.match;
         if (you.qualified && m && m.room) {
-          const go = el('a', 'btn', `Play your Cup match${m.opp ? ` vs ${m.opp}` : ''}`);
+          const go = el('a', 'btn', `Play your Invitational match${m.opp ? ` vs ${m.opp}` : ''}`);
           go.href = `#vs-${m.room}`;
           go.addEventListener('click', () => { try { sessionStorage.setItem(`tmd:vsmode:${m.room}`, 'cup'); } catch (e) { /* none */ } });
           box.append(go, el('p', 'note', `Be in within 10 minutes of it opening, on your team, or it goes to them.`));
@@ -13608,8 +13608,8 @@
       q.addEventListener('click', () => { vs.closedByUs = true; try { sessionStorage.setItem('tmd:vsqueue', 'ranked'); } catch (e) { /* none */ } location.hash = '#vs'; });
       row.append(q);
     }
-    if (vs.mode === 'cup') {                     // (the Cup: no rematch; back to the bracket)
-      const b = el('a', 'btn', 'Back to the Cup');
+    if (vs.mode === 'cup') {                     // (the Invitational: no rematch; back to the bracket)
+      const b = el('a', 'btn', 'Back to the Invitational');
       b.href = '#vs';
       row.append(b);
     } else if (res.by === 'score' || res.by === 'forfeit') {

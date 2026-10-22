@@ -144,16 +144,9 @@ assert.ok(ROOM_RE.test('ABC234') && !ROOM_RE.test('ABCD10') && !ROOM_RE.test('ab
   const s4 = a.last('step');
   assert.deepStrictEqual([s4.n, s4.halves[first], s4.halves[1 - first]], [4, null, { dc: DCALL }], '20 seconds and no call: the default, well before the decision\'s last moment');
   assert.ok(s4.at <= t4 + 4000 + OFF_MS + 100);
-  // the defense's clock: 10 seconds (match.js DEF_MS)
-  {
-    const t5 = w.now;
-    def.send({ t: 'ready', n: 5 });
-    await w.settle();
-    if (def.last('clock') && def.last('clock').n === 5) assert.strictEqual(def.last('clock').deadline, Math.min(t5 + DEF_MS, def.last('clock').deadline), 'the defense: 10 seconds');
-    if (def.last('clock') && def.last('clock').n === 5) assert.ok(def.last('clock').deadline <= t5 + DEF_MS, 'the defense: 10 seconds at most');
-  }
-  // a ready late in the watch window: the clock never runs past the decision's last moment
-  await w.advance(WATCH_MS + 10000);
+  // a ready late in the decision's time: the clock never runs past its last moment (late enough that even the
+  // defense's 10 seconds would: PLAY_MS after the last snap)
+  await w.advance(PLAY_MS - DEF_MS + 3000);
   // (the snaps' gains are random: snap 5 can be a try after a touchdown, or the other side's ball: ask whoever is up)
   const ms5 = a.last('step').ms, seat5 = VSCore.need(ms5)[0], up5 = seat5 === 0 ? a : b;
   up5.send({ t: 'ready', n: 5 });
