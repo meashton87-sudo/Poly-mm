@@ -2,6 +2,16 @@
   "about": "Every change to the game, newest first. Each update adds its notes here (scripts/site.py builds /patch-notes from this file). Game changes only: no ads, analytics, payments or behind-the-scenes work, and nothing that is not live yet.",
   "notes": [
     {
+      "date": "2026-10-22",
+      "title": "Versus: play someone live, or the computer",
+      "items": [
+        "Versus is here: college overtime against another player. You call your offense and your defense, both calls lock in before the snap, and the same play runs on both phones.",
+        "Play now for a quick match, Ranked to climb the ladder (your first 10 games place you), or send a friend a link.",
+        "Nobody on? After 20 seconds you can play the computer, or tap Computer to start right away. It calls plays the way NFL play-callers do, and it's never ranked.",
+        "Versus has its own card on the Home screen."
+      ]
+    },
+    {
       "date": "2026-10-21",
       "title": "Honest odds, pass protection and one-tap pass plays",
       "items": [

@@ -48,7 +48,7 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
 - Patch notes (web/patch_notes.json -> /patch-notes, site.py patch_notes_html; the game's Home links it): **every PR that
   changes the game adds its notes at the top** in the same PR (the date it merges, Eastern; a short title; one plain line
   a change, as a player would say it). Game changes only: never ads, analytics, payments, the site's address, tests or
-  tooling, nor anything not live (Versus, Coach mode, the full defense) until it is. tests/test_patch_notes.py checks the
+  tooling, nor anything not live (Coach mode, the full defense) until it is. tests/test_patch_notes.py checks the
   order and the wording; tests/test_names.py the team names.
 - NFL rules are encoded explicitly (clock stops, two-minute warning, out-of-bounds windows, play clock,
   timeouts). Keep a one-line rationale next to every policy constant at the top of `sim.py`.
@@ -80,6 +80,11 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   page); phones only send calls. Each snap's seed is drawn fresh by the room and never sent to a phone (a phone that
   knew it could see what a call does before making it). lazy_sim_test.mjs and vs_stress.mjs need board/assets/vs (the
   engine packs and teams.json; the site workflow copies them there before deploying the worker).
+  The computer (match.js CPU_SEAT, mode 'cpu', never rated): offered to a ticket after CPU_AFTER_S in the queue, or at
+  once from the lobby's Computer button (/vs/queue?mode=cpu); its half of every decision is the default (the engine's
+  own call), in at once (cpuTurn), never late, away or a forfeit; a rematch needs only the player. vs_cpu_test.mjs plays
+  it with the real engine. The load test (.github/workflows/versus-load.yml, board/vs_load.mjs) deploys the board as
+  its own worker (wrangler.loadtest.toml: its own Durable Objects), never the real one, and deletes it after.
 - The defense (every mode): the defense calls personnel, front, coverage and rush (engine.js DC). The offense's play is a
   real NFL play run against that defense, as charted (sampleVsDefense: the pass rush, then the shell, then man or zone;
   a run's box, then the blitz), widening the situation before letting a filter go, never across the goal line, the

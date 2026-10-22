@@ -1,0 +1,97 @@
+name: Versus load test
+
+# Versus under load on Cloudflare itself, never on the real board: the board's code is deployed under another name
+# (board/wrangler.loadtest.toml: two-minute-drill-loadtest, its own Durable Objects: lobby, rooms, ladder), bots play
+# matches against each other and against the computer through real WebSockets (board/vs_load.mjs), and the worker is
+# deleted after, pass or fail. Runs on demand, and when the Versus launch branch changes the test.
+on:
+  workflow_dispatch:
+    inputs:
+      pairs:
+        description: "matches between two bots"
+        default: "60"
+      cpu:
+        description: "matches against the computer"
+        default: "40"
+  push:
+    branches: ["claude/versus-**"]
+    paths: ["nfl-time-management/board/vs_load.mjs", "nfl-time-management/board/match.js", ".github/workflows/versus-load.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: versus-load
+  cancel-in-progress: true
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: nfl-time-management
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: nfl-time-management/pyproject.toml
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - id: week
+        run: echo "w=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache nflverse downloads (refreshed weekly)
+        uses: actions/cache@v4
+        with:
+          path: nfl-time-management/data/raw
+          key: site-nflverse-${{ steps.week.outputs.w }}
+
+      # the engine and its data as the site ships them (the room plays the football with the same packs)
+      - name: Build the engine data
+        run: |
+          python -m nflclock.cli build
+          python -c "from nflclock import webexport as w; w.export_engine()"
+          python -c "from nflclock import dailygame as G; print(G.build())"
+          python scripts/site.py _site_lt
+          rm -rf board/assets-loadtest && mkdir -p board/assets-loadtest/vs
+          cp _site_lt/engine_data.pack _site_lt/playbook.pack web/teams.json board/assets-loadtest/vs/
+
+      - name: The computer in memory first (real engine)
+        run: |
+          rm -rf board/assets/vs && mkdir -p board/assets/vs && cp board/assets-loadtest/vs/* board/assets/vs/
+          node board/match_test.mjs && node board/vs_cpu_test.mjs 40
+
+      - name: Deploy the load-test worker (its own name and storage)
+        id: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        working-directory: nfl-time-management/board
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "::error::no Cloudflare token"; exit 1; fi
+          npx --yes wrangler@4.144.0 deploy --config wrangler.loadtest.toml | tee deploy.log
+          url=$(grep -o 'https://two-minute-drill-loadtest[^ ]*workers.dev' deploy.log | head -1)
+          if [ -z "$url" ]; then echo "::error::no workers.dev address in the deploy output"; exit 1; fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          for i in $(seq 1 30); do curl -sf "$url/vs/ladder" >/dev/null && break; sleep 2; done
+
+      - name: Play the matches
+        run: node board/vs_load.mjs "${{ steps.deploy.outputs.url }}" "${{ inputs.pairs || '60' }}" "${{ inputs.cpu || '40' }}" 400
+
+      - name: Delete the load-test worker
+        if: always() && steps.deploy.outcome != 'skipped'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        working-directory: nfl-time-management/board
+        run: npx --yes wrangler@4.144.0 delete --config wrangler.loadtest.toml --force || echo "::warning::the load-test worker was not deleted (delete two-minute-drill-loadtest in the Cloudflare dashboard)"

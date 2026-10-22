@@ -18,6 +18,7 @@ const TEAMS = ['KC', 'BUF', 'PHI', 'DAL', 'SF', 'DET', 'BAL', 'GB', 'MIA', 'CIN'
 const R = VSCore.rng(Date.now() % 1e9);
 const pick = (a) => a[Math.floor(R() * a.length)];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const rooms = new Map();
 const rep = { matches: 0, ended: 0, by: {}, cpu: 0, decisions: 0, lat: [], errors: [], queueMs: [], firstStepMs: [] };
 
 function open(url) {
@@ -51,6 +52,7 @@ async function bot(i, wantCpu) {
   });
   q.onclose = null;
   rep.queueMs.push(Date.now() - t0);
+  rooms.set(room.room, (rooms.get(room.room) || []).concat([i]));
   if (room.mode === 'cpu') rep.cpu++;
   const ws = await open(`${WS}/vs/ws?room=${room.room}&key=${key}&mode=${room.mode}`);
   let ms = null, n = 0, seat = -1, sent = -1, sentAt = 0, firstAt = 0;
@@ -69,7 +71,14 @@ async function bot(i, wantCpu) {
     };
     ws.onmessage = (ev) => {
       const m = JSON.parse(ev.data);
-      if (m.t === 'hello') { seat = m.seat; ms = m.ms; n = m.n; if (m.phase === 'over') { finish(m.result); return; } act(); }
+      if (m.t === 'hello') {
+        seat = m.seat; ms = m.ms; n = m.n;
+        if (m.phase === 'over') { finish(m.result); return; }
+        // both picked the same team: the second picks another, as a phone does when told it's taken
+        if (m.phase === 'wait' && m.teams && !m.teams[seat]) ws.send(JSON.stringify({ t: 'team', team: pick(TEAMS.filter((t) => !m.teams.includes(t))), name: `Load${i}` }));
+        act();
+      }
+      if (m.t === 'taken') ws.send(JSON.stringify({ t: 'team', team: pick(TEAMS.filter((t) => t !== m.team)), name: `Load${i}` }));
       if (m.t === 'start') { ms = m.ms; n = 0; act(); }
       if (m.t === 'step') {
         if (sentAt) rep.lat.push(Date.now() - sentAt);
@@ -79,7 +88,7 @@ async function bot(i, wantCpu) {
       }
       if (m.t === 'over') finish(m.result);
     };
-    const finish = (res) => { rep.ended++; rep.by[res.by] = (rep.by[res.by] || 0) + 1; try { ws.close(1000); } catch (e) { /* gone */ } resolve(); };
+    const finish = (res) => { if (res.by === 'noshow') rep.noshowRooms = (rep.noshowRooms || []).concat([`${room.room}:${JSON.stringify(rooms.get(room.room))}:${JSON.stringify(res.missing)}`]); rep.ended++; rep.by[res.by] = (rep.by[res.by] || 0) + 1; try { ws.close(1000); } catch (e) { /* gone */ } resolve(); };
     ws.onerror = () => reject(new Error(`room ${room.room}: socket error`));
     setTimeout(() => reject(new Error(`room ${room.room}: not over in ${DEADLINE_MS / 60000} minutes`)), DEADLINE_MS);
   });
@@ -97,6 +106,7 @@ const out = {
   answerMs: { p50: q(rep.lat, 0.5), p95: q(rep.lat, 0.95), p99: q(rep.lat, 0.99), max: q(rep.lat, 1) },
   firstSnapMs: { p50: q(rep.firstStepMs, 0.5), max: q(rep.firstStepMs, 1) },
   queueMs: { p50: q(rep.queueMs, 0.5), max: q(rep.queueMs, 1) },
+  noshowRooms: rep.noshowRooms || [], roomsWithOne: [...rooms.values()].filter((x) => x.length === 1 && x[0] < PAIRS * 2).length,
   errors: rep.errors.length, errorSamples: rep.errors.slice(0, 8), minutes: +((Date.now() - t0) / 60000).toFixed(1),
 };
 console.log(JSON.stringify(out, null, 1));
@@ -106,3 +116,4 @@ if (out.answerMs.p95 > P95_MAX) bad.push(`the room's answer time p95 ${out.answe
 if (rep.cpu < CPU * 0.9) bad.push(`only ${rep.cpu} of ${CPU} computer matches started`);
 if (bad.length) { console.error(`versus load: FAIL: ${bad.join('; ')}`); process.exit(1); }
 console.log('versus load ok');
+process.exit(0);          // (the bots' give-up timers would keep node waiting)
