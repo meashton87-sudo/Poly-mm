@@ -1244,7 +1244,9 @@ function commSorted(list, counts, sort, now = Date.now()) {
   const n = (e) => (counts[e.id] && counts[e.id].n) || 0;
   const by = sort === 'new' ? (a, b) => b.at - a.at : sort === 'hot' ? (a, b) => commHot(b, counts[b.id], now) - commHot(a, counts[a.id], now) || b.at - a.at
     : (a, b) => n(b) - n(a) || b.at - a.at;
-  return list.filter((e) => !blocked(e.t) && !blocked(e.nm)).sort(by);
+  // (the list is kept in posting order: reversed first, two posted in the same millisecond come newest first too, a
+  // stable sort)
+  return list.filter((e) => !blocked(e.t) && !blocked(e.nm)).reverse().sort(by);
 }
 // the day's once-a-day marks: the first play of a new day (UTC) clears the day before's
 async function commDay(storage, date) {
