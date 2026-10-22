@@ -45,7 +45,7 @@ export const ROOM_RE = /^[A-HJ-KM-NP-Z2-9]{6}$/;
 const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const KEY_RE = /^[A-Za-z0-9_-]{16,128}$/;
 const TEAM_RE = /^[A-Z]{2,3}$/;
-const MODES = ['ranked', 'casual', 'friend', 'cpu'];
+const MODES = ['ranked', 'casual', 'friend', 'cpu', 'cup'];
 export const CPU_SEAT = 1, CPU_KEY = 'cpu', CPU_NAME = 'Computer';
 export const CPU_AFTER_S = 20;             // waiting this long in the queue: the computer is offered (casual or ranked)
 // against the computer nobody waits on you: no 30-second play clock (a call has this long, the room's clock only to
@@ -81,6 +81,48 @@ export const ELO = { START: 1000, K_NEW: 40, K: 24, PROVISIONAL: 10, FLOOR: 100,
 // matchmaking (ranked): two players are paired when their ratings are within WIN_BASE + WIN_PER_S for each second
 // the longer of them has waited; after WIN_OPEN_S anyone
 export const MM = { WIN_BASE: 100, WIN_PER_S: 20, WIN_OPEN_S: 45, TICK_MS: 2000 };
+// The Cup (the owner, Oct 22): the top `size` on the ranked ladder at `qualifyAt` (with their placement games played:
+// `minGames`) play a single-elimination bracket from `startAt`, seeded by rating (1 v 16, 8 v 9, ...; fewer than 16: the
+// top seeds get byes). Each match's room is made with both seats taken as soon as both its players are known; a player
+// not in (and on a team) `showMs` after it opens loses it, neither: the higher seed goes on. Results come from the rooms,
+// never a phone. The worker vars CUP_ID, CUP_QUALIFY_AT, CUP_START_AT and CUP_PRIZE set another one
+export const CUP = { id: '2026-10-25', qualifyAt: '2026-10-25T16:00:00Z', startAt: '2026-10-25T22:00:00Z', size: 16, minGames: 10, showMs: 10 * 60_000, prize: '$50' };
+export const cupConfig = (env = {}) => {
+  const size = [2, 4, 8, 16, 32].includes(Number(env.CUP_SIZE)) ? Number(env.CUP_SIZE) : CUP.size;
+  const c = { ...CUP, id: env.CUP_ID || CUP.id, qualifyAt: env.CUP_QUALIFY_AT || CUP.qualifyAt, startAt: env.CUP_START_AT || CUP.startAt, prize: env.CUP_PRIZE || CUP.prize,
+    size, minGames: Number.isInteger(Number(env.CUP_MIN_GAMES)) && env.CUP_MIN_GAMES !== undefined && env.CUP_MIN_GAMES !== '' ? Number(env.CUP_MIN_GAMES) : CUP.minGames };
+  return { ...c, qAt: Date.parse(c.qualifyAt), sAt: Date.parse(c.startAt) };
+};
+// the bracket's first round by seed (0 the top seed), the standard order: 1 v 16, 8 v 9, 4 v 13, 5 v 12 | 2 v 15, 7 v 10,
+// 3 v 14, 6 v 11 (the top two can only meet in the final)
+const seedOrder = (n) => { let o = [0]; while (o.length < n) { const m = o.length * 2; o = o.flatMap((x) => [x, m - 1 - x]); } return o; };
+export function cupBracket(nSeeds, size = 16) {
+  const ms = [], so = seedOrder(size);
+  for (let i = 0; i < size / 2; i++) ms.push({ id: `1-${i}`, round: 1, i, p: [so[2 * i], so[2 * i + 1]].map((x) => (x < nSeeds ? x : null)), room: null, w: null, by: null, at: null });
+  for (let r = 2, n = size / 4; n >= 1; r++, n /= 2) for (let i = 0; i < n; i++) ms.push({ id: `${r}-${i}`, round: r, i, p: [null, null], room: null, w: null, by: null, at: null });
+  return ms;
+}
+// the bracket played on as far as it goes: winners into the next round, byes and empty slots through. Returns the
+// matches that now have both players and no room yet (to open once the Cup has started)
+export function cupSettle(c) {
+  const byId = new Map(c.matches.map((m) => [m.id, m])), rounds = Math.max(...c.matches.map((m) => m.round));
+  const winnerOf = (m) => (m.w === 0 || m.w === 1 ? m.p[m.w] : null);
+  for (let r = 1; r <= rounds; r++) {
+    for (const m of c.matches.filter((x) => x.round === r)) {
+      if (r > 1) {
+        const f = [byId.get(`${r - 1}-${2 * m.i}`), byId.get(`${r - 1}-${2 * m.i + 1}`)];
+        if (!f.every((x) => x.w !== null)) continue;                // a feeder still to play
+        if (m.w === null && !m.room) { m.p = f.map(winnerOf); if (m.p[0] !== null && m.p[1] !== null && m.p[1] < m.p[0]) m.p.reverse(); }   // (the higher seed in seat 0)
+      }
+      if (m.w !== null || m.room) continue;
+      if (m.p[0] === null && m.p[1] === null) { m.w = -1; m.by = 'empty'; }
+      else if (m.p[0] === null || m.p[1] === null) { m.w = m.p[0] === null ? 1 : 0; m.by = 'bye'; }
+    }
+  }
+  const fin = c.matches.find((m) => m.round === rounds);
+  c.champ = fin && (fin.w === 0 || fin.w === 1) ? fin.p[fin.w] : null;
+  return c.matches.filter((m) => m.w === null && !m.room && m.p[0] !== null && m.p[1] !== null);
+}
 
 const clean = (n) => String(n ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
 const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
@@ -138,7 +180,8 @@ export class Match {
   async fetch(req) {
     const url = new URL(req.url);
     if (url.pathname === '/vs/queue') return this.queue(req, url);
-    if (url.pathname === '/vs/ladder' || url.pathname === '/vs/me' || url.pathname === '/vs/report' || url.pathname === '/vs/rating') return this.ladder(req, url);
+    if (url.pathname === '/vs/ladder' || url.pathname === '/vs/me' || url.pathname === '/vs/report' || url.pathname === '/vs/rating' || url.pathname === '/vs/standings') return this.ladder(req, url);
+    if (url.pathname.startsWith('/vs/cup')) return this.cup(req, url);
     if (url.pathname === '/vs/init') return this.init(req);
     if (req.headers.get('Upgrade') !== 'websocket') return new Response('websocket wanted', { status: 426 });
     const key = url.searchParams.get('key') || '', room = url.searchParams.get('room') || '';
@@ -146,7 +189,7 @@ export class Match {
     const kh = await hashKey(key), now = Date.now();
     const mode = MODES.includes(url.searchParams.get('mode')) ? url.searchParams.get('mode') : 'friend';
     let R = await this.room();
-    if (!R) R = this.fresh(room, mode === 'ranked' || mode === 'cpu' ? 'casual' : mode, now);    // a ranked room (or the computer's) is only ever made by the lobby
+    if (!R) R = this.fresh(room, mode === 'ranked' || mode === 'cpu' || mode === 'cup' ? 'casual' : mode, now);    // a ranked room (the computer's, the Cup's) is only ever made by the lobby (the Cup)
     let seat = R.seats.indexOf(kh);
     if (seat < 0 && !R.pre) seat = R.seats.indexOf(null);
     if (seat < 0) return new Response('the room is full', { status: 409 });
@@ -205,6 +248,7 @@ export class Match {
     R.teams = [TEAM_RE.test(b.teams && b.teams[0]) ? b.teams[0] : null, TEAM_RE.test(b.teams && b.teams[1]) ? b.teams[1] : null];
     if (R.teams[0] && R.teams[0] === R.teams[1]) R.teams[1] = null;
     R.names = [clean(b.names && b.names[0]), clean(b.names && b.names[1])];
+    if (R.mode === 'cup') { R.cup = String(b.cup || ''); R.cupId = String(b.cupId || ''); R.showBy = Number(b.showBy) || now + CUP.showMs; }
     await this.save(R);
     await this.schedule(R);
     return reply({ ok: true });
@@ -230,8 +274,9 @@ export class Match {
       for (const s of VSCore.need(R.ms)) if (!(pend && pend.n === R.n && s in pend.halves)) t.push(dl[s]);    // the calls still out
       for (const s of [0, 1]) if (R.off[s]) t.push(R.off[s] + (R.cpu != null ? CPU_DECIDE_MS : FORFEIT_MS));
     }
-    if (R.phase === 'wait' && R.pre) t.push(R.created + NOSHOW_MS);
+    if (R.phase === 'wait' && R.pre) t.push(R.mode === 'cup' ? R.showBy : R.created + NOSHOW_MS);
     if (R.phase === 'over' && R.mode === 'ranked' && R.result && R.result.winner >= 0 && !R.rated) t.push(Date.now() + 5000);
+    if (R.phase === 'over' && R.mode === 'cup' && !R.reported) t.push(Date.now() + 5000);
     await this.ctx.storage.setAlarm(Math.min(...t));
   }
 
@@ -323,7 +368,7 @@ export class Match {
     }
     await this.save(R);
     this.broadcast({ t: 'step', ...d, deadline: R.deadline, dl: R.dl, now, result });
-    if (result) { this.steppers.clear(); return this.rate(R); }
+    if (result) { this.steppers.clear(); return R.mode === 'cup' ? this.cupReport(R) : this.rate(R); }
     const afk = [0, 1].filter((s) => s !== R.cpu && R.defaults[s] >= AFK_LIMIT);
     if (afk.length === 2) return this.finish(R, { winner: -1, by: 'abandoned' });
     if (afk.length === 1) return this.finish(R, { winner: 1 - afk[0], by: 'forfeit', loser: afk[0], why: 'afk' });
@@ -353,13 +398,31 @@ export class Match {
   // over without the last snap: a forfeit, a no-show, both gone, an error
   async finish(R, result) {
     this.steppers.clear();
+    // (a Cup match always has a winner: nobody, both gone at once or an error, is the higher seed, seat 0)
+    if (R.mode === 'cup' && !(result.winner >= 0)) result = { ...result, winner: 0, by: result.by === 'noshow' ? 'noshow' : result.by || 'error', cupDefault: true };
     R.phase = 'over';
     R.result = { ...result, score: R.ms ? R.ms.root.score.slice() : [0, 0], round: R.ms ? R.ms.cot.round : 0 };
     await this.ctx.storage.delete('pend');
     await this.save(R);
     this.broadcast({ t: 'over', result: R.result });
+    if (R.mode === 'cup') return this.cupReport(R);
     if (R.result.winner >= 0) return this.rate(R);
     await this.schedule(R);
+  }
+  // a Cup match over: its result to the Cup (once: retried by the alarm until it is in)
+  async cupReport(R) {
+    try {
+      const res = await this.env.MATCH.get(this.env.MATCH.idFromName('cup')).fetch(new Request('https://cup/vs/cup/report', {
+        method: 'POST', body: JSON.stringify({ cupId: R.cupId, match: R.cup, room: R.room, winner: R.result.winner, by: R.result.by, score: R.result.score }) }));
+      if (!res.ok) throw new Error(`cup ${res.status}`);
+      const R2 = (await this.room()) || R;
+      R2.reported = true;
+      await this.save(R2);
+      await this.schedule(R2);
+    } catch (e) {
+      console.error('vs cup report', R.room, e && e.message);
+      await this.schedule(R);
+    }
   }
 
   // a ranked match: the ladder moves both ratings (once: the ladder keeps every room it has rated)
@@ -382,7 +445,7 @@ export class Match {
   }
 
   async rematch(R, seat) {                 // both have to ask: then one new room for both, the same teams (never ranked)
-    if (R.phase !== 'over' || !R.seats.every(Boolean)) return;
+    if (R.phase !== 'over' || !R.seats.every(Boolean) || R.mode === 'cup') return;
     R.again = [...new Set([...(R.again || []), seat, ...(R.cpu != null ? [R.cpu] : [])])];      // (the computer always says yes)
     if (R.again.length < 2) { await this.save(R); this.broadcast({ t: 'rematch-ask', seat }); return; }
     let next = R.next;
@@ -407,6 +470,7 @@ export class Match {
 
   async alarm() {
     if (this.ctx.getWebSockets('q').length) return this.pairTick();
+    if (await this.ctx.storage.get('cupObj')) return this.cupTick();
     const R = await this.room();
     if (!R) { if (await this.ctx.storage.get('room')) await this.ctx.storage.deleteAll(); return; }
     const now = Date.now();
@@ -452,13 +516,21 @@ export class Match {
         return this.schedule(R2);
       }
     }
-    if (R.phase === 'wait' && R.pre && now >= R.created + NOSHOW_MS) {
+    if (R.phase === 'wait' && R.pre && R.mode === 'cup') {
+      // the Cup: in (and on a team) by showBy, or that side loses; neither in: the higher seed (seat 0) goes on
+      if (now >= R.showBy) {
+        const missing = [0, 1].filter((s) => !R.seen[s] || !R.teams[s]);
+        if (missing.length === 1) return this.finish(R, { winner: 1 - missing[0], by: 'forfeit', loser: missing[0], why: 'noshow' });
+        return this.finish(R, { winner: 0, by: 'noshow', missing });
+      }
+    } else if (R.phase === 'wait' && R.pre && now >= R.created + NOSHOW_MS) {
       // ranked: matched and never came (or never picked a team) is a loss, so nobody dodges an opponent; else called off
       const missing = [0, 1].filter((s) => !R.seen[s] || !R.teams[s]);
       if (R.mode === 'ranked' && missing.length === 1) return this.finish(R, { winner: 1 - missing[0], by: 'forfeit', loser: missing[0], why: 'noshow' });
       return this.finish(R, { winner: -1, by: 'noshow', missing });
     }
     if (R.phase === 'over' && R.mode === 'ranked' && !R.rated && R.result && R.result.winner >= 0) return this.rate(R);
+    if (R.phase === 'over' && R.mode === 'cup' && !R.reported) return this.cupReport(R);
     await this.schedule(R);
   }
 
@@ -590,6 +662,108 @@ export class Match {
     return null;
   }
 
+  // ---------------------------------------------------------------------------------------------------- the Cup ---
+  // the object named 'cup' (CUP): cupObj {id, snap: {at, seeds: [{kh, name, rating, games}]}, matches, champ, claim}
+  async cupLoad(cfg) {
+    const c = await this.ctx.storage.get('cupObj');
+    return c && c.id === cfg.id ? c : { id: cfg.id, snap: null, matches: null, champ: null, claim: null };
+  }
+  async standings(at, cfg) {
+    const r = await this.env.MATCH.get(this.env.MATCH.idFromName('ladder')).fetch(new Request('https://ladder/vs/standings', {
+      method: 'POST', body: JSON.stringify({ at, n: cfg.size, minGames: cfg.minGames }) }));
+    if (!r.ok) throw new Error(`ladder ${r.status}`);
+    return (await r.json()).top;
+  }
+  // the qualifiers as the ladder stood at qualifyAt (taken once, any time after it: exact all the same), the bracket
+  // played on, and from startAt each match with both its players its room
+  async cupRun(c, cfg, now) {
+    if (!c.snap && now >= cfg.qAt) {
+      const top = await this.standings(cfg.qAt, cfg);
+      c.snap = { at: now, seeds: top };
+      c.matches = cupBracket(top.length, cfg.size);
+    }
+    if (c.matches) {
+      const open = cupSettle(c);
+      if (now >= cfg.sAt) {
+        for (const m of open) {
+          const code = await this.cupRoom(c, m, cfg, now);
+          if (code) { m.room = code; m.opened = now; }
+        }
+      }
+      if (c.champ !== null && c.champ !== undefined && !c.claim) c.claim = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => ALPHABET[b % ALPHABET.length]).join('');
+    }
+    await this.ctx.storage.put('cupObj', c);
+    const t = [];                                      // the next thing to do: qualify, start, a room not made yet
+    if (!c.snap) t.push(cfg.qAt);
+    else if (now < cfg.sAt) t.push(cfg.sAt);
+    if (c.matches && now >= cfg.sAt && c.matches.some((m) => m.w === null && !m.room && m.p[0] !== null && m.p[1] !== null)) t.push(now + 30_000);
+    if (t.length) await this.ctx.storage.setAlarm(Math.max(now + 500, Math.min(...t)));
+    return c;
+  }
+  async cupRoom(c, m, cfg, now) {
+    const s = c.snap.seeds;
+    for (let i = 0; i < 5; i++) {
+      const code = roomCode();
+      const r = await this.env.MATCH.get(this.env.MATCH.idFromName(`room:${code}`)).fetch(new Request('https://room/vs/init', {
+        method: 'POST', body: JSON.stringify({ room: code, mode: 'cup', seats: [s[m.p[0]].kh, s[m.p[1]].kh], names: [s[m.p[0]].name, s[m.p[1]].name], cup: m.id, cupId: c.id, showBy: now + cfg.showMs }) }));
+      if (r.ok) return code;
+    }
+    return null;
+  }
+  async cupTick() {
+    const cfg = cupConfig(this.env);
+    try { await this.cupRun(await this.cupLoad(cfg), cfg, Date.now()); } catch (e) {
+      console.error('vs cup', e && e.message);
+      await this.ctx.storage.setAlarm(Date.now() + 30_000);
+    }
+  }
+  async cup(req, url) {
+    const cfg = cupConfig(this.env), now = Date.now();
+    if (!Number.isFinite(cfg.qAt) || !Number.isFinite(cfg.sAt)) return reply({ error: 'no cup' }, 404);
+    let body = {};
+    if (req.method === 'POST') { try { body = await req.json(); } catch (e) { /* none */ } }
+    let c = await this.cupLoad(cfg);
+    await this.ctx.storage.put('cupObj', c);                // (this object is the Cup: its alarm is cupTick)
+    if (url.pathname === '/vs/cup/report') {                // a Cup room's result (never routed from outside)
+      const m = c.id === body.cupId && c.matches ? c.matches.find((x) => x.id === body.match && x.room === body.room) : null;
+      if (!m) return reply({ error: 'match' }, 400);
+      if (m.w === null) { m.w = body.winner === 1 ? 1 : 0; m.by = String(body.by || 'score'); m.score = Array.isArray(body.score) ? body.score.slice(0, 2) : null; m.at = now; }
+      await this.cupRun(c, cfg, now);
+      return reply({ ok: true });
+    }
+    if (url.pathname === '/vs/cup/admin') {                 // (the worker lets only the admin token through)
+      if (body.match != null && c.matches) {
+        const m = c.matches.find((x) => x.id === body.match);
+        if (!m || !(body.winner === 0 || body.winner === 1) || m.p[body.winner] === null) return reply({ error: 'match and winner (0: the first player, 1: the second) wanted' }, 400);
+        const next = c.matches.find((x) => x.round === m.round + 1 && x.i === m.i >> 1);
+        if (next && (next.room || next.w !== null)) return reply({ error: 'the next match has already started from this one' }, 409);
+        m.w = body.winner; m.by = 'admin'; m.at = now;
+      }
+      c = await this.cupRun(c, cfg, now);
+      return reply({ cup: c, cfg });
+    }
+    // GET /vs/cup?key=: the Cup as a phone sees it (names, ratings and seeds; never anyone's key)
+    try { c = await this.cupRun(c, cfg, now); } catch (e) { console.error('vs cup', e && e.message); }
+    const key = url.searchParams.get('key') || '', kh = KEY_RE.test(key) ? await hashKey(key) : null;
+    const seeds = c.snap ? c.snap.seeds : null;
+    let proj = null;
+    if (!seeds) {
+      if (!this.proj || now - this.proj.at > 20_000) { try { this.proj = { at: now, top: await this.standings(now, cfg) }; } catch (e) { this.proj = this.proj || { at: now, top: [] }; } }
+      proj = this.proj.top;
+    }
+    const list = seeds || proj, me = kh && list ? list.findIndex((x) => x.kh === kh) : -1;
+    const mine = seeds && me >= 0 && c.matches ? c.matches.filter((m) => m.p.includes(me)).sort((a, b) => b.round - a.round)[0] : null;
+    const you = kh ? { seed: me >= 0 ? me + 1 : null, qualified: !!seeds && me >= 0,
+      match: mine ? { id: mine.id, round: mine.round, room: mine.w === null ? mine.room : null, opp: (() => { const o = mine.p[1 - mine.p.indexOf(me)]; return o === null ? null : seeds[o].name; })(),
+        won: mine.w === null ? null : mine.p[mine.w] === me } : null,
+      champ: c.champ === me && me >= 0, claim: c.champ === me && me >= 0 ? c.claim : null } : null;
+    return reply({ id: c.id, qualifyAt: cfg.qualifyAt, startAt: cfg.startAt, prize: cfg.prize, size: cfg.size, minGames: cfg.minGames, now,
+      seeds: seeds ? seeds.map((x, i) => ({ seed: i + 1, name: x.name, rating: x.rating })) : null,
+      projection: proj ? proj.map((x, i) => ({ seed: i + 1, name: x.name, rating: x.rating, games: x.games })) : null,
+      matches: c.matches ? c.matches.map((m) => ({ id: m.id, round: m.round, i: m.i, p: m.p.map((x) => (x === null ? null : x + 1)), w: m.w, by: m.by, score: m.score || null, live: !!m.room && m.w === null })) : null,
+      champ: c.champ !== null && c.champ !== undefined && seeds ? seeds[c.champ].name : null, you });
+  }
+
   // ------------------------------------------------------------------------------------------------ the ladder ---
   // the object named 'ladder': one row per player (device), one per rated room (a room is never rated twice)
   sql() {
@@ -627,6 +801,19 @@ export class Match {
         rank: p.games ? this.rank(p.rating) : null, provisional: p.games < ELO.PROVISIONAL });
     }
     if (url.pathname === '/vs/rating') return reply({ rating: this.player(String(body.kh || '')).rating });
+    // /vs/standings (the Cup object only, never routed from outside): the ladder as it stood at a moment, each rating
+    // with every rated game after it taken back off (the games table keeps each one's change and time), the players with
+    // minGames rated games by then, best first
+    if (url.pathname === '/vs/standings') {
+      const at = Number(body.at) || Date.now(), n = Math.max(1, Math.min(64, Number(body.n) || 16)), min = Number(body.minGames) || 0;
+      const rows = q.exec(`SELECT p.kh AS kh, p.name AS name,
+          p.rating - COALESCE((SELECT SUM(g.da) FROM games g WHERE g.a = p.kh AND g.rated = 1 AND g.at > ?), 0)
+                   - COALESCE((SELECT SUM(g.db) FROM games g WHERE g.b = p.kh AND g.rated = 1 AND g.at > ?), 0) AS r,
+          p.games - (SELECT COUNT(*) FROM games g WHERE (g.a = p.kh OR g.b = p.kh) AND g.rated = 1 AND g.at > ?) AS n
+        FROM players p WHERE p.games > 0`, at, at, at).toArray()
+        .filter((x) => x.n >= min).sort((a, b) => b.r - a.r || b.n - a.n || (a.kh < b.kh ? -1 : 1)).slice(0, n);
+      return reply({ top: rows.map((x) => ({ kh: x.kh, name: x.name || 'Anonymous', rating: Math.round(x.r), games: x.n })) });
+    }
     // /vs/report: from a room object only (never routed from outside: the worker sends /vs/* paths to objects by name)
     const [k0, k1] = body.seats || [];
     if (!k0 || !k1 || k0 === k1 || (body.winner !== 0 && body.winner !== 1) || !ROOM_RE.test(String(body.room || ''))) return reply({ error: 'report' }, 400);
@@ -640,8 +827,8 @@ export class Match {
     p.forEach((x, s) => {
       const win = body.winner === s, k = x.games < ELO.PROVISIONAL ? ELO.K_NEW : ELO.K;
       if (rated) {
-        d[s] = k * ((win ? 1 : 0) - exp[s]);
-        x.rating = Math.max(ELO.FLOOR, x.rating + d[s]);
+        x.rating = Math.max(ELO.FLOOR, x.rating + k * ((win ? 1 : 0) - exp[s]));
+        d[s] = x.rating - before[s];                // (as it moved, the floor counted: /vs/standings takes them back off)
         x.games += 1;
         if (win) { x.w += 1; x.streak = x.streak > 0 ? x.streak + 1 : 1; } else { x.l += 1; x.streak = x.streak < 0 ? x.streak - 1 : -1; }
         x.peak = Math.max(x.peak, x.rating);

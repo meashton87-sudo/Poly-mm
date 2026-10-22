@@ -1919,6 +1919,20 @@ async function versus(req, env, url) {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: h });
   if (!env.MATCH) return json({ error: 'versus is not set up' }, 503, h);
   const allowed = String(env.ALLOWED_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean), origin = req.headers.get('Origin') || '';
+  // the Cup (match.js CUP): GET /vs/cup?key= the bracket as a phone sees it; POST /vs/cup/admin (Authorization: Bearer
+  // <ADMIN_TOKEN>) the whole of it, or { match, winner } to settle one by hand (a dispute). Its results come from its
+  // rooms only (/vs/cup/report is never routed from outside)
+  // (the admin's call carries its token, from anywhere: a terminal has no Origin; the page's from the site's own pages)
+  if (url.pathname === '/vs/cup' || url.pathname === '/vs/cup/admin') {
+    if (url.pathname === '/vs/cup' && allowed.length && !allowed.includes('*') && !allowed.includes(origin)) return json({ error: 'origin' }, 403, h);
+    if (url.pathname === '/vs/cup' ? req.method !== 'GET' : req.method !== 'POST') return json({ error: 'method' }, 405, h);
+    if (url.pathname === '/vs/cup/admin') {
+      const auth = req.headers.get('Authorization') || '', want = env.ADMIN_TOKEN ? `Bearer ${env.ADMIN_TOKEN}` : '';
+      if (!want || auth !== want) return json({ error: 'unauthorized' }, 401, h);
+    }
+    const r = await env.MATCH.get(env.MATCH.idFromName('cup')).fetch(req);
+    return new Response(r.body, { status: r.status, headers: { ...h, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+  }
   if (allowed.length && !allowed.includes('*') && !allowed.includes(origin)) return json({ error: 'origin' }, 403, h);
   if (url.pathname === '/vs/ladder' || url.pathname === '/vs/me') {
     if ((url.pathname === '/vs/ladder') !== (req.method === 'GET') || !['GET', 'POST'].includes(req.method)) return json({ error: 'method' }, 405, h);
@@ -1949,7 +1963,7 @@ import { ROOM_RE } from './match.js';
 export default {
   fetch(req, env) {
     const url = new URL(req.url);
-    if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me'].includes(url.pathname)) return versus(req, env, url);
+    if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me', '/vs/cup', '/vs/cup/admin'].includes(url.pathname)) return versus(req, env, url);
     if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, ...COMM_PATHS, '/board', '/daily', '/week', '/days', '/tally'].includes(url.pathname) && !isSocial(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },

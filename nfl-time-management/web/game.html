@@ -680,6 +680,16 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .chip.plays.on { border-color: var(--chain); }
 .concept small.tag { display: none; }
 .modal .box:has(.concepts) { width: min(700px, 100%); }
+/* (Versus: the Cup in the lobby) */
+.vscup:not(:empty) { border: 2px solid var(--chain); border-radius: 12px; padding: 10px 12px; margin: 10px 0; display: grid; gap: 6px; }
+.vscup .hk { font: 800 12px var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--chain); }
+.vscup p { margin: 0; }
+.vscupb summary { cursor: pointer; font-weight: 700; }
+.vscupb .lab { font: 800 11px var(--body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-top: 6px; }
+.vscupb .mt { font-size: 13px; font-variant-numeric: tabular-nums; }
+.vscupb .mt .w { font-weight: 800; }
+.vscupb .mt .v { color: var(--muted); }
+.vscupb .mt.live { color: var(--chain); }
 /* (Versus: your last call again, one tap) */
 .btn.same { width: 100%; margin: 4px 0 6px; min-height: 40px; font-size: 14px; text-transform: none; letter-spacing: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* (Versus: the plays on the pass sheet, a row to swipe; the one set marked) */

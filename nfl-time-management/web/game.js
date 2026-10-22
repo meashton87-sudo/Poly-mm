@@ -12871,7 +12871,7 @@
   // result to both phones, which animate it. The room keeps the play clock and the score, calls forfeits and rates
   // ranked matches; a phone only ever sends a call. Modes: ranked (the ladder: matched by rating), casual, a friend.
   const VS_TEAM_KEY = `${STORE}:vsteam`;
-  const VS_MODES = { ranked: 'Ranked', casual: 'Casual', friend: 'Friend match', cpu: 'Versus the computer' };
+  const VS_MODES = { ranked: 'Ranked', casual: 'Casual', friend: 'Friend match', cpu: 'Versus the computer', cup: 'The Cup' };
   const VS_CPU_KEY = `${STORE}:vscpu`, VS_CPU_LEVELS = { rookie: 'Rookie', pro: 'Pro' };
   const vsCpuLevel = () => (VS_CPU_LEVELS[load(VS_CPU_KEY, 'pro')] ? load(VS_CPU_KEY, 'pro') : 'pro');
   const VS_CPU_DECIDE_MS = 10 * 60e3;       // against the computer: no play clock to speak of (match.js CPU_DECIDE_MS)
@@ -13174,11 +13174,69 @@
     track('vs_queue', { mode });
   }
   // the Versus screen (#vs): your team, then ranked, casual or a friend; the ladder
+  // The Cup (board/match.js CUP, GET /vs/cup): the top on the ranked ladder at the qualifying time play a bracket from
+  // the start; before it, where you stand; then the seeds, your match (its room: both seats are taken for you), the
+  // bracket and the champion (whose phone shows the claim code for the prize)
+  function vsCupBox() {
+    const box = el('div', 'vscup');
+    const when = (iso) => new Date(iso).toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit' });
+    fetch(`${BOARD.api}/vs/cup?key=${encodeURIComponent(deviceKey())}`).then((r) => (r.ok ? r.json() : null)).then((c) => {
+      if (!c || !box.isConnected || c.error) return;
+      const now = Date.now(), skew = c.now - now, at = (iso) => Date.parse(iso) - skew;
+      const done = !!c.champ, started = now >= at(c.startAt), you = c.you || {};
+      if (done && now - at(c.startAt) > 3 * 86400e3) return;          // (an old Cup: gone from the lobby after a few days)
+      box.append(el('div', 'hk', `The Cup · ${c.prize} to the winner`));
+      if (!c.seeds) {
+        box.append(el('p', '', `The top ${c.size} on the ranked ladder at ${when(c.qualifyAt)} play a bracket from ${when(c.startAt)}, live. ${c.minGames} ranked games to be in.`));
+        box.append(el('p', 'note', you.seed ? `You’re #${you.seed} right now: in, if it holds. Keep winning ranked.` : `You’re not in the top ${c.size} right now: play Ranked to get in.`));
+      } else if (!done) {
+        box.append(el('p', '', you.qualified ? `You’re in: seed ${you.seed} of ${c.seeds.length}.` : `The ${c.seeds.length} are in. ${started ? 'Under way now.' : `It starts ${when(c.startAt)}.`}`));
+        const m = you.match;
+        if (you.qualified && m && m.room) {
+          const go = el('a', 'btn', `Play your Cup match${m.opp ? ` vs ${m.opp}` : ''}`);
+          go.href = `#vs-${m.room}`;
+          go.addEventListener('click', () => { try { sessionStorage.setItem(`tmd:vsmode:${m.room}`, 'cup'); } catch (e) { /* none */ } });
+          box.append(go, el('p', 'note', `Be in within 10 minutes of it opening, on your team, or it goes to them.`));
+        } else if (you.qualified && m && m.won === false) box.append(el('p', 'note', `Out in round ${m.round}. Thanks for playing.`));
+        else if (you.qualified && !started) box.append(el('p', 'note', `Come back at ${when(c.startAt)}: your match opens here.`));
+        else if (you.qualified) box.append(el('p', 'note', 'Your next match opens here when your opponent is known.'));
+      } else {
+        box.append(el('p', '', `Champion: ${c.champ}`));
+        if (you.champ && you.claim) box.append(el('p', 'note', `That’s you! Your claim code is ${you.claim}. Send it to the Two-Minute Drill team to collect your ${c.prize}.`));
+      }
+      // the bracket, round by round (who played whom, who went on)
+      const list = c.seeds || c.projection || [];
+      if (c.matches && c.seeds) {
+        const det = el('details', 'vscupb'), names = (n) => (n == null ? 'bye' : `${n} ${c.seeds[n - 1].name}`);
+        det.append(el('summary', '', 'The bracket'));
+        const rounds = Math.max(...c.matches.map((m) => m.round));
+        for (let r = 1; r <= rounds; r++) {
+          det.append(el('div', 'lab', r === rounds ? 'Final' : r === rounds - 1 ? 'Semifinals' : r === rounds - 2 ? 'Quarterfinals' : `Round ${r}`));
+          c.matches.filter((m) => m.round === r).forEach((m) => {
+            if (m.p[0] == null && m.p[1] == null) return;
+            const line = el('div', `mt${m.live ? ' live' : ''}`);
+            m.p.forEach((x, k) => { if (k) line.append(el('span', 'v', ' vs ')); line.append(el('span', m.w === k ? 'w' : '', names(x))); });
+            if (m.live) line.append(el('span', 'v', ' · live'));
+            if (m.score && m.by === 'score') line.append(el('span', 'v', ` · ${m.score[0]}–${m.score[1]}`));
+            det.append(line);
+          });
+        }
+        box.append(det);
+      } else if (list.length) {
+        const det = el('details', 'vscupb');
+        det.append(el('summary', '', `The top ${c.size} right now`));
+        list.forEach((x) => det.append(el('div', 'mt', `${x.seed}. ${x.name} · ${x.rating}`)));
+        box.append(det);
+      }
+    }).catch(() => { /* no Cup box */ });
+    return box;
+  }
   async function renderVsLobby() {
     show('arch');
     const box = $('arch');
     box.textContent = '';
     box.append(el('h2', '', 'Versus'), el('p', 'lead', 'College overtime against another player, or the computer: each team gets the ball at the other’s 25, no clock. You call your offense and your defense; both calls lock in before the snap.'));
+    if (BOARD.api) box.append(vsCupBox());
     const pick = el('div', 'vspick');
     // (your team in one line with Change, the 32 only when you pick: the Play keys were under them on a phone. A
     // fanbase pick, Your team, is your Versus team until you choose another)
@@ -13537,7 +13595,11 @@
       q.addEventListener('click', () => { vs.closedByUs = true; try { sessionStorage.setItem('tmd:vsqueue', 'ranked'); } catch (e) { /* none */ } location.hash = '#vs'; });
       row.append(q);
     }
-    if (res.by === 'score' || res.by === 'forfeit') {
+    if (vs.mode === 'cup') {                     // (the Cup: no rematch; back to the bracket)
+      const b = el('a', 'btn', 'Back to the Cup');
+      b.href = '#vs';
+      row.append(b);
+    } else if (res.by === 'score' || res.by === 'forfeit') {
       const again = el('button', `btn${vs.mode === 'ranked' ? ' ghostbtn' : ''}`, vs.mode === 'ranked' ? 'Rematch (casual)' : 'Rematch');
       again.type = 'button'; again.id = 'vsAgain';
       again.addEventListener('click', () => { again.disabled = true; again.textContent = vs.mode === 'cpu' ? 'Setting up…' : 'Waiting for your opponent…'; vsSend({ t: 'rematch' }); });
@@ -13546,7 +13608,7 @@
     }
     const next = el('a', 'btn ghostbtn', 'New match');
     next.href = '#vs';
-    row.append(next);
+    if (vs.mode !== 'cup') row.append(next);
     card.append(row);
     // the result to a group chat (how a two-player game gets its next player): the score, who, and the way in
     if (res.by === 'score') {
