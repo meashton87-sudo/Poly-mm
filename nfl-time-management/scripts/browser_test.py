@@ -2059,6 +2059,21 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                     # phone size: each receiver's row, the protection, the options, Back
                     for sel in ("#dock .rcv", "#dock .prots .chip", "#dock .opts-row:not(.prots) .chip", "#dock .ask .chip"):
                         await check("pass", sel, 300)
+                    # the pass plays (game.js CONCEPTS): the picker whole on the screen with no scrolling in it, a tap sets
+                    # every route (Mesh: crossers) and the Plays chip names it
+                    if await page.locator("#playsBtn").count():
+                        await page.click("#playsBtn", timeout=3000)
+                        await page.wait_for_timeout(400)
+                        fit = await page.evaluate("() => { const b = document.querySelector('#modal .box'), r = b.getBoundingClientRect(); return [b.scrollHeight - b.clientHeight, Math.round(r.top), Math.round(r.bottom), innerHeight, document.querySelectorAll('#modal .concept').length]; }")
+                        if fit[0] > 1 or fit[1] < 0 or fit[2] > fit[3] or fit[4] < 9:
+                            out.append(f"{at}: the pass plays picker does not fit: {fit!r}")
+                        await page.click(".concept[data-concept='mesh']", timeout=3000)
+                        await page.wait_for_timeout(400)
+                        got = await page.evaluate("() => [document.getElementById('playsBtn').textContent, [...document.querySelectorAll('#dock .rcv .rt')].map((e) => e.textContent)]")
+                        if "Mesh" not in got[0] or sum(1 for x in got[1] if "Crosser" in x) < 2:
+                            out.append(f"{at}: Mesh picked, the dock reads {got!r}")
+                        await check("pass, a concept set", "#snapGo", 300)
+                        await check("pass, a concept set", "#dock .ask .chip", 300)
                     # max protect: the back and a tight end kept in (their rows Blocking, no route on the field for
                     # them), the open man still one who goes out; back to standard after
                     mx = page.locator("#dock .prots .chip[data-prot='max']")

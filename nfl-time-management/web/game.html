@@ -649,6 +649,34 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .rcv .rt { font-size: 12.5px; color: var(--muted); }
 .rcv.on { border: 2px solid var(--chain); padding: 7px 9px; }
 .rcv.blk { opacity: .55; cursor: default; }
+/* pass concepts (game.js CONCEPTS): a card each, drawn small from your formation, what it beats under its name */
+.concepts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 8px; }
+.concept { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 3px; text-align: left; padding: 8px; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--card); color: var(--ink); font: inherit; cursor: pointer; min-width: 0; }
+.concept:hover, .concept:focus-visible { border-color: var(--chain); }
+.concept.fit { border: 2px solid var(--chain); padding: 7px; }
+.concept b { font: 800 14px var(--body); }
+.concept small { font-size: 11.5px; line-height: 1.3; color: var(--muted); }
+.concept .fitTag { position: absolute; top: 6px; right: 6px; font: 800 10px var(--body); letter-spacing: .06em; text-transform: uppercase; padding: 2px 6px;
+  border-radius: 999px; background: var(--chain); color: var(--chain-ink); }
+.concept.own { justify-content: center; border-style: dashed; }
+.cdiag { width: 100%; height: auto; aspect-ratio: 150 / 92; border-radius: 6px; background: var(--field, #2f7a46); }
+.cdiag .los { stroke: rgba(255, 255, 255, .55); stroke-width: 1; stroke-dasharray: 3 3; }
+.cdiag .rt { fill: none; stroke: #ffffff; stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+.cdiag circle.wr { fill: #ffd84a; }
+.cdiag circle.oth { fill: #ffffff; }
+.chip.plays.on { border-color: var(--chain); }
+.concept small.tag { display: none; }
+.modal .box:has(.concepts) { width: min(700px, 100%); }
+@media (max-width: 600px) {
+  .concepts { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .concept { padding: 5px; gap: 2px; }
+  .concept.fit { padding: 4px; }
+  .concept b { font-size: 12.5px; line-height: 1.2; }
+  .concept small.long { display: none; }
+  .concept small.tag { display: block; font-size: 11px; }
+  .concept .fitTag { top: 3px; right: 3px; font-size: 9px; padding: 1px 4px; }
+}
 .rcv .od { grid-column: 2; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .rcv .od b, .rcv .od i { font: inherit; }
 .rcv .od .pk { color: var(--sq-r-ink); }

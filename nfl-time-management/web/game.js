@@ -1499,6 +1499,97 @@
     const R = SITU_ROUTES[spotKind(G.root)];
     return E.map((a) => (a.label === 'WR' ? R.WR[wr.indexOf(a)] || 'hitch' : a.label === 'TE' ? R.TE : R.RB));
   }
+  // Pass concepts: a playbook's names for routes run together, one tap for every receiver's route by where he lines up
+  // (the widest receiver on each side first, then the slots inside him, the tight end, the back). A player said the
+  // passes all felt like one concept and drawing your own was beyond most players. The throw plays as always: the real
+  // throws on the route of the man it goes to; the line under each is what the concept is built to beat (its men's
+  // routes are the reason, nothing is added to the odds)
+  const CONCEPTS = [
+    { k: 'verts', tag: 'vs Cover 3', name: 'Four Verticals', beats: 'Cover 3: four deep threats for three deep defenders',
+      r: (o) => (o.pos === 'RB' ? 'flat' : 'go') },
+    { k: 'smash', tag: 'vs Cover 2', name: 'Smash', beats: 'Cover 2: a hitch under a corner route, the cornerback can take one',
+      r: (o) => (o.pos === 'RB' ? 'flat' : o.pos === 'TE' ? 'corner' : o.rank === 0 ? 'hitch' : 'corner') },
+    { k: 'flood', tag: 'vs Cover 3', name: 'Flood', beats: 'Cover 3: deep, middle and flat to one sideline, three men against two',
+      r: (o) => (o.pos === 'RB' ? 'flat' : !o.strong ? (o.pos === 'TE' ? 'cross' : 'in') : o.pos === 'TE' ? 'out' : o.rank === 0 ? 'go' : 'deep_out') },
+    { k: 'mesh', tag: 'vs man', name: 'Mesh', beats: 'Man coverage: two shallow crossers rub their defenders off each other',
+      r: (o) => (o.pos === 'RB' ? 'angle' : o.pos === 'TE' || o.rank > 0 || o.crosser ? 'cross' : 'go') },
+    { k: 'slants', tag: 'vs blitz', name: 'Slants', beats: 'Press and the blitz: out quick, inside the cornerback',
+      r: (o) => (o.pos === 'RB' ? 'flat' : o.pos === 'TE' ? 'hitch' : 'slant') },
+    { k: 'stick', tag: 'short yardage', name: 'Stick', beats: 'Zone, short yardage: a quick stop at 5 with the flat beside it',
+      r: (o) => (o.pos === 'RB' ? 'flat' : o.pos === 'TE' || o.rank > 0 ? 'hitch' : 'go') },
+    { k: 'dagger', tag: 'vs Cover 2/3', name: 'Dagger', beats: 'Cover 3 and 2: the seam clears the middle, the dig comes in under it',
+      r: (o) => (o.pos === 'RB' ? 'angle' : o.pos === 'TE' ? 'cross' : !o.strong ? 'hitch' : o.rank === 0 ? 'in' : 'go') },
+    { k: 'shot', tag: 'vs one safety', name: 'Post-Wheel', beats: 'One deep safety: a post down the middle, the back wheels up the sideline',
+      r: (o) => (o.pos === 'RB' ? 'wheel' : o.pos === 'TE' ? 'in' : o.rank === 0 && o.strong ? 'post' : o.rank === 0 ? 'go' : 'in') },
+    { k: 'outs', tag: 'stops the clock', name: 'Sideline', beats: 'The clock: every route ends at the sideline, out of bounds after the catch',
+      r: (o) => (o.pos === 'RB' ? 'flat' : o.pos === 'TE' ? 'out' : o.rank === 0 ? 'out' : 'corner') },
+  ];
+  // the concept that fits the spot (spotKind), first in the list
+  const CONCEPT_FIT = { goal: 'slants', sideline: 'outs', short: 'stick', long: 'dagger' };
+  function conceptRoutes(sc, c) {
+    const E = eligibles(sc), st = sc.s * sc.dir;
+    const wr = E.filter((a) => a.label === 'WR');
+    const roleOf = (a) => {
+      const sd = Math.sign(a.x0 - sc.bx) || st, same = wr.filter((w) => (Math.sign(w.x0 - sc.bx) || st) === sd).sort((x, y) => Math.abs(y.x0 - sc.bx) - Math.abs(x.x0 - sc.bx));
+      return { pos: a.label, strong: sd === st, rank: Math.max(0, same.indexOf(a)), inside: same.length > 1 };
+    };
+    const roles = E.map(roleOf);
+    // (Mesh: two crossers; a set with one man inside sends the backside's widest across too)
+    if (c.k === 'mesh' && roles.filter((o) => o.pos === 'TE' || (o.pos === 'WR' && o.rank > 0)).length < 2) {
+      const w = roles.find((o) => o.pos === 'WR' && o.rank === 0 && !o.strong) || roles.find((o) => o.pos === 'WR' && o.rank === 0);
+      if (w) w.crosser = true;
+    }
+    return roles.map((o) => c.r(o));
+  }
+  const conceptNow = (sc) => { const P = ui.pass; return CONCEPTS.find((c) => P.concept === c.k && conceptRoutes(sc, c).every((r, i) => P.routes[i] === r && !(P.drawn && P.drawn[i]))) || null; };
+  function applyConcept(c) {
+    const sc = scene, P = ui.pass;
+    if (busy || !passing() || !sc) return;
+    const rs = conceptRoutes(sc, c);
+    (P.hist = P.hist || []).push(...rs.map((_, i) => [i, P.routes[i], (P.drawn && P.drawn[i]) || null]).filter((h, i) => h[1] !== rs[i] || h[2]));
+    P.routes = rs; P.drawn = []; P.concept = c.k; P.draw = false;
+    track('pass_concept', { concept: c.k });
+    closeModal();
+    redrawPass();
+  }
+  // each concept drawn small from where your receivers line up now
+  function conceptCard(sc, c, fit) {
+    const b = el('button', `concept${fit ? ' fit' : ''}`);
+    b.type = 'button'; b.dataset.concept = c.k;
+    const W = 150, H = 92, L0 = sc.losL, top = 26, xs = (x) => ((x - SX0) / XYD / 53.333) * W;
+    const ys = (L) => H - 14 - (sc.dir * (L - L0) / top) * (H - 20);
+    const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, 'aria-hidden': 'true', class: 'cdiag' });
+    svg.append(S('line', { x1: 0, x2: W, y1: ys(L0), y2: ys(L0), class: 'los' }));
+    const rs = conceptRoutes(sc, c), stay = protOn() ? protMen(sc, G.prot) : [];
+    eligibles(sc).forEach((a, i) => {
+      const x0 = xs(a.x0), y0 = ys(a.L0);
+      svg.append(S('circle', { cx: x0.toFixed(1), cy: y0.toFixed(1), r: 3.2, class: a.label === 'WR' ? 'wr' : 'oth' }));
+      if (stay.includes(a)) return;
+      const r = Motion.routeOnField(rs[i], ROUTE_DEPTH[rs[i]], (a.x0 - SX0) / XYD, outOf(sc, a), sc.dir, L0, Math.abs(a.L0 - L0), 0.5);
+      const pts = [[x0, y0]].concat(r.pts.map((q) => [clip((q[0] / 53.333) * W, 2, W - 2), clip(ys(q[1]), 2, H - 2)]));
+      svg.append(S('path', { d: pts.map((q, k) => `${k ? 'L' : 'M'}${q[0].toFixed(1)} ${q[1].toFixed(1)}`).join(''), class: 'rt' }));
+    });
+    b.append(svg, el('b', '', c.name), el('small', 'long', c.beats), el('small', 'tag', c.tag));
+    b.title = c.beats;
+    if (fit) b.append(el('span', 'fitTag', 'Fits now'));
+    b.setAttribute('aria-label', `${c.name}: ${rs.map((r, i) => `${eligibles(sc)[i].label} ${routeName(eligibles(sc)[i].label, r)}`).join(', ')}. Beats ${c.beats}`);
+    b.addEventListener('click', () => applyConcept(c));
+    return b;
+  }
+  function openConcepts() {
+    const sc = scene;
+    if (busy || !passing() || !sc) return;
+    const fitK = CONCEPT_FIT[spotKind(G.root)], list = CONCEPTS.slice().sort((a, b) => (b.k === fitK) - (a.k === fitK));
+    const grid = el('div', 'concepts');
+    list.forEach((c) => grid.append(conceptCard(sc, c, c.k === fitK)));
+    const own = el('button', 'concept own');
+    own.type = 'button';
+    own.append(el('b', '', '✏️ Draw your own'), el('small', 'long', 'Drag a receiver on the field where he should go'), el('small', 'tag', 'on the field'));
+    own.addEventListener('click', () => { closeModal(); setDraw(true); });
+    grid.append(own);
+    track('concepts_open', {});
+    openModal('Pass plays', [el('p', 'note', 'One tap sets every route. Then throw to the open man, or pick who gets it.'), grid]);
+  }
   // toward his own sideline; the same on the field and in the animation
   const outOf = (sc, a) => Math.sign(a.x0 - sc.bx) || sc.s * sc.dir || 1;
   // ... but the back's route on a rollout goes the way the quarterback rolls (players saw the flat run away from him,
@@ -6332,20 +6423,25 @@
     back.addEventListener('click', () => { if (busy) return; ui.step = 'family'; drawField(); drawDock(); });
     head.append(back);
     if (P.hist && P.hist.length) {
-      const undo = el('button', 'chip', '↶ Undo');
+      const undo = el('button', 'chip', bcast() ? '↶' : '↶ Undo');
       undo.type = 'button';
       undo.setAttribute('aria-label', 'Undo the last route change');
       undo.addEventListener('click', undoRoute);
       head.append(undo);
     }
-    const pen = el('button', `chip pen${P.draw ? ' on' : ''}`, P.draw ? '✓ Done' : '✏️ Draw');
+    const cn = !P.draw && sc ? conceptNow(sc) : null, plays = el('button', `chip plays${cn ? ' on' : ''}`, `📋 ${cn ? cn.name : 'Plays'}`);
+    plays.type = 'button'; plays.id = 'playsBtn';
+    plays.setAttribute('aria-label', cn ? `Pass plays: ${cn.name} set` : 'Pass plays: pick a concept');
+    plays.addEventListener('click', openConcepts);
+    if (!P.draw) head.append(plays);
+    const pen = el('button', `chip pen${P.draw ? ' on' : ''}`, P.draw ? '✓ Done' : bcast() ? '✏️' : '✏️ Draw');
     pen.type = 'button'; pen.id = 'drawBtn';
     pen.setAttribute('aria-label', P.draw ? 'Done drawing routes' : 'Draw routes');
     pen.setAttribute('aria-pressed', String(!!P.draw));
     pen.addEventListener('click', () => { if (!busy) setDraw(!P.draw); });
     head.append(pen);
     // (the broadcast view on a phone: the defense's look in the head's line, the receivers' room below it)
-    if (G.look != null && bcast()) { const L = LOOKS[G.look], rc = el('span', `readchip${L.blitz ? ' blitz' : ''}`, `${L.loaded ? 'Loaded box' : 'Light box'}${L.blitz ? ' · blitz' : ''}`); rc.title = L.loaded ? '7 or more near the line' : '6 or fewer near the line'; head.insertBefore(rc, pen); }
+    if (G.look != null && bcast()) { const L = LOOKS[G.look], rc = el('span', `readchip${L.blitz ? ' blitz' : ''}`, `${L.loaded ? 'Loaded box' : 'Light box'}${L.blitz ? ' · blitz' : ''}`); rc.title = L.loaded ? '7 or more near the line' : '6 or fewer near the line'; head.insertBefore(rc, head.querySelector('#playsBtn') || pen); }
     else if (G.look != null) d.append(readLine(G.look));
     if (!VS) {
       // the protection (PROTS): one tap, kept for the drive's next passes
