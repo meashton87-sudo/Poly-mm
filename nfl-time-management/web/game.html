@@ -1405,6 +1405,19 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
 .err { color: var(--sq-r-ink); font-weight: 600; }
 .sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .siteinfo { max-width: 680px; margin: 28px auto 0; padding: 18px 16px 0; border-top: 1px solid var(--line); }
+.siteinfo > summary { cursor: pointer; font: 800 13px/1.2 var(--display); text-transform: uppercase; letter-spacing: .06em; color: var(--muted, var(--ink)); list-style: none; text-align: center; padding: 4px 0 8px; }
+.siteinfo > summary::-webkit-details-marker { display: none; }
+/* the longer reading folded away (game.js moreEl), and Pro's restore */
+details.more, details.havepro { margin: 8px 0; }
+details.more > summary, details.havepro > summary { cursor: pointer; font-weight: 700; font-size: 14px; color: var(--muted); list-style: none; }
+details.more > summary::-webkit-details-marker, details.havepro > summary::-webkit-details-marker { display: none; }
+details.more > summary::after, details.havepro > summary::after { content: " ›"; }
+details.more[open] > summary::after, details.havepro[open] > summary::after { content: " ⌄"; }
+details.more > p { margin: 6px 0 0; color: var(--muted); font-size: 14px; line-height: 1.45; max-width: 65ch; }
+details.havepro > .row { margin-top: 8px; }
+.siteinfo > summary::after { content: " +"; }
+.siteinfo[open] > summary::after { content: " –"; }
+.siteinfo[open] > summary { margin-bottom: 10px; }
 .siteinfo h2 { font: 900 24px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; margin: 0 0 8px; }
 .siteinfo h3 { font: 800 17px/1.2 var(--display); text-transform: uppercase; letter-spacing: .03em; margin: 18px 0 4px; }
 .siteinfo p { margin: 0 0 8px; max-width: 65ch; color: var(--ink); }
@@ -1502,7 +1515,9 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
   <div id="boot" class="status"><span class="spin"></span><span>Loading today's spots…</span></div>
 </main>
 
-<section class="siteinfo" aria-labelledby="aboutGame">
+<!-- what the game is, folded away: a tap opens it (the owner: no reading unless you want it) -->
+<details class="siteinfo">
+  <summary>About the game</summary>
   <h2 id="aboutGame">What is Two-Minute Drill?</h2>
   <p>Two-Minute Drill is a free daily football game: you call the plays for the end of a real game. Every day
     everyone gets the same real spot, most often a late-game drive from a recent NFL season (playoffs included), now and
@@ -1528,7 +1543,7 @@ div.arch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin
   <p>The situations, the 160,141 real plays the snaps are drawn from and the player ratings all come from public NFL
     play-by-play, participation and charting data published by nflverse. The ranks and stats come from real players'
     results. <a href="how-it-works">Read the full guide</a>.</p>
-</section>
+</details>
 <!--SITE-FOOT-->
 
 <div id="deep" class="deep" role="dialog" aria-modal="true" aria-labelledby="deepT" hidden>

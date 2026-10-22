@@ -374,6 +374,8 @@
   function load(key, dflt) { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : dflt; } catch (e) { return dflt; } }
   function save(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) { /* storage off: play on */ } }
   function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  // the longer reading, a tap away (the owner: nothing to read on a page unless you ask for it)
+  function moreEl(label, text) { const d = el('details', 'more'); d.append(el('summary', '', label), el('p', '', text)); return d; }
   function S(tag, attrs, text) {
     const e = document.createElementNS(SVGNS, tag);
     for (const k in attrs) e.setAttribute(k, attrs[k]);
@@ -6079,15 +6081,12 @@
     }
     box.append(el('div', 'who', VS ? `You're ${teamName(me)}. Your opponent has ${teamName(op)}: they call their side, you call yours.`
       : `You're calling it for ${teamName(me)}.${rc ? ` Can you do better than ${rc} did?` : ''}`));
-    if (SURV) box.append(el('div', 'who surv', 'Win to stay alive. Lose and your run is over. Tied at the end: overtime.'));
-    if (todayDaily() && state.restarts) box.append(el('div', 'who prac', 'Started over: this drive counts for your streak and stats, not on today’s leaderboard.'));
-    if (PRACTICE) box.append(el('div', 'who prac', 'Practice: graded like the daily, but it doesn’t count toward your stats, streak or the leaderboard.'));
+    if (SURV) box.append(el('div', 'who surv', 'Win to stay alive.'));
+    if (todayDaily() && state.restarts) box.append(el('div', 'who prac', 'Started over: not on today’s leaderboard.'));
+    if (PRACTICE) box.append(el('div', 'who prac', 'Practice: doesn’t count.'));
     const chl = challengeLine();
     if (chl) box.append(chl);
     box.append(todaySoFar());
-    const rl = sc.real || {};
-    box.append(el('div', 'from', sc.custom ? `Your situation, with each team as it lined up that season and every player rated as of the end of its regular season.`
-      : `The real score, clock, ball and timeouts from that game, with the players who were on the field and how good they were that week.`));
     box.append(el('div', 'from legal', 'Fan-made. Not affiliated with or endorsed by the NFL or its teams.'));
     go.focus({ preventScroll: true });
     // the first call's facts, asked for while the intro is read: the worker keeps the answer (game_worker.js), so Play
@@ -7078,7 +7077,7 @@
     };
     const render = () => {
       const f = G.form || {};
-      const hint = el('p', 'phint', 'Optional. Where the quarterback stands and how many backs are behind him are charted on the real plays: pick the shotgun, under center, the pistol or an empty set (with two backs in your personnel, two-back sets) and the play is drawn from real plays run from it (never from a handful: too few, and every play counts). The receivers’ look is the lineup on the field only.');
+      const hint = el('p', 'phint', 'Optional.');
       const done = el('button', 'btn pdone', 'Done');
       done.type = 'button';
       done.addEventListener('click', closeModal);
@@ -7157,7 +7156,7 @@
     const qbs = bq && !VS ? [bq, ...((base.lineup || {}).qbs || []).filter((q) => q.name !== bq.name && typeof q.adj === 'number')] : [];
     const render = () => {
       const cur = G.pers || real, L = lineup(G.me);
-      const hint = el('p', 'phint', `Optional. The play is drawn from real NFL plays run with the grouping you pick; the players you pick are the ones on the field and the ones you can throw to${qbs.length > 1 ? ', and the quarterback’s passes go as his had before this game' : ''}.`);
+      const hint = el('p', 'phint', 'Optional.');
       const groups = el('div', 'pgroups');
       PERS.forEach(([k]) => {
         const [t, sub] = PERS_INFO[k], b = el('button', `pgroup${cur === k ? ' on' : ''}`);
@@ -9967,15 +9966,13 @@
     const box = el('div', 'pro provalue'), days = Math.max(0, dayOf(new Date()) - 1);
     box.append(el('div', 'k', 'Want more? Two-Minute Drill Pro'), el('div', 'price', '$4.99 \u00b7 once, yours for good'));
     const ul = el('ul');
-    ['The historic drives: Mahomes\u2019 13 seconds, the Minneapolis Miracle, the Helmet Catch, 28\u20133 and more, from their real spots',
-      'Playoff runs: coach a team through its whole postseason, every late-game spot in order',
-      `The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed`].forEach((t) => ul.append(el('li', '', t)));
+    ['Historic drives', 'Playoff runs', `Every past daily${days ? ` (${days})` : ''}`].forEach((t) => ul.append(el('li', '', t)));
     const row = el('div', 'row'), buy = el('button', 'btn', 'Unlock Pro \u00b7 $4.99'), more = el('a', 'btn ghostbtn', 'See what\u2019s inside');
     buy.type = 'button';
     buy.addEventListener('click', () => { track('pro_value_buy'); startPurchase(buy); });
     more.href = '#archive';
     row.append(buy, more);
-    box.append(ul, row, el('p', 'note', 'Apple Pay, Google Pay or a card on Stripe\u2019s secure page. Signed in, it goes on your account for every device.'));
+    box.append(ul, row);
     track('pro_value_seen');
     return box;
   }
@@ -10370,7 +10367,7 @@
       },
       week: () => {
         if (!wk) { panel.append(el('p', 'note', 'The week’s list did not load. Refresh to try again.')); return; }
-        panel.append(el('p', 'note lbrule', `${span(wk.from, wk.to)}: each player’s best ${wk.best} daily scores of the 7 days, added up (${wk.best * 100} is perfect). Play ${wk.best} days to max it out; a bad day never counts against you.`));
+        panel.append(el('p', 'note lbrule', `${span(wk.from, wk.to)}: best ${wk.best} days added up`));
         const y = wk.you;
         panel.append(list(wk.top.map((r) => ({ name: r.name, score: String(r.pts), sub: `${r.days}d` })), y ? [y.rank, wk.n, String(y.pts), `${y.days}d`] : null));
         if (!wk.top.length) panel.append(el('p', 'note', 'Nobody on this week’s list yet.'));
@@ -11820,11 +11817,9 @@
     const box = el('div', 'pro'), days = Math.max(0, dayOf(new Date()) - 1);
     box.append(el('div', 'k', 'Two-Minute Drill Pro'), el('div', 'price', '$4.99 · once'));
     const ul = el('ul');
-    [`The archive: every past daily${days ? ` (${days} so far)` : ''}, any day you missed, with its score and stats`,
-      'The historic drives. Mahomes’ 13 seconds, the Minneapolis Miracle, the Helmet Catch, 28–3 and more, each from its real spot',
-      'The playoff runs. A team’s whole postseason, every late-game spot in order. Win them all',
-      ...(VS_PRO ? ['Versus. Play someone live, or the computer: college overtime, you call your offense and your defense'] : []),
-      ...(SCN ? ['Build a scenario. Any two teams of any season from 2001 on, as they lined up then, in any situation: 2007 New England against 2023 Kansas City, down 4 with two minutes left'] : [])].forEach((t) => ul.append(el('li', '', t)));
+    ['Historic drives', 'Playoff runs', `Every past daily${days ? ` (${days})` : ''}`,
+      ...(VS_PRO ? ['Versus: play someone live'] : []),
+      ...(SCN ? ['Build your own scenario'] : [])].forEach((t) => ul.append(el('li', '', t)));
     box.append(ul);
     if (isPro()) {
       box.append(el('p', '', acctPro() ? `Pro is on your account (${ACCT.me.email}): sign in on any device to play it there.` : `Pro is on. Your code: ${proCode()}. Keep it: it unlocks Pro on up to 3 of your devices.`));
@@ -11834,8 +11829,7 @@
     buy.type = 'button';
     buy.addEventListener('click', () => startPurchase(buy));
     row.append(buy);
-    box.append(row, el('p', 'note', acctPro() || !authSession() ? 'Apple Pay, Google Pay or a card, on Stripe’s secure page. One code, up to 3 of your devices.'
-      : `Apple Pay, Google Pay or a card, on Stripe’s secure page. Signed in as ${(ACCT.me && ACCT.me.email) || 'you'}: Pro goes on your account, for any device you sign in on.`));
+    box.append(row);
     const rs = el('div', 'row'), inp = el('input'), go = el('button', 'btn', 'Restore');
     inp.placeholder = 'TMD-XXXX-XXXX-XXXX'; inp.setAttribute('aria-label', 'Your Pro code'); inp.autocapitalize = 'characters'; inp.spellcheck = false;
     go.type = 'button';
@@ -11854,7 +11848,10 @@
       }
     });
     rs.append(inp, go);
-    box.append(el('p', 'note', 'Already have Pro? Enter your code.'), rs, recoverNodes());
+    // (restoring a code, folded away: most people come here to buy)
+    const have = el('details', 'havepro');
+    have.append(el('summary', '', 'Already have Pro?'), rs, ...[].concat(recoverNodes() || []));
+    box.append(have);
     if (!BOARD.api) { buy.disabled = true; go.disabled = true; }
     return [box];
   }
@@ -12048,7 +12045,7 @@
     if (done) {
       foot.append(countdown(streak ? `${streak} · next drive in ` : 'Next drive in '));
     } else {
-      foot.append(el('span', '', streak ? `${streak}${sk.pending.length ? ' ❄️' : ''}: play today to keep it` : 'One real drive a day, the same for everyone'));
+      if (streak) foot.append(el('span', '', `${streak}${sk.pending.length ? ' ❄️' : ''}: play today to keep it`));
     }
     card.append(foot);
     return { el: card, status };
@@ -12062,7 +12059,7 @@
     const num = el('div', 'hnum');
     num.append(el('b', '', sv.best ? String(sv.best) : '–'), el('span', '', sv.best ? `win${sv.best === 1 ? '' : 's'}, your best run` : 'no runs yet'));
     a.append(el('div', 'hk', 'Survivor'), num,
-      el('p', '', alive ? `Your run is alive: ${run.won} win${run.won === 1 ? '' : 's'} so far.` : 'Real fourth quarters back to back. One loss ends it.'),
+      ...(alive ? [el('p', '', `Your run is alive: ${run.won} win${run.won === 1 ? '' : 's'} so far.`)] : []),
       el('span', 'cta', alive ? 'Continue' : 'Play'));
     return a;
   }
@@ -12072,7 +12069,6 @@
     a.href = '#vs';
     a.dataset.to = VS_PRO && !isPro() ? 'versus_pitch' : 'versus';
     a.append(el('div', 'hk', VS_PRO ? (isPro() ? 'Versus · Pro' : 'Versus · with Pro') : 'Versus · live'), el('div', 'hpitch', 'Play someone'),
-      el('p', '', 'College overtime against another player: you call your offense and your defense. Nobody on? Play the computer.'),
       el('span', 'cta', VS_PRO && !isPro() ? 'Take a look' : 'Play'));
     return a;
   }
@@ -12083,7 +12079,6 @@
     a.dataset.to = isPro() ? 'pro' : 'pro_pitch';
     if (!isPro()) {
       a.append(el('div', 'hk', 'Pro · $4.99 once'), el('div', 'hpitch', 'Historic drives'),
-        el('p', '', `The Helmet Catch, 28\u2060–\u20603 and more, playoff runs, every past daily.`),
         el('span', 'cta', 'Take a look'));
       return a;
     }
@@ -12169,7 +12164,8 @@
     ic.append(svg);
     const tx = el('span', 'ptx');
     if (o.k) tx.append(el('span', 'pk', o.k));
-    tx.append(el('b', '', title), el('span', 'ps', sub));
+    tx.append(el('b', '', title));
+    if (sub) tx.append(el('span', 'ps', sub));
     if (o.bar != null) { const bar = el('span', 'pbar'), f = el('i'); f.style.width = `${Math.round(o.bar * 100)}%`; bar.append(f); tx.append(bar); }
     a.append(ic, tx);
     return a;
@@ -12220,7 +12216,6 @@
     if (bad) box.append(el('p', 'note badlink', `There is no ${bad}${isPro() ? ': here are the ones there are.' : '.'}`));
     if (SCN && !isPro()) box.append(scenEntry(), commEntry());        // Build a scenario first on the Pro screen, with Pro or without (building is free to try), then what others built
     if (!isPro()) {
-      box.append(el('p', 'lead', `Every daily since launch${todayN > 1 ? `, ${todayN - 1} so far` : ''}, the historic drives and the playoff runs: play any of them, graded like the day it ran.`));
       if (PRO_LIVE === null && (proCode() || authSession())) {     // a code (or a session) is kept here but the board could not confirm it
         const again = el('button', 'btn', 'Try again');
         again.type = 'button'; again.addEventListener('click', () => location.reload());
@@ -12246,7 +12241,7 @@
       ttl.append(el('span', 'k', 'Your rank'), el('b', '', rk.title), el('span', 'sub', rk.next ? `${rk.next.at - passed} more ${rk.next.at - passed === 1 ? 'pass' : 'passes'} to ${rk.next.title}` : 'Every drive passed. The Hall of Fame.'));
       const num = el('div', 'phn');
       num.append(el('b', '', `${passed}/${n}`), el('span', 'k', 'passed'));
-      head.append(ttl, num, driveStrip(ds), el('p', 'note', `Pass a drive with an A: ${PASS_AT} or better, better than ${PASS_AT}% of NFL play\u2011callers, counting the calls and the result, and you have to win the game. Replay any drive as often as you like; your best grade counts.${played ? ` Played ${played} of ${n}.` : ''}`));
+      head.append(ttl, num, driveStrip(ds), el('p', 'note', `Win with an A (${PASS_AT}+) to pass.${played ? ` Played ${played} of ${n}.` : ''}`));
       box.append(head, el('h3', '', 'Historic drives'));
       const dl = el('div', 'days');
       pro.drives.forEach((d, k) => {
@@ -12279,7 +12274,7 @@
           el('span', `sc${rec && rec.w === rec.n ? ' champ' : ''}`, rec ? `${rec.w === rec.n ? '🏆 ' : ''}${rec.w}-${rec.l}` : 'Play'));
         rl.append(a);
       });
-      box.append(rl, el('p', 'note', 'Every game of the run in order, each from its spot with the most at stake, the game still in doubt. Lose one and the season is over, as it was for real; win them all.'));
+      box.append(rl, el('p', 'note', 'Lose one and the run is over.'));
     } else box.append(el('p', 'note', 'The playoff runs land here with the next build.'));
     }
     if (sec !== 'dailies') return;
@@ -12390,7 +12385,7 @@
     const a = el('a', 'scnentry'), n = Object.values(scenList()).filter((e) => e && !e.gone).length;
     a.href = '#custom';
     a.append(el('span', 'k', isPro() ? 'New · Build a scenario' : 'New in Pro · Build a scenario'), el('b', '', 'Your teams, your situation'),
-      el('span', 'm', `Any two teams from 2001 on, as they lined up that season. Set the game, the clock, the score and the ball, then call it.${n ? ` ${n} played.` : ''}`),
+      ...(n ? [el('span', 'm', `${n} played`)] : []),
       el('span', 'cta', 'Build one'));
     return a;
   }
@@ -12558,7 +12553,7 @@
           });
           body.append(row(lab, sel));
         });
-        body.append(el('p', 'lnote', 'Anyone of that season’s team: the quarterback’s passes go as his had, the kicker kicks as he did; the others are who is on the field and whom you can throw to.'));
+        body.append(el('p', 'lnote', 'Anyone from that season’s team.'));
         if (focused) { const x = document.getElementById(focused); if (x) x.focus(); }      // (the pick just made keeps the focus)
       };
       return d;
@@ -12675,7 +12670,7 @@
     }
     form.append(gN, gT, gL, gG, gS);
     box.append(el('h3', '', 'Start from'), pre, form, errs, sum, acts, posted, reset);
-    box.append(el('p', 'note', `Seasons ${first}–${last}: each team as it lined up in a game late in its regular season (the latest for this season, ${last}, through week ${ix.seasons[ix.seasons.length - 1].thru}), with every player rated as of then, its quarterback, kicker and punter, and its strength. Before ${first} nothing names who started on the line, so those seasons are left out. The overtime is the one of its time; the playoffs never end tied. Scenarios post to no leaderboard: they aren’t the same for everyone. Posted to Community, a scenario shows how many have played it and how many won.`));
+    box.append(moreEl('About the rosters', `Seasons ${first}–${last}: each team as it lined up in a game late in its regular season (the latest for this season, ${last}, through week ${ix.seasons[ix.seasons.length - 1].thru}), with every player rated as of then, its quarterback, kicker and punter, and its strength. Before ${first} nothing names who started on the line, so those seasons are left out. The overtime is the one of its time; the playoffs never end tied. Scenarios post to no leaderboard: they aren’t the same for everyone. Posted to Community, a scenario shows how many have played it and how many won.`));
     // My scenarios
     box.append(el('h3', '', 'My scenarios'));
     const mine = el('div', 'days');
@@ -12775,7 +12770,6 @@
     const a = el('a', 'scnentry comm');
     a.href = '#community';
     a.append(el('span', 'k', 'Community'), el('b', '', 'Scenarios players built'),
-      el('span', 'm', 'Play what other players set up and see how many have played each one and how many won. Post yours from the builder.'),
       el('span', 'cta', 'Browse'));
     return a;
   }
@@ -12821,7 +12815,7 @@
     box.textContent = '';
     const back = el('a', 'linkbtn', '← Pro');
     back.href = '#archive';
-    box.append(back, el('h2', '', 'Community scenarios'), el('p', 'lead', `Scenarios other players built: their teams, their situation. Tap one to play it${isPro() ? '' : ' (playing is part of Pro)'}.`));
+    box.append(back, el('h2', '', 'Community scenarios'), ...(isPro() ? [] : [el('p', 'lead', 'Playing them is part of Pro.')]));
     const build = el('a', 'linkbtn', 'Build and post your own');
     build.href = '#custom';
     box.append(build);
@@ -13090,7 +13084,8 @@
     save(`${STORE}:vsintro`, seen + 1);
     if (seen >= 2) {          // (you know the rules: who chooses, and go)
       box.append(el('p', 'story', first === G.me ? 'You won the toss: offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`));
-    } else box.append(el('p', 'story', `Each team gets the ball at the other’s 25, no clock. From the second overtime, a touchdown has to go for two; from the third, it’s a two-point play each. Ahead after both teams have had it, you win. ${first === G.me ? 'You won the toss: you choose offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`} The choice alternates every overtime.`));
+    } else box.append(el('p', 'story', first === G.me ? 'You won the toss: you choose.' : `${teamName(op)} won the toss.`),
+      moreEl('Overtime rules', 'Each team gets the ball at the other’s 25, no clock. Ahead after both teams have had it, you win. From the second overtime, a touchdown has to go for two, and the team that went second goes first; from the third, it’s a two-point play each.'));
     if (seen < 2) box.append(el('div', 'who', vs.mode === 'cpu' ? 'You call your side: the offense when you have it, the defense when they do. No play clock against the computer: take your time.'
       : 'You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap. The defense has 10 seconds to call (miss it and a standard defense goes in), the offense 20 (miss two in a row and you forfeit).'));
     const go = el('button', 'btn', 'Kick it off');
@@ -13218,8 +13213,12 @@
       if (done && now - at(c.startAt) > 3 * 86400e3) return;          // (an old Cup: gone from the lobby after a few days)
       box.append(el('div', 'hk', 'Two-Minute Drill Invitational'), el('b', 'cupb', `${c.prize} to the winner`));
       if (!c.seeds) {
-        box.append(el('p', '', `The top ${c.size} on the ranked ladder at ${when(c.qualifyAt)} play a bracket from ${when(c.startAt)}, live. ${c.minGames} ranked game${c.minGames === 1 ? '' : 's'} to be in.`));
-        box.append(el('p', 'note', you.seed ? `You’re #${you.seed} right now: in, if it holds. Keep winning ranked.` : `You’re not in the top ${c.size} right now: play Ranked to get in.`));
+        box.append(el('p', '', `Top ${c.size} on the ladder · ${when(c.startAt)}`));
+        box.append(el('p', 'note', you.seed ? `You’re #${you.seed}: in, if it holds.` : 'Not in yet: play Ranked.'));
+        // (the rules, a tap away)
+        const how = el('details', 'vscupb');
+        how.append(el('summary', '', 'How it works'), el('div', 'mt', `The top ${c.size} on the ranked ladder at ${when(c.qualifyAt)} (${c.minGames} ranked game${c.minGames === 1 ? '' : 's'} or more) play a bracket from ${when(c.startAt)}, live. Be in within 10 minutes of your match opening or it goes to your opponent.`));
+        box.append(how);
       } else if (!done) {
         box.append(el('p', '', you.qualified ? `You’re in: seed ${you.seed} of ${c.seeds.length}.` : `The ${c.seeds.length} are in. ${started ? 'Under way now.' : `It starts ${when(c.startAt)}.`}`));
         const m = you.match;
@@ -13227,13 +13226,13 @@
           const go = el('a', 'btn', `Play your Invitational match${m.opp ? ` vs ${m.opp}` : ''}`);
           go.href = `#vs-${m.room}`;
           go.addEventListener('click', () => { try { sessionStorage.setItem(`tmd:vsmode:${m.room}`, 'cup'); } catch (e) { /* none */ } });
-          box.append(go, el('p', 'note', `Be in within 10 minutes of it opening, on your team, or it goes to them.`));
+          box.append(go, el('p', 'note', 'Be in within 10 minutes.'));
         } else if (you.qualified && m && m.won === false) box.append(el('p', 'note', `Out in round ${m.round}. Thanks for playing.`));
         else if (you.qualified && !started) box.append(el('p', 'note', `Come back at ${when(c.startAt)}: your match opens here.`));
         else if (you.qualified) box.append(el('p', 'note', 'Your next match opens here when your opponent is known.'));
       } else {
         box.append(el('p', '', `Champion: ${c.champ}`));
-        if (you.champ && you.claim) box.append(el('p', 'note', `That’s you! Your claim code is ${you.claim}. Send it to the Two-Minute Drill team to collect your ${c.prize}.`));
+        if (you.champ && you.claim) box.append(el('p', 'note', `That’s you! Claim code ${you.claim}: send it to the Two-Minute Drill team for your ${c.prize}.`));
       }
       // the bracket, round by round (who played whom, who went on)
       const list = c.seeds || c.projection || [];
@@ -13269,19 +13268,19 @@
     // (Versus as part of Pro: without it, what Versus is and the Pro pitch)
     if (VS_PRO && !isPro()) {
       track('versus_pitch', {});
-      box.append(el('h2', '', 'Versus'), el('p', 'lead', 'Play someone live, or the computer. College overtime: each team gets the ball at the other’s 25. You call your offense and your defense; both calls lock in before the snap. Versus is part of Pro.'));
+      box.append(el('h2', '', 'Versus'), el('p', 'lead', 'Play someone live. Part of Pro.'));
       box.append(...proNodes(), authNodes());
       return;
     }
     // the lobby, laid out as the Pro hub is (the owner: like the Pro tab, more to look at): you (your rating and team)
     // in a card, the Invitational, then a tile a way to play (Play now the big one), the smaller things in a card, the
     // ladder
-    box.append(el('h2', '', 'Versus'), el('p', 'lead', 'College overtime, live: each team gets the ball at the other’s 25, no clock. You call your offense and your defense; both calls lock in before the snap.'));
+    box.append(el('h2', '', 'Versus'));
     const fan = load(FAN_KEY, null);
     if (!vsMyTeam() && fan && TEAMS[fan] && !COLLEGE.has(fan)) save(VS_TEAM_KEY, fan);
     let open = !vsMyTeam();
     const hub = el('section', 'phub vshub'), rk = el('div', 'prank vsrank'), pick = el('div', 'vspick');
-    const rB = el('b', '', '1000'), rS = el('span', 'ps', 'No ranked games yet: your first 10 place you'), rBar = el('span', 'pbar'), rF = el('i');
+    const rB = el('b', '', '1000'), rS = el('span', 'ps', 'Unranked'), rBar = el('span', 'pbar'), rF = el('i');
     rF.style.width = '0%';
     rBar.append(rF);
     rk.append(el('span', 'pk', 'Your rating'), rB, rS, rBar);
@@ -13318,8 +13317,8 @@
     };
     // (casual first and biggest: a quick match, no rating; ranked's first 10 games are placement, a rating that moves faster)
     const modes = el('div', 'ptiles vsmodes');
-    [['casual', 'play', 'Play now', 'Someone live, no rating', { k: 'Quick match', big: true }], ['ranked', 'ranked', 'Ranked', 'Win to climb the ladder', {}],
-      ['cpu', 'cpu', 'Computer', 'Starts right away', {}], ['friend', 'friend', 'Friend', 'Send them a link, play them now', { wide: true }]].forEach(([m, kind, title, sub, o]) => {
+    [['casual', 'play', 'Play now', 'Quick match, no rating', { big: true }], ['ranked', 'ranked', 'Ranked', '', {}],
+      ['cpu', 'cpu', 'Computer', '', {}], ['friend', 'friend', 'Play a friend', '', { wide: true }]].forEach(([m, kind, title, sub, o]) => {
       const b = proCard(kind, title, sub, () => go(m), o);
       if (o.wide) b.classList.add('wide');
       b.dataset.mode = m;
@@ -13382,7 +13381,7 @@
       const ol = el('ol', 'board');
       (top.top || []).slice(0, 20).forEach((x, i) => { const li = el('li', i < 3 ? `m${i + 1}` : ''); li.append(el('span', 'rk', String(x.rank || i + 1)), el('span', 'nm', x.name), el('span', 'n', `${x.rating}${x.provisional ? '?' : ''} · ${x.w}–${x.l}`)); ol.append(li); });
       if (!(top.top || []).length) lad.append(el('p', 'note', 'Nobody yet. Be the first.'));
-      else lad.append(ol, el('p', 'note', '? : still in placement (the first 10 ranked games move a rating faster)'));
+      else lad.append(ol, el('p', 'note', '? = still in placement'));
     } catch (e) { lad.append(el('p', 'note', 'The ladder did not load.')); }
   }
   function vsNote(text) {
