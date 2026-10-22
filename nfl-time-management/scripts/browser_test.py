@@ -2586,6 +2586,14 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     say(f"cover man too far to break it up (shown as a bad ball instead): {late} of {len(inc)} incompletions")
     # the pass looks like what happened, on every real pass of the run (pass_look_problems): a catch in his hands, a
     # miss gone where its kind says and never into his hands
+    # a clean catch (charted uncontested) is not made in "triple coverage": three or more men in reach of him as the ball
+    # gets there (players saw it; 5.4% of such catches before the fix, 3.4% after: fail only when this many would be
+    # unlikely at 6%, p < 0.01)
+    cl = [x for r in results for x in r.get("seps", []) if x.get("caught") and not x.get("intc") and "x" not in (x.get("data") or "")]
+    crowded = [x for x in cl if x.get("crowd", 0) >= 3]
+    say(f"clean catches with 3+ men on the receiver: {len(crowded)} of {len(cl)}")
+    if crowded and binom_tail(len(cl), len(crowded), 0.06) < 0.01:
+        fail("crowded", f"FAIL: clean catches made in a crowd {crowded[:4]}")
     allseps = [x for r in results for x in r.get("seps", [])]
     kinds = {}
     for x in allseps:
