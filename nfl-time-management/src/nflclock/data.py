@@ -28,7 +28,7 @@ PBP_COLUMNS = [
     "total_home_score", "total_away_score", "posteam_score", "defteam_score",
     "score_differential", "posteam_score_post", "defteam_score_post",
     "ep", "epa", "wp", "vegas_wp", "punt_blocked", "first_down_penalty",
-    "incomplete_pass", "touchback", "interception", "fumble_lost", "safety",
+    "incomplete_pass", "touchback", "interception", "fumble", "fumble_lost", "safety",
     "penalty", "penalty_yards", "penalty_team", "penalty_type", "sack",
     "touchdown", "return_touchdown", "pass_touchdown", "rush_touchdown",
     "complete_pass", "pass", "rush", "out_of_bounds", "return_yards",
