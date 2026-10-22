@@ -4462,7 +4462,7 @@
         runFrom(hr, tP, [[q[0] + ux * k, q[1] + uy * k]], { T: tThrow + 0.05 - tP, v1: stick ? undefined : 0 });
         // (with him a beat as the ball goes, then he pulls up: a rusher left on the passer after the throw read as a
         // sack that never came; the owner, Oct 22)
-        if (stick) { leg(hr, tThrow + 0.1, 'stick', { who: passer.b, dx: ux * k, dy: uy * k, ease: 0.2 }); leg(hr, tThrow + 0.3, 'go', { ...xy([q[0] + ux * 3.2, q[1] + uy * 3.2]), eff: 0.5 }); leg(hr, tThrow + 1.1, 'stand'); }
+        if (stick) { leg(hr, tThrow + 0.1, 'stick', { who: passer.b, dx: ux * k, dy: uy * k, ease: 0.2 }); leg(hr, tThrow + 0.3, 'chase', { who: passer.b, gap: 2.4, eff: 0.5, lead: 0 }); leg(hr, tThrow + 1.3, 'stand'); }
         else leg(hr, tThrow + 0.3, 'stand');
         busy.add(hr);
         hr.homeK = stick ? 2 : 1;                           // (the browser test's qbCheck: who got there)
