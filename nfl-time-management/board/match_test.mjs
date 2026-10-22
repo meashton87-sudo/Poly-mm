@@ -3,7 +3,7 @@
 // (vs_stress.mjs plays thousands of whole matches with the real engine.)
 import assert from 'node:assert';
 import { World, FakeClient } from './vs_world.mjs';
-import { ROOM_RE, PLAY_MS, WATCH_MS, DECIDE_MS, FIRST_MS, FORFEIT_MS, AFK_LIMIT, NOSHOW_MS, ELO, MM } from './match.js';
+import { ROOM_RE, PLAY_MS, WATCH_MS, DECIDE_MS, FIRST_MS, FORFEIT_MS, AFK_LIMIT, NOSHOW_MS, ELO, MM, CPU_AFTER_S, CPU_SEAT } from './match.js';
 import VSCore from '../web/vs_core.js';
 
 // the stand-in engine: a snap gains (seed % 15) - 3 yards; a call 'fg' kicks a field goal (good); 'td' scores
@@ -144,7 +144,7 @@ assert.ok(ROOM_RE.test('ABC234') && !ROOM_RE.test('ABCD10') && !ROOM_RE.test('ab
   await w.settle();
   assert.strictEqual(up5.last('clock').deadline, s4.deadline, 'capped at the decision\'s last moment');
   for (const seat of VSCore.need(ms5)) {
-    const half = VSCore.role(ms5, seat) === 'pat' ? { action: { pat: 'xp' } } : seat === ms5.root.pos ? { action: { call: 'inside', play: 'run' } } : { dc: DCALL };
+    const half = VSCore.role(ms5, seat) === 'pat' ? { action: { pat: 'xp' } } : seat === ms5.root.pos ? { action: { call: 'inside', play: 'run' } } : { dc: { pers: 'nickel', front: 'even', cover: 'c3', rush: 5 } };
     (seat === 0 ? a : b).send({ t: 'half', n: 5, half });
   }
   await w.settle();
@@ -384,6 +384,62 @@ async function runAnswering(w, a, ms) {
   assert.deepStrictEqual([A.last('over').result.by, rated.rated, rated.ratings[0].after > 1000, rated.ratings[1].after < 1000], ['forfeit', true, true, true], 'the quitter loses rating');
   const me = (await w.http('ladder', '/vs/me', { key: B.key })).body;
   assert.deepStrictEqual([me.games, me.l, me.streak, me.provisional], [1, 1, -1, true]);
+  w.close();
+}
+// ---- the computer: offered after CPU_AFTER_S in the queue, its own room, every one of its calls in at once (the
+// engine's own), never away or late, never rated; a rematch is another match against it
+{
+  const w = new World({ engine: stub });
+  const a = new FakeClient(w, K(70));
+  await a.queue({ mode: 'casual', team: 'KC', name: 'Solo' });
+  assert.strictEqual(a.last('queued').cpu, false, 'not offered at once');
+  a.send({ t: 'cpu' });
+  await w.settle();
+  assert.strictEqual(a.last('match'), undefined, 'asked too soon: still in the queue');
+  await w.advance(CPU_AFTER_S * 1000 + 2500);
+  assert.strictEqual(a.last('queued').cpu, true, 'offered after waiting');
+  a.send({ t: 'cpu' });
+  await w.settle();
+  const m = a.last('match');
+  assert.ok(m && m.mode === 'cpu', 'a room against the computer');
+  const A = new FakeClient(w, a.key);
+  assert.strictEqual(await A.open(m.room, { mode: 'cpu' }), 101);
+  const h = A.last('hello');
+  assert.deepStrictEqual([h.seat, h.mode, h.online[CPU_SEAT], h.names[CPU_SEAT]], [0, 'cpu', true, 'Computer'], 'the computer is the other seat, always there');
+  assert.ok(h.teams[CPU_SEAT] && h.teams[CPU_SEAT] !== 'KC', 'the computer has a team of its own');
+  // play it out: answer every decision that is ours, as late as the play clock allows now and then
+  for (let i = 0; i < 400; i++) {
+    const R = await state(w, m.room);
+    if (R.phase !== 'live') break;
+    const need = VSCore.need(R.ms);
+    assert.ok(need.length, 'a live match always waits on someone');
+    const pend = w.objects.get(`room:${m.room}`).store.get('pend');
+    if (need.includes(CPU_SEAT)) assert.ok(pend && pend.n === R.n && CPU_SEAT in pend.halves, `the computer's call is in at once (decision ${R.n})`);
+    if (!need.includes(0)) { await w.advance(1000); continue; }
+    const role = R.ms.cot.pick ? 'pick' : R.ms.root.phase === 1 ? 'pat' : R.ms.root.pos === 0 ? 'off' : 'def';
+    const half = role === 'pick' ? { pick: 'offense' } : role === 'pat' ? { action: { pat: 'xp' } } : role === 'off' ? { action: { call: i % 3 ? 'inside' : 'slant', play: 'run' } } : { dc: { pers: 'nickel', front: 'even', cover: 'c3', rush: 5 } };
+    A.send({ t: 'half', n: R.n, half });
+    await w.settle();
+  }
+  const end = await state(w, m.room);
+  assert.strictEqual(end.phase, 'over', 'the match ends');
+  assert.ok(end.result.by === 'score' && end.result.winner >= 0, `it ends on the scoreboard, not a forfeit (${JSON.stringify(end.result)})`);
+  assert.strictEqual(end.rated, null, 'never rated');
+  A.send({ t: 'rematch' });
+  await w.settle();
+  const re = A.last('rematch');
+  assert.ok(re && re.room, 'a rematch needs only you');
+  assert.strictEqual((await state(w, re.room)).mode, 'cpu', 'and is the computer again');
+  // the Computer button: a room at once, never in the queue
+  const nowC = new FakeClient(w, K(72));
+  assert.strictEqual(await nowC.queue({ mode: 'cpu', team: 'GB', name: 'Now' }), 101);
+  const nm = nowC.last('match');
+  assert.ok(nm && nm.mode === 'cpu' && !nowC.last('queued'), 'the computer straight away');
+  assert.strictEqual(w.obj('lobby').ctx.getWebSockets('q').length, 0, 'nobody left in the queue');
+  // a phone can't make a room the computer's
+  const F = new FakeClient(w, K(71));
+  await F.open('CPU234', { mode: 'cpu' });
+  assert.notStrictEqual((await state(w, 'CPU234')).mode, 'cpu', 'only the lobby makes a computer room');
   w.close();
 }
 console.log('match rooms ok');
