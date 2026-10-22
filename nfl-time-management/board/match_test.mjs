@@ -436,6 +436,23 @@ async function runAnswering(w, a, ms) {
   const nm = nowC.last('match');
   assert.ok(nm && nm.mode === 'cpu' && !nowC.last('queued'), 'the computer straight away');
   assert.strictEqual(w.obj('lobby').ctx.getWebSockets('q').length, 0, 'nobody left in the queue');
+  // the computer won the toss: its choice plays as the phone connects, and the phone's hello is the room after it (a
+  // hello from before it left the phone waiting on the computer, the room on the phone: load test runs 7-11)
+  let tossSeen = 0;
+  for (let tries = 0; tries < 16 && tossSeen < 3; tries++) {
+    const c = new FakeClient(w, K(40 + tries));
+    await c.queue({ mode: 'cpu', team: 'GB', name: `Toss${tries}` });
+    const C = new FakeClient(w, c.key);
+    await C.open(c.last('match').room, { mode: 'cpu' });
+    const hh = C.last('hello'), R = await state(w, c.last('match').room);
+    assert.deepStrictEqual([hh.n, JSON.stringify(hh.ms)], [R.n, JSON.stringify(R.ms)], 'the hello is the room as it is');
+    if (R.n > 0) {
+      tossSeen += 1;
+      assert.strictEqual(hh.decisions.length, R.n, "the computer's toss in the hello's decisions");
+      assert.ok(VSCore.need(hh.ms).includes(0), 'and the phone is told the next call is its own');
+    }
+  }
+  assert.ok(tossSeen > 0, 'the computer won a toss in the tries');
   // the computer's own call missed (cpuTurn failing, as the engine loads under load): the room's alarm puts it in within
   // CPU_TURN_MS, never at the player's 10-minute deadline (load test run 7: matches sat on the computer's toss)
   for (let tries = 0; tries < 12; tries++) {

@@ -150,7 +150,10 @@ export class Match {
     R.off[seat] = 0;
     if (R.phase === 'wait' && R.seen[0] && R.seen[1] && R.teams[0] && R.teams[1]) this.begin(R, now);
     await this.save(R);
-    if (R.cpu != null && R.phase === 'live') await this.cpuTurn();
+    // the computer's call now (a toss it won plays at once): the phone's hello is the room after it, with that step in
+    // its decisions (the step's own message went out before this socket was open; a hello from before it left the
+    // phone waiting on the computer while the room waited on the phone: the load test's stuck matches)
+    if (R.cpu != null && R.phase === 'live') { await this.cpuTurn(); R = (await this.room()) || R; }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     for (const old of this.ctx.getWebSockets(`s${seat}`)) { try { old.close(4000, 'replaced'); } catch (e) { /* gone */ } }
