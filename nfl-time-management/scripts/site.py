@@ -428,7 +428,20 @@ def move_page(script: str, new: str) -> str:
 # Every page: the same footer (the site's pages, the contact, the disclaimer and the data credit), its style, and the
 # canonical address of the page
 PAGES = [("", "Play", 1.0), ("how-it-works", "How it works", 0.8), ("about", "About", 0.6), ("stats", "Stats", 0.6),
-         ("privacy", "Privacy", 0.3)]
+         ("patch-notes", "Patch notes", 0.5), ("privacy", "Privacy", 0.3)]
+
+
+def patch_notes_html(notes: dict) -> str:
+    """The patch notes page's updates (web/patch_notes.json: newest first, each a date, a title and its items), as HTML.
+    The newest is marked New. Game changes only (CLAUDE.md: every update to the game adds its notes at the top)."""
+    e = lambda x: html.escape(x, quote=False)
+    out = []
+    for i, n in enumerate(notes["notes"]):
+        d = datetime.strptime(n["date"], "%Y-%m-%d")
+        out.append(f'<section class="pn"><time datetime="{n["date"]}">{d.strftime("%B")} {d.day}, {d.year}</time>'
+                   f'<h2>{e(n["title"])}{"<span class=new>New</span>" if i == 0 else ""}</h2><ul>'
+                   + "".join(f"<li>{e(x)}</li>" for x in n["items"]) + "</ul></section>")
+    return "\n".join(out)
 FOOT_CSS = ("<style>.sitefoot{max-width:680px;margin:28px auto 0;padding:14px 16px 28px;border-top:1px solid var(--line);"
             "font-size:12.5px;line-height:1.5;color:var(--muted)}.sitefoot nav{display:flex;flex-wrap:wrap;gap:6px 16px;margin-bottom:8px}"
             ".sitefoot nav a{color:var(--ink);font-weight:700;text-decoration:none}.sitefoot nav a:hover{text-decoration:underline}"
@@ -488,7 +501,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         raise SystemExit(f"--google-client-id wants an OAuth client id like 1234-abc.apps.googleusercontent.com, not {google_client_id!r}")
     if ad_slot and not re.fullmatch(r"\d{6,12}", ad_slot):
         raise SystemExit(f"--ad-slot wants an ad unit's slot number, not {ad_slot!r}")
-    missing = [f for f in FILES + ["stats.html", "privacy.html", "about.html", "how-it-works.html", "admin.html", "sw.js"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
+    missing = [f for f in FILES + ["stats.html", "privacy.html", "about.html", "how-it-works.html", "patch-notes.html", "patch_notes.json", "admin.html", "sw.js"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
     if missing:
         raise SystemExit(f"build the game data first; missing in web/: {', '.join(missing)}")
     if out.exists():
@@ -607,6 +620,11 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
                                  ("about.html", "about", "About Two-Minute Drill",
                                   "An independent, fan-made NFL play-calling game built on public nflverse data.")):
         fill(name, (GA_TAG.format(id=ga) if ga else "") + ads_head(tags_adsense, ad_slot) + share_tags(site_url, title, d, path), path)
+    # the patch notes (/patch-notes): every update to the game, from web/patch_notes.json
+    fill("patch-notes.html", (GA_TAG.format(id=ga) if ga else "") + ads_head(tags_adsense, ad_slot) + share_tags(site_url,
+         "Two-Minute Drill patch notes", "Every change to the game, newest first.", "patch-notes"), "patch-notes")
+    (out / "patch-notes.html").write_text((out / "patch-notes.html").read_text().replace("<!--NOTES-->",
+        patch_notes_html(json.loads((WEB / "patch_notes.json").read_text()))))
     # the privacy page (AdSense wants one): the analytics tag only, no ads on it
     fill("privacy.html", (GA_TAG.format(id=ga) if ga else "") + ICONS, "privacy", ads=False)
     # the Gauntlet's audit (admin.html, the check before a prize): not linked anywhere, not in the sitemap, noindex; no

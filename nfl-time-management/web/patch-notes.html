@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!--SITE-HEAD-->
+<title>Two-Minute Drill patch notes</title>
+<meta name="description" content="Every change to Two-Minute Drill, the daily NFL play-calling game, newest first: new features, fixes and how the football plays.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800;900&family=Libre+Franklin:wght@400;600;700&display=swap">
+<style>
+/* Same tokens as the game and the stats page */
+:root {
+  --paper: #f3f5f2; --card: #ffffff; --ink: #121a15; --muted: #5a675e; --line: #d3dbd5; --turf: #2c7549;
+  --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "Libre Franklin", "Franklin Gothic Medium", "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; color-scheme: dark;
+} }
+:root[data-theme="dark"] { --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.55 var(--body); padding-top: env(safe-area-inset-top, 0px); }
+.wrap { max-width: 640px; margin: 0 auto; padding: 14px 16px 48px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 8px; }
+h1 { margin: 0; font: 900 30px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
+h1 small { display: block; font: 700 11px var(--body); letter-spacing: .16em; color: var(--muted); margin-top: 4px; }
+h2 { font: 800 20px/1.15 var(--display); text-transform: uppercase; letter-spacing: .02em; margin: 26px 0 6px; text-wrap: balance; }
+p, li { max-width: 65ch; }
+a { color: var(--turf); }
+a.play { font-weight: 700; color: var(--ink); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; background: var(--card); white-space: nowrap; }
+.note { color: var(--muted); font-size: 13px; }
+
+/* the patch notes: an update a block, newest first (scripts/site.py patch_notes_html, from web/patch_notes.json) */
+.pn { border-top: 1px solid var(--line); padding: 14px 0 6px; }
+.pn:first-of-type { border-top: 0; }
+.pn time { display: block; font: 700 12px var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.pn h2 { margin: 4px 0 8px; }
+.pn ul { margin: 0; padding-left: 20px; }
+.pn li { margin: 0 0 6px; }
+.pn .new { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 999px; background: var(--turf); color: #fff; font: 800 10px var(--body); letter-spacing: .08em; vertical-align: 2px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><a href="./#home" class="home">Two-Minute Drill</a><small>Patch notes</small></h1>
+    <a class="play" href="./">Play today ›</a>
+  </header>
+<main>
+  <p class="note">Every change to the game, newest first. New updates are added here as they go live.</p>
+<!--NOTES-->
+</main>
+<!--SITE-FOOT-->
+</div>
+</body>
+</html>

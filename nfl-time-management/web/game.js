@@ -11744,7 +11744,7 @@
     }
     const links = el('nav', 'hlinks');
     links.setAttribute('aria-label', 'About the game');
-    [['about', 'About'], ['how-it-works', 'How it works'], ['privacy', 'Privacy']].forEach(([href, t]) => { const a = el('a', '', t); a.href = href; links.append(a); });
+    [['patch-notes', 'Patch notes'], ['about', 'About'], ['how-it-works', 'How it works'], ['privacy', 'Privacy']].forEach(([href, t]) => { const a = el('a', '', t); a.href = href; links.append(a); });
     box.append(links);
     // the site moved: a browser with nothing saved here (no day played, never handed over) can still bring its progress
     // from the old address, whose /move page hands it over as every old page does (its redirect rule leaves /move alone)
