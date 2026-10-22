@@ -62,6 +62,7 @@ jobs:
           python -m nflclock.cli build
           python -c "from nflclock import webexport as w; w.export_engine()"
           python -c "from nflclock import dailygame as G; print(G.build())"
+          python -c "from nflclock import pro; print(pro.build())"      # (web/teams.json: Versus's 32 teams, written by the Pro export)
           python scripts/site.py _site_lt
           rm -rf board/assets-loadtest && mkdir -p board/assets-loadtest/vs
           cp _site_lt/engine_data.pack _site_lt/playbook.pack web/teams.json board/assets-loadtest/vs/

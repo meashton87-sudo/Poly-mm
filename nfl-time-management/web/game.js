@@ -12894,18 +12894,18 @@
     const t0 = Date.now(), line = el('p', 'lead', 'Finding you an opponent…'), info = el('p', 'note', '');
     const cancel = el('button', 'btn ghostbtn', 'Cancel');
     cancel.type = 'button';
-    box.append(el('h2', '', VS_MODES[mode]), el('p', 'note', `Your team: ${teamName(vsMyTeam())}`), line, info, cpu, cancel);
-    let ws, closed = false, tries = 0, size = 0, rating = 0;
     // nobody to play after a while (match.js CPU_AFTER_S): the computer, one tap (never rated), or keep waiting
     const cpu = el('button', 'btn', 'Play the computer now');
     cpu.type = 'button'; cpu.hidden = true;
     cpu.append(el('small', '', 'Unranked · starts right away'));
     cpu.addEventListener('click', () => {
-      if (!ws || ws.readyState !== 1) return;
+      if (!ws || ws.readyState !== 1) return;          // (ws: the queue's socket, below)
       cpu.disabled = true;
       track('vs_cpu', { mode, secs: Math.round((Date.now() - t0) / 1000) });
       try { ws.send(JSON.stringify({ t: 'cpu' })); } catch (e) { cpu.disabled = false; }
     });
+    box.append(el('h2', '', VS_MODES[mode]), el('p', 'note', `Your team: ${teamName(vsMyTeam())}`), line, info, cpu, cancel);
+    let ws, closed = false, tries = 0, size = 0, rating = 0;
     const done = () => { closed = true; clearInterval(tk); try { ws && ws.close(); } catch (e) { /* gone */ } };
     const draw = () => {
       const s = Math.round((Date.now() - t0) / 1000);
