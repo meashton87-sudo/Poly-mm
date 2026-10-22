@@ -2228,10 +2228,13 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                         await check("run", sel, 200)
                 sk = await page.evaluate(SKETCH)
                 rb = [m for m in (sk or {}).get("men", []) if m[2] in ("RB", "FB")]
-                for k in range(4 if rb else 0):
+                # (four lanes 8 yards past the line, then the same lanes 4 yards past it: on a small phone the
+                # longer line can run off the field the sheet leaves showing)
+                for k in range(8 if rb else 0):
                     x, y = rb[0][:2]
                     ly, up, ppy = sk["los"][1], sk["up"], sk["ppy"]
-                    pts = [(x + (k - 1.5) * 3 * ppy, ly), (x + (k - 1.5) * 4 * ppy, ly + up * 8 * ppy)]
+                    lane, deep = k % 4, (8 if k < 4 else 4)
+                    pts = [(x + (lane - 1.5) * 3 * ppy, ly), (x + (lane - 1.5) * 4 * ppy, ly + up * deep * ppy)]
                     await watch("#drawGo")
                     await page.mouse.move(x, y); await page.mouse.down()
                     for nx, ny in pts:
