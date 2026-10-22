@@ -2756,9 +2756,10 @@
   // ball goes. Anything but a sack is never drawn with a man on him after the throw (it read as a sack that never came:
   // the owner, Oct 22)
   function qbCheck(sc, P, e) {
-    const segs = P.segs.slice().sort((a, b) => a.t0 - b.t0), i = segs.findIndex((s, j) => s.kind === 'fly' && s.lift && j > 0 && segs[j - 1].kind === 'hold' && segs[j - 1].a && segs[j - 1].a.label === 'QB');
-    if (i < 0 || /sack/.test(e.evt || '')) return null;
-    const qb = segs[i - 1].a, t0 = segs[i].t0, yd = (p, q) => Math.hypot((p.x - q.x) / XYD, p.L - q.L);
+    const segs = P.segs.slice().sort((a, b) => a.t0 - b.t0), i = segs.findIndex((s) => s.kind === 'fly' && s.lift);
+    const h = i > 0 ? segs.slice(0, i).reverse().find((s) => s.kind === 'hold' && s.a) : null;
+    if (!h || h.a.label !== 'QB' || /sack/.test(e.evt || '')) return null;
+    const qb = h.a, t0 = segs[i].t0, yd = (p, q) => Math.hypot((p.x - q.x) / XYD, p.L - q.L);
     let on = 0, minR = 99;
     for (let t = t0 + 0.1; t <= Math.min(P.T, t0 + 1.2); t += 0.05) {
       const q = at(qb, t), r = Math.min(...sc.actors.filter((d) => !d.off && d.trk).map((d) => yd(at(d, t), q)));
@@ -13193,7 +13194,7 @@
       if (done && now - at(c.startAt) > 3 * 86400e3) return;          // (an old Cup: gone from the lobby after a few days)
       box.append(el('div', 'hk', `Two-Minute Drill Invitational · ${c.prize} to the winner`));
       if (!c.seeds) {
-        box.append(el('p', '', `The top ${c.size} on the ranked ladder at ${when(c.qualifyAt)} play a bracket from ${when(c.startAt)}, live. ${c.minGames} ranked games to be in.`));
+        box.append(el('p', '', `The top ${c.size} on the ranked ladder at ${when(c.qualifyAt)} play a bracket from ${when(c.startAt)}, live. ${c.minGames} ranked game${c.minGames === 1 ? '' : 's'} to be in.`));
         box.append(el('p', 'note', you.seed ? `You’re #${you.seed} right now: in, if it holds. Keep winning ranked.` : `You’re not in the top ${c.size} right now: play Ranked to get in.`));
       } else if (!done) {
         box.append(el('p', '', you.qualified ? `You’re in: seed ${you.seed} of ${c.seeds.length}.` : `The ${c.seeds.length} are in. ${started ? 'Under way now.' : `It starts ${when(c.startAt)}.`}`));
