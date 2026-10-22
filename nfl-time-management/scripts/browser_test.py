@@ -638,6 +638,8 @@ DRAW_FUZZ = """async ([kind, n, seed]) => {
 # it, with nobody having scrolled; on a tall phone every receiver's row too, clear of the Snap key. The Snap key's first
 # line one line, the name in it whole (a long name wrapped it, the key growing at the foot of the screen). Said with it:
 # the calls' sheet down (a phone: dragged or tapped down, the keys under the screen's edge till it comes back up)
+# the field's options (game.js fieldOpts: speed, Personnel, Formation, Ratings) open, as a player who opened them once has them
+OPEN_OPTS = "try { localStorage.setItem('tmd:v3:fieldopts', 'true'); } catch (e) {}"
 REACH = """(sel) => {
   const es = [...document.querySelectorAll(sel)];
   if (!es.length) return [`${sel}: not on the screen`];
@@ -1669,6 +1671,7 @@ async def qb_swap(browser, base: str, shots: str = "") -> list[str]:
     out: list[str] = []
     for attempt in range(5):                 # (a run's first spot is drawn at random: one whose team has another quarterback)
         ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+        await ctx.add_init_script(OPEN_OPTS)            # (the field's options open: Personnel, Formation)
         await ctx.add_init_script("window.__sepLog = []; try { localStorage.setItem('tmd:v3:seen', 'true'); } catch (e) {}")
         await ctx.add_init_script(WORKER_SPY)
         page = await ctx.new_page()
@@ -1776,6 +1779,7 @@ async def formation_pick(browser, base: str, shots: str = "") -> list[str]:
     backfield and goes to the simulator with no formation (the lineup only); Back to the real lineup clears it."""
     out: list[str] = []
     ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    await ctx.add_init_script(OPEN_OPTS)            # (the field's options open: Personnel, Formation)
     await ctx.add_init_script("window.__sepLog = []; try { localStorage.setItem('tmd:v3:seen', 'true'); } catch (e) {}")
     await ctx.add_init_script(WORKER_SPY)
     page = await ctx.new_page()
@@ -1879,6 +1883,7 @@ async def pers_group(browser, base: str) -> list[str]:
     picked goes with the next snap of yours."""
     out: list[str] = []
     ctx = await browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    await ctx.add_init_script(OPEN_OPTS)            # (the field's options open: Personnel, Formation)
     await ctx.add_init_script("window.__sepLog = []; try { localStorage.setItem('tmd:v3:seen', 'true'); } catch (e) {}")
     await ctx.add_init_script(WORKER_SPY)
     page = await ctx.new_page()
