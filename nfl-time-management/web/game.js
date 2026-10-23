@@ -12125,7 +12125,7 @@
     const a = el('a', 'hcard hvs');
     a.href = '#vs';
     a.dataset.to = VS_PRO && !isPro() ? 'versus_pitch' : 'versus';
-    a.append(el('div', 'hk', VS_PRO ? (isPro() ? 'Versus · Pro' : 'Versus · with Pro') : 'Versus · live'), el('div', 'hpitch', 'Play someone'),
+    a.append(el('div', 'hk', VS_PRO ? (isPro() ? 'Versus · Beta' : 'Versus · Beta, with Pro') : 'Versus · Beta'), el('div', 'hpitch', 'Play someone'),
       el('span', 'cta', VS_PRO && !isPro() ? 'Take a look' : 'Play'));
     return a;
   }
@@ -13341,7 +13341,10 @@
     // the lobby, laid out as the Pro hub is (the owner: like the Pro tab, more to look at): you (your rating and team)
     // in a card, the Invitational, then a tile a way to play (Play now the big one), the smaller things in a card, the
     // ladder
-    box.append(el('h2', '', 'Versus'));
+    // (a beta until the full release, the owner: Monday)
+    const vh = el('h2', '', 'Versus ');
+    vh.append(el('span', 'betatag', 'Beta'));
+    box.append(vh);
     const fan = load(FAN_KEY, null);
     if (!vsMyTeam() && fan && TEAMS[fan] && !COLLEGE.has(fan)) save(VS_TEAM_KEY, fan);
     let open = !vsMyTeam();
