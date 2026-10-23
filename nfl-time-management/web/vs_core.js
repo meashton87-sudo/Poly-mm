@@ -39,8 +39,11 @@
   // trick plays: no charting has fakes of their own), against the defense its kick call made: everyone sent after the
   // kick leaves nobody home; staying home is a normal look
   const FAKES = { run: 'trick_direct', pass: 'trick_pass' };
-  const KICK_DC = { block: { pers: 'base', front: 'loaded', cover: 'c0', rush: 6 }, rush: { pers: 'base', front: 'loaded', cover: 'c0', rush: 6 },
-    safe: { pers: 'base', front: 'even', cover: 'c3', rush: 4 }, return: { pers: 'nickel', front: 'light', cover: 'c3', rush: 3 } };
+  // (the engine has no kick formation: a fake is drawn against an ordinary look, and the defense's kick call decides
+  // whether it is a surprise. Everyone sent after the kick is caught out (no trick seen); a defense staying home is
+  // waiting for it, as one that has seen the trick twice (engine.js SEEN_IT, the most it takes off))
+  const KICK_DC = { pers: 'base', front: 'even', cover: 'c3', rush: 4 };
+  const READY = { block: 0, rush: 0, safe: 2, return: 2 };
   // what 4th down offers from here: a field goal inside the 50 (a 67-yarder at most), a punt from 30 yards out or more
   const intentsAt = (r) => INTENTS.filter((k) => k === 'go' || (k === 'fg' ? r.yl <= 50 : r.yl >= 30));
   // the 4th-down question is up: a snap on 4th down (not a try) with no answer yet
@@ -262,7 +265,7 @@
       const k = c.k4, st = def && KICK_DEF[k].includes(def.st) ? def.st : null;
       let a = { play: k, to_off: false, to_def: false, ...(st ? { st } : {}) };
       if (off && FAKES[off.fake]) {             // the fake: the trick against the kick defense called
-        a = { call: FAKES[off.fake], play: 'go', dc: { ...KICK_DC[st || KICK_DEF[k][1]] }, seen: (ms.tricks || [0, 0])[r.pos], to_off: false, to_def: false };
+        a = { call: FAKES[off.fake], play: 'go', dc: { ...KICK_DC }, seen: READY[st || KICK_DEF[k][1]], to_off: false, to_def: false };
         ms.tricks = (ms.tricks || [0, 0]).slice();
         ms.tricks[r.pos] += 1;
         notes.push({ k: 'fake', team: r.pos, kick: k, fake: off.fake });
