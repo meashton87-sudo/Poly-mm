@@ -10227,7 +10227,9 @@
     let b = 0, t = 0;
     if (!noAds()) {
       const vh = innerHeight, vw = innerWidth;
-      for (const el of document.querySelectorAll('body > *, body > * > *, body > * > * > *')) {
+      // (and Google's anchor wherever it is put: an ins.adsbygoogle with its anchor status, or one beside body under html;
+      // Ezoic saw the game not move up over it)
+      for (const el of document.querySelectorAll('body > *, body > * > *, body > * > * > *, html > ins, ins.adsbygoogle[data-anchor-status], ins.adsbygoogle[data-anchor-shown], [id^="ezmobfooter"], [id*="anchor" i]')) {
         if (adOurs(el)) continue;
         const cs = getComputedStyle(el);
         if ((cs.position !== 'fixed' && cs.position !== 'sticky') || cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) continue;
