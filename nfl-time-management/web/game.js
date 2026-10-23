@@ -219,13 +219,17 @@
   // passing: pick a receiver and his route. The routes each position runs (tap him again for the next), how deep each
   // is drawn (NGS median catch depths), and what it is called. The snap is a real play where a receiver at that
   // position ran that route (engine.js samplePlaybook)
-  const ROUTES = { WR: ['slant', 'hitch', 'out', 'in', 'post', 'corner', 'go', 'screen'], TE: ['flat', 'hitch', 'out', 'cross', 'in', 'go'],
+  const ROUTES = { WR: ['slant', 'hitch', 'out', 'curl', 'in', 'comeback', 'post', 'corner', 'go', 'screen'], TE: ['flat', 'hitch', 'out', 'curl', 'cross', 'in', 'go'],
     RB: ['flat', 'angle', 'screen', 'wheel'] };
-  const ROUTE_DEPTH = { go: 24, post: 16, corner: 19, out: 4, deep_out: 13, in: 12, slant: 6, cross: 4, hitch: 5, screen: -3, flat: -2, wheel: 16, angle: 3 };
+  const ROUTE_DEPTH = { go: 24, post: 16, corner: 19, out: 4, deep_out: 13, in: 12, slant: 6, cross: 4, hitch: 5, curl: 11, comeback: 13, screen: -3, flat: -2, wheel: 16, angle: 3 };
+  // a curl and a comeback (the owner asked for them) are charted as a hitch and a deep out: the throws on those routes
+  // about that deep (engine.js ROUTE_ALIAS: change both)
+  const ROUTE_ALIAS = { curl: ['hitch', 11], comeback: ['deep_out', 13] };
+  const SIT_ROUTES = new Set(['hitch', 'curl', 'comeback']);       // (he stops and comes back to the ball)
   const ROUTE_NAME = { go: 'Go', post: 'Post', corner: 'Corner', out: 'Quick out', deep_out: 'Deep out', in: 'Dig', slant: 'Slant', cross: 'Crosser',
-    hitch: 'Hitch', screen: 'Screen', flat: 'Flat', wheel: 'Wheel', angle: 'Angle' };
+    hitch: 'Hitch', curl: 'Curl', comeback: 'Comeback', screen: 'Screen', flat: 'Flat', wheel: 'Wheel', angle: 'Angle' };
   const ROUTE_SAY = { go: 'a go route', post: 'a post', corner: 'a corner route', out: 'a quick out', deep_out: 'a deep out', in: 'a dig', slant: 'a slant',
-    cross: 'a crosser', hitch: 'a hitch', screen: 'a screen', flat: 'a route to the flat', wheel: 'a wheel route', angle: 'an angle route' };
+    cross: 'a crosser', hitch: 'a hitch', curl: 'a curl', comeback: 'a comeback', screen: 'a screen', flat: 'a route to the flat', wheel: 'a wheel route', angle: 'an angle route' };
   const routeName = (lab, rt) => (lab === 'TE' && rt === 'go' ? 'Seam' : ROUTE_NAME[rt]);
   const routeSay = (lab, rt) => (lab === 'TE' && rt === 'go' ? 'a seam route' : ROUTE_SAY[rt]);
   // Run blocking (the Blocking chips under Run): how the line blocks a back's run, drawn on the field (lineplay: the
@@ -336,7 +340,9 @@
   // a player can keep the defense to the three simple calls (asked for: the full one is a lot to take in)
   const simpleDef = () => !VS && !!load(`${STORE}:simpledef`, false);
   const VS_DECIDE_MS = 30000;      // the play clock in Versus: 30 seconds a call (board/match.js DECIDE_MS: a pick, a try)
-  const VS_DEF_MS = 10000, VS_OFF_MS = 20000;     // ... at a snap: 10 seconds on defense, 20 on offense (match.js DEF_MS, OFF_MS)
+  // ... at a snap: 15 seconds on defense, then 20 on offense from the moment the defense's call is in; 4th down's
+  // question 15 (match.js DEF_MS, OFF_MS, INTENT_MS)
+  const VS_DEF_MS = 15000, VS_OFF_MS = 20000, VS_INTENT_MS = 15000;
   // spots whose data was corrected, and when the fix went live: a drive's try saved before it starts over
   // (the two overtime drives were played as a fourth quarter until their start carried the overtime: startRoot otOf)
   const SPOT_FIXED = { '2018_14_NE_MIA#4172': Date.parse('2026-10-16T22:50:00Z'), '2023_22_SF_KC#4561': Date.parse('2026-10-18T13:00:00Z'),
@@ -1701,7 +1707,10 @@
     redrawPass();
   }
   // each receiver's odds on his current route, from the real plays it would draw (worker 'odds'), cached per snap
-  const routeAt = (a) => (Number.isFinite(a.depth) ? `${a.route}@${a.depth}` : a.route);     // (engine.js routeOfAct)
+  const routeAt = (a) => {     // (engine.js routeOfAct)
+    const al = ROUTE_ALIAS[a.route], rt = al ? al[0] : a.route, d = Number.isFinite(a.depth) ? a.depth : al ? al[1] : null;
+    return d != null ? `${rt}@${d}` : rt;
+  };
   // (with what else the snap draws by: the repeats, personnel, formation, backs and motion read, engine.js routeOdds)
   function pickKey(a) { return `${a.call}|${routeAt(a)}|${a.who}|${a.looks}|${a.rep || 0}|${a.pers || 0}|${a.form || ''}|${a.bf ?? ''}|${a.cov || ''}|${a.oob ? 1 : 0}|${a.prot || ''}`; }
   async function fetchOdds() {
@@ -2695,7 +2704,7 @@
     roll: ['out', 'cross', 'corner'], hail: ['go'], rpo: ['slant', 'hitch', 'out'], flea: ['go', 'post'], tpass: ['go', 'post', 'corner'] };
   // the timing routes: how far past the break (yards along it) the ball meets him at the soonest (a hitch: at the end
   // of his step back to the ball)
-  const BREAK_OUT = { hitch: 99, out: 2.5, deep_out: 2.5, in: 2 };
+  const BREAK_OUT = { hitch: 99, curl: 99, comeback: 99, out: 2.5, deep_out: 2.5, in: 2 };
   const OTHER_ROUTES = { short: ['hitch', 'out', 'slant', 'cross', 'in'], deep: ['go', 'post', 'in', 'corner', 'deep_out', 'hitch'],
     hail: ['go'] };
   const GROUP = { XOL: 'OL', QB: 'QB', RB: 'RB', WR: 'WR', TE: 'TE', LT: 'OL', LG: 'OL', C: 'OL', RG: 'OL', RT: 'OL', T: 'OL', G: 'OL',
@@ -4007,7 +4016,7 @@
       const arm = armOf(passer.p);
       const flightTo = (c) => (qRel ? Math.hypot(c[0] - qRel[0], c[1] - qRel[1]) / ballSpeed(deep, arm) : flight(deep, arm));
       if (wide) tThrow = Math.max(tThrow, tStart + plan(tgt, rpts).T - flightTo(catchPt));
-      let tCatch = tThrow + flightTo(catchPt), v1 = !wide && (routeName === 'hitch' || routeName === 'screen') ? 0 : undefined, timed = true;
+      let tCatch = tThrow + flightTo(catchPt), v1 = !wide && (SIT_ROUTES.has(routeName) || routeName === 'screen') ? 0 : undefined, timed = true;
       // a timing route (a hitch, an out, a dig, a deep out): the throw (when it was charted) is thrown on time, before
       // he turns, and the ball meets him coming out of his break: caught where he is, running flat out, when it gets
       // there, a step or two past the break (never at the end of the route with the ball hanging in the air while
@@ -4027,7 +4036,7 @@
         // at its own speed; the flight stretched to meet him hung the ball in the air for seconds on a deep hitch)
         if (tCatch > tThrow + flightTo(catchPt) + 0.05) tThrow = tCatch - flightTo(catchPt);
         // a hitch on time comes back to the ball; early, he settles facing the passer, and it comes to him
-        if (routeName === 'hitch') {
+        if (SIT_ROUTES.has(routeName)) {
           const sit = plan(tgt, rpts, { v1: 0 });
           v1 = tStart + sit.T <= tCatch ? 0 : undefined;
           timed = v1 === undefined;
@@ -4773,15 +4782,23 @@
       } else {
         const across = sg === 0 || Math.sign(hole[0] - q0[0]) !== Math.sign(c0[0] - q0[0]);
         // (drawn: the handoff where his line passes nearest the quarterback)
+        // (an end-around: the quarterback steps out to meet the receiver coming across, the ball handed off at speed
+        // three yards deep; he bends round the edge in a wide arc, never a stop and turn: the owner saw it jerk)
+        const endAround = carrier.label === 'WR' && !dBehind.length, wSide = Math.sign(c0[0] - q0[0]) || 1;
         const meshPt = dBehind.length ? dBehind.reduce((b, x) => (dist(x, q0) < dist(b, q0) ? x : b))
-          : carrier.label === 'WR' ? [q0[0] + (c0[0] > q0[0] ? 1.2 : -1.2), fwd(L0, md + 0.1)]
+          : endAround ? [q0[0] + wSide * 2.4, fwd(L0, -3.0)]
             : across ? [q0[0] + (c0[0] - q0[0]) * 0.3, fwd(L0, md)] : [c0[0] + (hole[0] - c0[0]) * 0.15, fwd(L0, md)];
+        // (his way round: level across behind the line to the far edge, outside the tackle, turning upfield over the
+        // last six yards)
+        const ux = -wSide;
+        if (endAround) hole = [inX(q0[0] + ux * 9), hole[1]];
+        const arc = endAround ? [[inX(hole[0] - ux * 6.5), fwd(L0, -2.6)], [inX(hole[0] - ux * 2.2), fwd(L0, -1.0)]] : [];
         const start = carrier.label === 'WR' ? 0.35 : REACT_OFF;
         // (at speed into the hole whatever the result: the contact, if it comes there, is runDown's; slowing into it
         // left a back jogging at the edge with nobody there)
         // (a counter: a jab step away from the play first, then back across)
         const jab = scheme === 'counter' && !dBehind.length && carrier.label !== 'WR' ? [[c0[0] - (sg || 1) * 1.1, fwd(L0, md - 0.2)]] : [];
-        const pl = follow(carrier, start, plan(carrier, [c0, ...jab, ...(dBehind.length ? dBehind : [meshPt]), hole], { eff: carrier.label === 'WR' ? 0.95 : 0.9 }));
+        const pl = follow(carrier, start, plan(carrier, [c0, ...jab, ...(dBehind.length ? dBehind : [meshPt]), ...arc, hole], { eff: carrier.label === 'WR' ? 0.95 : 0.9 }));
         let best = 9, bt = 0.7;
         for (let s = 0; s <= pl.T; s += 0.05) { const p = pl.at(s), d = dist([p[0], p[1]], meshPt); if (d < best) { best = d; bt = s; } }
         tMesh = Math.max(T_SNAP + 0.35, start + bt);
@@ -6417,6 +6434,8 @@
     const puntHelps = !(r.t <= 1800 && behind && th <= 40) && !(r.clock_running && allRunOut(r));
     if (r.down === 4 && r.yl >= 30 && puntHelps) specials.push('punt');
     if (!r.clock_running && canKneel(r)) specials.push('kneel');
+    // (Versus: a kick only by saying so on 4th down, vsPromptIntent: the defense knows it is coming)
+    if (VS) return { calls, specials: specials.filter((k) => k !== 'fg' && k !== 'punt') };
     return { calls, specials };
   }
   // a field goal that can't change the result in your favour is a plain key, not the gold one (still there to call):
@@ -7549,6 +7568,7 @@
       if (VS) vsSubmit({ dc: { ...sk.dc } }, sk.draw);
       else decideDefense({ ...sk.dc }, sk.draw);
     });
+    if (VS && G.cot && G.cot.k4 === 'go' && r.down === 4) d.append(el('div', 'k4note', '4th down: they’re going for it'));
     if (VS && vs.lastDef && !r.try2) {
       const same = el('button', 'btn ghostbtn same', `↻ Same defense: ${vdefText(vs.lastDef.dc)}`);
       same.type = 'button'; same.id = 'sameDef';
@@ -7608,6 +7628,7 @@
     custom.append(cs, box);
     if (!VS && share) custom.append(el('p', 'vdeftip', 'NFL %: how often NFL defenses lined up each way in this spot. It starts on the most common.'));
     d.append(presets, sum, tip, custom);
+    if (VS && !r.try2) vsDefTimeout(d, r);
     if (!VS && defTimeoutOk(r) && !toOnField()) {          // (a phone: the button on the field, toButton)
       const tg = el('div', 'toggle');
       const lab = el('div', 'lab', 'Timeout first');
@@ -8302,6 +8323,8 @@
       if (x.k === 'pick') addLog(`${tn(x.team)} chooses ${x.choice}${x.auto ? ' (out of time)' : ''}: ${tn(x.first)} ball first`, VSCore.COT_T, mine(x.team));
       else if (x.k === 'end') addLog(`${tn(x.team)} takes the end of the field: ${tn(1 - x.team)} chooses offense or defense`, VSCore.COT_T, mine(x.team));
       else if (x.k === 'timeout') addLog(`Timeout, ${tn(x.team)}`, VSCore.COT_T, mine(x.team));
+      else if (x.k === 'intent') addLog(`4th down: ${tn(x.team)} ${x.choice === 'go' ? 'goes for it' : x.choice === 'fg' ? 'lines up for the field goal' : 'lines up to punt'}${x.auto ? ' (out of time)' : ''}`, VSCore.COT_T, mine(x.team));
+      else if (x.k === 'fake') addLog(`Fake ${x.kick === 'fg' ? 'field goal' : 'punt'}!`, VSCore.COT_T, mine(x.team));
       else if (x.k === 'two') addLog('Going for two', VSCore.COT_T, mine(x.team));
       else if (x.k === 'must2') addLog('Second overtime on: a touchdown has to go for two', VSCore.COT_T, mine(x.team));
       else if (x.k === 'poss') addLog(`${tn(x.team)} ball${x.round >= 3 ? ': a two-point play' : ' at the 25'}`, VSCore.COT_T, mine(x.team));
@@ -13007,7 +13030,11 @@
       Object.assign(vs, { phase: 'live', ms: m.ms, ms0: m.ms, n: 0, deadline: m.deadline, dl: m.dl || null });
       vsMaybeStart();
     } else if (m.t === 'clock') {                    // the room's word on your play clock for this call
-      if (m.n === vs.n && vs.seat >= 0) { vs.dl = vsDls(); vs.dl[vs.seat] = m.deadline; vsDrawBar(); }
+      if (m.n === vs.n && vs.seat >= 0 && (m.seat == null || m.seat === vs.seat)) {
+        vs.dl = vsDls(); vs.dl[vs.seat] = m.deadline;
+        vs.offWait = m.wait ? m.n : -1;                // (the offense: waiting on the defense's call)
+        vsDrawBar();
+      }
     } else if (m.t === 'locked') {
       if (m.n === vs.n && m.seat !== vs.seat) { vs.oppLocked = m.n; vsDrawBar(); }
       if (m.n === vs.n && m.seat === vs.seat && vs.waiting !== m.n) {          // back after a reload: your call is already in
@@ -13438,7 +13465,8 @@
     }
     b.textContent = '';
     if (vs.banner) b.append(el('span', 'warn', vs.banner));
-    if (vs.ui === 'prompt' && vsMyDl() && vs.mode !== 'cpu') {          // (the computer: take your time)
+    if (vs.ui === 'prompt' && G && vs.offWait === G.vsN && vs.mode !== 'cpu') b.append(el('span', 'clk', 'The defense is calling…'));
+    else if (vs.ui === 'prompt' && vsMyDl() && vs.mode !== 'cpu') {          // (the computer: take your time)
       const s = Math.max(0, Math.ceil((vsMyDl() - vsNow()) / 1000));
       b.append(el('span', `clk${s <= 10 ? ' low' : ''}`, `Play clock ${s}`));
     }
@@ -13456,13 +13484,19 @@
     vs.ui = 'prompt';
     if (vs.n === G.vsN && vs.seat >= 0) {
       vs.dl = vsDls();
-      const role = G.root && G.cot ? VSCore.role({ root: G.root, cot: G.cot, over: false }, vs.seat) : null;
-      vs.dl[vs.seat] = Math.min(vs.dl[vs.seat], vsNow() + (vs.mode === 'cpu' ? VS_CPU_DECIDE_MS : role === 'defense' ? VS_DEF_MS : role === 'offense' ? VS_OFF_MS : VS_DECIDE_MS));
+      const ms = G.root && G.cot ? { root: G.root, cot: G.cot, over: false } : null, role = ms ? VSCore.role(ms, vs.seat) : null;
+      // (the offense at a snap or a kick: its clock waits on the defense's call, unless that is in already: the room says)
+      const waits = vs.mode !== 'cpu' && (role === 'offense' || role === 'kick') && vs.oppLocked !== G.vsN;
+      vs.offWait = waits ? G.vsN : -1;
+      if (!waits) {
+        vs.dl[vs.seat] = Math.min(vs.dl[vs.seat], vsNow() + (vs.mode === 'cpu' ? VS_CPU_DECIDE_MS : role === 'defense' || role === 'kickdef' ? VS_DEF_MS
+          : role === 'offense' || role === 'kick' ? VS_OFF_MS : role === 'intent' ? VS_INTENT_MS : VS_DECIDE_MS));
+      }
       vsSend({ t: 'ready', n: G.vsN });
     }
     vs.timer = setInterval(() => {
       if (vs.ui !== 'prompt') { clearInterval(vs.timer); return; }
-      if (vsNow() >= vsMyDl()) {
+      if (vsNow() >= vsMyDl() && vs.offWait !== G.vsN) {
         clearInterval(vs.timer);
         if (!busy && vs.waiting !== G.vsN) { vs.ui = 'idle'; status('Out of time: your default call is in'); }
       }
@@ -13550,9 +13584,11 @@
   function vsCalls(d, root) {
     const off = d.halves[root.pos], def = d.halves[1 - root.pos];
     const a = off && off.action;
-    const offTxt = !off ? 'no call in time (the default)' : off.timeout ? 'a timeout' : off.two ? 'going for two' : a && a.call ? (CALL[a.call] || {}).label || 'a play'
+    const offTxt = !off ? 'no call in time (the default)' : off.timeout ? 'a timeout' : off.two ? 'going for two' : off.fake ? `a fake ${off.fake === 'run' ? 'run' : 'pass'}`
+      : off.kick ? 'the kick' : a && a.call ? (CALL[a.call] || {}).label || 'a play'
       : a && a.play ? specialLabel(a.play) : a && a.pat ? (a.pat === 'two' ? 'going for two' : 'the extra point') : 'a play';
-    const defTxt = root.phase !== SNAP ? null : !def ? 'no call in time (the default)' : def.dc ? vdefText(def.dc) : 'a defense';
+    const ST = { block: 'going for the block', safe: 'staying home', rush: 'rushing the punt', return: 'setting up the return' };
+    const defTxt = root.phase !== SNAP ? null : !def ? 'no call in time (the default)' : def.timeout ? 'a timeout' : def.st ? ST[def.st] : def.dc ? vdefText(def.dc) : 'a defense';
     const me = root.pos === G.me;
     return `${me ? 'You' : 'They'}: ${offTxt}${defTxt ? ` · ${me ? 'They' : 'You'}: ${defTxt}` : ''}`;
   }
@@ -13603,6 +13639,7 @@
     if (!role) {
       vs.ui = 'idle';
       if (G.cot && G.cot.pick) vsWaitPick();
+      else if (r.phase === SNAP && r.down === 4 && !r.try2 && !G.cot.k4) vsWait4(r);
       else status(r.phase === PAT ? `${teamName(code(r.pos))} lines up for the try…` : 'Waiting for your opponent…');
       vsDrawBar();
       return 'stop';
@@ -13611,6 +13648,9 @@
     if (vsNow() >= vsMyDl()) { vs.ui = 'idle'; status('Out of time: your default call is in'); return 'stop'; }
     vsClockStart();
     if (role === 'pick') vsPromptPick();
+    else if (role === 'intent') vsPromptIntent(r);
+    else if (role === 'kick') vsPromptKick(r);
+    else if (role === 'kickdef') vsPromptKickDef(r);
     else if (role === 'offense') promptOffense();
     else if (role === 'defense') promptDefense();
     else promptChoice('pat');
@@ -13636,6 +13676,84 @@
       keys.append(b);
     });
     d.append(keys);
+  }
+  // 4th down (the owner: the defense should know a kick is coming): the offense says go for it or kick first, and the
+  // defense calls knowing it; lined up to kick, the offense can still fake it
+  function vsPromptIntent(r) {
+    drawAll();
+    const d = $('dock');
+    d.textContent = '';
+    takeBanner(d);
+    const head = el('div', 'ask');
+    head.append(el('h2', '', '4th down'), el('span', 'sub', `${ddText(r)} · ${spotText(r)} · they see your choice before they call`));
+    d.append(head);
+    const opts = VSCore.intentsAt(r), keys = el('div', 'keys');
+    const label = { go: 'Go for it', fg: 'Field goal', punt: 'Punt' };
+    const subs = { go: 'Run a play', fg: `A ${r.yl + 17}-yard try`, punt: 'Give them the ball deep' };
+    keys.style.setProperty('--cols', opts.length);
+    opts.forEach((o, i) => {
+      const b = key(label[o], subs[o], 'big', i);
+      b.addEventListener('click', () => { if (busy) return; track('vs_intent', { intent: o }); vsSubmit({ intent: o }); });
+      keys.append(b);
+    });
+    d.append(keys);
+  }
+  function vsWait4(r) {
+    const d = $('dock');
+    d.textContent = '';
+    takeBanner(d);
+    const head = el('div', 'ask');
+    head.append(el('h2', '', '4th down'), el('span', 'sub', `${teamName(code(r.pos))} decides: go for it or kick…`));
+    const st = el('div', 'status');
+    st.append(el('span', 'spin'), el('span', '', 'You call once they choose'));
+    d.append(head, st);
+  }
+  // lined up to kick: kick it, or fake it (a direct snap or a trick pass, against whatever the defense called)
+  function vsPromptKick(r) {
+    drawAll();
+    const d = $('dock'), k = G.cot.k4;
+    d.textContent = '';
+    takeBanner(d);
+    const head = el('div', 'ask');
+    head.append(el('h2', '', k === 'fg' ? 'Field goal unit' : 'Punt team'), el('span', 'sub', 'They know you’re lined up to kick. Kick it, or fake it?'));
+    d.append(head);
+    const keys = el('div', 'keys');
+    keys.style.setProperty('--cols', 3);
+    [['kick', k === 'fg' ? 'Kick it' : 'Punt it', k === 'fg' ? `A ${r.yl + 17}-yard try` : 'Flip the field'], ['run', 'Fake: run', 'Direct snap'], ['pass', 'Fake: pass', 'A trick throw']].forEach(([o, t, sub], i) => {
+      const b = key(t, sub, 'big', i);
+      b.addEventListener('click', () => { if (busy) return; track('vs_kick', { kick: k, fake: o === 'kick' ? '' : o }); vsSubmit(o === 'kick' ? { kick: true } : { fake: o }); });
+      keys.append(b);
+    });
+    d.append(keys);
+  }
+  // they said they're kicking: go for the block (everyone comes: more blocks, but a fake walks in) or stay home
+  function vsPromptKickDef(r) {
+    drawAll();
+    const d = $('dock'), k = G.cot.k4;
+    d.textContent = '';
+    takeBanner(d);
+    const head = el('div', 'ask');
+    head.append(el('h2', '', k === 'fg' ? `${teamName(code(r.pos))} is kicking a field goal` : `${teamName(code(r.pos))} is punting`), el('span', 'sub', `${ddText(r)} · ${spotText(r)} · watch for a fake`));
+    d.append(head);
+    const keys = el('div', 'keys');
+    const opts = k === 'fg' ? [['block', 'Go for the block', 'Everyone comes: more blocks, wide open to a fake'], ['safe', 'Stay home', 'A normal rush, ready for a fake']]
+      : [['rush', 'Rush the punt', 'Everyone comes: a block now and then, wide open to a fake'], ['return', 'Set up the return', 'Ready for a fake, a return on']];
+    keys.style.setProperty('--cols', 2);
+    opts.forEach(([o, t, sub], i) => {
+      const b = key(t, sub, 'big def', i);
+      b.addEventListener('click', () => { if (busy) return; track('vs_kickdef', { kick: k, st: o }); vsSubmit({ st: o }); });
+      keys.append(b);
+    });
+    d.append(keys);
+    vsDefTimeout(d, r, k === 'fg' ? 'Timeout: ice the kicker' : 'Timeout');
+  }
+  // the defense's timeout in Versus (overtime has no clock: a moment to think, a kicker made to wait)
+  function vsDefTimeout(d, r, label = 'Timeout') {
+    if (!VS || !(r.to && r.to[G.me] > 0)) return;
+    const b = el('button', 'btn ghostbtn vsto', `${label} · ${r.to[G.me]} left`);
+    b.type = 'button'; b.id = 'vsDefTo';
+    b.addEventListener('click', () => { if (busy) return; track('vs_timeout', { side: 'defense' }); vsSubmit({ timeout: true }); });
+    d.append(b);
   }
   function vsWaitPick() {
     const c = G.cot, d = $('dock'), nm = teamName(code(c.pick.team));

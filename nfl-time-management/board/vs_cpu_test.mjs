@@ -53,6 +53,8 @@ for (let i = 0; i < N; i++) {
     if (role === 'pick') half = { pick: R() < 0.5 ? 'offense' : 'defense' };
     else if (role === 'pat') half = { action: { pat: 'xp' } };
     else if (role === 'defense') half = { dc: DC };
+    else if (role === 'intent') half = { intent: R() < 0.5 ? 'go' : VSCore.intentsAt(S.ms.root).slice(-1)[0] };
+    else if (role === 'kick') half = { kick: true };
     else { const c = same || CALLS[Math.floor(R() * CALLS.length)].id; half = { action: { call: c, play: E.eng.pb.calls.find((x) => x.id === c).kind === 'run' ? 'run' : 'pass' } }; out.snaps++; }
     A.send({ t: 'half', n: S.n, half });
     await w.settle();

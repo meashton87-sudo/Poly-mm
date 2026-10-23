@@ -31,6 +31,21 @@
   const DC = { pers: ['heavy', 'base', 'nickel', 'dime'], front: ['light', 'even', 'loaded'],
     cover: ['c0', 'c1', '2man', 'c2', 'c3', 'c4', 'c6', 'prevent'], rush: [3, 4, 5, 6] };
   const PICKS = ['offense', 'defense', 'end'];
+  // 4th down (the owner: the defense should know a kick is coming): the offense says first whether it goes for it or
+  // kicks (cot.k4), and the defense calls knowing it: against a kick, the block or the safe call (engine.js act.st)
+  const INTENTS = ['go', 'fg', 'punt'];
+  const KICK_DEF = { fg: ['block', 'safe'], punt: ['rush', 'return'] };
+  // a fake (the owner): the offense, lined up to kick, runs a trick instead, a direct snap or a trick pass (the real
+  // trick plays: no charting has fakes of their own), against the defense its kick call made: everyone sent after the
+  // kick leaves nobody home; staying home is a normal look
+  const FAKES = { run: 'trick_direct', pass: 'trick_pass' };
+  const KICK_DC = { block: { pers: 'base', front: 'loaded', cover: 'c0', rush: 6 }, rush: { pers: 'base', front: 'loaded', cover: 'c0', rush: 6 },
+    safe: { pers: 'base', front: 'even', cover: 'c3', rush: 4 }, return: { pers: 'nickel', front: 'light', cover: 'c3', rush: 3 } };
+  // what 4th down offers from here: a field goal inside the 50 (a 67-yarder at most), a punt from 30 yards out or more
+  const intentsAt = (r) => INTENTS.filter((k) => k === 'go' || (k === 'fg' ? r.yl <= 50 : r.yl >= 30));
+  // the 4th-down question is up: a snap on 4th down (not a try) with no answer yet
+  const at4 = (ms) => ms.root.phase === SNAP && ms.root.down === 4 && !ms.root.try2 && !ms.cot.k4;
+  const kicking = (ms) => ms.root.phase === SNAP && (ms.cot.k4 === 'fg' || ms.cot.k4 === 'punt');
   const PLAYS = new Set(['run', 'pass', 'kneel', 'spike', 'fg', 'punt']);     // engine.js PLAY
   const WHO = new Set(['RB', 'WR', 'TE']);                                    // engine.js WHO_CODE
 
@@ -103,13 +118,18 @@
   function need(ms) {
     if (ms.over) return [];
     if (ms.cot.pick) return [ms.cot.pick.team];
+    if (at4(ms)) return [ms.root.pos];
+    if (kicking(ms)) return [0, 1];
     return ms.root.phase === SNAP ? [0, 1] : [ms.root.pos];
   }
-  // what a decision is, for a seat: 'pick', 'offense', 'defense', 'pat' (null: nothing to answer)
+  // what a decision is, for a seat: 'pick', 'intent' (4th down: go or kick), 'kickdef' (against the kick), 'offense',
+  // 'defense', 'pat' (null: nothing to answer)
   function role(ms, seat) {
     if (!need(ms).includes(seat)) return null;
     if (ms.cot.pick) return 'pick';
     if (ms.root.phase === PAT) return 'pat';
+    if (at4(ms)) return 'intent';
+    if (kicking(ms)) return ms.root.pos === seat ? 'kick' : 'kickdef';
     return ms.root.pos === seat ? 'offense' : 'defense';
   }
 
@@ -121,7 +141,8 @@
     if (typeof a.play === 'string' && PLAYS.has(a.play)) o.play = a.play;
     if (a.oob === true) o.oob = true;
     if (Number.isInteger(a.pers) && a.pers >= 10 && a.pers <= 33) o.pers = a.pers;
-    if (typeof a.route === 'string' && pb && pb.routeNames && pb.routeNames.includes(a.route)) o.route = a.route;
+    // (and the page's curl and comeback, which the engine reads as the throws on a hitch and a deep out: engine.js ROUTE_ALIAS)
+    if (typeof a.route === 'string' && pb && pb.routeNames && (pb.routeNames.includes(a.route) || a.route === 'curl' || a.route === 'comeback')) o.route = a.route;
     if (typeof a.who === 'string' && WHO.has(a.who)) o.who = a.who;
     if (a.philly === true) o.philly = true;
     if (a.pat === 'two' || a.pat === 'xp') o.pat = a.pat;
@@ -138,7 +159,12 @@
     const r = role(ms, seat);
     if (!r || !h || typeof h !== 'object') return null;
     if (r === 'pick') return PICKS.includes(h.pick) && !(h.pick === 'end' && ms.cot.pick.end) ? { pick: h.pick } : null;
-    if (r === 'defense') { const dc = cleanDef(h.dc); return dc ? { dc } : null; }
+    // (a timeout: the defense's too, at the snap or against a kick, while it has one)
+    const toOk = h.timeout === true && ms.root.to && ms.root.to[seat] > 0;
+    if (r === 'intent') return intentsAt(ms.root).includes(h.intent) ? { intent: h.intent } : null;
+    if (r === 'kickdef') return toOk ? { timeout: true } : KICK_DEF[ms.cot.k4].includes(h.st) ? { st: h.st } : null;
+    if (r === 'kick') return FAKES[h.fake] ? { fake: h.fake } : h.kick === true ? { kick: true } : null;
+    if (r === 'defense') { if (toOk) return { timeout: true }; const dc = cleanDef(h.dc); return dc ? { dc } : null; }
     if (r === 'pat') {
       if (h.two === true) return { two: true };
       const a = cleanAction(h.action, pb);
@@ -146,6 +172,8 @@
     }
     if (h.timeout === true) return { timeout: true };
     const a = cleanAction(h.action, pb);
+    // (a kick only by saying so on 4th down: the defense knows it is coming)
+    if (a && (a.play === 'fg' || a.play === 'punt')) delete a.play;
     // the calls the page offers here only (game.js callOptions): a sneak needs 3 yards or less to go; no Hail Mary
     // (overtime has no clock to beat)
     if (a && (a.call === 'hail_mary' || (a.call === 'qb_sneak' && ms.root.ytg > 3))) { delete a.call; delete a.route; delete a.who; }
@@ -214,11 +242,39 @@
       return { ms, res: null, kind: 'pick', notes };
     }
     const off = h(r.pos), def = h(1 - r.pos);
-    if (r.phase === SNAP && off && off.timeout && r.to[r.pos] > 0 && !r.try2) {
+    // 4th down: go for it or kick (out of time: the kick from 32 yards out or closer, a try of 49 at most; else go)
+    if (at4(ms)) {
+      const ok = intentsAt(r), ch = off && ok.includes(off.intent) ? off.intent : r.yl <= 32 && ok.includes('fg') ? 'fg' : 'go';
+      c.k4 = ch;
+      notes.push({ k: 'intent', team: r.pos, choice: ch, auto: !(off && off.intent) });
+      return { ms, res: null, kind: 'intent', notes };
+    }
+    const timeout = (t) => {
       ms.root = { ...r, to: r.to.slice() };
-      ms.root.to[r.pos] -= 1;
-      notes.push({ k: 'timeout', team: r.pos });
+      ms.root.to[t] -= 1;
+      notes.push({ k: 'timeout', team: t });
       return { ms, res: null, kind: 'timeout', notes };
+    };
+    if (r.phase === SNAP && off && off.timeout && r.to[r.pos] > 0 && !r.try2 && !kicking(ms)) return timeout(r.pos);
+    if (r.phase === SNAP && def && def.timeout && r.to[1 - r.pos] > 0) return timeout(1 - r.pos);
+    // the kick they said was coming, against the defense's call on it
+    if (kicking(ms)) {
+      const k = c.k4, st = def && KICK_DEF[k].includes(def.st) ? def.st : null;
+      let a = { play: k, to_off: false, to_def: false, ...(st ? { st } : {}) };
+      if (off && FAKES[off.fake]) {             // the fake: the trick against the kick defense called
+        a = { call: FAKES[off.fake], play: 'go', dc: { ...KICK_DC[st || KICK_DEF[k][1]] }, seen: (ms.tricks || [0, 0])[r.pos], to_off: false, to_def: false };
+        ms.tricks = (ms.tricks || [0, 0]).slice();
+        ms.tricks[r.pos] += 1;
+        notes.push({ k: 'fake', team: r.pos, kick: k, fake: off.fake });
+      }
+      c.k4 = null;
+      ms.seq += 1;
+      const res = step(r, a, seed >>> 0);
+      res.action = a;
+      ms.root = res.root;
+      if (res.done) ms.root.phase = DONE;
+      after(ms, notes, opt);
+      return { ms, res, kind: 'play', notes };
     }
     if (r.phase === PAT && off && off.two) {
       ms.root = { ...r, phase: SNAP, down: 1, ytg: twoYlOf(opt), yl: twoYlOf(opt), clock_running: false, try2: { ...r } };
@@ -229,6 +285,8 @@
     if (r.phase === SNAP) {
       a = off && off.action ? { ...off.action } : (r.try2 ? { pat: 'two' } : {});
       if (r.try2) a.pat = 'two';
+      // going for it on 4th down: no call in time is the engine's own play, never its kick (engine.js forced 'go')
+      if (c.k4 === 'go' && !a.call && !a.play) a.play = 'go';
       if (def && def.dc) a.dc = { ...def.dc };
       // a trick play the defense has seen this match works less well (engine.js dcEffect 'seen_it')
       const trick = typeof a.call === 'string' && a.call.startsWith('trick');
@@ -236,6 +294,7 @@
       a.to_off = false; a.to_def = false;
     } else a = off && off.action ? { ...off.action } : { pat: 'xp' };
     ms.seq += 1;
+    c.k4 = null;                    // (4th down's answer is for this snap only)
     const res = step(r.try2 || r, a, seed >>> 0);
     res.action = a;
     if (r.phase === SNAP && typeof a.call === 'string' && a.call.startsWith('trick')) {
@@ -343,7 +402,7 @@
     return walk(JSON.parse(new TextDecoder().decode(u8.subarray(8, base))));
   }
 
-  const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, VS_OT, TEAM_BOOST, boostPool, hash, rng, buildGame, possRoot, start, chooser, need, role,
+  const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, INTENTS, KICK_DEF, FAKES, intentsAt, VS_OT, TEAM_BOOST, boostPool, hash, rng, buildGame, possRoot, start, chooser, need, role,
     cleanAction, cleanDef, cleanHalf, apply, after, describe, called, noToss, stepper, unpack };
   if (typeof module !== 'undefined' && module && module.exports) module.exports = VSCore;
   if (global) global.VSCore = VSCore;       // (always: a page with some other script's global `module` still gets it)

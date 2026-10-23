@@ -415,6 +415,10 @@
       case 'slant': return { pts: [[0, s0], [0, 1.6], [-26, 1.6 + 26 * 0.72]], at: 'depth', minD: 3 };
       case 'cross': return { pts: [[0, s0], [-1.5, 1.4], [-38, Math.max(D, 1) + 1.6]], at: -(9 + 7 * r) };
       case 'hitch': { const s = Math.max(D, 3) + 0.8; return { pts: [[0, s0], [0, s], [-0.4, s - 0.8]], at: 'end' }; }
+      // a curl: a hitch run deeper (charted as one route, HITCH/CURL), turning inside back to the passer; a comeback:
+      // up the field fifteen yards, then back down toward the sideline to the ball
+      case 'curl': { const s = Math.max(D, 8) + 1.2; return { pts: [[0, s0], [0, s], [-1.0, s - 1.4]], at: 'end' }; }
+      case 'comeback': { const s = Math.max(D, 10) + 2.5; return { pts: [[0, s0], [0.6, s], [2.6, s - 2.4]], at: 'end' }; }
       case 'screen': return { pts: [[0, s0], [0.4, s0 - 0.4], [-1.2, Math.min(D, -0.5)]], at: 'end' };
       case 'flat': return { pts: [[0, s0], [2.2, s0 + 1.6], [12, Math.max(D, -1) + 0.6]], at: 6 + 3 * r };
       case 'wheel': return { pts: [[0, s0], [5, s0 + 1.8], [9, 1.5], [10.5, Math.max(D, 8) + 16]], at: 'depth', minD: 4 };

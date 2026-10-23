@@ -138,6 +138,10 @@ class Bot {
     if (chance(this.mood.junk)) { stats.junk++; half = pick([null, 'x', 42, { pick: 'sideways' }, { def: 'prevent' }, { dc: { pers: 'nickel', front: 'even', cover: 'c9', rush: 4 } }, { dc: { pers: 'x', rush: 5 } }, { dc: 'blitz' },
       { action: { call: 'nope', play: 'teleport', looks: -5, pers: 999 } }, { two: 'yes' }, { action: [] }]); }
     else if (role === 'pick') half = { pick: pick(this.ms.cot.pick.end ? ['offense', 'defense'] : VSCore.PICKS) };
+    else if (role === 'intent') half = { intent: pick(VSCore.intentsAt(this.ms.root)) };
+    else if (role === 'kick') half = chance(0.15) ? { fake: pick(['run', 'pass']) } : { kick: true };
+    else if (role === 'kickdef') half = chance(0.05) ? { timeout: true } : { st: pick(VSCore.KICK_DEF[this.ms.cot.k4]) };
+    else if (role === 'defense' && chance(0.02)) half = { timeout: true };
     else if (role === 'defense') half = { dc: { pers: pick(VSCore.DC.pers), front: pick(VSCore.DC.front), cover: pick(VSCore.DC.cover), rush: pick(VSCore.DC.rush) } };
     else if (role === 'pat') half = chance(0.45) ? { two: true } : { action: { pat: 'xp' } };
     else if (chance(0.04)) half = { timeout: true };

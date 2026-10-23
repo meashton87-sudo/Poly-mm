@@ -39,6 +39,9 @@ import VSCore from '../web/vs_core.js';
 import { lazySimulator } from './lazy_sim.js';
 
 // each seat's deadline for the decision in play (a room from before the per-seat clock: the decision's)
+// a seat on defense in the decision in play (its call, or its call against a kick): a missed one is its default, never a
+// forfeit count (15 seconds is short, and the default is a real call)
+const onDefense = (ms, seat) => { const r = VSCore.role(ms, seat); return r === 'defense' || r === 'kickdef'; };
 const dls = (R) => (Array.isArray(R.dl) && R.dl.length === 2 ? R.dl.slice() : [R.deadline, R.deadline]);
 
 export const ROOM_RE = /^[A-HJ-KM-NP-Z2-9]{6}$/;
@@ -64,11 +67,19 @@ const ROOKIE_CALLS = ['deep_strong', 'deep_weak', 'deep_middle', 'pa_deep', 'dee
 const ROOKIE_DEF = [{ pers: 'dime', front: 'light', cover: 'prevent', rush: 3 }, { pers: 'dime', front: 'light', cover: 'c4', rush: 3 }, { pers: 'nickel', front: 'light', cover: 'prevent', rush: 4 }];
 export const WATCH_MS = 15_000;            // after a snap: the play to watch (at most) before the play clock runs anyway
 export const DECIDE_MS = 30_000;           // the play clock: 30 seconds to call, from the moment the call comes up (a pick, a try)
-export const DEF_MS = 10_000;              // ... at a snap the defense has 10 seconds to commit (the owner, Oct 22)
-export const OFF_MS = 20_000;              // ... and the offense 20 to call its play
-// a seat's play clock for the decision in play: by its role (offense, defense, the pick or the try)
-export const decideMs = (ms, seat) => { const r = VSCore.role(ms, seat); return r === 'defense' ? DEF_MS : r === 'offense' ? OFF_MS : DECIDE_MS; };
-export const PLAY_MS = WATCH_MS + DECIDE_MS;    // a decision's last moment after the last snap
+export const DEF_MS = 15_000;              // ... at a snap the defense has 15 seconds to commit (the owner, Oct 23)
+export const OFF_MS = 20_000;              // ... then the offense 20 to call its play, from the moment the defense is in
+export const INTENT_MS = 15_000;           // ... and on 4th down, 15 to say go for it or kick, before either
+// a seat's play clock for the decision in play: by its role (the defense or its call on a kick, the offense or its
+// kick, 4th down's question, the pick or the try)
+export const decideMs = (ms, seat) => {
+  const r = VSCore.role(ms, seat);
+  return r === 'defense' || r === 'kickdef' ? DEF_MS : r === 'offense' || r === 'kick' ? OFF_MS : r === 'intent' ? INTENT_MS : DECIDE_MS;
+};
+// the offense's clock waits on the defense: at a snap (and at a kick) the defense calls first, the offense's 20
+// seconds start when the defense's call is in (or its clock ran out)
+const ON_DEF = (ms) => VSCore.need(ms).length === 2 && !ms.cot.pick;
+export const PLAY_MS = WATCH_MS + DEF_MS + OFF_MS + 5000;    // a decision's last moment after the last snap
 export const FIRST_MS = 75_000;            // the first decision (the coin toss): the intro too, then the clock
 export const FORFEIT_MS = 60_000;          // a phone gone this long in a live match: that side forfeits
 export const AFK_LIMIT = 2;                // decisions in a row left to the play clock: that side forfeits
@@ -322,9 +333,13 @@ export class Match {
       // the decision's last moment)
       if (R.phase !== 'live' || m.n !== R.n || !VSCore.need(R.ms).includes(seat)) return;
       R.dl = dls(R);
-      R.dl[seat] = Math.min(R.dl[seat], now + (R.cpu != null ? CPU_DECIDE_MS : decideMs(R.ms, seat)));
+      // (the offense, the defense's call not in yet: its clock waits, wait: true, until it is: offStart)
+      const pend = await this.ctx.storage.get('pend'), defIn = pend && pend.n === R.n && (1 - R.ms.root.pos) in pend.halves;
+      const waits = R.cpu == null && ON_DEF(R.ms) && seat === R.ms.root.pos && !defIn;
+      if (waits) R.offWait = R.n;
+      else R.dl[seat] = Math.min(R.dl[seat], now + (R.cpu != null ? CPU_DECIDE_MS : decideMs(R.ms, seat)));
       await this.save(R);
-      try { ws.send(JSON.stringify({ t: 'clock', n: R.n, deadline: R.dl[seat], now })); } catch (e) { /* closing */ }
+      try { ws.send(JSON.stringify({ t: 'clock', n: R.n, seat, deadline: R.dl[seat], now, ...(waits ? { wait: true } : {}) })); } catch (e) { /* closing */ }
       await this.schedule(R);
       return;
     }
@@ -336,14 +351,28 @@ export class Match {
     pend.halves[seat] = VSCore.cleanHalf(R.ms, seat, m.half, E.eng.pb);
     // nothing usable (the phone's clock ran out): a default, counted toward a forfeit except on defense (10 seconds is
     // short, and the defense's default is a real call: the engine's own)
-    R.defaults[seat] = pend.halves[seat] ? 0 : VSCore.role(R.ms, seat) === 'defense' ? R.defaults[seat] : R.defaults[seat] + 1;
+    R.defaults[seat] = pend.halves[seat] ? 0 : onDefense(R.ms, seat) ? R.defaults[seat] : R.defaults[seat] + 1;
     // (the computer's call in here too: cpuTurn's own write of it, racing this one, could be lost under it, and the
     // match then waited out CPU_DECIDE_MS)
     if (R.cpu != null && VSCore.need(R.ms).includes(R.cpu) && !(R.cpu in pend.halves)) pend.halves[R.cpu] = R.cpuLevel === 'rookie' ? this.rookieHalf(R, E) : null;
     if (VSCore.need(R.ms).every((s) => s in pend.halves)) return this.commit(R, pend, E, now);
+    const started = this.offStart(R, pend, now);
     await this.ctx.storage.put('pend', pend);
     await this.save(R);
     this.broadcast({ t: 'locked', n: pend.n, seat });
+    if (started) this.broadcast(started);
+    await this.schedule(R);
+  }
+  // the defense's call in at a snap (or a kick): the offense's 20 seconds start now, if its call was up and waiting
+  // (a phone not up yet starts them itself on ready). Returns the clock message to send, or null
+  offStart(R, pend, now) {
+    if (R.cpu != null || !ON_DEF(R.ms) || R.offWait !== R.n) return null;
+    const off = R.ms.root.pos;
+    if (!((1 - off) in pend.halves) || off in pend.halves) return null;
+    R.dl = dls(R);
+    R.dl[off] = Math.min(R.deadline, now + OFF_MS);
+    R.offWait = -1;
+    return { t: 'clock', n: R.n, seat: off, deadline: R.dl[off], now };
   }
 
   // every half in (or the deadline): play it
@@ -510,12 +539,14 @@ export class Match {
         for (const s of late) {
           if (s === R2.cpu) { pend.halves[s] = R2.cpuLevel === 'rookie' ? this.rookieHalf(R2, E) : null; continue; }    // (the computer's own)
           pend.halves[s] = null;
-          if (VSCore.role(R2.ms, s) !== 'defense') R2.defaults[s] += 1;      // (a missed defense: its default, no forfeit count)
+          if (!onDefense(R2.ms, s)) R2.defaults[s] += 1;      // (a missed defense: its default, no forfeit count)
         }
         if (VSCore.need(R2.ms).every((s) => s in pend.halves)) return this.commit(R2, pend, E, Date.now());
+        const started = this.offStart(R2, pend, Date.now());
         await this.ctx.storage.put('pend', pend);
         await this.save(R2);
         for (const s of late) this.broadcast({ t: 'locked', n: pend.n, seat: s });
+        if (started) this.broadcast(started);
         return this.schedule(R2);
       }
     }
@@ -632,13 +663,16 @@ export class Match {
   rookieHalf(R, E) {
     const role = VSCore.role(R.ms, R.cpu), pick = (a) => a[rand() % a.length];
     let h = null;
+    const r = R.ms.root;
     if (role === 'offense') {
       const id = pick(ROOKIE_CALLS), c = E.eng.pb.calls.find((x) => x.id === id);
       if (c) h = { action: { call: c.id, play: c.kind === 'run' ? 'run' : 'pass' } };
-      // and it settles: in field-goal range from second down on it kicks, unless three points would lose it on the spot
-      const r = R.ms.root;
-      if (r.down >= 2 && r.yl <= 35 && !r.try2 && r.score[1 - R.cpu] - r.score[R.cpu] <= 3) h = { action: { play: 'fg' } };
-    } else if (role === 'defense') h = { dc: { ...pick(ROOKIE_DEF) } };
+    } else if (role === 'intent') {
+      // it settles: on 4th down in field-goal range it kicks, unless three points would lose it on the spot
+      h = { intent: r.yl <= 35 && r.score[1 - R.cpu] - r.score[R.cpu] <= 3 ? 'fg' : 'go' };
+    } else if (role === 'kick') h = { kick: true };
+    else if (role === 'kickdef') h = { st: VSCore.KICK_DEF[R.ms.cot.k4][1] };
+    else if (role === 'defense') h = { dc: { ...pick(ROOKIE_DEF) } };
     return h ? VSCore.cleanHalf(R.ms, R.cpu, h, E.eng.pb) : null;
   }
   // a ticket that has waited CPU_AFTER_S asks for the computer: a room of its own against a team other than its own

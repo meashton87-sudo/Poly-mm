@@ -27,7 +27,7 @@ for (const t of T) {
 const R = VSCore.rng(+(process.argv[2] || 7));
 const pick = (a) => a[Math.floor(R() * a.length)];
 const calls = eng.pb.calls;
-const stats = { matches: 0, decisions: 0, plays: 0, dcs: 0, why: 0, tricks: 0, rounds: {}, td: 0, fg: 0, two: 0, picks: { offense: 0, defense: 0, end: 0 }, homeWins: 0 };
+const stats = { matches: 0, decisions: 0, plays: 0, dcs: 0, why: 0, tricks: 0, rounds: {}, td: 0, fg: 0, two: 0, picks: { offense: 0, defense: 0, end: 0 }, homeWins: 0, intents: {}, kicks: 0, defTO: 0 };
 const t0 = Date.now();
 for (const h of T) {
   for (const a of T) {
@@ -42,6 +42,10 @@ for (const h of T) {
         let x = null;
         if (R() < 0.92) {
           if (role === 'pick') { x = { pick: pick(ms.cot.pick.end ? ['offense', 'defense'] : VSCore.PICKS) }; stats.picks[x.pick]++; }
+          else if (role === 'intent') { x = { intent: pick(VSCore.intentsAt(ms.root)) }; stats.intents[x.intent] = (stats.intents[x.intent] || 0) + 1; }
+          else if (role === 'kickdef') x = R() < 0.1 ? { timeout: true } : { st: pick(VSCore.KICK_DEF[ms.cot.k4]) };
+          else if (role === 'kick') { x = R() < 0.2 ? { fake: pick(['run', 'pass']) } : { kick: true }; if (x.fake) stats.fakes = (stats.fakes || 0) + 1; }
+          else if (role === 'defense' && R() < 0.03) x = { timeout: true };
           else if (role === 'defense') { x = { dc: { pers: pick(VSCore.DC.pers), front: pick(VSCore.DC.front), cover: pick(VSCore.DC.cover), rush: pick(VSCore.DC.rush) } }; stats.dcs++; }
           else if (role === 'pat') x = R() < 0.4 ? { two: true } : { action: { pat: 'xp' } };
           else if (R() < 0.05 && ms.root.down === 4) x = { action: { play: 'fg' } };
@@ -50,9 +54,22 @@ for (const h of T) {
         halves[s] = VSCore.cleanHalf(ms, s, x, eng.pb);
       }
       const before = ms;
+      // who answers: 4th down the offense alone (go or kick), a kick said to be coming the defense alone, a snap both
+      const nd = VSCore.need(before), br = before.root;
+      if (!before.cot.pick && br.phase === VSCore.SNAP && br.down === 4 && !br.try2 && !before.cot.k4) assert.deepStrictEqual(nd, [br.pos], `${h}-${a}: 4th down: the offense says first`);
+      if (!before.cot.pick && br.phase === VSCore.SNAP && (before.cot.k4 === 'fg' || before.cot.k4 === 'punt')) assert.deepStrictEqual(nd, [0, 1], `${h}-${a}: a kick coming: both call (the kick or a fake; the block or home)`);
       const out = VSCore.apply(ms, halves, step, (R() * 4294967296) >>> 0);
       ms = out.ms;
       stats.decisions++;
+      if (out.kind === 'timeout' && out.notes[0].team !== br.pos) { stats.defTO++; assert.strictEqual(ms.root.to[1 - br.pos], br.to[1 - br.pos] - 1, `${h}-${a}: the defense's timeout taken`); }
+      if (out.res) {
+        const k = out.res.log.find((e) => e.ev === 'fg' || e.ev === 'punt');
+        // a kick only when the offense said so on 4th down, and the kick it said
+        if (k && !br.try2 && br.phase === VSCore.SNAP) { stats.kicks++; assert.ok(before.cot.k4 === k.ev, `${h}-${a}: a ${k.ev} only when said (${before.cot.k4})`); }
+        const hk = halves[br.pos];
+        if (hk && hk.fake && (before.cot.k4 === 'fg' || before.cot.k4 === 'punt')) { assert.ok(!k, `${h}-${a}: a fake is no kick`); assert.ok(out.notes.some((n) => n.k === 'fake'), `${h}-${a}: the fake said`); }
+        if (before.cot.k4 === 'go') assert.ok(!k, `${h}-${a}: going for it: no kick`);
+      }
       if (out.res) {
         stats.plays++;
         for (const e of out.res.log) { if (e.ev === 'pat' && e.two) stats.two++; if (e.ev === 'fg') { stats.fga = (stats.fga || 0) + 1; if (e.made) { stats.fg++; assert.strictEqual(ms.root.score[e.team] - before.root.score[e.team], 3, `${h}-${a}: a field goal is 3`); } } }
