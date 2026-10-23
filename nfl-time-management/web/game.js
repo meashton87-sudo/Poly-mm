@@ -6695,8 +6695,9 @@
     return tg;
   }
   const PASS_MORE_KEY = `${STORE}:passmore`, passMore = () => load(PASS_MORE_KEY, false) === true;
-  // the receivers' list: always where there is room for it, on an upright phone behind its chip (kept per device)
-  const RCV_KEY = `${STORE}:rcvlist`, rcvList = () => load(RCV_KEY, false) === true, listRoom = () => !bcast() || sideways();
+  // the receivers' list: always where there is room for it; an upright phone shows it too until its chip hides it (kept
+  // per device: players asked for it back the evening it went)
+  const RCV_KEY = `${STORE}:rcvlist`, rcvList = () => load(RCV_KEY, true) !== false, listRoom = () => !bcast() || sideways();
   function drawPassDock(head) {
     const r = G.root, d = $('dock'), P = ui.pass, sc = scene;
     head.append(el('h2', '', 'Pass'));
@@ -6787,8 +6788,7 @@
     }
     // the receivers, a row each, his route and odds: a tap picks who gets the ball (the Snap key at the foot throws it);
     // a tap on him on the field does the same (passTap). Players missed the list when it went (#238): it is back
-    // wherever there is room (a computer, a phone on its side); an upright phone has it behind the Receivers chip
-    // (kept per device)
+    // everywhere; an upright phone can hide it with the Receivers chip (kept per device)
     const list = el('div', 'rcvs');
     list.setAttribute('role', 'group');
     list.setAttribute('aria-label', 'Who gets the ball');
