@@ -10180,7 +10180,9 @@
   // --adt, game.html). Players saw the anchor over the play buttons ("I can't call a play without an ad blocking the
   // options"): an ad nested in a wrapper, lifted off the edge (the home bar), or expanded taller than the old limit got
   // past the first version. Checked as the page changes (an ad arriving), on a resize, and every second and a half
-  const AD_FLOOR_MAX = 340, AD_EDGE = 80;
+  // (and with Ezoic on the page, AD_RESERVE kept free at the foot while playing whether its anchor has come or not
+  // (--adr): Ezoic asked for 125px for Google's anchor ad, so it never lands over the game)
+  const AD_FLOOR_MAX = 340, AD_EDGE = 80, AD_RESERVE = 125;
   const adOurs = (el) => !!el.closest('#app, #play, header.top, .modal, .deep, .toast, #modal, .sheet');
   function adFloor() {
     let b = 0, t = 0;
@@ -10199,6 +10201,8 @@
     const root = document.documentElement.style;
     if (root.getPropertyValue('--adb') !== `${b}px`) root.setProperty('--adb', `${b}px`);
     if (root.getPropertyValue('--adt') !== `${t}px`) root.setProperty('--adt', `${t}px`);
+    const res = EZ && !noAds() ? AD_RESERVE : 0;
+    if (root.getPropertyValue('--adr') !== `${res}px`) root.setProperty('--adr', `${res}px`);
   }
   setInterval(adFloor, 1500);
   addEventListener('resize', adFloor);
