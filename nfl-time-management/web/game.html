@@ -433,11 +433,25 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .pro .rcform input { min-height: 44px; font-size: 16px; }      /* (16px: iOS does not zoom into the field) */
 .pro .recover .sent { font-weight: 600; font-size: 14px; }
 .pro .recover .err { font-size: 13px; }
-.modes { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
-.modes a { font: 700 12px var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); text-decoration: none;
-  padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); }
+/* the mode tabs (the owner: they should pop): solid buttons in the display face, each mode its own color when on, and
+   Versus lit gold with its Beta tag while it is new */
+.modes { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+.modes a { --mc: var(--ink); position: relative; display: inline-flex; align-items: center; gap: 6px; font: 800 15px/1 var(--display); letter-spacing: .07em;
+  text-transform: uppercase; color: var(--ink); text-decoration: none; padding: 9px 16px; border-radius: 999px; background: var(--card);
+  border: 1.5px solid var(--line); box-shadow: 0 1px 0 var(--line), 0 2px 6px rgba(0, 0, 0, .06); transition: transform .12s ease, box-shadow .12s ease; }
+.modes a:hover { transform: translateY(-1px); box-shadow: 0 2px 0 var(--line), 0 4px 10px rgba(0, 0, 0, .1); }
 .modes a[hidden] { display: none; }
-.modes a[aria-current="page"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+#modeDaily { --mc: var(--turf); } #modeSurv { --mc: var(--sq-r); } #modeArch { --mc: var(--gold); }
+.modes a[aria-current="page"] { background: var(--mc); color: #fff; border-color: var(--mc); box-shadow: 0 2px 8px rgba(0, 0, 0, .18); }
+#modeHome[aria-current="page"] { color: var(--paper); }
+#modeVs { background: linear-gradient(180deg, #f6d35a, #e2b12b); color: #1b1606; border-color: #c99a17;
+  box-shadow: 0 0 0 0 rgba(226, 185, 59, .55), 0 2px 8px rgba(201, 154, 23, .35); animation: vsglow 2.4s ease-out infinite; }
+#modeVs[aria-current="page"] { background: #1b1606; color: #f6d35a; border-color: #1b1606; animation: none; }
+#modeVs .tnew { font: 800 9px/1 var(--body); letter-spacing: .12em; padding: 3px 6px; border-radius: 999px; background: #1b1606; color: #f6d35a; }
+#modeVs[aria-current="page"] .tnew { background: #f6d35a; color: #1b1606; }
+@keyframes vsglow { 0% { box-shadow: 0 0 0 0 rgba(226, 185, 59, .55), 0 2px 8px rgba(201, 154, 23, .35); }
+  70% { box-shadow: 0 0 0 10px rgba(226, 185, 59, 0), 0 2px 8px rgba(201, 154, 23, .35); } 100% { box-shadow: 0 0 0 0 rgba(226, 185, 59, 0), 0 2px 8px rgba(201, 154, 23, .35); } }
+@media (prefers-reduced-motion: reduce) { #modeVs { animation: none; } }
 .intro .who.surv { font: 800 13px var(--body); letter-spacing: .1em; text-transform: uppercase; color: var(--sq-r-ink); }
 .intro .who.sofar { font: 700 14px var(--body); color: var(--gold-ink); }      /* the day's target */
 .intro .who.chal { font: 800 15px var(--body); color: var(--ink); }
@@ -915,7 +929,8 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
   body:has(#play:not([hidden])) .top .in { padding-block: 3px; }
   .wrap:has(> #play:not([hidden])) { padding-top: 6px; gap: 6px 10px; flex-flow: row wrap; justify-content: center; align-items: center; }
   .wrap:has(> #play:not([hidden])) > #play { flex-basis: 100%; min-width: 0; }
-  .wrap:has(> #play:not([hidden])) .modes a { padding: 4px 12px; font-size: 11px; }
+  .wrap:has(> #play:not([hidden])) .modes a { padding: 6px 12px; font-size: 13px; }
+  .wrap:has(> #play:not([hidden])) #modeVs .tnew { display: none; }
   .wrap:has(> #play:not([hidden])) .tiles span { width: 22px; height: 22px; font-size: 12px; border-width: 1.5px; }
 } }
 .pgroups { display: grid; gap: 6px; }
@@ -1468,7 +1483,7 @@ details.havepro > .row { margin-top: 8px; }
 </header>
 
 <main class="wrap">
-  <nav class="modes" aria-label="Game mode"><a id="modeHome" href="#home">Home</a><a id="modeDaily" href="#daily">Daily</a><a id="modeSurv" href="#survivor">Survivor</a><a id="modeVs" href="#vs" hidden>Versus</a><a id="modeArch" href="#archive">Pro</a></nav>
+  <nav class="modes" aria-label="Game mode"><a id="modeHome" href="#home">Home</a><a id="modeDaily" href="#daily">Daily</a><a id="modeSurv" href="#survivor">Survivor</a><a id="modeVs" href="#vs" hidden>Versus<b class="tnew">Beta</b></a><a id="modeArch" href="#archive">Pro</a></nav>
   <div id="tiles" class="tiles" role="group" aria-label="Today's three spots"></div>
   <section id="arch" class="arch" aria-label="Archive" hidden></section>
   <section id="homeview" aria-labelledby="homeH" hidden></section>
