@@ -3565,6 +3565,18 @@
           // while he ran the return without it)
           // (out of bounds: he goes out to it, over the sideline: kept on the turf he picked it up short of it, in bounds)
           t = Math.max(tEnd + 0.6, tEnd + 0.12 + runFrom(rec, tEnd + 0.1, [f], { T: 0.6, v1: 0, past: outB }).T);
+          // the scramble: the nearest men of both sides go for it too, getting there a beat after him (a pile round the
+          // ball), so who comes up with it is not given away by who runs (Tim: everyone froze but the man who got it)
+          if (!outB) {
+            const near = (side) => side.filter((m) => m !== rec && m !== car && dist(here(m), f) < 14)
+              .sort((a, b) => dist(here(a), f) - dist(here(b), f)).slice(0, 4);
+            near(K.off).concat(near(K.def)).forEach((m, i) => {
+              const q = here(m), [ux, uy] = unit(q[0] - f[0], q[1] - f[1]), r = 0.9 + R() * 0.8;
+              busy.add(m);
+              runFrom(m, tEnd + 0.1 + R() * 0.15, [[inX(f[0] + ux * r), f[1] + uy * r]], { T: Math.max(0.5, t - tEnd - 0.1 + 0.05 * i), v1: 0 });
+              leg(m, t + 0.25 + 0.05 * i, 'stand');
+            });
+          }
           hold(t, rec);
           if (lost && e.tdDef) t = returnTd(rec, t, f, 'Scoop and score!');
           else {
@@ -3588,9 +3600,11 @@
         say(tEnd, lossOf >= 1 ? `Stopped for a loss of ${lossOf}` : two ? 'Stopped short' : 'Tackled', 'info', { follow: car });
         down(tEnd + 0.08, car);
       }
-      if (e.fd && !e.td) say(tEnd + 0.35, 'First down', 'good', { slot: 1, follow: car });
-      if (e.onDowns) say(tEnd + 0.35, 'Turnover on downs', 'hit', { slot: 1, follow: car });
-      lastEnd(t + 1.1);
+      // (after a fumble, once it is recovered: said at once it told who came up with it)
+      const tSay = fumble ? t + 0.5 : tEnd + 0.35;
+      if (e.fd && !e.td) say(tSay, 'First down', 'good', { slot: 1, follow: car });
+      if (e.onDowns) say(tSay, 'Turnover on downs', 'hit', { slot: 1, follow: car });
+      lastEnd(t + (fumble && (e.fd || e.onDowns) ? 1.5 : 1.1));
       return t;
     }
 
