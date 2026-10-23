@@ -3,6 +3,14 @@
   "notes": [
     {
       "date": "2026-10-23",
+      "title": "More field on the pass screen",
+      "items": [
+        "The list of receivers under the field is gone: tap a receiver on the field to throw to him, tap him again for his next route, tap the grass for the open man.",
+        "The timeout button no longer hides behind the scoreboard on phones."
+      ]
+    },
+    {
+      "date": "2026-10-23",
       "title": "Versus beta (Pro)",
       "items": [
         "Play someone live, or the computer: college overtime, you call your offense and your defense. Part of Pro, in beta until Monday.",
