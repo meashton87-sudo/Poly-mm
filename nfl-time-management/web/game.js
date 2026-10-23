@@ -1021,11 +1021,16 @@
   // the timeout a button on the field (a phone's broadcast view), unless the page is zoomed so narrow that the chips on
   // the field run under the calls' sheet (game.html, max-width 299px): then a key with the calls, as on a computer
   const toOnField = () => bcast() && !window.matchMedia('(max-width: 299px)').matches;
+  // a phone on its side (game.html SIDE_MQ): the calls a sheet down the right, the field the left, its whole height (the
+  // sheet across the bottom left a strip of field too thin to draw on, the defense under the scoreboard)
+  const SIDE_MQ = '(orientation: landscape) and (max-height: 520px)';
+  const sideways = () => bcast() && window.matchMedia(SIDE_MQ).matches;
   // what covers the field in the broadcast view, in px: the scoreboard and the chips under it at the top, the calls'
   // sheet (or its bar, when it is down) at the bottom
   function covers() {
     if (!bcast()) return { top: 0, bot: 0 };
     const play = $('play'), sh = $('sheet'), vh = play.clientHeight || window.innerHeight;
+    if (sideways()) return { top: 104, bot: 0 };       // (the sheet beside the field, not over it)
     const bot = sh.classList.contains('down') ? 66 : clip(sh.offsetHeight || vh * 0.45, 66, vh * 0.6);      // (a pass's sheet: up to 58%, game.html)
     return { top: 104, bot };
   }
@@ -5884,7 +5889,7 @@
     if (!bcast()) return;
     // (the sheet as it settles, not mid-slide: during a play, away but for the skip note; down, its bar)
     const sh = $('sheet'), bar = $('bar').getBoundingClientRect();
-    const sheetTop = window.innerHeight - ($('field').classList.contains('playing') ? 52 : sh.classList.contains('down') ? 66 : sh.offsetHeight);
+    const sheetTop = window.innerHeight - ($('field').classList.contains('playing') ? 52 : sideways() ? 8 : sh.classList.contains('down') ? 66 : sh.offsetHeight);
     const under = [document.querySelector('.fieldbox .fov'), $('toBtn')].filter((e) => e && !e.hidden && e.getClientRects().length)
       .reduce((y, e) => Math.max(y, e.getBoundingClientRect().bottom), bar.bottom);
     if (under + 8 + t.offsetHeight + 8 <= sheetTop) t.style.top = `${Math.round(under + 8)}px`;
@@ -6988,7 +6993,7 @@
     if (dots.length && w) {
       const fl = fov.querySelector('.fovl'), chips = [...fov.querySelectorAll('.fovl > *, .btns > *')].filter((e) => !e.hidden && e.getClientRects().length)
         .map((e) => e.getBoundingClientRect()).filter((r) => r.width);
-      const sheet = $('sheet'), floor = sheet && !sheet.classList.contains('down') ? sheet.getBoundingClientRect().top - 6 : window.innerHeight - 72;
+      const sheet = $('sheet'), floor = sideways() ? window.innerHeight - 8 : sheet && !sheet.classList.contains('down') ? sheet.getBoundingClientRect().top - 6 : window.innerHeight - 72;
       const topL = Math.round(Math.max(bottom, fl ? fl.getBoundingClientRect().bottom : 0) - fb.top + 8);
       // (an end zone's name too, if it can be: ezClear moves it only as far as its end zone goes)
       const names = [...(scene ? scene.svg.querySelectorAll('text.ez') : [])].map((t) => t.getBoundingClientRect()).filter((r) => r.width);
