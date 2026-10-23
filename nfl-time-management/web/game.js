@@ -1680,15 +1680,16 @@
     });
     sc.svg.insertBefore(g, sc.layer);
   }
-  // a tap on a receiver while you pick a pass: throw to him, or (already him) his next route
-  // a tap on a receiver on the field: his next route (any receiver: set them all up, then pick who gets the ball).
-  // The page stays where it is, so the field and every route stay in view while you tap
+  // a tap on a receiver on the field: throw to him; the man already picked: his next route (no list of receivers
+  // under the field: the owner wanted the room; the grass tapped goes back to the open man). Drawing: he is the one
+  // you draw for, and the throw. The page stays where it is, so the field and every route stay in view while you tap
   function passTap(a) {
     if (busy || !passing() || !scene || !a.off) return false;
     const i = eligibles(scene).indexOf(a);
     if (i < 0 || blocks(scene, i)) return false;
     const list = ROUTES[a.label], P = ui.pass;
-    if (P.draw) { P.sel = P.sel === i ? null : i; redrawPass(); return true; }
+    if (P.draw) { P.sel = P.sel === i ? null : i; if (P.sel != null) P.target = i; redrawPass(); return true; }
+    if (P.target !== i) { P.target = i; redrawPass(); return true; }
     P.drawn = P.drawn || [];
     (P.hist = P.hist || []).push([i, P.routes[i], P.drawn[i] || null]);
     const was = P.drawn[i] ? -1 : list.indexOf(P.routes[i]);          // from a drawn route: the first on the list
@@ -1859,6 +1860,7 @@
         if (dd < bd) { bd = dd; best = i; }
       });
       if (best >= 0 && bd <= 22) { ev.preventDefault(); routeTapAt = Date.now(); passTap(eligibles(scene)[best]); }
+      else if (ui.pass.target != null && !busy) { ui.pass.target = null; redrawPass(); }      // (the grass: the open man)
     });
   }
   // ---- drawing a route (✏️ Draw routes on the pass picker): tap a receiver, then drag where he goes. The line is
@@ -2081,6 +2083,7 @@
       if (tap) {
         // a tap: pick that receiver (him again: let him go); off them all, let go of whoever was picked
         P.sel = D.hit >= 0 && P.sel !== D.hit ? D.hit : null;
+        if (P.sel != null && !blocks(scene, P.sel)) P.target = P.sel;
         redrawPass();
         return;
       }
@@ -2542,18 +2545,10 @@
   // (browser tests only, window.__sepLog: the drawing and the play, for bots that draw thousands of lines and plays)
   if (window.__sepLog) {
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
-      DRAWN_RANGE, CALL, ROUTES, routeName, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, goalCheck, qbCheck, speedLog, get: () => ({ G, ui, scene, busy }),
+      DRAWN_RANGE, CALL, ROUTES, routeName, blocks: (sc, i) => blocks(sc, i), passTap, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, goalCheck, qbCheck, speedLog, get: () => ({ G, ui, scene, busy }),
       readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
       promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k),
       drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock(), crowdKey: (r, k) => crowdKey(r, k) };
-  }
-  // who gets the ball, by his place in the list (the field may be redrawn under the buttons: a resize, the phone's
-  // address bar)
-  // (his row tapped again: back to the open man)
-  function passPick(i) {
-    if (busy || !passing() || !scene || !eligibles(scene)[i] || blocks(scene, i)) return;
-    ui.pass.target = ui.pass.target === i ? null : i;
-    redrawPass();
   }
   // No receiver picked: the throw goes to the open man. The engine plays exactly what the Snap key always sent before
   // a pick (the first receiver's call, route and position: openI, the first who goes out: not one your protection keeps
@@ -6720,10 +6715,10 @@
     if (!P.draw) {
       // (the first few passes only: after that the screen is the receivers and the keys)
       const told = load(`${STORE}:passhint`, 0);
-      const h = told >= 3 ? null : !bcast() ? el('p', 'hint', 'Snap throws to the open man, or tap a name to pick who gets the ball. Tap a man on the field for his next route, or drag him to draw one.')
-        : el('p', 'hint one', VS ? 'Pick a play. Snap: the open man, or tap a man on the field to throw to him.' : 'Snap: the open man, or pick one. Tap a dot: his route.');
+      const h = told >= 3 ? null : !bcast() ? el('p', 'hint', 'Snap throws to the open man, or tap a receiver on the field to throw to him. Tap him again for his next route, or drag him to draw one.')
+        : el('p', 'hint one', VS ? 'Pick a play. Snap: the open man, or tap a man on the field to throw to him.' : 'Tap a man to throw to him; again: his route.');
       if (h) {
-        h.title = 'Snap throws to whoever gets open, or tap a name to pick who gets the ball (tap it again for the open man). Tap a receiver on the field to change his route, or drag him to draw your own (drag the quarterback for his drop or a rollout).';
+        h.title = 'Snap throws to whoever gets open, or tap a receiver on the field to throw to him (the grass: the open man again). Tap him again to change his route, or drag him to draw your own (drag the quarterback for his drop or a rollout).';
         d.append(h);
       }
     } else {
@@ -6742,32 +6737,7 @@
       }
       d.append(h);
     }
-    // the receivers, a row each: a tap picks who gets the ball (the Snap key at the foot throws it)
-    const list = el('div', 'rcvs');
-    list.setAttribute('role', 'group');
-    list.setAttribute('aria-label', 'Who gets the ball');
-    E.forEach((a, i) => {
-      if (blocks(sc, i)) {                    // (kept in by your protection: no route, no ball)
-        const b = el('button', 'rcv blk');
-        b.type = 'button'; b.disabled = true;
-        b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label), el('span', 'rt', 'Blocking'));
-        b.setAttribute('aria-label', `${a.p ? a.p.name : a.label}: staying in to block`);
-        list.append(b);
-        return;
-      }
-      const b = el('button', `rcv${P.target === i ? ' on' : ''}`);
-      b.type = 'button';
-      b.setAttribute('aria-pressed', String(P.target === i));
-      const pk = pickKey(passOption(sc, i, false).action), od = G.odds && G.odds[pk];
-      b.dataset.k = pk;
-      const dr = P.drawn && P.drawn[i];
-      b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label),
-        el('span', 'rt', `${dr ? '✏️ ' : ''}${routeName(a.label, P.routes[i])}${dr ? ` · ${dr.depth} yds` : ''}`));
-      if (od) b.append(oddsEl(od));
-      b.setAttribute('aria-label', `${P.target === i ? 'The target (tap again for the open man)' : 'Throw to'}: ${a.p ? a.p.name : a.label}, ${routeName(a.label, P.routes[i])}`);
-      b.addEventListener('click', () => { if (!busy) passPick(i); });
-      list.append(b);
-    });
+    // (no list of who gets the ball: a tap on him on the field picks him, passTap; the Snap key at the foot names him)
     // the options first (they change the odds on the cards), as three small toggles on one line
     const opt = (label, tip, on, set, id) => {
       const b = el('button', `chip opt${on ? ' on' : ''}`, label);
@@ -6796,10 +6766,10 @@
       });
       d.append(row);
       if (P.target != null && E[P.target]) {
-        const a = E[P.target], who = el('p', 'hint one', `Throwing to ${shortName(a.p ? a.p.name : '') || a.label} (${routeName(a.label, P.routes[P.target])}). Tap him again for the open man.`);
+        const a = E[P.target], who = el('p', 'hint one', `Throwing to ${shortName(a.p ? a.p.name : '') || a.label} (${routeName(a.label, P.routes[P.target])}). Tap him again for his next route, the grass for the open man.`);
         d.append(who);
       }
-    } else d.append(list);
+    }
     const avail = callOptions(r).calls, more = ['hail_mary'].filter((id) => avail.includes(id));
     // the screen in one tap: the back's route set to the screen and the ball to him (it was only a route on the
     // picker, which players didn't find, while the grade could still name the screen as the best call)
@@ -6989,7 +6959,9 @@
       // (an end zone's name too, if it can be: ezClear moves it only as far as its end zone goes)
       const names = [...(scene ? scene.svg.querySelectorAll('text.ez') : [])].map((t) => t.getBoundingClientRect()).filter((r) => r.width);
       const free = (x, y, rs) => !rs.some((r) => r.left < x + w + 3 && r.right > x - 3 && r.top < y + h + 3 && r.bottom > y - 3);
-      const clear = (x, y) => y + h <= floor && x >= fb.left && free(x, y, dots.concat(chips));
+      // (never up beside the scoreboard: the chips' own row is the highest it goes; the owner saw it behind the score)
+      const ceil = fov.getBoundingClientRect().top;
+      const clear = (x, y) => y >= ceil && y + h <= floor && x >= fb.left && free(x, y, dots.concat(chips));
       const xr = fb.right - 8 - w, xl = fb.left + 8, lr = last && last.getBoundingClientRect();
       const spots = [[xr, fb.top + top0]];
       if (lr) spots.push([lr.left - 6 - w, lr.top]);

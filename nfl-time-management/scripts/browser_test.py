@@ -692,6 +692,23 @@ LONG = """([i, name]) => {
   if (G.odds) Object.values(G.odds).forEach((o) => { if (o) o.picks = Math.max(o.picks || 0, 0.12); });
   return { n: E.length, target: ui.pass.target };
 }"""
+# a receiver's dot on the screen (by his place among the eligibles); every receiver's route as named
+DOT_AT = """(i) => { const D = window.__draw, { scene } = D.get(), a = D.eligibles(scene)[i]; if (!a) return null; const r = a.g.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }"""
+ROUTES_NOW = "(() => { const D = window.__draw, { ui, scene } = D.get(); return D.eligibles(scene).map((a, i) => D.routeName(a.label, ui.pass.routes[i])); })()"
+# a spot of open grass on the field in view: on the field (nothing over it there), 40 units from any route or dot
+GRASS_AT = """() => {
+  const D = window.__draw, { scene } = D.get(), svg = scene && scene.svg, m = svg && svg.getScreenCTM();
+  if (!m || !scene.routePts) return null;
+  const r = svg.getBoundingClientRect(), inv = m.inverse();
+  for (let fy = 0.15; fy < 0.9; fy += 0.07) for (let fx = 0.06; fx < 0.95; fx += 0.08) {
+    const x = r.left + r.width * fx, y = r.top + r.height * fy, e = document.elementFromPoint(x, y);
+    if (!e || e.closest('svg') !== svg || e.closest('g.dot')) continue;
+    const q = new DOMPoint(x, y).matrixTransform(inv);
+    const seg = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy, u = L ? Math.max(0, Math.min(1, ((q.x - a[0]) * dx + (q.y - a[1]) * dy) / L)) : 0; return Math.hypot(q.x - a[0] - u * dx, q.y - a[1] - u * dy); };
+    if (scene.routePts.every((pts) => pts.every((p, k) => Math.hypot(q.x - p[0], q.y - p[1]) > 40 && (!k || seg(pts[k - 1], p) > 40)))) return [x, y];
+  }
+  return null;
+}"""
 # the defense's screens and the kicks, put up in place on a phone's first call (the test page is thrown away after)
 SHOW = """async (what) => {
   const D = window.__draw, { G, ui } = D.get();
@@ -2140,13 +2157,13 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                     # phone size: each receiver's row, the protection, the options, Back
                     # (the simple screen first, the default: the receivers, More, no protection or option rows; then
                     # More: every row in view too)
-                    for sel in ("#dock .rcv", "#passMore", "#dock .ask .chip"):
+                    for sel in ("#snapGo", "#passMore", "#dock .ask .chip"):
                         await check("pass", sel, 300)
                     if await page.locator("#dock .prots").count():
                         out.append(f"{at}: the pass screen opened with the protection row (it is behind More)")
                     await page.click("#passMore", timeout=3000)
                     await page.wait_for_timeout(300)
-                    for sel in ("#dock .rcv", "#dock .prots .chip", "#dock .opts-row:not(.prots) .chip", "#dock .ask .chip"):
+                    for sel in ("#snapGo", "#dock .prots .chip", "#dock .opts-row:not(.prots) .chip", "#dock .ask .chip"):
                         await check("pass, More", sel, 300)
                     # the pass plays (game.js CONCEPTS): the picker whole on the screen with no scrolling in it, a tap sets
                     # every route (Mesh: crossers) and the Plays chip names it
@@ -2158,19 +2175,28 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                             out.append(f"{at}: the pass plays picker does not fit: {fit!r}")
                         await page.click(".concept[data-concept='mesh']", timeout=3000)
                         await page.wait_for_timeout(400)
-                        got = await page.evaluate("() => [document.getElementById('playsBtn').textContent, [...document.querySelectorAll('#dock .rcv .rt')].map((e) => e.textContent)]")
+                        got = await page.evaluate(f"() => [document.getElementById('playsBtn').textContent, {ROUTES_NOW}]")
                         if "Mesh" not in got[0] or sum(1 for x in got[1] if "Crosser" in x) < 2:
                             out.append(f"{at}: Mesh picked, the dock reads {got!r}")
                         await check("pass, a concept set", "#snapGo", 300)
                         await check("pass, a concept set", "#dock .ask .chip", 300)
-                        # its routes still yours to change: a tap on a man on the field gives him his next route, the
-                        # concept kept and marked changed (✎); the throw goes with the route as changed
+                        # its routes still yours to change: a tap on a man on the field picks him, a second his next
+                        # route, the concept kept and marked changed (✎); the throw goes with the route as changed
                         dot = await page.evaluate("() => { const D = window.__draw, { scene } = D.get(), a = D.eligibles(scene).find((x) => !x.g.closest('.blk')); if (!a) return null; const r = a.g.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2, D.eligibles(scene).indexOf(a)]; }")
                         if dot:
-                            before = await page.evaluate("(i) => document.querySelectorAll('#dock .rcv')[i].querySelector('.rt').textContent", dot[2])
-                            await page.mouse.click(dot[0], dot[1])
+                            before = await page.evaluate(f"(i) => {ROUTES_NOW}[i]", dot[2])
+                            for _ in range(2):
+                                if await page.evaluate("(i) => window.__draw.get().ui.pass.target === i", dot[2]):
+                                    break
+                                xy = await page.evaluate(DOT_AT, dot[2])
+                                await page.mouse.click(xy[0], xy[1])
+                                await page.wait_for_timeout(400)
+                            else:
+                                out.append(f"{at}: a receiver tapped on the field is not the target")
+                            xy = await page.evaluate(DOT_AT, dot[2])
+                            await page.mouse.click(xy[0], xy[1])
                             await page.wait_for_timeout(400)
-                            after = await page.evaluate("(i) => [document.querySelectorAll('#dock .rcv')[i].querySelector('.rt').textContent, document.getElementById('playsBtn').textContent, window.__draw.get().ui.pass.routes[i]]", dot[2])
+                            after = await page.evaluate(f"(i) => [{ROUTES_NOW}[i], document.getElementById('playsBtn').textContent, window.__draw.get().ui.pass.routes[i]]", dot[2])
                             if after[0] == before or "✎" not in after[1] or "Mesh" not in after[1]:
                                 out.append(f"{at}: a route changed on a concept: {before!r} -> {after!r}")
                     # max protect: the back and a tight end kept in (their rows Blocking, no route on the field for
@@ -2179,41 +2205,42 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                     if await mx.count():
                         await mx.click(timeout=3000)
                         await page.wait_for_timeout(300)
-                        blk = await page.evaluate("() => [...document.querySelectorAll('#dock .rcv.blk .pos')].map((e) => e.textContent)")
+                        blk = await page.evaluate("() => { const D = window.__draw, { scene } = D.get(); return D.eligibles(scene).filter((a, i) => D.blocks(scene, i)).map((a) => a.label); }")
                         if not blk or any(x not in ("RB", "TE") for x in blk):
                             out.append(f"{at}: max protect kept in {blk!r}")
                         await check("pass, max protect", "#snapGo", 300)
-                        await check("pass, max protect", "#dock .rcv", 300)
                         await page.click("#dock .prots .chip[data-prot='std']", timeout=3000)
                         await page.wait_for_timeout(300)
-                # nobody picked: the open man (the Snap key and what it says aloud); a row tapped: him; tapped again:
-                # the open man again
+                # nobody picked: the open man (the Snap key and what it says aloud); a receiver tapped on the field:
+                # him; the grass tapped: the open man again
                 snap_txt = "() => { const g = document.getElementById('snapGo'); return g ? [g.querySelector('.go').textContent, g.getAttribute('aria-label')] : null; }"
                 st0 = await page.evaluate(snap_txt)
                 if not st0 or "open man" not in st0[0] or "open man" not in st0[1]:
                     out.append(f"{at}: the Snap key does not throw to the open man before a pick: {st0!r}")
-                rows0 = page.locator("#dock .rcv")
-                if await rows0.count():
-                    await rows0.nth(0).click(timeout=3000)
+                xy0 = await page.evaluate(DOT_AT, 0)
+                if xy0:
+                    await page.mouse.click(xy0[0], xy0[1])
+                    await page.wait_for_timeout(300)
                     st1 = await page.evaluate(snap_txt)
                     if not st1 or "open man" in st1[0]:
-                        out.append(f"{at}: a receiver tapped, the Snap key still reads {st1!r}")
-                    await page.locator("#dock .rcv").nth(0).click(timeout=3000)
-                    st2 = await page.evaluate(snap_txt)
-                    if not st2 or "open man" not in st2[0]:
-                        out.append(f"{at}: his row tapped again, the Snap key is not back to the open man: {st2!r}")
-                # every receiver with a long name, on the longest-named route he runs: picked (a tap on his row), the
-                # Snap key drawn again for him (another picked first when he already is)
-                rows = page.locator("#dock .rcv")
+                        out.append(f"{at}: a receiver tapped on the field, the Snap key still reads {st1!r}")
+                    grass = await page.evaluate(GRASS_AT)
+                    if grass:
+                        await page.mouse.click(grass[0], grass[1])
+                        await page.wait_for_timeout(300)
+                        st2 = await page.evaluate(snap_txt)
+                        if not st2 or "open man" not in st2[0]:
+                            out.append(f"{at}: the grass tapped, the Snap key is not back to the open man: {st2!r}")
+                # every receiver with a long name, on the longest-named route he runs: picked (the test's hook, as a tap
+                # on him would), the Snap key drawn again for him (another picked first when he already is)
                 for i in range(6):
                     got = await page.evaluate(LONG, [i, LONG_NAMES[i % len(LONG_NAMES)]])
                     if not got:
                         break
-                    if got["target"] == i:
-                        await rows.nth((i + 1) % got["n"]).click(timeout=3000)
                     await watch("#snapGo")
-                    await rows.nth(i).click(timeout=3000)
-                    await check(f"pass, receiver {i + 1} (a long name)", "#snapGo", 600)
+                    picked = await page.evaluate("(i) => { const D = window.__draw, { ui, scene } = D.get(), a = D.eligibles(scene)[i]; if (D.blocks(scene, i)) return false; ui.pass.target = null; return D.passTap(a); }", i)
+                    if picked:
+                        await check(f"pass, receiver {i + 1} (a long name)", "#snapGo", 600)
                 # drawing the routes: its own hint over the receivers
                 await watch("#snapGo")
                 await page.click("#drawBtn", timeout=3000)
