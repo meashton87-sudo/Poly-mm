@@ -2199,6 +2199,13 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                             after = await page.evaluate(f"(i) => [{ROUTES_NOW}[i], document.getElementById('playsBtn').textContent, window.__draw.get().ui.pass.routes[i]]", dot[2])
                             if after[0] == before or "✎" not in after[1] or "Mesh" not in after[1]:
                                 out.append(f"{at}: a route changed on a concept: {before!r} -> {after!r}")
+                            # (he is the target now: back to the open man, the grass tapped, for the checks after)
+                            grass = await page.evaluate(GRASS_AT)
+                            if grass:
+                                await page.mouse.click(grass[0], grass[1])
+                                await page.wait_for_timeout(300)
+                            if await page.evaluate("() => window.__draw.get().ui.pass.target != null"):
+                                out.append(f"{at}: the grass tapped after a pick, the target is still set")
                     # max protect: the back and a tight end kept in (their rows Blocking, no route on the field for
                     # them), the open man still one who goes out; back to standard after
                     mx = page.locator("#dock .prots .chip[data-prot='max']")

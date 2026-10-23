@@ -1031,6 +1031,9 @@
   }
   // the field's size on a desktop (a player: "it feels condensed"): Standard, Large (the default) or Extra large, kept
   // per device; the page wider and the field's column with it (game.html body.fs-*), and taller (fieldHeight)
+  // a steady camera (the field's ⚙ Options, kept per device): the whole play in view from the snap, no zoom or pan, as
+  // with the phone's reduced motion (a player got dizzy from the camera following a pressured pocket)
+  const CAM_KEY = `${STORE}:steadycam`, steadyCam = () => reduced() || load(CAM_KEY, false) === true;
   const FS_KEY = `${STORE}:fieldsize`, FS = ['m', 'l', 'xl'], FS_LABEL = { m: 'Standard', l: 'Large', xl: 'Extra large' };
   const fieldSize = () => { const v = load(FS_KEY, 'l'); return FS.includes(v) ? v : 'l'; };
   function applyFieldSize() {
@@ -2675,6 +2678,23 @@
   const playSpeed = () => { const v = Number(load(SPEED_KEY, 1)); return SPEEDS.includes(v) ? v : 1; };
   const playsOn = () => playSpeed() > 0;
   let speedOn = false;
+  function camBtn() {
+    const b = $('camBtn');
+    if (!b) return;
+    const show = () => {
+      const on = steadyCam();
+      b.textContent = on ? '🎥 Steady' : '🎥 Follow';
+      b.disabled = reduced();              // (the phone's reduced motion: always steady)
+      b.setAttribute('aria-pressed', String(on));
+      b.setAttribute('aria-label', on ? 'Camera: steady, the whole play in view. Tap for a camera that follows the play' : 'Camera: follows the play. Tap to hold it steady');
+    };
+    show();
+    b.addEventListener('click', () => {
+      save(CAM_KEY, !(load(CAM_KEY, false) === true)); show();
+      toast(steadyCam() ? 'Steady camera: the whole play in view, no zooming' : 'The camera follows the play');
+      track('steady_cam', { on: steadyCam() });
+    });
+  }
   function speedBtn() {
     const b = $('speedBtn');
     if (!b) return;
@@ -3545,6 +3565,18 @@
           // while he ran the return without it)
           // (out of bounds: he goes out to it, over the sideline: kept on the turf he picked it up short of it, in bounds)
           t = Math.max(tEnd + 0.6, tEnd + 0.12 + runFrom(rec, tEnd + 0.1, [f], { T: 0.6, v1: 0, past: outB }).T);
+          // the scramble: the nearest men of both sides go for it too, getting there a beat after him (a pile round the
+          // ball), so who comes up with it is not given away by who runs (Tim: everyone froze but the man who got it)
+          if (!outB) {
+            const near = (side) => side.filter((m) => m !== rec && m !== car && dist(here(m), f) < 14)
+              .sort((a, b) => dist(here(a), f) - dist(here(b), f)).slice(0, 4);
+            near(K.off).concat(near(K.def)).forEach((m, i) => {
+              const q = here(m), [ux, uy] = unit(q[0] - f[0], q[1] - f[1]), r = 0.9 + R() * 0.8;
+              busy.add(m);
+              runFrom(m, tEnd + 0.1 + R() * 0.15, [[inX(f[0] + ux * r), f[1] + uy * r]], { T: Math.max(0.5, t - tEnd - 0.1 + 0.05 * i), v1: 0 });
+              leg(m, t + 0.25 + 0.05 * i, 'stand');
+            });
+          }
           hold(t, rec);
           if (lost && e.tdDef) t = returnTd(rec, t, f, 'Scoop and score!');
           else {
@@ -3568,9 +3600,11 @@
         say(tEnd, lossOf >= 1 ? `Stopped for a loss of ${lossOf}` : two ? 'Stopped short' : 'Tackled', 'info', { follow: car });
         down(tEnd + 0.08, car);
       }
-      if (e.fd && !e.td) say(tEnd + 0.35, 'First down', 'good', { slot: 1, follow: car });
-      if (e.onDowns) say(tEnd + 0.35, 'Turnover on downs', 'hit', { slot: 1, follow: car });
-      lastEnd(t + 1.1);
+      // (after a fumble, once it is recovered: said at once it told who came up with it)
+      const tSay = fumble ? t + 0.5 : tEnd + 0.35;
+      if (e.fd && !e.td) say(tSay, 'First down', 'good', { slot: 1, follow: car });
+      if (e.onDowns) say(tSay, 'Turnover on downs', 'hit', { slot: 1, follow: car });
+      lastEnd(t + (fumble && (e.fd || e.onDowns) ? 1.5 : 1.1));
       return t;
     }
 
@@ -5452,7 +5486,7 @@
   function runPlan(sc, P, speed, clk) {
     const runoff = clk ? Math.max(0, clk.t0 - clk.snap) : 0;
     const PRE = Math.max(runoff >= 1 ? clip(0.4 + runoff / 30, 0.55, 1.5) : 0, P.motion ? 1.2 : 0);
-    const ZI = 0.6, ZO = 0.5, total = PRE + ZI + P.T + P.hold + ZO, still = reduced();
+    const ZI = 0.6, ZO = 0.5, total = PRE + ZI + P.T + P.hold + ZO, still = steadyCam();
     // (college overtime in Versus has no clock: the scoreboard keeps its possession, never a clock run over it)
     const ck = clk && !G.cot ? document.querySelector('#bar .clk') : null;
     return new Promise((resolve) => {
@@ -5466,7 +5500,7 @@
       const frame = (now) => {
         if (start === null) start = now;
         const t = skip ? total : ((now - start) / 1000) * speed, tt = t - PRE;
-        // (reduced motion: the play's frame from the start, held still; no zoom in or out)
+        // (a steady camera, or reduced motion: the play's frame from the start, held still; no zoom in or out)
         const k = still ? 1 : EASE.io(clip(tt / ZI, 0, 1)) * (P.stay ? 1 : 1 - EASE.io(clip((tt - ZI - P.T - P.hold) / ZO, 0, 1)));
         const c0 = sc.cam0 || FULL;            // from the pre-snap frame into the play's, and back
         const pc = still || !P.camAt ? P.cam : P.camAt(clip(tt - ZI, 0, P.T));   // (following the play: finishCamera)
@@ -13898,7 +13932,8 @@
       b.setAttribute('aria-expanded', String(open));
     };
     fieldOpts();
-    $('optsBtn').addEventListener('click', () => { save(OPTS_KEY, !(load(OPTS_KEY, false) === true)); track('field_opts', { open: load(OPTS_KEY, false) === true }); fieldOpts(); });
+    // (the timeout button placed again under the chips as they open or shut: it sat over Formation)
+    $('optsBtn').addEventListener('click', () => { save(OPTS_KEY, !(load(OPTS_KEY, false) === true)); track('field_opts', { open: load(OPTS_KEY, false) === true }); fieldOpts(); if ($('toBtn') && !$('toBtn').hidden) placeTo(); });
     $('deepBtn').addEventListener('click', () => { if (G) openDeep(); });
     applyFieldSize();
     $('sizeBtn').addEventListener('click', () => {
@@ -13911,6 +13946,7 @@
     $('persBtn').addEventListener('click', openPers);
     $('formBtn').addEventListener('click', openForm);
     speedBtn();
+    camBtn();
     $('deepClose').addEventListener('click', closeDeep);
     $('mClose').addEventListener('click', closeModal);
     $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeModal(); });
