@@ -3,6 +3,13 @@
   "notes": [
     {
       "date": "2026-10-23",
+      "title": "A steady camera",
+      "items": [
+        "New in the field's Options: Steady camera. The whole play stays in view from the snap, with no zooming or panning, for anyone the moving camera makes dizzy."
+      ]
+    },
+    {
+      "date": "2026-10-23",
       "title": "More field on the pass screen",
       "items": [
         "The list of receivers under the field is gone: tap a receiver on the field to throw to him, tap him again for his next route, tap the grass for the open man.",
