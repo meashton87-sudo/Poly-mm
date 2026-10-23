@@ -3,6 +3,20 @@
   "notes": [
     {
       "date": "2026-10-22",
+      "title": "A taller field",
+      "items": [
+        "On a computer, the field runs down to the bottom of the window at every size."
+      ]
+    },
+    {
+      "date": "2026-10-22",
+      "title": "Up next",
+      "items": [
+        "After the daily drive, the end card offers one thing to play next: Survivor, or Versus if you have it."
+      ]
+    },
+    {
+      "date": "2026-10-22",
       "title": "Less to read",
       "items": [
         "Home, Pro and the start of each drive are down to what you play: the explanations are a tap away."
