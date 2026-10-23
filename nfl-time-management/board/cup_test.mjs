@@ -4,6 +4,9 @@
 import assert from 'node:assert';
 import { World, FakeClient } from './vs_world.mjs';
 import { cupBracket, cupSettle, CUP, ROOM_RE } from './match.js';
+import VSCore from '../web/vs_core.js';
+// the decisions 4th down brings (vs_core.js): go for it, the kick and not a fake, staying home against it
+const nh = (role, ms) => (role === 'intent' ? { intent: 'go' } : role === 'kick' ? { kick: true } : role === 'kickdef' ? { st: VSCore.KICK_DEF[ms.cot.k4][1] } : null);
 
 // ---- the bracket on its own: seeds 1 v 16 ... ; byes for missing seeds; empty slots through
 {
@@ -53,7 +56,7 @@ const ladder = w.obj('ladder').m, q = ladder.sql();
 // qualifying time (in at the rating he had then)
 const P = [];
 for (let i = 0; i < 20; i++) {
-  const k = K(i), h = await kh(k), games = i === 1 || i === 3 ? 6 : 12;
+  const k = K(i), h = await kh(k), games = i === 1 || i === 3 ? 3 : 12;
   P.push({ i, k, h, name: `P${i}`, rating: 1500 - 20 * i, games });
   q.exec('INSERT INTO players (kh, name, rating, games, w, l, peak, streak, updated) VALUES (?, ?, ?, ?, 0, 0, ?, 0, 0)', h, `P${i}`, 1500 - 20 * i, games, 1500 - 20 * i);
 }
@@ -115,9 +118,9 @@ async function play(m, winSeat) {
     const R = w.objects.get(`room:${m.room}`).store.get('room');
     if (R.phase === 'over') return R;
     for (const s of [0, 1]) {
-      const role = R.ms.cot.pick ? (R.ms.cot.pick.team === s ? 'pick' : null) : R.ms.root.phase === PAT ? (R.ms.root.pos === s ? 'pat' : null) : R.ms.root.pos === s ? 'offense' : 'defense';
+      const role = VSCore.role(R.ms, s);
       if (!role) continue;
-      const half = role === 'pick' ? { pick: 'defense' } : role === 'pat' ? { action: { pat: 'xp' } } : role === 'defense' ? { dc: { pers: 'nickel', front: 'even', cover: 'c3', rush: 4 } } : { action: { call: s === winSeat ? 'td' : 'inside' } };
+      const half = nh(role, R.ms) || (role === 'pick' ? { pick: 'defense' } : role === 'pat' ? { action: { pat: 'xp' } } : role === 'defense' ? { dc: { pers: 'nickel', front: 'even', cover: 'c3', rush: 4 } } : { action: { call: s === winSeat ? 'td' : 'inside' } });
       cl[s].send({ t: 'half', n: R.n, half });
     }
     await w.settle();

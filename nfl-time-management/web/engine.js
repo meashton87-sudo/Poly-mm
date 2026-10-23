@@ -256,7 +256,14 @@
   }
   // the route an action asks for: the receiver's route, at the depth it was drawn to when it was drawn (act.depth)
   const oobMode = (oob) => (oob === -1 ? -1 : oob ? 1 : 0);    // _cdfOf's: 1 get out of bounds, -1 stay in, 0 neither
-  const routeOfAct = (act) => (act.route && Number.isFinite(act.depth) ? `${act.route}@${Math.round(act.depth)}` : act.route);
+  // the routes the page offers that the charting folds into another: a curl is a hitch run deep (NGS HITCH/CURL), a
+  // comeback a deep out caught coming back to the sideline: the throws on that route about that deep (game.js
+  // ROUTE_ALIAS: change both)
+  const ROUTE_ALIAS = { curl: ['hitch', 11], comeback: ['deep_out', 13] };
+  const routeOfAct = (act) => {
+    const al = act.route && ROUTE_ALIAS[act.route], rt = al ? al[0] : act.route, d = Number.isFinite(act.depth) ? act.depth : al ? al[1] : null;
+    return rt && d != null ? `${rt}@${Math.round(d)}` : rt;
+  };
   const DRAWN_WIN = 3;                // a drawn route: real throws on it within 3 yards (15% of it, deeper) of the drawn depth
   const PB_LOOK_MIN = 15;             // daily game: a call's plays against one defensive look are used when at least this many
                                       // (playbook.py LOOK_MIN)

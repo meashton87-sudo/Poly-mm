@@ -5,14 +5,17 @@ import assert from 'node:assert';
 import { World, FakeClient } from './vs_world.mjs';
 import { ROOM_RE, PLAY_MS, WATCH_MS, DECIDE_MS, OFF_MS, DEF_MS, decideMs, FIRST_MS, FORFEIT_MS, AFK_LIMIT, NOSHOW_MS, ELO, MM, CPU_AFTER_S, CPU_SEAT, CPU_TURN_MS } from './match.js';
 
-// the play clock by role: the defense 10 seconds, the offense 20, a pick or a try 30 (the owner, Oct 22)
+// the play clock by role: the defense 15 seconds, the offense 20 (from the defense's call in), a pick or a try 30 (the owner, Oct 23)
 {
   const snap = { over: false, root: { phase: 0, pos: 0 }, cot: { pick: null } }, pat = { over: false, root: { phase: 1, pos: 1 }, cot: { pick: null } };
   assert.deepStrictEqual([decideMs(snap, 0), decideMs(snap, 1), decideMs(pat, 1), decideMs({ over: false, root: { phase: 0, pos: 0 }, cot: { pick: { team: 1 } } }, 1)],
-    [OFF_MS, DEF_MS, DECIDE_MS, DECIDE_MS], 'offense 20 s, defense 10 s, a try or a pick 30 s');
-  assert.deepStrictEqual([OFF_MS, DEF_MS], [20000, 10000]);
+    [OFF_MS, DEF_MS, DECIDE_MS, DECIDE_MS], 'offense 20 s, defense 15 s, a try or a pick 30 s');
+  assert.deepStrictEqual([OFF_MS, DEF_MS], [20000, 15000]);
 }
 import VSCore from '../web/vs_core.js';
+
+// the decisions 4th down brings (vs_core.js): go for it, the kick and not a fake, staying home against it
+const nh = (role, ms) => (role === 'intent' ? { intent: 'go' } : role === 'kick' ? { kick: true } : role === 'kickdef' ? { st: VSCore.KICK_DEF[ms.cot.k4][1] } : null);
 
 // the stand-in engine: a snap gains (seed % 15) - 3 yards; a call 'fg' kicks a field goal (good); 'td' scores
 const PAT = 1, KICKOFF = 2;
@@ -127,23 +130,27 @@ assert.ok(ROOM_RE.test('ABC234') && !ROOM_RE.test('ABCD10') && !ROOM_RE.test('ab
   assert.strictEqual(a.last('step').n, 2, 'not before the deadline');
   await w.advance(1000);
   assert.deepStrictEqual([a.last('step').n, a.last('step').halves[1 - first]], [3, null], 'the defense defaulted');
-  // the play clock: the offense's 20 seconds from the moment the call is up on the phone (ready), for each seat on its own
+  // the play clock: the defense calls first; the offense's call up on its phone (ready) waits for it (wait: true, the
+  // decision's last moment), and its 20 seconds start when the defense's call is in (the owner, Oct 23)
   const t4 = w.now;
   await w.advance(4000);
   off.send({ t: 'ready', n: 4 });
   await w.settle();
-  assert.deepStrictEqual([off.last('clock').n, off.last('clock').deadline], [4, t4 + 4000 + OFF_MS], 'the clock starts when the call is up');
+  assert.deepStrictEqual([off.last('clock').n, off.last('clock').wait, off.last('clock').deadline], [4, true, a.last('step').deadline], 'the offense waits on the defense');
   assert.strictEqual(def.last('clock'), undefined, 'the other phone is not told');
-  off.send({ t: 'ready', n: 4 });                                     // again: the clock does not start over
+  off.send({ t: 'ready', n: 4 });                                     // again: nothing starts
   await w.advance(2000);
-  assert.strictEqual(off.last('clock').deadline, t4 + 4000 + OFF_MS, 'a second ready changes nothing');
+  assert.ok(off.last('clock').wait, 'a second ready changes nothing');
   def.send({ t: 'half', n: 4, half: { dc: DCALL } });
-  await w.advance(OFF_MS - 2000 - 100);
+  await w.settle();
+  const tD = w.now;
+  assert.deepStrictEqual([off.last('clock').seat, off.last('clock').wait, off.last('clock').deadline], [first, undefined, tD + OFF_MS], 'the defense in: the offense\'s 20 seconds start');
+  await w.advance(OFF_MS - 100);
   assert.strictEqual(a.last('step').n, 3, 'not before its 20 seconds');
   await w.advance(200);
   const s4 = a.last('step');
   assert.deepStrictEqual([s4.n, s4.halves[first], s4.halves[1 - first]], [4, null, { dc: DCALL }], '20 seconds and no call: the default, well before the decision\'s last moment');
-  assert.ok(s4.at <= t4 + 4000 + OFF_MS + 100);
+  assert.ok(s4.at <= tD + OFF_MS + 100);
   // a ready late in the decision's time: the clock never runs past its last moment (late enough that even the
   // defense's 10 seconds would: PLAY_MS after the last snap)
   await w.advance(PLAY_MS - DEF_MS + 3000);
@@ -153,7 +160,7 @@ assert.ok(ROOM_RE.test('ABC234') && !ROOM_RE.test('ABCD10') && !ROOM_RE.test('ab
   await w.settle();
   assert.strictEqual(up5.last('clock').deadline, s4.deadline, 'capped at the decision\'s last moment');
   for (const seat of VSCore.need(ms5)) {
-    const half = VSCore.role(ms5, seat) === 'pat' ? { action: { pat: 'xp' } } : seat === ms5.root.pos ? { action: { call: 'inside', play: 'run' } } : { dc: { pers: 'nickel', front: 'even', cover: 'c3', rush: 5 } };
+    const half = nh(VSCore.role(ms5, seat), ms5) || (VSCore.role(ms5, seat) === 'pat' ? { action: { pat: 'xp' } } : seat === ms5.root.pos ? { action: { call: 'inside', play: 'run' } } : { dc: { pers: 'nickel', front: 'even', cover: 'c3', rush: 5 } });
     (seat === 0 ? a : b).send({ t: 'half', n: 5, half });
   }
   await w.settle();
@@ -198,7 +205,7 @@ async function runAnswering(w, a, ms) {
     if (s.ms && !a.last('over') && VSCore.need(s.ms).includes(0) && a.answered !== s.n + 1) {
       const role = VSCore.role(s.ms, 0);
       a.answered = s.n + 1;
-      a.send({ t: 'half', n: s.n + 1, half: role === 'pick' ? { pick: 'offense' } : role === 'defense' ? { dc: { pers: 'base', front: 'even', cover: 'c3', rush: 4 } } : role === 'pat' ? { two: true } : { action: { call: 'inside' } } });
+      a.send({ t: 'half', n: s.n + 1, half: nh(role, s.ms) || (role === 'pick' ? { pick: 'offense' } : role === 'defense' ? { dc: { pers: 'base', front: 'even', cover: 'c3', rush: 4 } } : role === 'pat' ? { two: true } : { action: { call: 'inside' } }) });
     }
     await w.advance(1000);
   }
@@ -225,7 +232,7 @@ async function runAnswering(w, a, ms) {
     const s = a.last('step') || { ...a.last('start'), n: -1 };
     if (VSCore.need(s.ms).includes(0)) {
       const role = VSCore.role(s.ms, 0);
-      a.send({ t: 'half', n: s.n + 1, half: role === 'pick' ? { pick: 'offense' } : role === 'defense' ? { dc: { pers: 'base', front: 'loaded', cover: 'c1', rush: 4 } } : role === 'pat' ? { two: true } : { action: { call: 'inside' } } });
+      a.send({ t: 'half', n: s.n + 1, half: nh(role, s.ms) || (role === 'pick' ? { pick: 'offense' } : role === 'defense' ? { dc: { pers: 'base', front: 'loaded', cover: 'c1', rush: 4 } } : role === 'pat' ? { two: true } : { action: { call: 'inside' } }) });
     }
     await w.advance(PLAY_MS + 10);
   }
@@ -252,7 +259,7 @@ async function runAnswering(w, a, ms) {
     const s = a.last('step') || { ...a.last('start'), n: -1 };
     for (const seat of VSCore.need(s.ms)) {
       const role = VSCore.role(s.ms, seat);
-      c[seat].send({ t: 'half', n: s.n + 1, half: role === 'pick' ? { pick: 'offense' } : role === 'defense' ? { dc: { pers: 'dime', front: 'light', cover: 'c4', rush: 3 } } : role === 'pat' ? { two: true } : { action: { call: 'td' } } });
+      c[seat].send({ t: 'half', n: s.n + 1, half: nh(role, s.ms) || (role === 'pick' ? { pick: 'offense' } : role === 'defense' ? { dc: { pers: 'dime', front: 'light', cover: 'c4', rush: 3 } } : role === 'pat' ? { two: true } : { action: { call: 'td' } }) });
     }
     await w.settle();
   }
@@ -425,8 +432,8 @@ async function runAnswering(w, a, ms) {
     const pend = w.objects.get(`room:${m.room}`).store.get('pend');
     if (need.includes(CPU_SEAT)) assert.ok(pend && pend.n === R.n && CPU_SEAT in pend.halves, `the computer's call is in at once (decision ${R.n})`);
     if (!need.includes(0)) { await w.advance(1000); continue; }
-    const role = R.ms.cot.pick ? 'pick' : R.ms.root.phase === 1 ? 'pat' : R.ms.root.pos === 0 ? 'off' : 'def';
-    const half = role === 'pick' ? { pick: 'offense' } : role === 'pat' ? { action: { pat: 'xp' } } : role === 'off' ? { action: { call: i % 3 ? 'inside' : 'slant', play: 'run' } } : { dc: { pers: 'nickel', front: 'even', cover: 'c3', rush: 5 } };
+    const r0 = VSCore.role(R.ms, 0), role = r0 === 'offense' ? 'off' : r0 === 'defense' ? 'def' : r0;
+    const half = nh(r0, R.ms) || (role === 'pick' ? { pick: 'offense' } : role === 'pat' ? { action: { pat: 'xp' } } : role === 'off' ? { action: { call: i % 3 ? 'inside' : 'slant', play: 'run' } } : { dc: { pers: 'nickel', front: 'even', cover: 'c3', rush: 5 } });
     A.send({ t: 'half', n: R.n, half });
     await w.settle();
   }

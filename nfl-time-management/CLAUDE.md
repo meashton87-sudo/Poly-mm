@@ -83,7 +83,7 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   player's invite, plays for whoever has it); VS_AT (--vs-at: <meta name="vs-at">) holds it until a time, a reload after
   shows it. "pro" without PRO_ON is no Versus at all. The gate is the page's (isPro): the room never asks.
 - The Invitational (board/match.js CUP, the 'cup' object; shown as "Two-Minute Drill Invitational"): the top CUP.size
-  (16) on the ranked ladder at CUP.qualifyAt with CUP.minGames (10) rated games play a single-elimination bracket from
+  (16) on the ranked ladder at CUP.qualifyAt with CUP.minGames (5) rated games play a single-elimination bracket from
   CUP.startAt, seeded by rating (cupBracket: the standard order; byes when fewer). The standings at the qualifying time
   are worked out exactly at any time after it (/vs/standings: every rated game since taken back off; the games table
   keeps each change as it moved). Each match's room (mode 'cup', both seats taken) opens when both its players are
@@ -96,6 +96,12 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   page); phones only send calls. Each snap's seed is drawn fresh by the room and never sent to a phone (a phone that
   knew it could see what a call does before making it). lazy_sim_test.mjs and vs_stress.mjs need board/assets/vs (the
   engine packs and teams.json; the site workflow copies them there before deploying the worker).
+  4th down (vs_core.js at4, cot.k4): the offense says first, go for it, a field goal or a punt (intentsAt), and the
+  defense calls knowing it; a kick is then a decision for both: the offense kicks or fakes (FAKES: a trick play against
+  the kick defense called, KICK_DC), the defense goes for the block or stays home (KICK_DEF: engine.js act.st). A kick
+  only that way (cleanHalf drops a kick at the snap). The clocks (match.js decideMs): the defense 15 s, then the
+  offense 20 s from the moment the defense's call is in (offStart; {t:'clock', wait:true} until then); 4th down's
+  question 15 s; the defense can take a timeout. vs_pairs_test.mjs checks the order of it on every snap.
   The computer (match.js CPU_SEAT, mode 'cpu', never rated): offered to a ticket after CPU_AFTER_S in the queue, or at
   once from the lobby's Computer button (/vs/queue?mode=cpu); its half of every decision is the default (the engine's
   own call), in at once (cpuTurn), never late, away or a forfeit; a rematch needs only the player. vs_cpu_test.mjs plays
