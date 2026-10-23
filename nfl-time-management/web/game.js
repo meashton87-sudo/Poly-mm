@@ -2554,9 +2554,16 @@
   if (window.__sepLog) {
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
       DRAWN_RANGE, CALL, ROUTES, routeName, blocks: (sc, i) => blocks(sc, i), passTap, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, goalCheck, qbCheck, speedLog, get: () => ({ G, ui, scene, busy }),
-      readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
+      passPick: (i) => passPick(i), readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
       promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k),
       drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock(), crowdKey: (r, k) => crowdKey(r, k) };
+  }
+  // who gets the ball, by his row in the list (the field may be redrawn under the buttons: a resize, the phone's
+  // address bar); his row tapped again: back to the open man
+  function passPick(i) {
+    if (busy || !passing() || !scene || !eligibles(scene)[i] || blocks(scene, i)) return;
+    ui.pass.target = ui.pass.target === i ? null : i;
+    redrawPass();
   }
   // No receiver picked: the throw goes to the open man. The engine plays exactly what the Snap key always sent before
   // a pick (the first receiver's call, route and position: openI, the first who goes out: not one your protection keeps
@@ -6688,6 +6695,9 @@
     return tg;
   }
   const PASS_MORE_KEY = `${STORE}:passmore`, passMore = () => load(PASS_MORE_KEY, false) === true;
+  // the receivers' list: always where there is room for it; an upright phone shows it too until its chip hides it (kept
+  // per device: players asked for it back the evening it went)
+  const RCV_KEY = `${STORE}:rcvlist`, rcvList = () => load(RCV_KEY, true) !== false, listRoom = () => !bcast() || sideways();
   function drawPassDock(head) {
     const r = G.root, d = $('dock'), P = ui.pass, sc = scene;
     head.append(el('h2', '', 'Pass'));
@@ -6754,8 +6764,8 @@
     if (!P.draw) {
       // (the first few passes only: after that the screen is the receivers and the keys)
       const told = load(`${STORE}:passhint`, 0);
-      const h = told >= 3 ? null : !bcast() ? el('p', 'hint', 'Snap throws to the open man, or tap a receiver on the field to throw to him. Tap him again for his next route, or drag him to draw one.')
-        : el('p', 'hint one', VS ? 'Pick a play. Snap: the open man, or tap a man on the field to throw to him.' : 'Tap a man to throw to him; again: his route.');
+      const h = told >= 3 ? null : !bcast() ? el('p', 'hint', 'Snap throws to the open man, or pick who gets the ball: his name below, or tap him on the field. Tap him on the field again for his next route, or drag him to draw one.')
+        : el('p', 'hint one', VS ? 'Pick a play. Snap: the open man, or tap a man on the field to throw to him.' : 'Tap a receiver to throw to him; tap again: his route.');
       if (h) {
         h.title = 'Snap throws to whoever gets open, or tap a receiver on the field to throw to him (the grass: the open man again). Tap him again to change his route, or drag him to draw your own (drag the quarterback for his drop or a rollout).';
         d.append(h);
@@ -6776,7 +6786,34 @@
       }
       d.append(h);
     }
-    // (no list of who gets the ball: a tap on him on the field picks him, passTap; the Snap key at the foot names him)
+    // the receivers, a row each, his route and odds: a tap picks who gets the ball (the Snap key at the foot throws it);
+    // a tap on him on the field does the same (passTap). Players missed the list when it went (#238): it is back
+    // everywhere; an upright phone can hide it with the Receivers chip (kept per device)
+    const list = el('div', 'rcvs');
+    list.setAttribute('role', 'group');
+    list.setAttribute('aria-label', 'Who gets the ball');
+    E.forEach((a, i) => {
+      if (blocks(sc, i)) {                    // (kept in by your protection: no route, no ball)
+        const b = el('button', 'rcv blk');
+        b.type = 'button'; b.disabled = true;
+        b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label), el('span', 'rt', 'Blocking'));
+        b.setAttribute('aria-label', `${a.p ? a.p.name : a.label}: staying in to block`);
+        list.append(b);
+        return;
+      }
+      const b = el('button', `rcv${P.target === i ? ' on' : ''}`);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(P.target === i));
+      const pk = pickKey(passOption(sc, i, false).action), od = G.odds && G.odds[pk];
+      b.dataset.k = pk;
+      const dr = P.drawn && P.drawn[i];
+      b.append(el('span', 'pos', a.label), el('span', 'nm', shortName(a.p ? a.p.name : '') || a.label),
+        el('span', 'rt', `${dr ? '✏️ ' : ''}${routeName(a.label, P.routes[i])}${dr ? ` · ${dr.depth} yds` : ''}`));
+      if (od) b.append(oddsEl(od));
+      b.setAttribute('aria-label', `${P.target === i ? 'The target (tap again for the open man)' : 'Throw to'}: ${a.p ? a.p.name : a.label}, ${routeName(a.label, P.routes[i])}`);
+      b.addEventListener('click', () => { if (!busy) passPick(i); });
+      list.append(b);
+    });
     // the options first (they change the odds on the cards), as three small toggles on one line
     const opt = (label, tip, on, set, id) => {
       const b = el('button', `chip opt${on ? ' on' : ''}`, label);
@@ -6792,6 +6829,8 @@
     if (full || VS) opts.append(opt('Play action', 'Fake the handoff first: it freezes a loaded box.', P.pa, (v) => { P.pa = v; if (v) { P.roll = false; P.qb = null; P.rollSide = null; } }),
       opt(P.roll && P.rollSide ? `Roll out ${P.rollSide === 'strong' ? 'strong' : 'weak'}` : 'Roll out', 'Move the pocket toward your receiver’s side (or drag the quarterback the way to go).', P.roll, (v) => { P.roll = v; P.qb = null; P.rollSide = null; if (v) P.pa = false; }));
     if (oobMatters(r)) opts.append(opt('⏱ Out of bounds', 'Going out stops the clock now.', ui.oob, setOob, 'oobSwitch'));
+    if (!VS && !listRoom()) opts.append(opt(`👥 Receivers ${rcvList() ? '▴' : '▾'}`, 'The list of receivers: each one’s route and odds, a tap to throw to him.', rcvList(),
+      (v) => { save(RCV_KEY, v); track('pass_list', { on: v }); }, 'rcvBtn'));
     if (opts.childElementCount) d.append(opts);
     // Versus: the playbook on the sheet itself, a row of plays, the one set marked (the owner: players don't need a list
     // of who to throw to, a tap on the man on the field picks him; the plays were behind a small chip)
@@ -6808,7 +6847,7 @@
         const a = E[P.target], who = el('p', 'hint one', `Throwing to ${shortName(a.p ? a.p.name : '') || a.label} (${routeName(a.label, P.routes[P.target])}). Tap him again for his next route, the grass for the open man.`);
         d.append(who);
       }
-    }
+    } else if (listRoom() || rcvList()) d.append(list);
     const avail = callOptions(r).calls, more = ['hail_mary'].filter((id) => avail.includes(id));
     // the screen in one tap: the back's route set to the screen and the ball to him (it was only a route on the
     // picker, which players didn't find, while the grade could still name the screen as the best call)

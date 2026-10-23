@@ -1147,6 +1147,16 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     # (while a play runs, theirs between your calls included, the page says to wait for it: game.js
                     # restartAsk. The tap is tried again once it is over)
                     txt, missing = "", False
+
+                    async def ended():
+                        # (a call in, the drive can still be over: a turnover the other side kneels out. No Start
+                        # over then: canRestart. The end card comes instead)
+                        for _ in range(40):
+                            if (await page.evaluate(rstate) or {}).get("done") or await page.evaluate("() => !document.getElementById('done').hidden"):
+                                print(f"{name}: the drive ended on the first call, no Start over exercise")
+                                return True
+                            await page.wait_for_timeout(500)
+                        return False
                     for _ in range(6):
                         await page.wait_for_timeout(600)
                         for _ in range(40):
@@ -1157,11 +1167,16 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                             await page.click("#menuBtn", timeout=3000)
                             item = page.locator("#bmenu [data-restart]")
                             if not await item.is_visible():
-                                problems.append("the ☰ menu has no Start over during the daily"); missing = True; break
+                                await page.click("#menuBtn", timeout=3000)       # (closed again)
+                                if not await ended():
+                                    problems.append("the ☰ menu has no Start over during the daily")
+                                missing = True; break
                             await item.click(timeout=3000)
                         else:
                             if not await page.locator("#restartBtn").is_visible():
-                                problems.append("no Start over under the field during the daily"); missing = True; break
+                                if not await ended():
+                                    problems.append("no Start over under the field during the daily")
+                                missing = True; break
                             await page.click("#restartBtn", timeout=3000)
                         await page.wait_for_timeout(200)
                         txt = await page.evaluate("() => document.getElementById('modal').hidden ? '' : document.getElementById('modal').innerText")

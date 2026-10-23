@@ -3,6 +3,14 @@
   "notes": [
     {
       "date": "2026-10-23",
+      "title": "The receiver list is back",
+      "items": [
+        "The list of receivers with each one's route and odds is back on the pass screen: tap one to throw to him, tap him again for the open man.",
+        "On a phone, the Receivers button hides the list for more field, until you show it again. Tapping a receiver on the field still throws to him too."
+      ]
+    },
+    {
+      "date": "2026-10-23",
       "title": "Sideways phones",
       "items": [
         "Turn your phone sideways and the calls move to the right, with the whole field on the left: room to draw your routes, and the scoreboard clear of the players."
