@@ -2,6 +2,14 @@
   "about": "Every change to the game, newest first. Each update adds its notes here (scripts/site.py builds /patch-notes from this file). Game changes only: no ads, analytics, payments or behind-the-scenes work, and nothing that is not live yet.",
   "notes": [
     {
+      "date": "2026-10-23",
+      "title": "Bolder mode tabs",
+      "items": [
+        "The mode tabs are bigger and easier to spot, and the one you're on fills with its color.",
+        "An end-around stopped behind the line is brought down where it is spotted, never a step past it."
+      ]
+    },
+    {
       "date": "2026-10-22",
       "title": "Curls and comebacks",
       "items": [

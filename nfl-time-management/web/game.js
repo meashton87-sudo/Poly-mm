@@ -4786,13 +4786,14 @@
         // three yards deep; he bends round the edge in a wide arc, never a stop and turn: the owner saw it jerk)
         const endAround = carrier.label === 'WR' && !dBehind.length, wSide = Math.sign(c0[0] - q0[0]) || 1;
         const meshPt = dBehind.length ? dBehind.reduce((b, x) => (dist(x, q0) < dist(b, q0) ? x : b))
-          : endAround ? [q0[0] + wSide * 2.4, fwd(L0, -3.0)]
+          : endAround ? [q0[0] + wSide * 2.4, fwd(L0, Math.min(-3.0, cap - 0.3))]
             : across ? [q0[0] + (c0[0] - q0[0]) * 0.3, fwd(L0, md)] : [c0[0] + (hole[0] - c0[0]) * 0.15, fwd(L0, md)];
         // (his way round: level across behind the line to the far edge, outside the tackle, turning upfield over the
         // last six yards)
         const ux = -wSide;
         if (endAround) hole = [inX(q0[0] + ux * 9), hole[1]];
-        const arc = endAround ? [[inX(hole[0] - ux * 6.5), fwd(L0, -2.6)], [inX(hole[0] - ux * 2.2), fwd(L0, -1.0)]] : [];
+        // (never nearer the line than where he is met: a loss)
+        const arc = endAround ? [[inX(hole[0] - ux * 6.5), fwd(L0, Math.min(-2.6, cap - 0.2))], [inX(hole[0] - ux * 2.2), fwd(L0, Math.min(-1.0, cap))]] : [];
         const start = carrier.label === 'WR' ? 0.35 : REACT_OFF;
         // (at speed into the hole whatever the result: the contact, if it comes there, is runDown's; slowing into it
         // left a back jogging at the edge with nobody there)
