@@ -83,7 +83,7 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   player's invite, plays for whoever has it); VS_AT (--vs-at: <meta name="vs-at">) holds it until a time, a reload after
   shows it. "pro" without PRO_ON is no Versus at all. The gate is the page's (isPro): the room never asks.
 - The Invitational (board/match.js CUP, the 'cup' object; shown as "Two-Minute Drill Invitational"): the top CUP.size
-  (16) on the ranked ladder at CUP.qualifyAt with CUP.minGames (10) rated games play a single-elimination bracket from
+  (16) on the ranked ladder at CUP.qualifyAt with CUP.minGames (5) rated games play a single-elimination bracket from
   CUP.startAt, seeded by rating (cupBracket: the standard order; byes when fewer). The standings at the qualifying time
   are worked out exactly at any time after it (/vs/standings: every rated game since taken back off; the games table
   keeps each change as it moved). Each match's room (mode 'cup', both seats taken) opens when both its players are

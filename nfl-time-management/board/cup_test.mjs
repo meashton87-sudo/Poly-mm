@@ -56,7 +56,7 @@ const ladder = w.obj('ladder').m, q = ladder.sql();
 // qualifying time (in at the rating he had then)
 const P = [];
 for (let i = 0; i < 20; i++) {
-  const k = K(i), h = await kh(k), games = i === 1 || i === 3 ? 6 : 12;
+  const k = K(i), h = await kh(k), games = i === 1 || i === 3 ? 3 : 12;
   P.push({ i, k, h, name: `P${i}`, rating: 1500 - 20 * i, games });
   q.exec('INSERT INTO players (kh, name, rating, games, w, l, peak, streak, updated) VALUES (?, ?, ?, ?, 0, 0, ?, 0, 0)', h, `P${i}`, 1500 - 20 * i, games, 1500 - 20 * i);
 }

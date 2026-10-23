@@ -97,7 +97,7 @@ export const MM = { WIN_BASE: 100, WIN_PER_S: 20, WIN_OPEN_S: 45, TICK_MS: 2000 
 // top seeds get byes). Each match's room is made with both seats taken as soon as both its players are known; a player
 // not in (and on a team) `showMs` after it opens loses it, neither: the higher seed goes on. Results come from the rooms,
 // never a phone. The worker vars CUP_ID, CUP_QUALIFY_AT, CUP_START_AT and CUP_PRIZE set another one
-export const CUP = { id: '2026-10-25', qualifyAt: '2026-10-25T16:00:00Z', startAt: '2026-10-25T22:00:00Z', size: 16, minGames: 10, showMs: 10 * 60_000, prize: '$50' };
+export const CUP = { id: '2026-10-25', qualifyAt: '2026-10-25T16:00:00Z', startAt: '2026-10-25T22:00:00Z', size: 16, minGames: 5, showMs: 10 * 60_000, prize: '$50' };
 export const cupConfig = (env = {}) => {
   const size = [2, 4, 8, 16, 32].includes(Number(env.CUP_SIZE)) ? Number(env.CUP_SIZE) : CUP.size;
   const c = { ...CUP, id: env.CUP_ID || CUP.id, qualifyAt: env.CUP_QUALIFY_AT || CUP.qualifyAt, startAt: env.CUP_START_AT || CUP.startAt, prize: env.CUP_PRIZE || CUP.prize,

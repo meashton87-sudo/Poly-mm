@@ -13293,7 +13293,12 @@
         else if (you.qualified) box.append(el('p', 'note', 'Your next match opens here when your opponent is known.'));
       } else {
         box.append(el('p', '', `Champion: ${c.champ}`));
-        if (you.champ && you.claim) box.append(el('p', 'note', `That’s you! Claim code ${you.claim}: send it to the Two-Minute Drill team for your ${c.prize}.`));
+        if (you.champ && you.claim) {          // (the owner: the code by DM to the game's account on X)
+          const p = el('p', 'note', `That’s you! DM your claim code ${you.claim} to `), x = el('a', '', '@TwoMinuteDrill0 on X');
+          x.href = 'https://x.com/TwoMinuteDrill0'; x.target = '_blank'; x.rel = 'noopener';
+          p.append(x, document.createTextNode(` for your ${c.prize}.`));
+          box.append(p);
+        }
       }
       // the bracket, round by round (who played whom, who went on)
       const list = c.seeds || c.projection || [];
