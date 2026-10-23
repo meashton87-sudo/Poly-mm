@@ -595,6 +595,21 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
   body.bcast .dock > .snapbar { bottom: 0; padding-bottom: 8px; }
   @media (min-height: 740px) { body.bcast .sheet:has(#snapGo) { max-height: 58%; } }
   body.bcast .sheet:has(#vsbar):has(.prow) { max-height: 60%; }      /* (Versus: the play clock's row over the calls) */
+  /* a phone on its side (game.js SIDE_MQ): the calls a sheet down the right, the field the whole height on the left (the
+     sheet across the bottom left a strip too thin to draw a route on, the defense under the scoreboard) */
+  @media (orientation: landscape) and (max-height: 520px) {
+    body.bcast { --sidew: min(44%, 400px); }
+    body.bcast .fieldbox { right: var(--sidew); }
+    body.bcast #bar { right: calc(var(--sidew) + 10px); }
+    body.bcast .fieldbox .fov .dd { max-width: calc(56vw - 170px); }
+    body.bcast .sheet, body.bcast .sheet:has(#snapGo), body.bcast .sheet:has(#vsbar):has(.prow) { top: 0; left: auto; width: var(--sidew); max-height: none;
+      border-radius: 20px 0 0 20px; box-shadow: -8px 0 28px rgba(0, 0, 0, .3); padding-top: env(safe-area-inset-top, 0px); }
+    body.bcast .grip { display: none; }
+    body.bcast .sheet.down { transform: none; }
+    body.bcast #dock { padding-top: 12px; }
+    body.bcast .playgrid:has(#field.playing) .sheet { transform: translateX(calc(100% + 12px)); }
+    body.bcast #toast { left: calc((100% - var(--sidew)) / 2); max-width: calc(100% - var(--sidew) - 24px); }      /* (over the field, not the calls) */
+  }
   /* a long result or final card: its button stays in reach at the sheet's foot (the rest scrolls under it; the
      sticky edge is inside the dock's 14px padding, so -8px and the 6px plate leave nothing peeking below it) */
   body.bcast #dock .result > .btn, body.bcast #dock .endcard > .btn { position: sticky; bottom: -8px; z-index: 1; box-shadow: 0 0 0 6px var(--paper); opacity: 1; }
