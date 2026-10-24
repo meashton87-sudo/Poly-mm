@@ -1211,7 +1211,7 @@
     const svg = $('field'), H = fieldHeight();
     svg.setAttribute('viewBox', `0 0 360 ${H}`);
     svg.textContent = '';
-    svg.classList.remove('playing');
+    svg.classList.remove('playing'); document.body.classList.remove('playing');
     // (passing: the field takes the finger, so a drag from a receiver draws instead of scrolling)
     svg.classList.toggle('drawing', !!(passing() && ui.pass));
     const sc = { svg, H, r, cam: { ...FULL }, parts: [], actors: [], calls: [] };
@@ -1476,6 +1476,15 @@
     requestAnimationFrame(step);
   }
   const setTr = (g, t) => { if (g.__tr !== t) { g.__tr = t; g.setAttribute('transform', t); } };
+  // the field's box's width, kept by a ResizeObserver: read in place() on every frame of a play, clientWidth there made
+  // the browser work out the page's style and layout again each frame, after the men had moved (most of a frame's time)
+  const boxWs = new WeakMap(), boxRO = typeof ResizeObserver !== 'undefined' ? new ResizeObserver((es) => es.forEach((e) => boxWs.set(e.target, e.contentRect.width))) : null;
+  function boxW(b) {
+    if (!b) return 0;
+    if (!boxRO) return b.clientWidth;
+    if (!boxWs.has(b)) { boxWs.set(b, b.clientWidth); boxRO.observe(b); }
+    return boxWs.get(b);
+  }
   function place(sc) {
     const Y = camY(sc);
     // the field's lines, numbers and stands move only with the camera: placed again only when it moved (or a part came,
@@ -1496,7 +1505,7 @@
       b.g.style.opacity = b.show ? 1 : 0;
     }
     // (a call-out stays clear of the scoreboard over the field's top on a phone: under the man it follows, if need be)
-    const top = 18 + (bcast() ? PLAY_COVER.top * (360 / (sc.svg.parentElement.clientWidth || 360)) : 0);
+    const top = 18 + (bcast() ? PLAY_COVER.top * (360 / (boxW(sc.svg.parentElement) || 360)) : 0);
     sc.calls.forEach((c) => {
       const at_ = c.follow ? { x: c.follow.x, L: c.follow.L } : c;
       let y = c.below ? Y(at_.L) + 32 + c.slot * 30 : Y(at_.L) - 26 - c.slot * 30;
@@ -1764,7 +1773,10 @@
   let playEnd = -1e9;                 // when the last play's animation ended (performance.now)
   let fieldPress = null;              // the last press on the field: where it went down, how far it went (px)
   // a player's card from his dot: a tap of its own, not the end of a drag or a drawing, not during a play
-  const dotTap = (ev) => !(Date.now() - routeTapAt < 600 || $('field').classList.contains('playing') || (ev && ev.detail && fieldPress && fieldPress.far > 10));
+  // (nor a press that went down within DOT_AFTER_MS of a play's end: on an iPhone a tap to skip the play's end came
+  // through late and opened the card of whoever stood there, the daily bot check saw it 6 times in a morning)
+  const DOT_AFTER_MS = 1200;
+  const dotTap = (ev) => !(Date.now() - routeTapAt < 600 || $('field').classList.contains('playing') || (ev && ev.detail && fieldPress && (fieldPress.far > 10 || fieldPress.t - playEnd < DOT_AFTER_MS)));
   // a phone: the call's keys (Run, Pass, RPO, Trick, or the defense's) in sight under the thumbs, no scrolling. When the
   // last result, the stop note, the defense's look and the tempo push them past the sheet's edge, those fold a step at
   // a time (game.html .fit1-3; a tap on the result shows it all); past that the sheet scrolls to them. The sheet's
@@ -1841,7 +1853,7 @@
     const svg = $('field');
     let down = null;
     // (each press on the field, for the dot it may end on: dotTap)
-    svg.addEventListener('pointerdown', (ev) => { fieldPress = { x: ev.clientX, y: ev.clientY, far: 0 }; }, true);
+    svg.addEventListener('pointerdown', (ev) => { fieldPress = { x: ev.clientX, y: ev.clientY, far: 0, t: performance.now() }; }, true);
     svg.addEventListener('pointermove', (ev) => { if (fieldPress && ev.buttons) fieldPress.far = Math.max(fieldPress.far, Math.hypot(ev.clientX - fieldPress.x, ev.clientY - fieldPress.y)); }, true);
     // (the moment after a play: AFTER_PLAY_MS from its end to when the tap was made, a tap made before it too, waiting
     // on a busy phone; not once the next play runs, their drive's next snap: a tap then is that play's. A click from
@@ -5507,7 +5519,7 @@
       cutAnim = onTap;
       sc.calls.forEach((c) => c.g.remove());        // a pre-play label ("Kickoff") gives way to the play's own call-outs
       sc.calls = [];
-      sc.svg.classList.add('playing');
+      sc.svg.classList.add('playing'); document.body.classList.add('playing');      // (body.playing: game.html's rules for a play running, not :has(), which had the browser restyle the page on every frame)
       sc.svg.addEventListener('click', onTap);
       const frame = (now) => {
         if (start === null) start = now;
@@ -5536,7 +5548,7 @@
         if (t >= total) {
           if (cutAnim === onTap) cutAnim = null;
           sc.svg.removeEventListener('click', onTap);
-          sc.svg.classList.remove('playing');
+          sc.svg.classList.remove('playing'); document.body.classList.remove('playing');
           playEnd = performance.now();         // (the taps meant for the play, a moment longer: AFTER_PLAY_MS)
           if (ck) ck.classList.remove('tick');
           resolve();
@@ -10258,9 +10270,15 @@
   // --adt, game.html). Players saw the anchor over the play buttons ("I can't call a play without an ad blocking the
   // options"): an ad nested in a wrapper, lifted off the edge (the home bar), or expanded taller than the old limit got
   // past the first version. Checked as the page changes (an ad arriving), on a resize, and every second and a half
-  // (and with Ezoic on the page, AD_RESERVE kept free at the foot while playing whether its anchor has come or not
-  // (--adr): Ezoic asked for 125px for Google's anchor ad, so it never lands over the game)
+  // (and with Ezoic on the page, AD_RESERVE kept free at the foot while playing, --adr: Ezoic asked for 125px for
+  // Google's anchor ad, so it never lands over the game. Only while that anchor is on the page and not closed or
+  // unfilled: kept free with no ad in it, a player saw a third of his iPhone blank under the calls)
   const AD_FLOOR_MAX = 340, AD_EDGE = 80, AD_RESERVE = 125;
+  const anchorLive = () => [...document.querySelectorAll('ins.adsbygoogle[data-anchor-status], ins.adsbygoogle[data-anchor-shown], [id^="ezmobfooter"]')].some((a) => {
+    if (/dismiss|unfill|hidden|closed/i.test(`${a.dataset.anchorStatus || ''} ${a.dataset.adStatus || ''}`) || a.dataset.anchorShown === 'false') return false;
+    const cs = getComputedStyle(a);
+    return cs.display !== 'none' && cs.visibility !== 'hidden' && +cs.opacity !== 0;
+  });
   const adOurs = (el) => !!el.closest('#app, #play, header.top, .modal, .deep, .toast, #modal, .sheet');
   function adFloor() {
     let b = 0, t = 0;
@@ -10281,7 +10299,7 @@
     const root = document.documentElement.style;
     if (root.getPropertyValue('--adb') !== `${b}px`) root.setProperty('--adb', `${b}px`);
     if (root.getPropertyValue('--adt') !== `${t}px`) root.setProperty('--adt', `${t}px`);
-    const res = EZ && !noAds() ? AD_RESERVE : 0;
+    const res = EZ && !noAds() && anchorLive() ? AD_RESERVE : 0;
     if (root.getPropertyValue('--adr') !== `${res}px`) root.setProperty('--adr', `${res}px`);
   }
   setInterval(adFloor, 1500);

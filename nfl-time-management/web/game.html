@@ -574,13 +574,13 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
   body.bcast .sheet.dragging { transition: none; }
   /* the snap: the sheet slides away and the play has the whole screen (a note says a tap skips it); back up with
      what happened */
-  body.bcast .playgrid:has(#field.playing) .sheet { transform: translateY(calc(100% + 12px)); box-shadow: none; }
+  body.bcast.playing .playgrid .sheet { transform: translateY(calc(100% + 12px)); box-shadow: none; }
   body.bcast .skiphint { display: block; position: absolute; z-index: 3; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
     transform: translateX(-50%); padding: 7px 14px; border-radius: 999px; background: rgba(9, 15, 11, .78); color: #fff;
     font: 700 13px var(--body); pointer-events: none; opacity: 0; transition: opacity .3s ease; white-space: nowrap; }
-  body.bcast .fieldbox:has(#field.playing) .skiphint { opacity: 1; transition-delay: .4s; }
+  body.bcast.playing .fieldbox .skiphint { opacity: 1; transition-delay: .4s; }
   /* their drive: skip to your next call, beside the note (the sheet's own button is away with the sheet) */
-  body.bcast .fieldbox:has(#field.playing) .skipbtn:not([hidden]) { display: block; position: absolute; z-index: 3; right: 10px;
+  body.bcast.playing .fieldbox .skipbtn:not([hidden]) { display: block; position: absolute; z-index: 3; right: 10px;
     bottom: calc(env(safe-area-inset-bottom, 0px) + 7px); min-height: 40px; padding: 0 14px; border: 0; border-radius: 999px;
     background: var(--chain); color: var(--chain-ink); font: 800 13px var(--body); cursor: pointer; }
   body.bcast .sheet.down { transform: translateY(calc(100% - 66px - env(safe-area-inset-bottom, 0px))); }
@@ -607,7 +607,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
     body.bcast .grip { display: none; }
     body.bcast .sheet.down { transform: none; }
     body.bcast #dock { padding-top: 12px; }
-    body.bcast .playgrid:has(#field.playing) .sheet { transform: translateX(calc(100% + 12px)); }
+    body.bcast.playing .playgrid .sheet { transform: translateX(calc(100% + 12px)); }
     body.bcast #toast { left: calc((100% - var(--sidew)) / 2); max-width: calc(100% - var(--sidew) - 24px); }      /* (over the field, not the calls) */
   }
   /* a long result or final card: its button stays in reach at the sheet's foot (the rest scrolls under it; the
@@ -819,6 +819,9 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
   body.bcast .prow .key { min-height: 38px; }
   body.bcast .readchip { font: 800 12.5px var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; width: 0; flex: 1 1 0; }   /* (no width of its own: it takes what the head's line has left, cut short, never widening the sheet) */
   body.bcast .readchip.blitz { color: var(--sq-r-ink); }
+  /* (the sheet's head row stays at its top while the calls under it scroll: on a short iPhone, 390x664, the dock scrolled
+     to bring the Snap key up and slid the run's chips under the grip) */
+  body.bcast #dock > .ask { position: sticky; top: 0; z-index: 2; background: var(--paper); padding-block: 2px; }
   body.bcast .ask:has(.readchip) { flex-wrap: nowrap; align-items: center; }
   body.bcast .ask:has(.readchip) > .chip { flex: none; }
   body.bcast .opts-row.schemes { flex-wrap: nowrap; }
@@ -911,9 +914,9 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .fieldbox.opts-shut .fov .btns > :not(#optsBtn):not(#sizeBtn) { display: none !important; }   /* (the field size stays: desktop only, asked for) */
 /* during the play the down and distance stay up (a player: "it goes so fast it's hard to catch the situation"); the keys,
    the color key and the clock's state before the snap go */
-.fieldbox:has(#field.playing) .fov { pointer-events: none; }
-.fieldbox:has(#field.playing) .fov > * { pointer-events: none; }
-.fieldbox:has(#field.playing) .fov .btns, .fieldbox:has(#field.playing) .fov .ramp, .fieldbox:has(#field.playing) .fov .dd .ck { opacity: 0; transition: opacity .2s ease; }
+body.playing .fieldbox .fov { pointer-events: none; }
+body.playing .fieldbox .fov > * { pointer-events: none; }
+body.playing .fieldbox .fov .btns, body.playing .fieldbox .fov .ramp, body.playing .fieldbox .fov .dd .ck { opacity: 0; transition: opacity .2s ease; }
 .fovl { display: grid; gap: 4px; justify-items: start; min-width: 0; }
 .fov .dd { min-height: 0; text-align: left; background: rgba(10, 16, 12, .72); color: #fff; border-radius: 8px; padding: 4px 8px; font-size: 12px; }
 /* the chips go to the half of the screen away from the line of scrimmage (game.js drawField): the open grass */
@@ -934,7 +937,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .tobtn.on { background: var(--gold); color: #1a1405; }
 .tobtn small { font-weight: 700; opacity: .8; }
 .fieldbox.chipsdown .tobtn { bottom: auto; top: 8px; }
-.fieldbox:has(#field.playing) .tobtn { display: none; }
+body.playing .fieldbox .tobtn { display: none; }
 .ghost { border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 6px 12px; font-weight: 700; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .ghost:hover { border-color: var(--muted); }
 /* playing on a phone: a slimmer header and mode switch, so the field and the calls fill the screen */
