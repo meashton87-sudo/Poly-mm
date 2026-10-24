@@ -105,7 +105,7 @@
   // daily game: a pass you keep calling (act.rep: the same route or call this many times in your last 4 snaps, game.js
   // repOf) is one the defense sits on: from the third time on, each repeat moves the matchup by this much (a full
   // matchup moves the mean by MATCH_SD of the call's spread). The defense's habit, not the real plays: they stay real
-  const REPEAT_S = 0.4;
+  const REPEAT_S = 0.25;             // (0.4 till Oct 24: players felt the same pass punished too hard)
   const repeatS = (act) => -REPEAT_S * Math.max(0, Math.min(act.rep | 0, 4) - 1);
   // daily game: a back's run blocked your way (act.scheme, game.js SCHEMES) against the defense's call: football logic,
   // as the trick plays' (no charting says which scheme a real run used), a few tenths of a matchup at most. Power and
@@ -269,6 +269,10 @@
                                       // (playbook.py LOOK_MIN)
   // daily game: a defensive look as a bucket: 0 light box (6 or fewer), 1 light with a blitz, 2 loaded box (7 or more),
   // 3 loaded with a blitz; 255 when the charting has no box count
+  // the fouls called before the snap (nflverse penalty_type): the only ones drawn as a play that never ran (_isPreSnap)
+  const PRE_SNAP_PEN = new Set(['False Start', 'Delay of Game', 'Neutral Zone Infraction', 'Encroachment', 'Defensive Offside',
+    'Defensive Too Many Men on Field', 'Offensive Too Many Men on Field', 'Illegal Formation', 'Illegal Shift', 'Illegal Motion',
+    'Offensive Offside']);
   const lookBucket = (k) => ((k >> 4) === 0 ? 255 : ((k >> 4) >= 7 ? 2 : 0) + ((k >> 3) & 1));
   // daily game: the defense's call on its snap, as the looks it may show (lookBucket masks)
   const DEF_LOOKS = { blitz: (1 << 1) | (1 << 3), load: 1 << 2, soft: 1 << 0 };
@@ -1125,7 +1129,13 @@
     }
     // a foul before the snap, or another flag nothing was charted for (no look: what a pick filters on says nothing
     // about it); and a pool's such plays, by its weights, with their share of the pool (null: none)
-    _isPreSnap(r) { const P = this.e.pb; return (P.flags[r] & 1) !== 0 && P.lookB[r] === 255; }
+    // (a foul of a kind called before the snap, PRE_SNAP_PEN: a flag thrown during a play that had no look charted, a
+    // hold, a roughing the kicker on a fake, was drawn as one and shown before the snap, Oct 24)
+    _isPreSnap(r) {
+      const P = this.e.pb;
+      if (!P.preSnapPen) P.preSnapPen = new Set(P.penNames.map((n, i) => (PRE_SNAP_PEN.has(n) ? i : -1)).filter((i) => i >= 0));
+      return (P.flags[r] & 1) !== 0 && P.lookB[r] === 255 && (!P.pen || P.preSnapPen.has(P.pen[r]));
+    }
     _preSnap(cdf, pool) {
       this._pre = this._pre || new WeakMap();
       let byPool = this._pre.get(cdf);

@@ -133,7 +133,7 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
 - A pass to a picked receiver (route/who): sacks, scrambles and throwaways have no target charted, so they are drawn
   first, as often as in the situation's own plays (engine.js _noTarget, NO_TARGET_EV); game_smoke.js checks the rate.
   A pass you keep calling (game.js repOf, act.rep: the same route or call in the last 4 snaps) is drawn worse from the
-  third time on (engine.js REPEAT_S). A back's run carries the Blocking chips' scheme (act.scheme: zone, power,
+  third time on (engine.js REPEAT_S; the open man is never a repeat). A back's run carries the Blocking chips' scheme (act.scheme: zone, power,
   counter, duo, trap; game.js SCHEMES, lineplay draws it) and a small matchup against the defense's call (engine.js
   SCHEME_M, football logic: change both). A foul during the play (not before the snap) can be declined: the engine
   draws the play under it (_livePlay) and the offended team takes the better one, or your pick (act.penAs, game.js

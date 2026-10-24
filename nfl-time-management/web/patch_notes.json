@@ -2,6 +2,19 @@
   "about": "Every change to the game, newest first. Each update adds its notes here (scripts/site.py builds /patch-notes from this file). Game changes only: no ads, analytics, payments or behind-the-scenes work, and nothing that is not live yet.",
   "notes": [
     {
+      "date": "2026-10-24",
+      "title": "Phone fixes",
+      "items": [
+        "The Timeout button is back with your calls on phones, with how many you have left.",
+        "No more kicking-play penalties (like roughing the kicker) on a run or a pass, and no penalties shown before the snap that only happen during a play.",
+        "Throwing to the open man again and again no longer gets you sacked more; the same picked route over and over is read by the defense a little less harshly.",
+        "No more empty space under the calls on iPhone: the game uses the whole screen again.",
+        "Plays run smoother on phones.",
+        "A tap at the end of a play no longer opens a player's card by accident.",
+        "On shorter phones the top row of the calls stays in view when the list scrolls."
+      ]
+    },
+    {
       "date": "2026-10-23",
       "title": "The receiver list is back",
       "items": [

@@ -82,6 +82,10 @@ BASE = {"rb_out": "Outside run", "rb_tackle": "Off-tackle run", "rb_inside": "In
         "trick_pass": "Receiver pass", "trick_direct": "Direct snap"}
 
 
+
+# the fouls only a kick play has (nflverse penalty_type)
+KICK_FOULS = {"Roughing the Kicker", "Running Into the Kicker", "Ineligible Downfield Kick", "Player Out of Bounds on Kick",
+              "Fair Catch Interference", "Invalid Fair Catch Signal", "Kickoff Out of Bounds", "Short Free Kick"}
 def base_side(call_id: str) -> tuple[str, str | None]:
     if call_id in BASE:
         return BASE[call_id], None
@@ -385,6 +389,9 @@ def labeled_plays(seasons=SEASONS, seed: int = 11) -> pd.DataFrame:
     spread(pen_pass, [c for c in PASS_CALLS if c != C["hail_mary"]])
     spread(pen_run, RUN_CALLS)
     spread(pen | aborted, [c for c in range(len(CALLS)) if c != C["hail_mary"]])
+    # a kick's foul (roughing the kicker, ...) is no run or pass play's result: they came from kicks lined up and called
+    # back, and the game showed one on a first down at the 25 (Oct 24)
+    call[pen & s["penalty_type"].isin(KICK_FOULS).to_numpy()] = -1
     keep = call >= 0
     s, call, pen, aborted = s[keep].copy(), call[keep], pen[keep], aborted[keep]
 
