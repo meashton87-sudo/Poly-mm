@@ -6549,8 +6549,8 @@
       const extra = [];
       let fitTo = fam;
       if (r.clock_running) {
-        // (a phone: the timeout is the button on the field, toButton, not a key here too)
-        clockOptions(r).filter((k) => !TEMPOS.includes(k) && !(k === 'timeout' && toOnField())).forEach((k) => extra.push([k, k === 'rundown' ? 'Run it down' : CLOCK[k].label,
+        // (the timeout a key with the calls on a phone too, as it was: players couldn't find the button on the field)
+        clockOptions(r).filter((k) => !TEMPOS.includes(k)).forEach((k) => extra.push([k, k === 'rundown' ? 'Run it down' : CLOCK[k].label,
           k === 'timeout' ? `${r.to[me]} left` : k === 'rundown' ? `timeout at 0:0${RUNDOWN_AT}, then kick` : null]));
       }
       const { specials, calls: avail2 } = callOptions(r);
@@ -7102,9 +7102,10 @@
     // step of your call: players looked for it after picking Pass. When it can't be called, it says why, greyed out:
     // "I don't see the timeout option always")
     const mine = !!(r && toOnField() && ['family', 'pass', 'detail'].includes(ui.step) && r.phase === SNAP && r.pos === G.me && !G.over);
-    const off = mine && r.clock_running && clockOptions(r).includes('timeout');
+    // (your call's first step has the timeout as a key with the calls: the field's button only on the next steps)
+    const can = mine && r.clock_running && clockOptions(r).includes('timeout'), off = can && ui.step !== 'family';
     // (none left: no button; the dock's own note says so, as before)
-    const why = mine && !off && r.to[G.me] > 0 ? (!r.clock_running ? 'clock stopped' : 'you lead: let it run') : null;
+    const why = mine && !can && r.to[G.me] > 0 ? (!r.clock_running ? 'clock stopped' : 'you lead: let it run') : null;
     const def = !!(r && toOnField() && !VS && (ui.step === 'vdef' || ui.step === 'defense') && defTimeoutOk(r));
     b.hidden = !(off || def || why) || busy;
     if (b.hidden) return;

@@ -2219,6 +2219,11 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                             if grass:
                                 await page.mouse.click(grass[0], grass[1])
                                 await page.wait_for_timeout(300)
+                            elif await page.locator("#dock .rcv.on").count():
+                                # (no open grass in sight: a short phone with the receivers' list open. His row tapped
+                                # again is the open man too)
+                                await page.locator("#dock .rcv.on").first.click(timeout=3000)
+                                await page.wait_for_timeout(300)
                             if await page.evaluate("() => window.__draw.get().ui.pass.target != null"):
                                 out.append(f"{at}: the grass tapped after a pick, the target is still set")
                     # max protect: the back and a tight end kept in (their rows Blocking, no route on the field for
