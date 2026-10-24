@@ -175,8 +175,8 @@ for (let k = 0; k < 100; k++) {
     }
     return t / n;
   };
-  const hs = [0, -0.4, -0.8, -1.2].map(hitch);
-  assert.ok(hs[2] < hs[0] && hs[3] < hs[2] && hs[3] < hs[0] - 0.1, `repeated hitch: ${hs.map((x) => x.toFixed(2))}`);
+  const hs = [0, -0.25, -0.5, -0.75].map(hitch);
+  assert.ok(hs[2] < hs[0] && hs[3] < hs[1] && hs[3] < hs[0] - 0.1, `repeated hitch: ${hs.map((x) => x.toFixed(2))}`);      // (REPEAT_S 0.25: the steps are small against the noise)
   // a pass to a receiver you picked is sacked (and scrambles, throws it away) as often as the call's real plays: those
   // have no target charted, so the route filter alone left every one out (engine.js _noTarget)
   const dropOnly = (route) => {
@@ -242,7 +242,7 @@ for (let k = 0; k < 100; k++) {
   {
     let worst = 0, k = 0;
     for (const id of ['quick_strong', 'deep_middle', 'pa_short', 'roll_weak', 'screen']) for (const fk of [5, 61, 150]) for (const route of ['hitch', 'out', 'go']) for (const rep of [0, 3]) {
-      const ci = P.callIndex[id], s0 = S.matchOf(ci, S.defOfLooks(0)) - 0.4 * Math.max(0, Math.min(rep, 4) - 1);
+      const ci = P.callIndex[id], s0 = S.matchOf(ci, S.defOfLooks(0)) - 0.25 * Math.max(0, Math.min(rep, 4) - 1);      // (engine.js REPEAT_S)
       const o = S.routeOdds(0, ci, fk, 0, route, 'WR', 99, { rep });
       if (!o || o.n < 30) continue;
       let c = 0, m = 0;

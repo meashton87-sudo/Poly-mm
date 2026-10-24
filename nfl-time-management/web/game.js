@@ -7003,7 +7003,9 @@
   // plays are drawn toward the worse ones (engine.js REPEAT_S), and it is graded that way too (every option carries its
   // own count). Said before the snap once you have run it twice
   const REP_N = 4;
-  const repKey = (a) => (a && a.play === 'pass' && a.call && a.call !== 'hail_mary' ? (a.route ? `r:${a.route}` : `c:${a.call}`) : null);
+  // (the open man is no repeat: the Snap key with no one picked sent the first receiver's route every time, and a drive
+  // of open-man throws was drawn worse and worse, sacks in a row, Oct 24)
+  const repKey = (a) => (a && a.play === 'pass' && !a.open && a.call && a.call !== 'hail_mary' ? (a.route ? `r:${a.route}` : `c:${a.call}`) : null);
   function repOf(a) {
     const k = !VS && repKey(a);
     return k ? ((state && state.rep) || []).slice(-REP_N).filter((x) => x === k).length : 0;
