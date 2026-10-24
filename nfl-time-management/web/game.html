@@ -839,7 +839,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 }
 /* the snap in reach: the call's go key (a pass's Snap, Run it, Call it, the kick) held at the foot of the dock, the
    rest scrolling above it, never under the fold (game.js drawPassDock, sketchPanel) */
-.dock > .snapbar { order: 1; position: sticky; bottom: env(safe-area-inset-bottom, 0px); z-index: 2; background: var(--paper); padding-block: 6px; }
+.dock > .snapbar { order: 1; position: sticky; bottom: max(env(safe-area-inset-bottom, 0px), var(--adb, 0px)); z-index: 2; background: var(--paper); padding-block: 6px; }
 .dock > .snapbar .key.big { min-height: 56px; }
 /* it comes up where it stays (the other keys' pop rises from below: at the foot of the screen that started it past the
    bottom edge, out of reach, for its first moments) */
@@ -874,6 +874,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .howlost .t { display: grid; font-size: 13px; } .howlost .t b { font-size: 12px; color: var(--muted); font-weight: 700; }
 .rcv.on .pos, .rcv.on .rt { color: var(--ink); }
 .key:disabled { opacity: .45; cursor: default; }
+@media (min-width: 1000px) { #layoutBtn { display: none; } }      /* (a computer: never the phone's full-screen view) */
 #field .cheer { pointer-events: none; }
 #field .cheer .arm { animation: cheerArm .55s ease-in-out infinite alternate; animation-delay: var(--d, 0s); }
 #field .cheer .arm.r { animation-name: cheerArmR; }
@@ -1533,6 +1534,7 @@ details.havepro > .row { margin-top: 8px; }
           <button id="optsBtn" class="ghost" type="button" aria-expanded="false" aria-label="More options: play speed, camera, personnel, formation, ratings">⚙</button>
           <button id="speedBtn" class="ghost" type="button" hidden aria-label="Play speed">1×</button>
           <button id="camBtn" class="ghost" type="button" aria-pressed="false" aria-label="Camera">🎥 Follow</button>
+          <button id="layoutBtn" class="ghost" type="button" aria-pressed="false" aria-label="Screen layout">📺 Full screen</button>
           <button id="persBtn" class="ghost" type="button" hidden aria-label="Edit personnel"></button>
           <button id="formBtn" class="ghost" type="button" hidden aria-label="Pick the formation"></button>
           <button id="sizeBtn" class="ghost" type="button" aria-label="Field size">⤢ Large</button>
