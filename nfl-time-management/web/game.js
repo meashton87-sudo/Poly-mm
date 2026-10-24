@@ -2719,6 +2719,24 @@
       track('steady_cam', { on: steadyCam() });
     });
   }
+  function layoutBtn() {
+    const b = $('layoutBtn');
+    if (!b) return;
+    const label = () => {
+      const on = fullField();
+      b.textContent = on ? '📄 Classic view' : '📺 Full screen';
+      b.setAttribute('aria-pressed', String(on));
+      b.setAttribute('aria-label', on ? 'Full-screen field on. Tap for the classic view: the field, the calls under it' : 'Classic view. Tap for the full-screen field');
+    };
+    label();
+    b.addEventListener('click', () => {
+      if (busy) return;
+      save(FULL_KEY, !fullField()); label();
+      track('full_field', { on: fullField() });
+      if (!$('play').hidden) { show('play'); drawField(); drawDock(); }
+      toast(fullField() ? 'Full screen: the field fills the screen, the calls slide up from the bottom' : 'Classic view: the field, with your calls under it');
+    });
+  }
   function speedBtn() {
     const b = $('speedBtn');
     if (!b) return;
@@ -5771,9 +5789,13 @@
     else dd.textContent = r.phase === PAT ? `Try after the touchdown${ck.text === '0:00' ? ' (untimed)' : ''}` : r.phase === KICKOFF ? 'Kickoff' : r.t >= 1800 ? 'Halftime' : 'Final';
   }
   function drawAll() { drawTiles(); drawBar(); drawField(); }
+  // the full-screen field on a phone (the broadcast view, game.html body.bcast) only for a player who turns it on (the
+  // field's Options, layoutBtn): the page as it was before it, the field and the calls under it, is the phone's
+  // default again (the owner, Oct 24: players asked for the game as it used to be)
+  const FULL_KEY = `${STORE}:fullfield`, fullField = () => load(FULL_KEY, false) === true;
   function show(which) {
-    // (a phone playing: the broadcast view, game.html; the page under it starts from the top again after)
-    const bc = which === 'play';
+    // (a phone playing: the broadcast view, game.html, when it is on; the page under it starts from the top again after)
+    const bc = which === 'play' && fullField();
     if (bc !== document.body.classList.contains('bcast')) { document.body.classList.toggle('bcast', bc); window.scrollTo(0, 0); if (!bc) sheetDown(false); placeToast(); }
     $('arch').hidden = which !== 'arch';
     $('homeview').hidden = which !== 'home';
@@ -14014,6 +14036,7 @@
     $('formBtn').addEventListener('click', openForm);
     speedBtn();
     camBtn();
+    layoutBtn();
     $('deepClose').addEventListener('click', closeDeep);
     $('mClose').addEventListener('click', closeModal);
     $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeModal(); });

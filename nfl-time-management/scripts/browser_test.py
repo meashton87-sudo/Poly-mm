@@ -846,7 +846,8 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                   practice: bool = False, rapid: bool = False, reloads_max: int = 2) -> dict:
     rnd = random.Random(seed)
     vp = {"width": 390, "height": 844} if mobile else {"width": 1280, "height": 900}
-    ctx = await browser.new_context(viewport=vp, is_mobile=mobile, has_touch=mobile)
+    # (every other phone episode in the classic view, the phone's default: the field, the calls under it)
+    ctx = await browser.new_context(viewport=vp, is_mobile=mobile, has_touch=mobile, classic=mobile and seed % 2 == 1)
     if day is None:
         day = seed % 9 if mode == "daily" else 0
     # a shifted date (each day's drive), and a seeded Math.random so a failing survivor run can be replayed
@@ -1163,7 +1164,7 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                             if not await page.evaluate("() => document.getElementById('field').classList.contains('playing')"):
                                 break
                             await page.wait_for_timeout(250)
-                        if mobile:
+                        if await page.evaluate("() => document.body.classList.contains('bcast')"):
                             await page.click("#menuBtn", timeout=3000)
                             item = page.locator("#bmenu [data-restart]")
                             if not await item.is_visible():
@@ -3040,6 +3041,16 @@ async def main(a) -> int:
     async with async_playwright() as p:
         kw = {"executable_path": a.chromium} if a.chromium else {}
         browser = await p.chromium.launch(**kw)
+        # every page on the full-screen field (game.js fullField: a phone's broadcast view, which the phone checks below
+        # are written for), but for the episodes asked as classic: a phone's default view since Oct 24
+        new_context = browser.new_context
+
+        async def full_context(*args, classic=False, **kwargs):
+            ctx = await new_context(*args, **kwargs)
+            if not classic:
+                await ctx.add_init_script("try { if (localStorage.getItem('tmd:v3:fullfield') == null) localStorage.setItem('tmd:v3:fullfield', 'true'); } catch (e) {}")
+            return ctx
+        browser.new_context = full_context
         reach = await snap_reach(browser, base)
         print("snap in reach (pass, every receiver with a long name, drawing on; run, defense, kicks at " + ", ".join(f"{w}x{h}" for w, h, _ in SIZES)
               + "; the go keys from their first frame on a phone): " + ("ok" if not reach else "FAIL")
