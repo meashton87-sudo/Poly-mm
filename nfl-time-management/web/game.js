@@ -3391,15 +3391,25 @@
       // the open for a tackler to arrive): the man with the best angle commits from the moment the carrier got the
       // ball, so he is there when the run ends; the carrier never waits for him
       const stuff = fd * (contact[1] - L0) < 1.5 && o.from < t0 - 0.1, closeIn = !stuff && dist(start, contact) < 8;
-      const far = !stuff && !closeIn && reach.length && reach[0].T > tC - t0 + 0.4;
+      // (a beat late too, 0.1 s and more: between that and 0.4 s nobody was sent, and the carrier slowed for him)
+      const far = !stuff && !closeIn && reach.length && reach[0].T > tC - t0 + 0.1;
       // (a short catch with the nearest man still 3+ yards off: he broke on the ball, not after it; met late, the
       // receiver stood with the ball waiting for him, players saw it)
       const loose = closeIn && reach.length && dist(here(reach[0].d), contact) > 3;
       if (tackled && o.from != null && (stuff || closeIn || far) && reach.length && (reach[0].T > tC - t0 + 0.1 || loose)) {
-        const tf = stuff || far ? Math.max(o.from, REACT_DEF + 0.2) : Math.max(REACT_DEF + 0.2, t0 - 0.8);
+        let tf = stuff || far ? Math.max(o.from, REACT_DEF + 0.2) : Math.max(REACT_DEF + 0.2, t0 - 0.8);
         Wd.rewind(tf);
-        const pick0 = defs.filter((d) => !stuff || d.b.g !== 'CB').map((d) => ({ d, T: Motion.minTime([here(d), contact], d.b.g, { v0: vel(d), spd: d.b.spd }) }))
+        const best = () => defs.filter((d) => !stuff || d.b.g !== 'CB').map((d) => ({ d, T: Motion.minTime([here(d), contact], d.b.g, { v0: vel(d), spd: d.b.spd }) }))
           .sort((x, y) => x.T - y.T)[0];
+        let pick0 = best();
+        // (a deep ball's catch, o.from at the throw: nobody can make it from a beat before the catch, so the man who can
+        // breaks on the throw, and the receiver never slows in the open for him. A player saw one 10 yards clear stop
+        // short of the end zone)
+        if (closeIn && o.from < tf - 0.05 && (!pick0 || pick0.T > tC - tf - 0.15)) {
+          tf = Math.max(o.from, REACT_DEF + 0.2);
+          Wd.rewind(tf);
+          pick0 = best();
+        }
         // (only for a loose man: one who can't be there by the hit stays as he was, the old tackler, in time)
         const pick = pick0 && (reach[0].T > tC - t0 + 0.1 || pick0.T <= tC - tf - 0.15) ? pick0 : null;
         if (pick) {
@@ -4795,7 +4805,11 @@
         : [-8, -6, -4, -2, 0, 2, 4, 6, 8].map((k) => inX(x0 + k)).reduce((b, x) => (lane(x) < lane(b) ? x : b), x0);
       if (Math.abs(yac) > 4 && !e.bt) say(tCatch, 'Caught', 'boom', { follow: tgt });
       if (shadow) busy.delete(shadow);       // the man on him at the catch is the first who can tackle him
-      const ep = [endX, endY], tEnd = runDown(tgt, tCatch, ep, { td: e.td, oob: e.oob, bt: e.bt, from: tCatch, out: outTry ? Math.sign(sx - FW / 2) : 0 });
+      // (a deep ball: the safety who will make the tackle breaks on it as it is thrown, not after the catch. Run down
+      // from the catch alone, nobody could get there in time and the receiver slowed in the open for him, 10 yards
+      // clear and short of the end zone: a player saw it)
+      const tBreak = (e.air || 0) >= 15 ? Math.min(tCatch, tThrow + REACT_DEF + 0.2) : tCatch;
+      const ep = [endX, endY], tEnd = runDown(tgt, tCatch, ep, { td: e.td, oob: e.oob, bt: e.bt, from: tBreak, out: outTry ? Math.sign(sx - FW / 2) : 0 });
       finish(tgt, tEnd, ep);
     }
 
