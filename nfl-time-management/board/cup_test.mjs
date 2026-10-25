@@ -169,4 +169,24 @@ assert.strictEqual(r.body.you.claim, null, 'nobody else does');
 assert.ok(!JSON.stringify(r.body).includes(c.claim), '... anywhere');
 assert.deepStrictEqual(w.errors, [], 'no errors');
 w.close();
+// many phones look at the bracket as it starts (the alarm lost): one room a match, the one the bracket names (Oct 25:
+// each look made its own, 48 for 8 matches, the players of a match in different ones)
+{
+  const w2 = new World({ engine: stub });
+  const Q = w2.now + 3600_000, S = w2.now + 7200_000;
+  Object.assign(w2.env, { CUP_ID: 'race-cup', CUP_QUALIFY_AT: iso(Q), CUP_START_AT: iso(S) });
+  const q2 = w2.obj('ladder').m.sql();
+  for (let i = 0; i < 16; i++) q2.exec('INSERT INTO players (kh, name, rating, games, w, l, peak, streak, updated) VALUES (?, ?, ?, 12, 0, 0, ?, 0, 0)', `r${i}`, `R${i}`, 1500 - 20 * i, 1500 - 20 * i);
+  await w2.advance(Q - w2.now + 60_000);
+  await w2.http('cup', '/vs/cup');
+  w2.objects.get('cup').alarm = null;
+  w2.now = S + 1000;
+  const looks = await Promise.all(Array.from({ length: 6 }, () => w2.http('cup', '/vs/cup')));
+  await w2.settle();
+  assert.ok(looks.every((x) => x.status === 200));
+  const made = [...w2.objects.keys()].filter((k) => k.startsWith('room:')), cb = w2.objects.get('cup').store.get('cupObj');
+  assert.strictEqual(made.length, 8, 'one room a first-round match');
+  assert.ok(made.every((k) => cb.matches.some((m) => `room:${m.room}` === k)), 'each the one the bracket names');
+  w2.close();
+}
 console.log('cup ok: seeds as they stood, 15 matches, rooms, no-shows, a match played, the champion\'s claim');
