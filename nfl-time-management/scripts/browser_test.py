@@ -847,7 +847,10 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
     rnd = random.Random(seed)
     vp = {"width": 390, "height": 844} if mobile else {"width": 1280, "height": 900}
     # (every other phone episode in the classic view, the phone's default: the field, the calls under it)
-    ctx = await browser.new_context(viewport=vp, is_mobile=mobile, has_touch=mobile, classic=mobile and seed % 2 == 1)
+    # (only where main() wrapped new_context: the daily bot check, daily_check.py, opens its own and leaves every page as a
+    # player gets it, the classic view on a phone)
+    view = {"classic": mobile and seed % 2 == 1} if getattr(browser, "full_field", False) else {}
+    ctx = await browser.new_context(viewport=vp, is_mobile=mobile, has_touch=mobile, **view)
     if day is None:
         day = seed % 9 if mode == "daily" else 0
     # a shifted date (each day's drive), and a seeded Math.random so a failing survivor run can be replayed
@@ -3051,6 +3054,7 @@ async def main(a) -> int:
                 await ctx.add_init_script("try { if (localStorage.getItem('tmd:v3:fullfield') == null) localStorage.setItem('tmd:v3:fullfield', 'true'); } catch (e) {}")
             return ctx
         browser.new_context = full_context
+        browser.full_field = True
         reach = await snap_reach(browser, base)
         print("snap in reach (pass, every receiver with a long name, drawing on; run, defense, kicks at " + ", ".join(f"{w}x{h}" for w, h, _ in SIZES)
               + "; the go keys from their first frame on a phone): " + ("ok" if not reach else "FAIL")
