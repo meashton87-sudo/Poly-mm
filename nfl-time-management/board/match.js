@@ -766,14 +766,26 @@ export class Match {
     }
     return null;
   }
-  async cupTick() {
+  // one Cup event at a time, start to finish (the alarm, every phone's look at the bracket, a room's result): cupRun
+  // waits on other objects (the ladder, the rooms it makes), and another event let in then read the bracket from before
+  // the rooms were put in it and made its own for the same matches (Oct 25: 48 rooms for 8 matches, the two players of
+  // a match each waiting in a different one, and a result from a room the bracket no longer named refused)
+  // (an error comes out after: one thrown inside blockConcurrencyWhile would reset the object)
+  async cupLocked(fn) {
+    const r = await this.ctx.blockConcurrencyWhile(async () => { try { return { v: await fn() }; } catch (e) { return { e }; } });
+    if (r.e) throw r.e;
+    return r.v;
+  }
+  cupTick() { return this.cupLocked(() => this.cupTickNow()); }
+  async cupTickNow() {
     const cfg = cupConfig(this.env);
     try { await this.cupRun(await this.cupLoad(cfg), cfg, Date.now()); } catch (e) {
       console.error('vs cup', e && e.message);
       await this.ctx.storage.setAlarm(Date.now() + 30_000);
     }
   }
-  async cup(req, url) {
+  cup(req, url) { return this.cupLocked(() => this.cupNow(req, url)); }
+  async cupNow(req, url) {
     const cfg = cupConfig(this.env), now = Date.now();
     if (!Number.isFinite(cfg.qAt) || !Number.isFinite(cfg.sAt)) return reply({ error: 'no cup' }, 404);
     let body = {};
