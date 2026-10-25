@@ -81,6 +81,8 @@ export class World {
         if (!f || !fs.existsSync(f)) return new RealResponse('not found', { status: 404 });
         return new RealResponse(fs.readFileSync(f));
       }) },
+      // (a season under way all the tests long, unless one sets another: match.js SEASON)
+      SEASON_START_AT: new Date(start - 86400_000).toISOString(), SEASON_END_AT: new Date(start + 365 * 86400_000).toISOString(),
       MATCH: { idFromName: (n) => n, get: (id) => ({ fetch: (req) => world.outside(() => world.run(id, (o) => o.m.fetch(req))) }) },
     };
     if (engine) this.env.VS_ENGINE = engine;

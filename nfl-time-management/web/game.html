@@ -434,7 +434,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .pro .recover .sent { font-weight: 600; font-size: 14px; }
 .pro .recover .err { font-size: 13px; }
 /* the mode tabs (the owner: they should pop): solid buttons in the display face, each mode its own color when on, and
-   Versus lit gold with its Beta tag while it is new */
+   Versus lit gold with its New tag while it is new */
 .modes { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
 .modes a { --mc: var(--ink); position: relative; display: inline-flex; align-items: center; gap: 6px; font: 800 15px/1 var(--display); letter-spacing: .07em;
   text-transform: uppercase; color: var(--ink); text-decoration: none; padding: 9px 16px; border-radius: 999px; background: var(--card);
@@ -750,6 +750,16 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .vscupb .mt .w { font-weight: 800; }
 .vscupb .mt .v { color: var(--muted); }
 .vscupb .mt.live { color: var(--chain); }
+/* (Versus: the last Cup's champion atop the lobby; the season) */
+.vschamp:not(:empty) { border-radius: 16px; padding: 14px 16px; margin: 0 0 12px; display: grid; gap: 4px; color: #241a00;
+  background: linear-gradient(150deg, #ffe27a, #f2b72e 60%, #d9940f); box-shadow: 0 10px 24px -14px rgba(160, 110, 0, .8); }
+.vschamp .pk { font: 800 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: rgba(36, 26, 0, .75); }
+.vschamp b { font: 900 28px/1.05 var(--display); text-transform: uppercase; letter-spacing: .02em; overflow-wrap: anywhere; }
+.vschamp .note { margin: 0; color: rgba(36, 26, 0, .85); }
+.vschamp a { color: inherit; font-weight: 700; }
+.vsseason { gap: 4px; margin-top: 12px; }
+.vsseason b { font: 800 20px/1.15 var(--display); }
+.vsseason .note { margin: 4px 0 0; }
 /* (Versus: your last call again, one tap) */
 .btn.same { width: 100%; margin: 4px 0 6px; min-height: 40px; font-size: 14px; text-transform: none; letter-spacing: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Versus: 4th down said (game.js vsPromptIntent), the defense's timeout */
@@ -1503,7 +1513,7 @@ details.havepro > .row { margin-top: 8px; }
 </header>
 
 <main class="wrap">
-  <nav class="modes" aria-label="Game mode"><a id="modeHome" href="#home">Home</a><a id="modeDaily" href="#daily">Daily</a><a id="modeSurv" href="#survivor">Survivor</a><a id="modeVs" href="#vs" hidden>Versus<b class="tnew">Beta</b></a><a id="modeArch" href="#archive">Pro</a></nav>
+  <nav class="modes" aria-label="Game mode"><a id="modeHome" href="#home">Home</a><a id="modeDaily" href="#daily">Daily</a><a id="modeSurv" href="#survivor">Survivor</a><a id="modeVs" href="#vs" hidden>Versus<b class="tnew">New</b></a><a id="modeArch" href="#archive">Pro</a></nav>
   <div id="tiles" class="tiles" role="group" aria-label="Today's three spots"></div>
   <section id="arch" class="arch" aria-label="Archive" hidden></section>
   <section id="homeview" aria-labelledby="homeH" hidden></section>

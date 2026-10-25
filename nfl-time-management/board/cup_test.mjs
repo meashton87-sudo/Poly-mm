@@ -58,7 +58,7 @@ const P = [];
 for (let i = 0; i < 20; i++) {
   const k = K(i), h = await kh(k), games = i === 1 || i === 3 ? 3 : 12;
   P.push({ i, k, h, name: `P${i}`, rating: 1500 - 20 * i, games });
-  q.exec('INSERT INTO players (kh, name, rating, games, w, l, peak, streak, updated) VALUES (?, ?, ?, ?, 0, 0, ?, 0, 0)', h, `P${i}`, 1500 - 20 * i, games, 1500 - 20 * i);
+  q.exec('INSERT INTO players (kh, name, rating, games, w, l, peak, streak, updated, season) VALUES (?, ?, ?, ?, 0, 0, ?, 0, 0, \'s1\')', h, `P${i}`, 1500 - 20 * i, games, 1500 - 20 * i);
 }
 // before the qualifying time: the projection (the ladder now), your place in it
 let r = await w.http('cup', `/vs/cup?key=${P[0].k}`);
