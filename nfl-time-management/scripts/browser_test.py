@@ -1054,8 +1054,14 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                         box, v = await page.locator("#field").bounding_box(), page.viewport_size
                         x0, y0 = max(box["x"], 0), max(box["y"], 0)
                         x1, y1 = min(box["x"] + box["width"], v["width"]), min(box["y"] + box["height"], v["height"])
+                        # (and only where the field itself is on top: the classic view's page scrolls under the pinned top
+                        # bar and its mode tabs, and a finger meant for the field took Home there, leaving the drive)
                         for _ in range(rnd.randint(1, 3) if x1 > x0 and y1 > y0 else 0):
-                            await page.mouse.click(x0 + rnd.random() * (x1 - x0), y0 + rnd.random() * (y1 - y0))
+                            for _ in range(8):
+                                x, y = x0 + rnd.random() * (x1 - x0), y0 + rnd.random() * (y1 - y0)
+                                if await page.evaluate("([x, y]) => { const e = document.elementFromPoint(x, y); return !!(e && e.closest('#field')); }", [x, y]):
+                                    await page.mouse.click(x, y)
+                                    break
                     elif rnd.random() < 0.6:
                         await page.click("#field", timeout=1500)
                 elif st == "result":
