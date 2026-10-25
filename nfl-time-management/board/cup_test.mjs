@@ -176,7 +176,7 @@ w.close();
   const Q = w2.now + 3600_000, S = w2.now + 7200_000;
   Object.assign(w2.env, { CUP_ID: 'race-cup', CUP_QUALIFY_AT: iso(Q), CUP_START_AT: iso(S) });
   const q2 = w2.obj('ladder').m.sql();
-  for (let i = 0; i < 16; i++) q2.exec('INSERT INTO players (kh, name, rating, games, w, l, peak, streak, updated) VALUES (?, ?, ?, 12, 0, 0, ?, 0, 0)', `r${i}`, `R${i}`, 1500 - 20 * i, 1500 - 20 * i);
+  for (let i = 0; i < 16; i++) q2.exec('INSERT INTO players (kh, name, rating, games, w, l, peak, streak, updated, season) VALUES (?, ?, ?, 12, 0, 0, ?, 0, 0, \'s1\')', `r${i}`, `R${i}`, 1500 - 20 * i, 1500 - 20 * i);
   await w2.advance(Q - w2.now + 60_000);
   await w2.http('cup', '/vs/cup');
   w2.objects.get('cup').alarm = null;
