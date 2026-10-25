@@ -2,6 +2,14 @@
   "about": "Every change to the game, newest first. Each update adds its notes here (scripts/site.py builds /patch-notes from this file). Game changes only: no ads, analytics, payments or behind-the-scenes work, and nothing that is not live yet.",
   "notes": [
     {
+      "date": "2026-10-25",
+      "title": "Small phone fixes",
+      "items": [
+        "On the pass screen, tapping More brings the protection and play-action options into view instead of leaving them under the Snap button.",
+        "The welcome screen no longer comes back for players who have already played."
+      ]
+    },
+    {
       "date": "2026-10-24",
       "title": "Deep balls",
       "items": [
