@@ -6782,7 +6782,13 @@
       mo.type = 'button'; mo.id = 'passMore';
       mo.setAttribute('aria-pressed', String(passMore()));
       mo.setAttribute('aria-label', passMore() ? 'Fewer pass options' : 'More pass options: protection, play action, rollout');
-      mo.addEventListener('click', () => { if (busy) return; save(PASS_MORE_KEY, !passMore()); track('pass_more', { on: passMore() }); redrawPass(); });
+      mo.addEventListener('click', () => {
+        if (busy) return;
+        save(PASS_MORE_KEY, !passMore()); track('pass_more', { on: passMore() }); redrawPass();
+        // (the classic view, a page that scrolls: the options it opened brought into sight above the Snap key's bar, not
+        // left under it or below the fold; the bot check saw Max protect under the Snap key at 412x839)
+        if (!bcast() && passMore()) requestAnimationFrame(() => { const rows = $('dock').querySelectorAll('.opts-row'); if (rows.length) rows[rows.length - 1].scrollIntoView({ block: 'nearest' }); });
+      });
       head.append(mo);
     }
     // (the broadcast view on a phone: the defense's look in the head's line, the receivers' room below it)
@@ -10828,6 +10834,9 @@
     tour = null;
   }
 
+  // the first visit's welcome (the tour, or openHelp's three lines): never again to a player with a game on record, even
+  // when the mark it leaves did not keep (the daily bot check saw it come back over the game on iPhones)
+  const seenWelcome = () => load(`${STORE}:seen`, false) === true || Object.keys(load(`${STORE}:stats`, { days: {} }).days || {}).length > 0;
   function openHelp(auto) {
     track('help_open', { auto: auto === true });     // auto: shown on a first visit (not a tap on ?)
     // a first visit gets three lines and a button, not the manual: the full help is one tap away on ?
@@ -14135,7 +14144,7 @@
       if (SURV) {
         state = load(stateKey(), null) || newRun();
         if (!$('modal').hidden) { /* a question already up (the unsubscribe link's): the welcome waits for the next visit */ }
-        else if (!load(`${STORE}:seen`, false)) { if (TOUR_OK) tourStart(true); else openHelp(true); save(`${STORE}:seen`, true); } else tourStart(false);
+        else if (!seenWelcome()) { if (TOUR_OK) tourStart(true); else openHelp(true); save(`${STORE}:seen`, true); } else tourStart(false);
         startWorkers();
         if (state.out) renderSurvSummary(); else await survOpen();
         return;
@@ -14206,7 +14215,7 @@
     state = load(stateKey(), null) || { spots: [], current: 0, done: false, tryAt: Date.now() };     // tryAt: this try (a drive's record)
     if (!(PRACTICE || DRIVE || RUN_N) && sidesOf(dayN) && state.side == null) state.side = sideOf(dayN);     // (the side taken, kept with the day)
     if (!$('modal').hidden) { /* a question already up (the unsubscribe link's): the welcome waits for the next visit */ }
-    else if (!load(`${STORE}:seen`, false)) { if (TOUR_OK) tourStart(true); else openHelp(true); save(`${STORE}:seen`, true); } else tourStart(false);
+    else if (!seenWelcome()) { if (TOUR_OK) tourStart(true); else openHelp(true); save(`${STORE}:seen`, true); } else tourStart(false);
     drawTiles();
     startWorkers();
     if (state.done) renderSummary();

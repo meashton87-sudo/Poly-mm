@@ -1017,8 +1017,10 @@ async def episode(browser, base: str, name: str, mode: str, seed: int, target: i
                     welcome = st == "modal" and await page.evaluate("() => !!document.querySelector('#modal ol.quick')")
                     tapped = await page.evaluate("() => window.__opensAt != null && performance.now() - window.__opensAt < 3000")
                     if not asked and not tapped and not (welcome and (not welcomed or quirk == "nostore")):
-                        friction["modals"].append(await page.evaluate("() => document.getElementById('modal').innerText.replace(/\\s+/g, ' ').slice(0, 80)")
-                                                  if st == "modal" else "deep")
+                        # (where and when: the page's #hash and the reloads so far, so a screen that came back can be traced)
+                        where = f" [{page.url.partition('#')[2] or 'home'}, reload {reloads}]"
+                        friction["modals"].append((await page.evaluate("() => document.getElementById('modal').innerText.replace(/\\s+/g, ' ').slice(0, 60)")
+                                                   if st == "modal" else "deep") + where)
                     welcomed = welcomed or welcome
                     asked = False
                     await page.wait_for_timeout(rnd.choice([100, 400]))

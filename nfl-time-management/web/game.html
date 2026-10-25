@@ -839,6 +839,7 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 }
 /* the snap in reach: the call's go key (a pass's Snap, Run it, Call it, the kick) held at the foot of the dock, the
    rest scrolling above it, never under the fold (game.js drawPassDock, sketchPanel) */
+.dock .opts-row { scroll-margin-bottom: 96px; }      /* (brought into sight above the Snap key's sticky bar) */
 .dock > .snapbar { order: 1; position: sticky; bottom: max(env(safe-area-inset-bottom, 0px), var(--adb, 0px)); z-index: 2; background: var(--paper); padding-block: 6px; }
 .dock > .snapbar .key.big { min-height: 56px; }
 /* it comes up where it stays (the other keys' pop rises from below: at the foot of the screen that started it past the
