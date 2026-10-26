@@ -1569,6 +1569,24 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.ok(!store.has('blast:winback-test:from'));
   for (let i = 0; i < 600; i++) { store.delete(`acct:e:r${i}@example.com`); store.delete(`blast:winback-test:s:e:r${i}@example.com`); }
   store.delete('rmd:e:r7@example.com'); unset('BLAST_CAP');
+  // the same note from the vars (wrangler.toml BLAST_*): the cron runs send it after the reminders, once an account,
+  // and a run after everyone has had it sends nobody; a blank id, nothing
+  set({ BLAST_ID: 'winback-cron', BLAST_SUBJECT: 'Versus is free for everyone', BLAST_TEXT: 'Versus is free for everyone.\n\nPlay: https://nfl2mindrill.com/' });
+  for (let i = 0; i < 3; i++) store.set(`acct:e:v${i}@example.com`, { email: `v${i}@example.com` });
+  b0 = batches.length;
+  await cron('2026-10-27T08:05:00Z');
+  const gotc = to(b0);
+  assert.ok(gotc.includes('v0@example.com') && gotc.includes('v2@example.com') && gotc.includes('cal@example.com') && !gotc.includes('amy@example.com') && !gotc.includes('ben@example.com'), 'the cron sends the vars\' note to every account that has not said no');
+  assert.ok(batches.slice(b0).some((x) => x.mails[0].subject === 'Versus is free for everyone' && /^blast-winback-cron-/.test(x.headers['Idempotency-Key'])), 'as a blast');
+  b0 = batches.length;
+  await cron('2026-10-27T09:05:00Z');
+  assert.strictEqual(to(b0).filter((x) => /^v\d@example.com$/.test(x) || x === 'cal@example.com').length, 0, 'the next run: nobody twice');
+  set({ BLAST_ID: '' }); store.set('acct:e:v3@example.com', { email: 'v3@example.com' });
+  b0 = batches.length;
+  await cron('2026-10-28T08:05:00Z');
+  assert.ok(!to(b0).includes('v3@example.com'), 'a blank id: no note');
+  for (let i = 0; i < 4; i++) { store.delete(`acct:e:v${i}@example.com`); store.delete(`blast:winback-cron:s:e:v${i}@example.com`); }
+  unset('BLAST_ID', 'BLAST_SUBJECT', 'BLAST_TEXT');
   console.error = realErr; console.log = realLog;
   unset('GOOGLE_CLIENT_ID', 'SITE', 'API_URL', 'RESEND_KEY', 'MAIL_FROM');
   globalThis.fetch = realFetch;

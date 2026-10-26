@@ -2032,7 +2032,13 @@ export class Board {
   }
   async fetch(req) {
     await this.ready;                          // (every request after it: fairWeeks)
-    if (new URL(req.url).pathname === CRON_PATH) return json(await reminders(this.env, this.ctx.storage, String(((await readBody(req)) || {}).date || '')), 200, {});
+    if (new URL(req.url).pathname === CRON_PATH) {
+      const out = await reminders(this.env, this.ctx.storage, String(((await readBody(req)) || {}).date || ''));
+      // the owner's one-time email from the vars (wrangler.toml BLAST_ID, BLAST_SUBJECT, BLAST_TEXT: the same send as
+      // POST /auth/blast, so once every account has had it the runs send nobody; another note: a new id and text, deployed)
+      if (this.env.BLAST_ID && this.env.RESEND_KEY && this.env.MAIL_FROM) out.blast = await blast(this.env, this.ctx.storage, { id: this.env.BLAST_ID, subject: this.env.BLAST_SUBJECT, text: this.env.BLAST_TEXT });
+      return json(out, 200, {});
+    }
     return handle(req, this.env, this.ctx.storage, this.hits);
   }
 }
@@ -2048,7 +2054,7 @@ export default {
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },
   // the cron trigger (wrangler.toml): the day's reminder emails, sent by the Board (its storage); the day is the run's
-  // UTC date (each account gets one a day, however many runs)
+  // UTC date (each account gets one a day, however many runs); then the owner's one-time email, if the vars name one
   scheduled(ev, env, ctx) {
     const date = new Date(ev && ev.scheduledTime ? ev.scheduledTime : Date.now()).toISOString().slice(0, 10);
     const run = env.BOARD.get(env.BOARD.idFromName('board')).fetch(new Request(`https://board${CRON_PATH}`, { method: 'POST', body: JSON.stringify({ date }) }))
