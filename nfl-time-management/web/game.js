@@ -9551,9 +9551,9 @@
       chMine(p).then((id) => { if (id && share.text.includes(legacy)) { share.text = share.text.replace(legacy, cLink(id)); pre.textContent = share.text; } });
     }
     chEnd(box, p, (box.querySelector(':scope > .chbtn') || btn).nextSibling);
-    // (Versus free this week: the button right under Share and Challenge; Up next then offers Survivor, not Versus twice)
+    // (Versus free this week: the button right under the result, above Share; Up next then offers Survivor, not Versus twice)
     const vsBtn = !DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY && vsFreeWeek();
-    if (vsBtn) (box.querySelector(':scope > .chslot') || box.querySelector(':scope > .chbtn') || btn).after(vsFreeCard('daily'));
+    if (vsBtn) btn.before(vsFreeCard('daily'));
     const img = el('button', 'btn ghostbtn xshare', 'Share as a picture');
     img.type = 'button';
     img.addEventListener('click', () => shareImage({
