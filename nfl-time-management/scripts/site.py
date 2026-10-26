@@ -367,6 +367,10 @@ EZOIC_ADSTXT = "https://srv.adstxtmanager.com/19390/{domain}"     # Ezoic's ads.
 
 def ads_head(adsense: str | None, ad_slot: str | None, later: bool = False) -> str:
     out = banner_meta()
+    # (Ezoic serving the ads: no AdSense script, but the account's ownership tag on every page all the same: Google's
+    # site review looks for it, and the Oct 24 review of the old address found nothing and refused the site)
+    if EZOIC:
+        return (f"<meta name=\"google-adsense-account\" content=\"{adsense}\">" if adsense else "") + out
     if not adsense:
         return out
     return (ADSENSE_LATER if later else ADSENSE_TAG).format(id=adsense) + (f"<meta name=\"ad-slot\" content=\"{ad_slot}\">" if ad_slot and not out else "") + out
@@ -521,7 +525,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         if not re.fullmatch(r"G-[A-Z0-9]{4,16}", ga):
             raise SystemExit(f"--ga wants a measurement id like G-XXXXXXX, not {ga!r}")
         extra = GA_TAG.format(id=ga) + extra
-    extra += ads_head(tags_adsense, ad_slot, later=True)       # (the game's page: game.js loads the script)
+    extra += ads_head(adsense, ad_slot, later=True)       # (the game's page: game.js loads the script)
     if EZOIC:                                # Ezoic's spots in the game's own cards (game.js ezBox): their placeholder ids
         if ezoic_ids and not re.fullmatch(r"\d+(,\d+){0,2}", ezoic_ids):
             raise SystemExit(f"--ezoic-ids wants up to three placeholder ids like 101,102,103, not {ezoic_ids!r}")
@@ -631,7 +635,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     page = page.replace('<script src="game.js"></script>', f'<script src="game.{stamps["game.js"]}.js"></script>')
     (out / "index.html").write_text(HEAD.format(extra=moving + extra + AD_CSS) + page.replace("<!--SITE-FOOT-->", foot_ads() + FOOT) + "</body></html>\n")
     # the stats page (/stats): its own document; the same analytics tag and backend address
-    stats_head = (GA_TAG.format(id=ga) if ga else "") + ads_head(tags_adsense, ad_slot) + share_tags(site_url, "Two-Minute Drill stats",
+    stats_head = (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Two-Minute Drill stats",
         "How everyone did on the daily drive: players per day, the score spread and the top ten.", "stats") + (
         f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else "")
     fill = lambda name, head, path, ads=True: (out / name).write_text(own_fonts((WEB / name).read_text(), stamps).replace(DEFAULT_DOMAIN, home).replace("<!--SITE-HEAD-->",
@@ -643,9 +647,9 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
                                   "Real NFL late-game situations, 27 play calls, real plays on every snap, and calls graded on win chance."),
                                  ("about.html", "about", "About Two-Minute Drill",
                                   "An independent, fan-made NFL play-calling game built on public nflverse data.")):
-        fill(name, (GA_TAG.format(id=ga) if ga else "") + ads_head(tags_adsense, ad_slot) + share_tags(site_url, title, d, path), path)
+        fill(name, (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, title, d, path), path)
     # the patch notes (/patch-notes): every update to the game, from web/patch_notes.json
-    fill("patch-notes.html", (GA_TAG.format(id=ga) if ga else "") + ads_head(tags_adsense, ad_slot) + share_tags(site_url,
+    fill("patch-notes.html", (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url,
          "Two-Minute Drill patch notes", "Every change to the game, newest first.", "patch-notes"), "patch-notes")
     (out / "patch-notes.html").write_text((out / "patch-notes.html").read_text().replace("<!--NOTES-->",
         patch_notes_html(json.loads((WEB / "patch_notes.json").read_text()))))

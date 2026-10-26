@@ -9551,6 +9551,10 @@
       chMine(p).then((id) => { if (id && share.text.includes(legacy)) { share.text = share.text.replace(legacy, cLink(id)); pre.textContent = share.text; } });
     }
     chEnd(box, p, (box.querySelector(':scope > .chbtn') || btn).nextSibling);
+    // the card's ad right under the result, above the buttons: at the foot of the card (after the countdown and the
+    // reminders) only 40% of its views counted, the rest never scrolled to (Ezoic, Oct 25)
+    const ad = adBox('done');
+    if (ad) btn.before(ad);
     // (Versus free for everyone: the button right under the result, above Share; Up next then offers Survivor, not Versus twice)
     const vsBtn = !DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY && vsFreeWeek();
     if (vsBtn) btn.before(vsFreeCard('daily'));
@@ -9586,8 +9590,6 @@
     crowdEnd(box, decs, share, pre, !!(rEnd && rEnd.half !== 1 && rEnd.mine > rEnd.theirs));
     box.append(countdown(streak >= 1 ? 'Keep the streak: next drive in ' : null));
     if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) box.append(a2hsSlotEl(), reminderNodes());     // the habit: an icon on the phone, a reminder
-    const ad = adBox('done');
-    if (ad) box.append(ad);
     box.append(disclaimer());
   }
   // ---- Practice (#practice): after the day's drive, one more real drive at a time. The spot: survivor's pool (every
@@ -10360,7 +10362,7 @@
     if (old) old.remove();                                  // (one of each id on the page)
     const box = el('div', 'adbox'), ph = el('div');
     ph.id = `ezoic-pub-ad-placeholder-${id}`;
-    box.append(ph);
+    box.append(el('div', 'adlab', 'Advertisement'), ph);          // (labeled, and never among the buttons: AdSense's placement policy)
     const again = ezShown.has(id);
     ezShown.add(id);
     // (after the caller puts the card on the page)
