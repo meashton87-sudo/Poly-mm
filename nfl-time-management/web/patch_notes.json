@@ -3,6 +3,19 @@
   "notes": [
     {
       "date": "2026-10-26",
+      "title": "Famous Endings Week, faster on phones",
+      "items": [
+        "The game starts sooner on phones: the simulator loads while the page does, so the first call is ready earlier.",
+        "Smoother plays on iPhones: the stands are drawn as one picture instead of hundreds of shapes every frame.",
+        "Play action and Roll out are back on the pass screen itself; only the protection is behind More.",
+        "Famous Endings Week: a legendary final drive every day, Tuesday through Sunday, with its story on the intro.",
+        "Broke your streak after launch? Play any day this week (through Monday, November 2) and it comes back, no freeze needed.",
+        "Versus is free for everyone, for good: a button right on your end card and on Home, with the Season 1 Championship Sunday at 6 p.m. ET.",
+        "A good score makes Challenge a friend the main button, and a famous day's name leads the challenge text."
+      ]
+    },
+    {
+      "date": "2026-10-26",
       "title": "Versus: Season 1",
       "items": [
         "Versus is open to everyone from 10 a.m. ET Monday, October 26.",

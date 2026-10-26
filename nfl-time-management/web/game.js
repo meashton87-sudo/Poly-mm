@@ -665,10 +665,15 @@
     return !q ? w : w.includes('?') ? w + q : `${w}?${q.slice(1)}`;
   }
   function startWorker() {
-    const w = new Worker(workerUrl());
+    // (the first: the one the page's head started, if it is this address: site.py TMD_W0, already loading its scripts)
+    const early = self.TMD_W0 && self.TMD_W0.u === workerUrl() ? self.TMD_W0 : null;
+    if (self.TMD_W0 && !early) self.TMD_W0.w.terminate();        // (another address: of no use)
+    self.TMD_W0 = null;
+    const w = early ? early.w : new Worker(workerUrl());
     const slot = { w, ready: false, busy: false };
     w.onmessage = (ev) => onMsg(slot, ev.data);
     w.onerror = (e) => fatal('The simulator could not start: ' + (e.message || 'worker error'));
+    if (early && early.err) { fatal('The simulator could not start: ' + early.err); return; }
     pool.push(slot);
     initWorker(slot);
   }
@@ -1150,9 +1155,15 @@
           + (up ? `<path d="M${(xx - 1.4).toFixed(2)} ${(yy + 1.2).toFixed(2)}l-.6 -2.6M${(xx + 1.4).toFixed(2)} ${(yy + 1.2).toFixed(2)}l.6 -2.6" stroke="${SKIN[Math.floor(rnd() * SKIN.length)]}" stroke-width=".7" stroke-linecap="round"/>` : '');
       }
     }
+    // the tile drawn once as a picture (an image of its own), not hundreds of shapes in the pattern: the pattern moves with
+    // the camera every frame, and Safari draws a pattern's shapes all over again each time (the bot check: an iPhone's
+    // frames over 200 ms 3 to 6 times a Chromium's; the tile as an image: the same look, a frame on the stands a third
+    // of the work)
+    const tile = '<svg xmlns="http://www.w3.org/2000/svg" width="180" height="30" viewBox="0 0 180 30">'
+      + `<rect width="180" height="30" fill="#1b2029"/><path d="M0 4.9H180M0 9.9H180M0 14.9H180M0 19.9H180M0 24.9H180M0 29.9H180" stroke="#2f3541" stroke-width="1.1"/>${dots}</svg>`;
     const defs = S('defs', {});
     defs.innerHTML = `<pattern id="${id}" patternUnits="userSpaceOnUse" width="180" height="30">`
-      + `<rect width="180" height="30" fill="#1b2029"/><path d="M0 4.9H180M0 9.9H180M0 14.9H180M0 19.9H180M0 24.9H180M0 29.9H180" stroke="#2f3541" stroke-width="1.1"/>${dots}</pattern>`
+      + `<image width="180" height="30" href="data:image/svg+xml;charset=utf-8,${encodeURIComponent(tile)}"/></pattern>`
       + `<linearGradient id="${id}s" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".55"/></linearGradient>`;
     svg.append(defs);
     return id;
@@ -1259,8 +1270,9 @@
       return e;
     };
     // the midfield logo (players asked: it shows where the ball is at a glance): sideways at the 50, as on an NFL
-    // field, about 15 yards long (midlogo.png: the 2MD logo cut out of its navy)
-    const logo = put(S('image', { class: 'midlogo', href: 'midlogo.png', preserveAspectRatio: 'xMidYMid meet' }), (Y) => {
+    // field, about 15 yards long (midlogo.png: the 2MD logo cut out of its navy; stamped and cached for good: it was the
+    // one file the field asked the site for again on every page, 46-61 s in the bot check's busiest runs)
+    const logo = put(S('image', { class: 'midlogo', href: asset('midlogo.png'), preserveAspectRatio: 'xMidYMid meet' }), (Y) => {
       const len = clip(Math.abs(Y(42.5) - Y(57.5)), 50, 270), wid = len / 1.44, y = Y(50);
       logo.setAttribute('x', (-len / 2).toFixed(1)); logo.setAttribute('y', (-wid / 2).toFixed(1));
       logo.setAttribute('width', len.toFixed(1)); logo.setAttribute('height', wid.toFixed(1));
@@ -6776,14 +6788,15 @@
     pen.addEventListener('click', () => { if (!busy) setDraw(!P.draw); });
     head.append(pen);
     // the simple pass screen by default (a player: "getting way too complicated, can barely see the defense"): the
-    // receivers, the quick throws and Snap; the protection and the play action and rollout toggles behind More (kept
-    // per device), and shown anyway while one of them is on
-    const full = passMore() || (G.prot && G.prot !== 'std') || P.pa || P.roll;
+    // receivers, the play action and rollout toggles, the quick throws and Snap; the protection behind More (kept per
+    // device), and shown anyway while it is not the standard one (the owner, Oct 26: play action and the rollout were
+    // behind More too, and players lost them)
+    const full = passMore() || (G.prot && G.prot !== 'std');
     if (!VS && !P.draw) {
       const mo = el('button', `chip more${passMore() ? ' on' : ''}`, bcast() ? '⋯' : passMore() ? 'Less' : 'More');     // (a phone: the head's one line)
       mo.type = 'button'; mo.id = 'passMore';
       mo.setAttribute('aria-pressed', String(passMore()));
-      mo.setAttribute('aria-label', passMore() ? 'Fewer pass options' : 'More pass options: protection, play action, rollout');
+      mo.setAttribute('aria-label', passMore() ? 'Fewer pass options' : 'More pass options: protection');
       mo.addEventListener('click', () => {
         if (busy) return;
         save(PASS_MORE_KEY, !passMore()); track('pass_more', { on: passMore() }); redrawPass();
@@ -6882,12 +6895,14 @@
     };
     const opts = el('div', 'opts-row');
     // (a toggle tapped takes back a rollout drawn: the quarterback's line goes with it)
-    if (full || VS) opts.append(opt('Play action', 'Fake the handoff first: it freezes a loaded box.', P.pa, (v) => { P.pa = v; if (v) { P.roll = false; P.qb = null; P.rollSide = null; } }),
+    opts.append(opt('Play action', 'Fake the handoff first: it freezes a loaded box.', P.pa, (v) => { P.pa = v; if (v) { P.roll = false; P.qb = null; P.rollSide = null; } }),
       opt(P.roll && P.rollSide ? `Roll out ${P.rollSide === 'strong' ? 'strong' : 'weak'}` : 'Roll out', 'Move the pocket toward your receiver’s side (or drag the quarterback the way to go).', P.roll, (v) => { P.roll = v; P.qb = null; P.rollSide = null; if (v) P.pa = false; }));
     if (oobMatters(r)) opts.append(opt('⏱ Out of bounds', 'Going out stops the clock now.', ui.oob, setOob, 'oobSwitch'));
     if (!VS && !listRoom()) opts.append(opt(`👥 Receivers ${rcvList() ? '▴' : '▾'}`, 'The list of receivers: each one’s route and odds, a tap to throw to him.', rcvList(),
       (v) => { save(RCV_KEY, v); track('pass_list', { on: v }); }, 'rcvBtn'));
-    if (opts.childElementCount) d.append(opts);
+    // (above the hint: in the classic view on a phone the hint's three lines pushed the row under the Snap key's bar,
+    // the chips peeking out from under it)
+    if (opts.childElementCount) { const hint = d.querySelector(':scope > p.hint'); if (hint) d.insertBefore(opts, hint); else d.append(opts); }
     // Versus: the playbook on the sheet itself, a row of plays, the one set marked (the owner: players don't need a list
     // of who to throw to, a tap on the man on the field picks him; the plays were behind a small chip)
     if (VS && !P.draw && sc) {
@@ -9404,7 +9419,9 @@
       if (newly.length) {
         newly.forEach((k) => { fz[k] = Date.now(); });
         state.froze = [...(state.froze || []), ...newly];
-        track('freeze_used', { day: dayN, days: newly.length, streak: sk0.n });
+        const back = newly.filter((k) => sk0.back.has(k));        // (the amnesty week: the streak back, no freeze spent)
+        if (back.length) { state.back = sk0.n; track('streak_back', { day: dayN, days: back.length, streak: sk0.n }); }
+        if (back.length < newly.length) track('freeze_used', { day: dayN, days: newly.length - back.length, streak: sk0.n });
       }
       save(`${STORE}:stats`, st);
     }
@@ -9443,7 +9460,8 @@
         if (sp.real && sp.real.summary) sb.append(el('p', 'real', `What ${teamName(sp.player)} really did: ${sp.real.summary}.`));
         box.append(sb);
       }
-      if (!RUN_N && state.froze && state.froze.length) box.append(el('div', 'frz', `❄️ Streak saved by a freeze${state.froze.length > 1 ? ` (${state.froze.length} days)` : ''}: ${state.froze.length > 1 ? 'the days you missed count' : 'the day you missed counts'}`));
+      if (!RUN_N && state.back) box.append(el('div', 'frz', `🔥 Your streak is back: ${state.back} days. Welcome back.`));
+      else if (!RUN_N && state.froze && state.froze.length) box.append(el('div', 'frz', `❄️ Streak saved by a freeze${state.froze.length > 1 ? ` (${state.froze.length} days)` : ''}: ${state.froze.length > 1 ? 'the days you missed count' : 'the day you missed counts'}`));
     }
     if (RUN_N) {                      // the run's record against the real one; a loss ended it (state.out: that game)
       const run = PRO_RUNS.runs[RUN_N - 1], w = runRec.filter((x) => x > 0).length, l = runRec.filter((x) => x < 0).length;
@@ -9522,14 +9540,20 @@
     };
     box.insertBefore(btn, dbox);
     if (todayDaily()) {                 // a challenge of your own: the link to send (and the share text's, once made)
-      const legacy = chLink(p), chb = el('button', 'btn ghostbtn chbtn', 'Challenge a friend');
+      // (a good day: the challenge is the filled button and Share the plain one; a featured day's title leads the text)
+      const score = Math.round(p * 100), good = score >= 80 || /^[AB]/.test(gradeOf(score).L);
+      const legacy = chLink(p), chb = el('button', `btn chbtn${good ? '' : ' ghostbtn'}`, good ? `Challenge a friend: beat my ${score}` : 'Challenge a friend');
       chb.type = 'button';
-      const chText = (link) => `\ud83c\udfaf I scored ${Math.round(p * 100)} on today’s Two-Minute Drill (#${dayN}). Beat that: ${link}`;
+      if (good) { btn.classList.add('ghostbtn'); if (firstFinish) track('challenge_primary', { day: dayN, score }); }
+      const chText = (link) => `${dayTitle(dayN) ? `${dayTitle(dayN)}: ` : ''}\ud83c\udfaf I scored ${score} on today’s Two-Minute Drill (#${dayN}). Beat that: ${link}`;
       chb.addEventListener('click', async () => { const id = await chMine(p); track('challenge_share', { day: dayN, real: !!id }); shareText(chText(id ? cLink(id) : legacy), pre, 'challenge'); });
       btn.after(chb);
       chMine(p).then((id) => { if (id && share.text.includes(legacy)) { share.text = share.text.replace(legacy, cLink(id)); pre.textContent = share.text; } });
     }
     chEnd(box, p, (box.querySelector(':scope > .chbtn') || btn).nextSibling);
+    // (Versus free for everyone: the button right under the result, above Share; Up next then offers Survivor, not Versus twice)
+    const vsBtn = !DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY && vsFreeWeek();
+    if (vsBtn) btn.before(vsFreeCard('daily'));
     const img = el('button', 'btn ghostbtn xshare', 'Share as a picture');
     img.type = 'button';
     img.addEventListener('click', () => shareImage({
@@ -9552,7 +9576,7 @@
     badgeShow(box, state.badges || [], firstFinish);
     if (!DRIVE && !RUN_N && !CUSTOM) endSimplify(box);
     // one clear thing to play next, right under Share (the owner: after the daily there was nothing that stood out)
-    if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) { const mo = box.querySelector(':scope > .endmore'); if (mo) mo.after(upNext()); else dbox.before(upNext()); }
+    if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) { const mo = box.querySelector(':scope > .endmore'); if (mo) mo.after(upNext(vsBtn)); else dbox.before(upNext(vsBtn)); }
     if (todayDaily()) {
       const inn = box.querySelector(':scope > .endmore > .in');
       if (inn) inn.append(fanLink());
@@ -9584,10 +9608,27 @@
   }
   // a new practice drive on the next visit (the finished one's card is kept until then)
   const practiceNext = () => { const st = load(PRACTICE_KEY, null); if (st && st.done) save(PRACTICE_KEY, { ...st, stale: true }); };
+  // Versus free for everyone, for good (site.py --vs-free-at; the owner, Oct 26: players don't know it is free): a button
+  // on the daily's end card and a line on Home's Versus card; the Championship's day and hour with it until it starts
+  const vsFreeWeek = () => VS_ON && !VS_PRO && !!BOARD.api;
+  const vsCupLine = () => {
+    const d = new Date(VS_SEASON.cupAt), days = Math.ceil((d - Date.now()) / 864e5);
+    if (!(days >= 0)) return '';
+    const when = `${d.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'America/New_York' })} ${d.toLocaleTimeString('en-US', { hour: 'numeric', timeZone: 'America/New_York' })} ET`;
+    return `${VS_SEASON.cup}: ${when}${days > 1 ? ` · in ${days} days` : days === 1 ? ' · tomorrow' : ' · today'}`;
+  };
+  function vsFreeCard(from) {
+    const w = el('div', 'vsfree'), a = el('a', 'btn vsfreebtn', 'Play a live opponent, free for everyone');
+    a.href = '#vs';
+    a.addEventListener('click', () => { track(from === 'home' ? 'vs_home_free' : 'vs_endcard', { day: dayN }); scrollTo(0, 0); });
+    w.append(a);
+    if (vsCupLine()) w.append(el('p', 'note', vsCupLine()));
+    return w;
+  }
   // Up next on the daily's end card: Versus for whoever can play it (someone live, the computer if nobody is on), else
   // Survivor (your run, or a new one); a practice drive a line below
-  function upNext() {
-    const w = el('section', 'upnext'), vs = VS_ON && !!BOARD.api && (!VS_PRO || isPro());
+  function upNext(vsShown) {
+    const w = el('section', 'upnext'), vs = VS_ON && !!BOARD.api && (!VS_PRO || isPro()) && !vsShown;
     const a = el('a', `hcard unext ${vs ? 'hvs' : 'hsurv'}`);
     if (vs) {
       a.href = '#vs';
@@ -9645,15 +9686,29 @@
   // would take are pending: the streak is still alive, and the top bar says so. A league board works it out the same
   // way from the synced days (board/worker.js streakOf: change both together).
   const FREEZE_EVERY = 7, FREEZE_MAX = 2;
+  // The week after the launch spike (Oct 15-17, 2026): a streak that broke after it comes back on the player's first day
+  // back this week. One gap of missed days begun on day AMNESTY_FROM (Oct 16) or later is covered, freeze or not, when
+  // the day that ends it is one of AMNESTY_DAYS (Oct 27 to Nov 2): the latest such gap, once; its days are kept as
+  // frozen, so it stays covered after the week. A league board does the same (board/worker.js: change both together)
+  const AMNESTY_FROM = 5, AMNESTY_DAYS = [16, 22];
+  // the day that ends the one gap the amnesty covers (0: none): the latest played day in the window after a gap begun on
+  // or after AMNESTY_FROM, else today when it is such a day and not played yet (the streak alive until it is)
+  function amnestyEnd(ks, d) {
+    let last = 0, end = 0;
+    const fits = (b) => last > 0 && b - last > 1 && last + 1 >= AMNESTY_FROM && b >= AMNESTY_DAYS[0] && b <= AMNESTY_DAYS[1];
+    for (const k of ks) { if (fits(k)) end = k; last = k; }
+    return end || (last < d && fits(d) ? d : 0);
+  }
   function streakOf(st, d) {
     const fz = st.frozen || {}, ks = Object.keys(st.days || {}).map(Number).filter((k) => k > 0 && k <= d).sort((a, b) => a - b);
-    const frozen = new Set();
+    const frozen = new Set(), back = new Set(), amn = amnestyEnd(ks, d);
     let run = 0, best = 0, held = 0, last = 0;
     // the missed days after the last one played and before day b, covered (frozen) or the streak over
     const bridge = (b) => {
       const gap = Array.from({ length: Math.max(0, b - last - 1) }, (_, j) => last + 1 + j);
       if (!gap.length) return [];
       if (run > 0 && (gap.length <= held || gap.every((j) => fz[j]))) { held = Math.max(0, held - gap.length); run += gap.length; return gap; }
+      if (run > 0 && b === amn) { run += gap.length; gap.forEach((j) => back.add(j)); return gap; }      // (the amnesty: no freeze spent)
       run = 0;
       return null;
     };
@@ -9666,7 +9721,7 @@
       last = k;
     }
     const pending = last && last < d ? bridge(d) : [];      // (today not played yet: not missed yet)
-    return { n: last && pending ? run : 0, best, held, frozen, pending: pending || [] };
+    return { n: last && pending ? run : 0, best, held, frozen, back, pending: pending || [] };
   }
   // the daily's top bar: the day, and the streak (❄️: a missed day a freeze covers once today is played); drawn again
   // when a finish or a sync changes the streak (never over practice's own label: a sync landing mid-drive put the day's
@@ -12250,8 +12305,11 @@
     const a = el('a', 'hcard hvs');
     a.href = '#vs';
     a.dataset.to = VS_PRO && !isPro() ? 'versus_pitch' : 'versus';
-    a.append(el('div', 'hk', VS_PRO && !isPro() ? 'Versus, with Pro' : `Versus · ${VS_SEASON.name}`), el('div', 'hpitch', 'Play someone'),
+    const free = vsFreeWeek();
+    a.append(el('div', 'hk', VS_PRO && !isPro() ? 'Versus, with Pro' : `Versus · ${VS_SEASON.name}`), el('div', 'hpitch', free ? 'Free for everyone' : 'Play someone'),
+      ...(free ? [el('p', '', `Play someone live.${vsCupLine() ? ` ${vsCupLine()}.` : ''}`)] : []),
       el('span', 'cta', VS_PRO && !isPro() ? 'Take a look' : 'Play'));
+    if (free) a.addEventListener('click', () => track('vs_home_free', { day: dayN }));
     return a;
   }
   // Pro: your record (drives passed and the rank, the runs, the archive), else what it is and its price

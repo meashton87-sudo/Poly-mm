@@ -1,134 +1,53 @@
-# Handoff: Two-Minute Drill (2mindrills.com), Oct 22, 2026
+# Handoff: Two-Minute Drill (2mindrills.com), Oct 26 2026
 
-The owner is Max. The repo is meashton87-sudo/Poly-mm; the game lives in `nfl-time-management/`. Read `CLAUDE.md` in
-that folder first. It holds the project's rules and how every part works.
+Repo: `meashton87-sudo/Poly-mm`, project in `nfl-time-management/`. Read `nfl-time-management/CLAUDE.md` first; it has
+the project rules (patch notes in every game PR, never commit generated data, teams by city only, bots and tests never
+reach ads/analytics/the real board, no model names in commits/PRs, commit trailer, etc.).
 
 ## Standing rules (from the owner)
+- Changes ship by PR to `main`, batched into one PR. The `site.yml` deploy takes 50-90 minutes and restarts the Versus
+  match server: never merge while a deploy is running, and not during the Season 1 Championship (Sun Nov 1, 6 PM ET).
+- Before merging, run `scripts/browser_test.py` locally. With stale local data one check, "Who plays: the quarterback",
+  can fail; with data built the same day it passes.
+- Legal changes are on hold (a stash on `claude/legal`, local only). Coach mode is paused.
+- Never paste or echo keys or secrets. Customer PII is never shared further.
 
-- Never paste or echo Stripe keys or secrets, and never ask the owner to paste keys.
-- Customer PII is never shared further. The owner pastes only `cs_live_` IDs; answer with
-  `https://2mindrills.com/?claim=<id>&r=1`.
-- Legal changes are on hold. Coach mode is paused.
-- No model names in code, PRs or commits.
-- Never commit generated data (see CLAUDE.md for the list).
-- Teams are named by city only, never by nickname.
-- Bots and tests must never reach ads, analytics, the real board or polymarket. Polymarket stays off.
-- Every PR that changes the game adds its notes at the top of `web/patch_notes.json`. Game changes only, never ads or
-  tooling. `tests/test_patch_notes.py` checks it.
-- Changes ship by PR to `main`. The `site.yml` deploy takes about 80 minutes, with the browser test as its gate.
-  - Don't merge while a deploy is running: it can cancel or delay the one in flight.
-  - Batch changes into one PR.
-- Before merging, run `scripts/browser_test.py` locally. One check, "Who plays: no spot with another quarterback",
-  always fails locally because the local data is stale. Ignore it.
-- Rare cosmetic checks report instead of blocking.
-- Commit trailer: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` and
-  `Claude-Session: https://claude.ai/code/session_013B7agMisSsirUrdiKtbxa2`. PR bodies end with the Claude Code line
-  and the session URL.
+## State right now
+- **Versus Season 1 is live** (#248, deployed 06:36Z Oct 26). Versus is free for everyone from 10 AM ET Oct 26
+  (VS_FREE_AT in site.yml). Season 1 runs to Sun Nov 1 noon ET; ratings start at 1000 (beta ratings archived in the
+  ladder's `past` table); the Season 1 Championship takes the top 16 (5+ games) at season end, bracket Sun Nov 1 6 PM
+  ET, no prize. Lobby: Invitational champion banner on top, one Play button, Season 1 ladder.
+- **Cup race fix is live** (#249): cup events run one at a time (blockConcurrencyWhile); cup_test covers it.
+- **Unknown:** whether the Invitational (Oct 25) finished with a champion before #248 deployed. If not, the lobby's
+  champion banner is empty: the champion can be set with POST `/vs/cup/admin`, or the banner data (`cupPast` in the
+  'cup' Durable Object) needs a small admin addition. Ask the owner who won.
 
-## What is live
+## In review: `claude/bot-findings-oct26` (the Oct 26 bot check's top 3, plus the pass screen)
+1. **Faster first call on phones.** The page's head (site.py, the inline script after the stamps meta) starts the
+   simulator's first worker at once (`self.TMD_W0`); game.js `startWorker` adopts it when its address matches
+   `workerUrl()` (else terminates it; a load error is kept and reported). Not on `#vs` pages. A `<link rel=preload>` was
+   tried and dropped (workers don't use page preloads; Chrome warns).
+2. **Lighter stands.** game.js `crowdPattern` draws the crowd tile as one `<image>` (an SVG data URI) inside the
+   pattern instead of ~900 shapes redrawn every camera frame (WebKit). Chromium at 6x CPU: mean frame 41 -> 31 ms,
+   frames over 50 ms 37-39 -> 2-7 of 240. Checked pixel-identical to the old drawing at 3x DPR in Chromium (native
+   scale and 4x zoom); Safari itself was not available locally.
+3. **`/midlogo.png` stamped and cached for good** (site.py IMMUTABLE, game.js `asset('midlogo.png')`).
+4. **Play action and Roll out on the pass screen itself** (the owner: players lost them behind More); only the
+   protection row stays behind More.
+Checks run on the branch: eslint, pytest, `site.py` (check_stamps), `browser_test.py --daily 6 --survivor 3 --games 2`
+(9 of 9 clean before item 4; re-run after it). Patch notes added ("Faster on phones").
+After the deploy: the next daily bot check (daily-check.yml, Chromium + WebKit) should show engine.js and the first call
+much sooner on the iPhone episodes and fewer frames over 200 ms; `/midlogo.png` no longer among the slow files.
 
-- **#212:** sacks, accept or decline penalties, hitch spam, run-blocking schemes, motion, formations, and the stats
-  tally.
-- **#213:** honest per-snap pass odds, pass protection (Standard / RB in / Max protect), the 📋 Plays concepts picker
-  (routes stay editable), the no-scroll phone layout, the tackler always on camera, and no defender running past the
-  ball carrier.
-- **#214, the patch notes page (`/patch-notes`):** merged at about 03:37 UTC. Its deploy should finish around 05:00
-  UTC. A scheduled check fires at 05:03 UTC (trigger `trig_012PybTGe4yCCVunG9wyVmaq`) and also reports the load test.
+## Local setup notes (a fresh container)
+- `pip install -e ".[dev]" && pip install playwright`; Chromium is pre-installed at `/opt/pw-browsers/chromium`
+  (pass it as `--chromium`); never `playwright install`. No WebKit locally.
+- Data: `python -m nflclock.cli build`, then `webexport.export_engine()` and `dailygame.build()` (about 10 minutes, the
+  nflverse downloads allowed). Then `python scripts/site.py _site_a --board-api http://board.example --no-ads` and the
+  browser test as in CLAUDE.md.
+- GitHub's artifact store (blob.core.windows.net) and the board worker's address were blocked from the container.
 
-## In progress: Versus launch (branch `claude/versus-launch`, no PR yet)
-
-**Done and committed:**
-- **Computer opponent** (`board/match.js`, mode `cpu`, seat 1):
-  - its call is always the engine's default, the same calls an average NFL staff would make;
-  - never ranked, never late, never a forfeit;
-  - offered after 20 s in the queue, or at once from the lobby's **Computer** button;
-  - a rematch needs only the player.
-- **Tests:**
-  - `board/match_test.mjs` covers the computer;
-  - `board/vs_cpu_test.mjs` plays 60 real-engine matches: all end on the score, none are rated, and a random caller
-    wins 42%;
-  - `board/vs_stress.mjs 300` passes.
-- **Client:**
-  - a Versus card on Home;
-  - the lobby leads with Play now (casual), then Ranked, Computer and Friend;
-  - your team shows on one line with a Change button (it defaults to your fanbase team);
-  - an ad on the match-over card only, never during a match (`ezDrive`);
-  - "Share the result";
-  - against the computer the status says "Snapping…", not "Waiting for your opponent";
-  - the score never wraps, and the match's call sheet is taller so the calls fit.
-- **Analytics events:** `vs_queue`, `vs_matched`, `vs_cpu_offer`, `vs_cpu`, `vs_queue_cancel`, `vs_start`,
-  `vs_finish`.
-- **Patch notes:** a Versus entry dated 2026-10-22.
-- **Load test:**
-  - `.github/workflows/versus-load.yml` deploys the board as its own worker (`two-minute-drill-loadtest`, see
-    `board/wrangler.loadtest.toml`), runs `board/vs_load.mjs` (60 bot pairs and 40 matches against the computer),
-    then deletes that worker.
-  - Locally against `wrangler dev`: 40 matches, 0 errors, 95% of answers within about 1.4 s.
-  - Run 1 failed for lack of `web/teams.json` (fixed).
-  - Run 2 (id 39717865513) passed: 160 bots, 100 matches (40 against the computer), all ended on the score, 0
-    errors. Answers p50 62 ms, p95 392 ms, p99 974 ms, max 6.5 s; first snap about 1 s. The test worker was deleted.
-- **Browser test:** a full match against the computer was played in a real browser against a local `wrangler dev`.
-  It ended on the score with no script errors (before the last round of fixes).
-
-**Left to do:**
-1. **Owner approval needed: turn Versus on.** In `.github/workflows/site.yml`, set `VS_ON: "off"` to `"on"`. The
-   permission system blocked this edit, so ask the owner first.
-2. Re-run the full browser test on this branch. The last run was killed by a container restart.
-3. Re-run the match-against-the-computer browser check after the latest fixes:
-   - build the site with `python scripts/site.py <dir> --vs --board-api http://127.0.0.1:8787 --no-ads`;
-   - serve the board with `cd board && npx wrangler@4.144.0 dev --config wrangler.loadtest.toml --port 8787`, after
-     copying `board/assets/vs/*` into `board/assets-loadtest/vs/`;
-   - play it from Playwright: click `#intro .btn`, then prefer `#dock .key.big`;
-   - confirm `#dock` never scrolls (scrollHeight minus clientHeight should be 0).
-4. Open the PR (base `main`). The branch already has `origin/main` merged in.
-
-## Multiplayer: the hater review
-
-**Fixed** on `claude/versus-launch`:
-- The lobby's Play buttons now sit at the top, with your team on one line and a Change button.
-- Against the computer the status no longer says "waiting for your opponent".
-- A match's calls fit on a phone with no scrolling.
-- The score on the end card stays on one line.
-- There's a "Share the result" button.
-- **Computer levels:** Rookie and Pro.
-  - Rookie throws deep on any down and plays a soft defense with a light rush.
-  - It also settles for a field goal from second down on in range, unless three points would lose on the spot.
-  - `vs_cpu_test.mjs 600` measures a random-calling player beating the Rookie about 41–47% of the time and the Pro
-    40–47% (the 53% from 120 matches was noise). The calls move a match only a few points, so the Rookie is only a
-    little easier. Kicking a field goal that loses on the spot made it easier (57%) but looked broken, so it was
-    dropped.
-- **No play clock against the computer:** each call has 10 minutes, and locking the phone for under 10 minutes
-  never forfeits (`CPU_DECIDE_MS`).
-- The match intro shows the full rules only for your first two matches.
-- Your ranked rating now shows at the top of the lobby.
-- "Rematch" says "They left" when the opponent has gone, instead of waiting forever.
-- The ranked name was already fixed: it falls back to the account username.
-
-**Checked:** a full match against the computer in a real browser, against `wrangler dev`, ended "You win 13–0", with
-no screen needing to scroll and no script errors. `match_test`, `vs_cpu_test 120` and `vs_stress 200` all pass.
-
-**Still open:**
-
-| Issue | Idea |
-|---|---|
-| Ranked will have few players at launch (the computer covers casual only) | Show "players online" in the lobby |
-| No in-match emotes | Low priority |
-| The 60 s away-forfeit against human players is harsh on iOS app switching | Consider 90 s |
-
-## Other open tasks
-
-- Defense analytics calibration (task 73).
-- No catches in "triple coverage" (74).
-- An Alabama at Tennessee Saturday daily (75).
-- The NBA prototype ("Final Possession"): the latest artifact is https://claude.ai/artifact/KVK8jcY73XuuA5fZhhoDr4.
-  - Its source is `final-possession.html` in the old session's scratchpad (not in the repo).
-  - Owner feedback was to make it broadcast quality: players moving in their real team systems, animated free throws,
-    the tempo choice, and visible passes. Version 3 was rebuilt for that.
-
-## Business context the owner shared
-
-- About 100k players a day, with about 10k active in any 30 minutes.
-- Daily drives all-time: 601,923 by Oct 21; Survivor and Pro were only counted from Oct 22.
-- Ads run on Ezoic, pending Google approval. Kyle at Ezoic asked whether we're still waiting on AdSense approval.
-- The earnings estimate given was about $900 a day before Google approval, roughly $25–35k over 30 days if approval
-  comes in about two weeks. The owner should send Ezoic dashboard screenshots so it can be calibrated.
+## Other open items
+- Daily bot check: the scheduled 10:23 UTC run fires late, after the review routine (11:25 UTC) already dispatched one
+  by hand; the gate job skips the later scheduled run. Moving the review later or the cron earlier would avoid it.
+- Not started, awaiting the owner: push notifications / daily reminder toggle.
