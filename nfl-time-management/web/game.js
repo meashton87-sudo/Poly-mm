@@ -326,10 +326,12 @@
   // versus (two players, live; the site build's --vs turns it on: <meta name="vs">): #vs the lobby, #vs-CODE a room.
   // --vs-at holds it until a time (<meta name="vs-at">: a reload after shows it); --vs-pro makes it Pro's (<meta
   // name="vs-pro">): the lobby, its quick match and the computer take Pro, and anyone without it sees the Pro pitch.
-  // A room's link (#vs-CODE, a Pro player's invite) still plays for whoever has it
+  // A room's link (#vs-CODE, a Pro player's invite) still plays for whoever has it. --vs-free-at opens it to everyone
+  // from a time (<meta name="vs-free-at">: Season 1, the owner)
   const VS_AT = Date.parse((document.querySelector('meta[name="vs-at"]') || {}).content || '') || 0;
+  const VS_FREE_AT = Date.parse((document.querySelector('meta[name="vs-free-at"]') || {}).content || '') || 0;
   const VS_ON = !!document.querySelector('meta[name="vs"]') && Date.now() >= VS_AT;
-  const VS_PRO = VS_ON && !!document.querySelector('meta[name="vs-pro"]');
+  const VS_PRO = VS_ON && !!document.querySelector('meta[name="vs-pro"]') && !(VS_FREE_AT && Date.now() >= VS_FREE_AT);
   const VS_LOBBY = VS_ON && location.hash === '#vs';
   const VS_ROOM = VS_ON ? ((location.hash.match(/^#vs-([A-HJ-KM-NP-Z2-9]{6})$/) || [])[1] || '') : '';
   const VS = !!VS_ROOM;
@@ -12248,7 +12250,7 @@
     const a = el('a', 'hcard hvs');
     a.href = '#vs';
     a.dataset.to = VS_PRO && !isPro() ? 'versus_pitch' : 'versus';
-    a.append(el('div', 'hk', VS_PRO ? (isPro() ? 'Versus · Beta' : 'Versus · Beta, with Pro') : 'Versus · Beta'), el('div', 'hpitch', 'Play someone'),
+    a.append(el('div', 'hk', VS_PRO && !isPro() ? 'Versus, with Pro' : `Versus · ${VS_SEASON.name}`), el('div', 'hpitch', 'Play someone'),
       el('span', 'cta', VS_PRO && !isPro() ? 'Take a look' : 'Play'));
     return a;
   }
@@ -13076,7 +13078,10 @@
   // result to both phones, which animate it. The room keeps the play clock and the score, calls forfeits and rates
   // ranked matches; a phone only ever sends a call. Modes: ranked (the ladder: matched by rating), casual, a friend.
   const VS_TEAM_KEY = `${STORE}:vsteam`;
-  const VS_MODES = { ranked: 'Ranked', casual: 'Casual', friend: 'Friend match', cpu: 'Versus the computer', cup: 'The Invitational' };
+  // the season (board/match.js SEASON and CUP; the ladder's answer has the season's own times)
+  const VS_SEASON = { name: 'Season 1', startAt: '2026-10-26T14:00:00Z', endAt: '2026-11-01T17:00:00Z', cup: 'Season 1 Championship', cupAt: '2026-11-01T23:00:00Z' };
+  const VS_CUP_MIN = 5;
+  const VS_MODES = { ranked: VS_SEASON.name, casual: 'Quick match', friend: 'Friend match', cpu: 'Versus the computer', cup: VS_SEASON.cup };
   const VS_CPU_KEY = `${STORE}:vscpu`, VS_CPU_LEVELS = { rookie: 'Rookie', pro: 'Pro' };
   const vsCpuLevel = () => (VS_CPU_LEVELS[load(VS_CPU_KEY, 'pro')] ? load(VS_CPU_KEY, 'pro') : 'pro');
   const VS_CPU_DECIDE_MS = 10 * 60e3;       // against the computer: no play clock to speak of (match.js CPU_DECIDE_MS)
@@ -13241,7 +13246,7 @@
     const r = vs.result || {}, them = (r.missing || []).includes(1 - vs.seat) || (r.by === 'forfeit' && r.winner === vs.seat);
     if (r.by === 'forfeit') {       // ranked: one side never came, a loss for it
       box.append(el('h2', '', r.winner === vs.seat ? 'You win: they didn’t show' : 'You forfeited'),
-        el('p', 'lead', r.winner === vs.seat ? 'Your opponent never joined the match. It counts as a win.' : 'You were matched but didn’t join in time. In ranked that counts as a loss.'));
+        el('p', 'lead', r.winner === vs.seat ? 'Your opponent never joined the match. It counts as a win.' : `You were matched but didn’t join in time. In a ${VS_SEASON.name} match that counts as a loss.`));
       const p = el('p', 'vsrating', '');
       const x = vs.rated && vs.rated.ratings && vs.rated.ratings[vs.seat];
       if (x) p.textContent = `Rating ${x.before} → ${x.after} (${x.delta >= 0 ? '+' : '−'}${Math.abs(x.delta)})${x.rank ? ` · #${x.rank}` : ''}`;
@@ -13249,7 +13254,7 @@
     } else box.append(el('h2', '', 'Match called off'), el('p', 'lead', them ? 'Your opponent didn’t show up. Nobody’s rating changed.' : 'The match didn’t start in time. Nobody’s rating changed.'));
     const row = el('div', 'row');
     if (vs.mode === 'ranked' || vs.mode === 'casual') {
-      const again = el('button', 'btn', vs.mode === 'ranked' ? 'Find another ranked match' : 'Find another match');
+      const again = el('button', 'btn', 'Find another match');
       again.type = 'button';
       again.addEventListener('click', () => { location.hash = '#vs'; try { sessionStorage.setItem('tmd:vsqueue', vs.mode); } catch (e) { /* none */ } });
       row.append(again);
@@ -13338,7 +13343,7 @@
     // nobody to play after a while (match.js CPU_AFTER_S): the computer, one tap (never rated), or keep waiting
     const cpu = el('button', 'btn', 'Play the computer now');
     cpu.type = 'button'; cpu.hidden = true;
-    cpu.append(el('small', '', 'Unranked · starts right away'));
+    cpu.append(el('small', '', 'Not rated · starts right away'));
     cpu.addEventListener('click', () => {
       if (!ws || ws.readyState !== 1) return;          // (ws: the queue's socket, below)
       cpu.disabled = true;
@@ -13383,70 +13388,61 @@
     open();
     track('vs_queue', { mode });
   }
-  // the Versus screen (#vs): your team, then ranked, casual or a friend; the ladder
-  // The Cup (board/match.js CUP, GET /vs/cup): the top on the ranked ladder at the qualifying time play a bracket from
-  // the start; before it, where you stand; then the seeds, your match (its room: both seats are taken for you), the
-  // bracket and the champion (whose phone shows the claim code for the prize)
-  function vsCupBox() {
+  // the Versus screen (#vs): the last Cup's champion on top, your rating and team, the season, Play, the ladder
+  // The season (board/match.js SEASON, from /vs/ladder): ranked matches count from its start to its end, everyone from
+  // 1000; outside it Play is a quick match, no rating. Its Championship (match.js CUP, GET /vs/cup): the top on the
+  // ladder as the season ends play a bracket; before it, where you stand; then the seeds, your match (its room: both
+  // seats are taken for you), the bracket and the champion. The Cup before it stays on as its champion (cup.past)
+  const vsWhen = (iso) => new Date(iso).toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit' });
+  const vsInSeason = (s) => !!s && Date.now() >= Date.parse(s.startAt) && Date.now() < Date.parse(s.endAt);
+  function vsCupBox(champ) {
     const box = el('div', 'vscup');
-    const when = (iso) => new Date(iso).toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit' });
     fetch(`${BOARD.api}/vs/cup?key=${encodeURIComponent(deviceKey())}`).then((r) => (r.ok ? r.json() : null)).then((c) => {
       if (!c || !box.isConnected || c.error) return;
+      // (the last Cup's champion, atop the lobby; his phone: the claim code, by DM to the game's account on X)
+      const past = (c.past || [])[0];
+      if (past && champ.isConnected) {
+        champ.append(el('span', 'pk', `${past.name} champion`), el('b', '', `🏆 ${past.champ}`));
+        if (past.you && past.claim) {
+          const p = el('p', 'note', `That’s you! DM your claim code ${past.claim} to `), x = el('a', '', '@TwoMinuteDrill0 on X');
+          x.href = 'https://x.com/TwoMinuteDrill0'; x.target = '_blank'; x.rel = 'noopener';
+          p.append(x, document.createTextNode(' for your prize.'));
+          champ.append(p);
+        }
+      }
       const now = Date.now(), skew = c.now - now, at = (iso) => Date.parse(iso) - skew;
       const done = !!c.champ, started = now >= at(c.startAt), you = c.you || {};
+      if (!c.seeds) return;                                  // (the season under way: the season card says it all)
       if (done && now - at(c.startAt) > 3 * 86400e3) return;          // (an old Cup: gone from the lobby after a few days)
-      box.append(el('div', 'hk', 'Two-Minute Drill Invitational'), el('b', 'cupb', `${c.prize} to the winner`));
-      if (!c.seeds) {
-        box.append(el('p', '', `Top ${c.size} on the ladder · ${when(c.startAt)}`));
-        box.append(el('p', 'note', you.seed ? `You’re #${you.seed}: in, if it holds.` : 'Not in yet: play Ranked.'));
-        // (the rules, a tap away)
-        const how = el('details', 'vscupb');
-        how.append(el('summary', '', 'How it works'), el('div', 'mt', `The top ${c.size} on the ranked ladder at ${when(c.qualifyAt)} (${c.minGames} ranked game${c.minGames === 1 ? '' : 's'} or more) play a bracket from ${when(c.startAt)}, live. Be in within 10 minutes of your match opening or it goes to your opponent.`));
-        box.append(how);
-      } else if (!done) {
-        box.append(el('p', '', you.qualified ? `You’re in: seed ${you.seed} of ${c.seeds.length}.` : `The ${c.seeds.length} are in. ${started ? 'Under way now.' : `It starts ${when(c.startAt)}.`}`));
+      box.append(el('div', 'hk', c.name || 'The Championship'));
+      if (!done) {
+        box.append(el('p', '', you.qualified ? `You’re in: seed ${you.seed} of ${c.seeds.length}.` : `The ${c.seeds.length} are in. ${started ? 'Under way now.' : `It starts ${vsWhen(c.startAt)}.`}`));
         const m = you.match;
         if (you.qualified && m && m.room) {
-          const go = el('a', 'btn', `Play your Invitational match${m.opp ? ` vs ${m.opp}` : ''}`);
+          const go = el('a', 'btn', `Play your match${m.opp ? ` vs ${m.opp}` : ''}`);
           go.href = `#vs-${m.room}`;
           go.addEventListener('click', () => { try { sessionStorage.setItem(`tmd:vsmode:${m.room}`, 'cup'); } catch (e) { /* none */ } });
           box.append(go, el('p', 'note', 'Be in within 10 minutes.'));
         } else if (you.qualified && m && m.won === false) box.append(el('p', 'note', `Out in round ${m.round}. Thanks for playing.`));
-        else if (you.qualified && !started) box.append(el('p', 'note', `Come back at ${when(c.startAt)}: your match opens here.`));
+        else if (you.qualified && !started) box.append(el('p', 'note', `Come back at ${vsWhen(c.startAt)}: your match opens here.`));
         else if (you.qualified) box.append(el('p', 'note', 'Your next match opens here when your opponent is known.'));
-      } else {
-        box.append(el('p', '', `Champion: ${c.champ}`));
-        if (you.champ && you.claim) {          // (the owner: the code by DM to the game's account on X)
-          const p = el('p', 'note', `That’s you! DM your claim code ${you.claim} to `), x = el('a', '', '@TwoMinuteDrill0 on X');
-          x.href = 'https://x.com/TwoMinuteDrill0'; x.target = '_blank'; x.rel = 'noopener';
-          p.append(x, document.createTextNode(` for your ${c.prize}.`));
-          box.append(p);
-        }
-      }
+      } else box.append(el('b', 'cupb', `🏆 ${c.champ}`));
       // the bracket, round by round (who played whom, who went on)
-      const list = c.seeds || c.projection || [];
-      if (c.matches && c.seeds) {
-        const det = el('details', 'vscupb'), names = (n) => (n == null ? 'bye' : `${n} ${c.seeds[n - 1].name}`);
-        det.append(el('summary', '', 'The bracket'));
-        const rounds = Math.max(...c.matches.map((m) => m.round));
-        for (let r = 1; r <= rounds; r++) {
-          det.append(el('div', 'lab', r === rounds ? 'Final' : r === rounds - 1 ? 'Semifinals' : r === rounds - 2 ? 'Quarterfinals' : `Round ${r}`));
-          c.matches.filter((m) => m.round === r).forEach((m) => {
-            if (m.p[0] == null && m.p[1] == null) return;
-            const line = el('div', `mt${m.live ? ' live' : ''}`);
-            m.p.forEach((x, k) => { if (k) line.append(el('span', 'v', ' vs ')); line.append(el('span', m.w === k ? 'w' : '', names(x))); });
-            if (m.live) line.append(el('span', 'v', ' · live'));
-            if (m.score && m.by === 'score') line.append(el('span', 'v', ` · ${m.score[0]}–${m.score[1]}`));
-            det.append(line);
-          });
-        }
-        box.append(det);
-      } else if (list.length) {
-        const det = el('details', 'vscupb');
-        det.append(el('summary', '', `The top ${c.size} right now`));
-        list.forEach((x) => det.append(el('div', 'mt', `${x.seed}. ${x.name} · ${x.rating}`)));
-        box.append(det);
+      const det = el('details', 'vscupb'), names = (n) => (n == null ? 'bye' : `${n} ${c.seeds[n - 1].name}`);
+      det.append(el('summary', '', 'The bracket'));
+      const rounds = Math.max(...c.matches.map((m) => m.round));
+      for (let r = 1; r <= rounds; r++) {
+        det.append(el('div', 'lab', r === rounds ? 'Final' : r === rounds - 1 ? 'Semifinals' : r === rounds - 2 ? 'Quarterfinals' : `Round ${r}`));
+        c.matches.filter((m) => m.round === r).forEach((m) => {
+          if (m.p[0] == null && m.p[1] == null) return;
+          const line = el('div', `mt${m.live ? ' live' : ''}`);
+          m.p.forEach((x, k) => { if (k) line.append(el('span', 'v', ' vs ')); line.append(el('span', m.w === k ? 'w' : '', names(x))); });
+          if (m.live) line.append(el('span', 'v', ' · live'));
+          if (m.score && m.by === 'score') line.append(el('span', 'v', ` · ${m.score[0]}–${m.score[1]}`));
+          det.append(line);
+        });
       }
+      box.append(det);
     }).catch(() => { /* no Cup box */ });
     return box;
   }
@@ -13461,22 +13457,16 @@
       box.append(...proNodes(), authNodes());
       return;
     }
-    // the lobby, laid out as the Pro hub is (the owner: like the Pro tab, more to look at): you (your rating and team)
-    // in a card, the Invitational, then a tile a way to play (Play now the big one), the smaller things in a card, the
-    // ladder
-    // (a beta until the full release, the owner: Monday)
-    const vh = el('h2', '', 'Versus ');
-    vh.append(el('span', 'betatag', 'Beta'));
-    box.append(vh);
+    // (the owner, Oct 25: clean and simple. The champion on top, you, the season, one Play, the ladder)
+    box.append(el('h2', '', 'Versus'));
+    const champ = el('div', 'vschamp');
+    box.append(champ);
     const fan = load(FAN_KEY, null);
     if (!vsMyTeam() && fan && TEAMS[fan] && !COLLEGE.has(fan)) save(VS_TEAM_KEY, fan);
     let open = !vsMyTeam();
     const hub = el('section', 'phub vshub'), rk = el('div', 'prank vsrank'), pick = el('div', 'vspick');
-    const rB = el('b', '', '1000'), rS = el('span', 'ps', 'Unranked'), rBar = el('span', 'pbar'), rF = el('i');
-    rF.style.width = '0%';
-    rBar.append(rF);
-    rk.append(el('span', 'pk', 'Your rating'), rB, rS, rBar);
-    const meLine = rS;                              // (filled in once the ladder answers, below)
+    const rB = el('b', '', '1000'), rS = el('span', 'ps', 'No games yet');
+    rk.append(el('span', 'pk', 'Your rating'), rB, rS);
     const drawPick = () => {
       pick.textContent = '';
       const t = vsMyTeam();
@@ -13494,10 +13484,22 @@
     };
     hub.append(rk, pick);
     box.append(hub);
-    if (BOARD.api) box.append(vsCupBox());
+    // the season: when, and how the Championship is made
+    let season = { ...VS_SEASON };
+    const sbox = el('section', 'phub vsseason');
+    const drawSeason = () => {
+      sbox.textContent = '';
+      const now = Date.now(), s0 = Date.parse(season.startAt), s1 = Date.parse(season.endAt);
+      sbox.append(el('span', 'pk', season.name), el('b', '', now < s0 ? `Starts ${vsWhen(season.startAt)}` : now < s1 ? `Ends ${vsWhen(season.endAt)}` : 'Final standings'));
+      if (now < s1) sbox.append(el('p', 'note', `The top 16 (${VS_CUP_MIN} games or more) play the ${VS_SEASON.cup}, ${vsWhen(VS_SEASON.cupAt)}.`));
+    };
+    drawSeason();
+    box.append(sbox);
+    if (BOARD.api) box.append(vsCupBox(champ));
     const go = (mode) => {
       if (!vsMyTeam()) { toast('Pick your team first'); return; }
-      if (mode === 'ranked' && !myName()) { toast('Ranked needs a name: set it below'); nameIn.focus(); return; }
+      if (mode === 'play') mode = vsInSeason(season) ? 'ranked' : 'casual';
+      if (mode === 'ranked' && !myName()) { toast(`Set your name for the ${season.name} ladder`); nameIn.focus(); return; }
       if (mode === 'friend') {
         const a = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', room = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => a[b % a.length]).join('');
         try { sessionStorage.setItem(`tmd:vsmode:${room}`, 'friend'); } catch (e) { /* none */ }
@@ -13507,12 +13509,11 @@
       }
       vsQueue(mode);
     };
-    // (casual first and biggest: a quick match, no rating; ranked's first 10 games are placement, a rating that moves faster)
+    // one Play (in the season a rated match, else a quick one), the computer and a friend beside it
     const modes = el('div', 'ptiles vsmodes');
-    [['casual', 'play', 'Play now', 'Quick match, no rating', { big: true }], ['ranked', 'ranked', 'Ranked', '', {}],
-      ['cpu', 'cpu', 'Computer', '', {}], ['friend', 'friend', 'Play a friend', '', { wide: true }]].forEach(([m, kind, title, sub, o]) => {
+    const playSub = () => (vsInSeason(season) ? `${season.name} match` : 'Quick match');
+    [['play', 'play', 'Play', playSub(), { big: true }], ['cpu', 'cpu', 'Computer', '', {}], ['friend', 'friend', 'Play a friend', '', {}]].forEach(([m, kind, title, sub, o]) => {
       const b = proCard(kind, title, sub, () => go(m), o);
-      if (o.wide) b.classList.add('wide');
       b.dataset.mode = m;
       b.disabled = !BOARD.api;
       modes.append(b);
@@ -13535,7 +13536,7 @@
     };
     drawLv();
     const nameRow = el('label', 'vsfield'), nameIn = el('input');
-    nameIn.placeholder = 'Your name (for ranked)'; nameIn.maxLength = 24; nameIn.value = myName(); nameIn.setAttribute('aria-label', 'Your name');
+    nameIn.placeholder = 'Your name'; nameIn.maxLength = 24; nameIn.value = myName(); nameIn.setAttribute('aria-label', 'Your name');
     nameIn.addEventListener('change', () => { save(NAME_KEY, nameIn.value.trim().slice(0, 24)); track('name_set', { mode: 'versus' }); });
     nameRow.append(el('span', 'pk', 'Your name on the ladder'), nameIn);
     const joinRow = el('div', 'vsfield'), join = el('div', 'row'), inp = el('input'), jb = el('button', 'btn ghostbtn', 'Join');
@@ -13555,25 +13556,29 @@
     // straight back into the queue (a no-show's "find another match")
     let again = null;
     try { again = sessionStorage.getItem('tmd:vsqueue'); sessionStorage.removeItem('tmd:vsqueue'); } catch (e) { /* none */ }
-    if ((again === 'ranked' || again === 'casual') && vsMyTeam()) { vsQueue(again); return; }
+    if ((again === 'ranked' || again === 'casual') && vsMyTeam()) { vsQueue(again === 'ranked' && !vsInSeason(season) ? 'casual' : again); return; }
     // the ladder, and you on it
-    const lad = el('section', 'phub vsladder');
-    lad.append(el('span', 'pk', 'Ranked ladder'));
+    const lad = el('section', 'phub vsladder'), ladK = el('span', 'pk', `${season.name} ladder`);
+    lad.append(ladK);
     box.append(lad);
     try {
       await BOARD.ready;
       const [top, me] = await Promise.all([fetch(`${BOARD.api}/vs/ladder`).then((r) => r.json()), fetch(`${BOARD.api}/vs/me`, POST_JSON({ key: deviceKey() })).then((r) => r.json())]);
-      const streak = me.streak > 1 ? ` · ${me.streak} wins in a row` : me.streak < -1 ? ` · ${-me.streak} losses in a row` : '';
-      // (your rating up top, the Pro hub's rank card: a placement bar for the first 10, then your rank)
+      if (top.season && top.season.startAt && top.season.endAt) {
+        season = { ...season, ...top.season };
+        drawSeason();
+        ladK.textContent = `${season.name} ladder`;
+        const ps = modes.querySelector('[data-mode="play"] .ps');
+        if (ps) ps.textContent = playSub();
+      }
       if (me.games) {
         rB.textContent = String(me.rating);
-        meLine.textContent = `${me.rank ? `#${me.rank} on the ladder · ` : ''}${me.w}–${me.l}${streak}${me.provisional ? ` · placement ${me.games} of 10` : ''}`;
-        rF.style.width = `${Math.round(100 * Math.min(1, me.games / 10))}%`;
+        rS.textContent = `${me.rank ? `#${me.rank} · ` : ''}${me.w}–${me.l}`;
       }
       const ol = el('ol', 'board');
-      (top.top || []).slice(0, 20).forEach((x, i) => { const li = el('li', i < 3 ? `m${i + 1}` : ''); li.append(el('span', 'rk', String(x.rank || i + 1)), el('span', 'nm', x.name), el('span', 'n', `${x.rating}${x.provisional ? '?' : ''} · ${x.w}–${x.l}`)); ol.append(li); });
-      if (!(top.top || []).length) lad.append(el('p', 'note', 'Nobody yet. Be the first.'));
-      else lad.append(ol, el('p', 'note', '? = still in placement'));
+      (top.top || []).slice(0, 20).forEach((x, i) => { const li = el('li', i < 3 ? `m${i + 1}` : ''); li.append(el('span', 'rk', String(x.rank || i + 1)), el('span', 'nm', x.name), el('span', 'n', `${x.rating} · ${x.w}–${x.l}`)); ol.append(li); });
+      if (!(top.top || []).length) lad.append(el('p', 'note', Date.now() < Date.parse(season.startAt) ? `Opens ${vsWhen(season.startAt)}.` : 'Nobody yet. Be the first.'));
+      else lad.append(ol);
     } catch (e) { lad.append(el('p', 'note', 'The ladder did not load.')); }
   }
   function vsNote(text) {
@@ -13924,17 +13929,17 @@
     card.append(el('p', 'vsrating', ''));
     const row = el('div', 'row');
     if (vs.mode === 'ranked') {
-      const q = el('button', 'btn', 'Play ranked again');
+      const q = el('button', 'btn', 'Play again');
       q.type = 'button';
       q.addEventListener('click', () => { vs.closedByUs = true; try { sessionStorage.setItem('tmd:vsqueue', 'ranked'); } catch (e) { /* none */ } location.hash = '#vs'; });
       row.append(q);
     }
-    if (vs.mode === 'cup') {                     // (the Invitational: no rematch; back to the bracket)
-      const b = el('a', 'btn', 'Back to the Invitational');
+    if (vs.mode === 'cup') {                     // (the Championship: no rematch; back to the bracket)
+      const b = el('a', 'btn', 'Back to the bracket');
       b.href = '#vs';
       row.append(b);
     } else if (res.by === 'score' || res.by === 'forfeit') {
-      const again = el('button', `btn${vs.mode === 'ranked' ? ' ghostbtn' : ''}`, vs.mode === 'ranked' ? 'Rematch (casual)' : 'Rematch');
+      const again = el('button', `btn${vs.mode === 'ranked' ? ' ghostbtn' : ''}`, vs.mode === 'ranked' ? 'Rematch (not rated)' : 'Rematch');
       again.type = 'button'; again.id = 'vsAgain';
       again.addEventListener('click', () => { again.disabled = true; again.textContent = vs.mode === 'cpu' ? 'Setting up…' : 'Waiting for your opponent…'; vsSend({ t: 'rematch' }); });
       if (vs.mode !== 'cpu' && vs.online && !vs.online[1 - vs.seat]) { again.disabled = true; again.textContent = 'They left'; }
@@ -13966,10 +13971,10 @@
     if (!p || vs.mode !== 'ranked') return;
     const res = vs.result || {};
     if (res.winner < 0) { p.textContent = 'Not rated.'; return; }
-    if (!vs.rated) { p.textContent = 'Ranked: updating your rating…'; return; }
-    if (!vs.rated.rated) { p.textContent = 'Not rated: you’ve played each other three times today.'; return; }
+    if (!vs.rated) { p.textContent = 'Updating your rating…'; return; }
+    if (!vs.rated.rated) { p.textContent = vs.rated.reason === 'season' ? `Not rated: ${VS_SEASON.name} isn’t on right now.` : 'Not rated: you’ve played each other three times today.'; return; }
     const x = vs.rated.ratings[vs.seat];
-    p.textContent = `Rating ${x.before} → ${x.after} (${x.delta >= 0 ? '+' : '−'}${Math.abs(x.delta)})${x.rank ? ` · #${x.rank}` : ''}${x.provisional ? ` · placement ${x.games} of 10` : ''}`;
+    p.textContent = `Rating ${x.before} → ${x.after} (${x.delta >= 0 ? '+' : '−'}${Math.abs(x.delta)})${x.rank ? ` · #${x.rank}` : ''}`;
   }
 
   // ----------------------------------------------------------------- boot ---

@@ -97,12 +97,21 @@ export const MM = { WIN_BASE: 100, WIN_PER_S: 20, WIN_OPEN_S: 45, TICK_MS: 2000 
 // top seeds get byes). Each match's room is made with both seats taken as soon as both its players are known; a player
 // not in (and on a team) `showMs` after it opens loses it, neither: the higher seed goes on. Results come from the rooms,
 // never a phone. The worker vars CUP_ID, CUP_QUALIFY_AT, CUP_START_AT and CUP_PRIZE set another one
-export const CUP = { id: '2026-10-25', qualifyAt: '2026-10-25T16:00:00Z', startAt: '2026-10-25T22:00:00Z', size: 16, minGames: 5, showMs: 10 * 60_000, prize: '$50' };
+// (the first, Oct 25, was The Invitational ($50); its champion stays on as cupPast, shown atop the lobby)
+export const CUP = { id: 's1', name: 'Season 1 Championship', qualifyAt: '2026-11-01T17:00:00Z', startAt: '2026-11-01T23:00:00Z', size: 16, minGames: 5, showMs: 10 * 60_000, prize: '' };
 export const cupConfig = (env = {}) => {
   const size = [2, 4, 8, 16, 32].includes(Number(env.CUP_SIZE)) ? Number(env.CUP_SIZE) : CUP.size;
-  const c = { ...CUP, id: env.CUP_ID || CUP.id, qualifyAt: env.CUP_QUALIFY_AT || CUP.qualifyAt, startAt: env.CUP_START_AT || CUP.startAt, prize: env.CUP_PRIZE || CUP.prize,
+  const c = { ...CUP, id: env.CUP_ID || CUP.id, name: env.CUP_NAME || CUP.name, qualifyAt: env.CUP_QUALIFY_AT || CUP.qualifyAt, startAt: env.CUP_START_AT || CUP.startAt, prize: env.CUP_PRIZE ?? CUP.prize,
     size, minGames: Number.isInteger(Number(env.CUP_MIN_GAMES)) && env.CUP_MIN_GAMES !== undefined && env.CUP_MIN_GAMES !== '' ? Number(env.CUP_MIN_GAMES) : CUP.minGames };
   return { ...c, qAt: Date.parse(c.qualifyAt), sAt: Date.parse(c.startAt) };
+};
+// The season (the owner, Oct 25): ranked games count from startAt to endAt, everyone from ELO.START (the beta's ratings
+// kept in the table past, never shown); the season's Championship (CUP) takes its top 16 as the season ends. The worker
+// vars SEASON_ID, SEASON_NAME, SEASON_START_AT and SEASON_END_AT set another one
+export const SEASON = { id: 's1', name: 'Season 1', startAt: '2026-10-26T14:00:00Z', endAt: '2026-11-01T17:00:00Z' };
+export const seasonConfig = (env = {}) => {
+  const c = { id: env.SEASON_ID || SEASON.id, name: env.SEASON_NAME || SEASON.name, startAt: env.SEASON_START_AT || SEASON.startAt, endAt: env.SEASON_END_AT || SEASON.endAt };
+  return { ...c, sAt: Date.parse(c.startAt), eAt: Date.parse(c.endAt) };
 };
 // the bracket's first round by seed (0 the top seed), the standard order: 1 v 16, 8 v 9, 4 v 13, 5 v 12 | 2 v 15, 7 v 10,
 // 3 v 14, 6 v 11 (the top two can only meet in the final)
@@ -701,9 +710,19 @@ export class Match {
 
   // ---------------------------------------------------------------------------------------------------- the Cup ---
   // the object named 'cup' (CUP): cupObj {id, snap: {at, seeds: [{kh, name, rating, games}]}, matches, champ, claim}
+  // (a Cup another one replaces: its champion kept in cupPast, the newest first: name, the champion's name and key hash
+  // and claim code, for his phone only)
   async cupLoad(cfg) {
     const c = await this.ctx.storage.get('cupObj');
-    return c && c.id === cfg.id ? c : { id: cfg.id, snap: null, matches: null, champ: null, claim: null };
+    if (c && c.id === cfg.id) return c;
+    if (c && c.snap && c.champ !== null && c.champ !== undefined) {
+      const past = (await this.ctx.storage.get('cupPast')) || [], s = c.snap.seeds[c.champ];
+      if (!past.some((x) => x.id === c.id)) {
+        past.unshift({ id: c.id, name: c.name || 'The Invitational', champ: s.name, kh: s.kh, claim: c.claim || null, at: Date.now() });
+        await this.ctx.storage.put('cupPast', past.slice(0, 10));
+      }
+    }
+    return { id: cfg.id, name: cfg.name, snap: null, matches: null, champ: null, claim: null };
   }
   async standings(at, cfg) {
     const r = await this.env.MATCH.get(this.env.MATCH.idFromName('ladder')).fetch(new Request('https://ladder/vs/standings', {
@@ -806,7 +825,9 @@ export class Match {
       match: mine ? { id: mine.id, round: mine.round, room: mine.w === null ? mine.room : null, opp: (() => { const o = mine.p[1 - mine.p.indexOf(me)]; return o === null ? null : seeds[o].name; })(),
         won: mine.w === null ? null : mine.p[mine.w] === me } : null,
       champ: c.champ === me && me >= 0, claim: c.champ === me && me >= 0 ? c.claim : null } : null;
-    return reply({ id: c.id, qualifyAt: cfg.qualifyAt, startAt: cfg.startAt, prize: cfg.prize, size: cfg.size, minGames: cfg.minGames, now,
+    const past = ((await this.ctx.storage.get('cupPast')) || []).map((x) => ({ id: x.id, name: x.name, champ: x.champ,
+      you: !!kh && x.kh === kh, claim: kh && x.kh === kh ? x.claim : null }));
+    return reply({ id: c.id, name: cfg.name, past, qualifyAt: cfg.qualifyAt, startAt: cfg.startAt, prize: cfg.prize, size: cfg.size, minGames: cfg.minGames, now,
       seeds: seeds ? seeds.map((x, i) => ({ seed: i + 1, name: x.name, rating: x.rating })) : null,
       projection: proj ? proj.map((x, i) => ({ seed: i + 1, name: x.name, rating: x.rating, games: x.games })) : null,
       matches: c.matches ? c.matches.map((m) => ({ id: m.id, round: m.round, i: m.i, p: m.p.map((x) => (x === null ? null : x + 1)), w: m.w, by: m.by, score: m.score || null, live: !!m.room && m.w === null })) : null,
@@ -824,22 +845,29 @@ export class Match {
       q.exec(`CREATE TABLE IF NOT EXISTS games (room TEXT PRIMARY KEY, a TEXT NOT NULL, b TEXT NOT NULL, winner INTEGER NOT NULL, by TEXT NOT NULL,
         rated INTEGER NOT NULL, da REAL NOT NULL, db REAL NOT NULL, at INTEGER NOT NULL, out TEXT NOT NULL)`);
       q.exec('CREATE INDEX IF NOT EXISTS games_pair ON games (a, b, at)');
+      // the season a row's rating is of ('beta': the rows from before seasons); a row from another season's player is
+      // a new one this season, the old one kept in past
+      try { q.exec("ALTER TABLE players ADD COLUMN season TEXT NOT NULL DEFAULT 'beta'"); } catch (e) { /* (there already) */ }
+      q.exec(`CREATE TABLE IF NOT EXISTS past (kh TEXT NOT NULL, season TEXT NOT NULL, name TEXT NOT NULL, rating REAL NOT NULL, games INTEGER NOT NULL,
+        w INTEGER NOT NULL, l INTEGER NOT NULL, peak REAL NOT NULL, PRIMARY KEY (kh, season))`);
       this.ready = true;
     }
     return this.ctx.storage.sql;
   }
-  player(kh) {
+  player(kh, season = seasonConfig(this.env).id) {
     const row = this.sql().exec('SELECT * FROM players WHERE kh = ?', kh).toArray()[0];
-    return row || { kh, name: '', rating: ELO.START, games: 0, w: 0, l: 0, peak: ELO.START, streak: 0, updated: 0 };
+    if (row && row.season === season) return row;
+    return { kh, name: row ? row.name : '', rating: ELO.START, games: 0, w: 0, l: 0, peak: ELO.START, streak: 0, updated: 0, season, old: row && row.games ? row : null };
   }
-  rank(rating) { return this.sql().exec('SELECT COUNT(*) AS n FROM players WHERE games > 0 AND rating > ?', rating).one().n + 1; }
+  rank(rating) { return this.sql().exec('SELECT COUNT(*) AS n FROM players WHERE season = ? AND games > 0 AND rating > ?', seasonConfig(this.env).id, rating).one().n + 1; }
   async ladder(req, url) {
-    const q = this.sql();
+    const q = this.sql(), se = seasonConfig(this.env);
     if (url.pathname === '/vs/ladder') {
-      const top = q.exec('SELECT name, rating, games, w, l, streak FROM players WHERE games > 0 ORDER BY rating DESC, games DESC LIMIT ?', ELO.TOP).toArray()
+      const top = q.exec('SELECT name, rating, games, w, l, streak FROM players WHERE season = ? AND games > 0 ORDER BY rating DESC, games DESC LIMIT ?', se.id, ELO.TOP).toArray()
         .map((x, i, a) => ({ rank: i && a[i - 1].rating === x.rating ? null : i + 1, name: x.name || 'Anonymous', rating: Math.round(x.rating), games: x.games, w: x.w, l: x.l, streak: x.streak, provisional: x.games < ELO.PROVISIONAL }));
       top.forEach((x, i) => { if (x.rank === null) x.rank = top[i - 1].rank; });     // a tie shares the rank (as /vs/me counts it)
-      return reply({ top, players: q.exec('SELECT COUNT(*) AS n FROM players WHERE games > 0').one().n });
+      return reply({ top, players: q.exec('SELECT COUNT(*) AS n FROM players WHERE season = ? AND games > 0', se.id).one().n,
+        season: { id: se.id, name: se.name, startAt: se.startAt, endAt: se.endAt } });
     }
     let body = {};
     try { body = await req.json(); } catch (e) { /* none */ }
@@ -859,7 +887,7 @@ export class Match {
           p.rating - COALESCE((SELECT SUM(g.da) FROM games g WHERE g.a = p.kh AND g.rated = 1 AND g.at > ?), 0)
                    - COALESCE((SELECT SUM(g.db) FROM games g WHERE g.b = p.kh AND g.rated = 1 AND g.at > ?), 0) AS r,
           p.games - (SELECT COUNT(*) FROM games g WHERE (g.a = p.kh OR g.b = p.kh) AND g.rated = 1 AND g.at > ?) AS n
-        FROM players p WHERE p.games > 0`, at, at, at).toArray()
+        FROM players p WHERE p.season = ? AND p.games > 0`, at, at, at, se.id).toArray()
         .filter((x) => x.n >= min).sort((a, b) => b.r - a.r || b.n - a.n || (a.kh < b.kh ? -1 : 1)).slice(0, n);
       return reply({ top: rows.map((x) => ({ kh: x.kh, name: x.name || 'Anonymous', rating: Math.round(x.r), games: x.n })) });
     }
@@ -869,8 +897,8 @@ export class Match {
     const done = q.exec('SELECT out FROM games WHERE room = ?', body.room).toArray()[0];
     if (done) return reply(JSON.parse(done.out));
     const now = Date.now(), p = [this.player(k0), this.player(k1)];
-    const pairN = q.exec('SELECT COUNT(*) AS n FROM games WHERE rated = 1 AND at > ? AND ((a = ? AND b = ?) OR (a = ? AND b = ?))', now - 86400_000, k0, k1, k1, k0).one().n;
-    const rated = pairN < ELO.PAIR_CAP;
+    const pairN = q.exec('SELECT COUNT(*) AS n FROM games WHERE rated = 1 AND at > ? AND ((a = ? AND b = ?) OR (a = ? AND b = ?))', Math.max(now - 86400_000, se.sAt - 1), k0, k1, k1, k0).one().n;   // (the season's games)
+    const inSeason = now >= se.sAt && now < se.eAt, rated = inSeason && pairN < ELO.PAIR_CAP;
     const e0 = 1 / (1 + 10 ** ((p[1].rating - p[0].rating) / 400)), exp = [e0, 1 - e0];
     const before = p.map((x) => x.rating), d = [0, 0];
     p.forEach((x, s) => {
@@ -885,11 +913,14 @@ export class Match {
       const nm = clean(body.names && body.names[s]);
       if (nm) x.name = nm;
       x.updated = now;
-      q.exec(`INSERT INTO players (kh, name, rating, games, w, l, peak, streak, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      if (!rated && x.old) return;                  // (a game the season does not count: a past season's row stays as it was)
+      if (x.old) q.exec('INSERT OR IGNORE INTO past (kh, season, name, rating, games, w, l, peak) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        x.kh, x.old.season, x.old.name, x.old.rating, x.old.games, x.old.w, x.old.l, x.old.peak);
+      q.exec(`INSERT INTO players (kh, name, rating, games, w, l, peak, streak, updated, season) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(kh) DO UPDATE SET name = excluded.name, rating = excluded.rating, games = excluded.games, w = excluded.w, l = excluded.l,
-        peak = excluded.peak, streak = excluded.streak, updated = excluded.updated`, x.kh, x.name, x.rating, x.games, x.w, x.l, x.peak, x.streak, x.updated);
+        peak = excluded.peak, streak = excluded.streak, updated = excluded.updated, season = excluded.season`, x.kh, x.name, x.rating, x.games, x.w, x.l, x.peak, x.streak, x.updated, se.id);
     });
-    const out = { rated, reason: rated ? null : 'pair', ratings: p.map((x, s) => ({ before: Math.round(before[s]), after: Math.round(x.rating), delta: Math.round(x.rating) - Math.round(before[s]),
+    const out = { rated, reason: rated ? null : inSeason ? 'pair' : 'season', ratings: p.map((x, s) => ({ before: Math.round(before[s]), after: Math.round(x.rating), delta: Math.round(x.rating) - Math.round(before[s]),
       games: x.games, rank: x.games ? this.rank(x.rating) : null, provisional: x.games < ELO.PROVISIONAL })) };
     q.exec('INSERT INTO games (room, a, b, winner, by, rated, da, db, at, out) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       body.room, k0, k1, body.winner, String(body.by || 'score'), rated ? 1 : 0, d[0], d[1], now, JSON.stringify(out));

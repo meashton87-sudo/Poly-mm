@@ -2,6 +2,16 @@
   "about": "Every change to the game, newest first. Each update adds its notes here (scripts/site.py builds /patch-notes from this file). Game changes only: no ads, analytics, payments or behind-the-scenes work, and nothing that is not live yet.",
   "notes": [
     {
+      "date": "2026-10-26",
+      "title": "Versus: Season 1",
+      "items": [
+        "Versus is open to everyone from 10 a.m. ET Monday, October 26.",
+        "Season 1 runs until noon ET Sunday, November 1. Everyone starts at 1000.",
+        "The top 16 on the Season 1 ladder (5 games or more) play the Season 1 Championship bracket Sunday at 6 p.m. ET.",
+        "The lobby is simpler: one Play button, the Season 1 ladder, and the Invitational champion at the top."
+      ]
+    },
+    {
       "date": "2026-10-25",
       "title": "Small phone fixes",
       "items": [

@@ -49,7 +49,7 @@ const K = (i) => `device-key-${String(i).padStart(14, '0')}`;
 const state = async (w, code) => w.objects.get(`room:${code}`).store.get('room');
 const kh = async (k) => { const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`vs:${k}`))); return Array.from(d.slice(0, 12), (b) => b.toString(16).padStart(2, '0')).join(''); };
 const addPlayer = (w, k, name, rating, games) => w.obj('ladder').m.sql().exec(
-  'INSERT INTO players (kh, name, rating, games, w, l, peak, streak, updated) VALUES (?, ?, ?, ?, 0, 0, ?, 0, 0)', k, name, rating, games, rating);
+  'INSERT INTO players (kh, name, rating, games, w, l, peak, streak, updated, season) VALUES (?, ?, ?, ?, 0, 0, ?, 0, 0, \'s1\')', k, name, rating, games, rating);
 
 assert.ok(ROOM_RE.test('ABC234') && !ROOM_RE.test('ABCD10') && !ROOM_RE.test('abc234') && !ROOM_RE.test('ABCDEFG'), 'room codes');
 
