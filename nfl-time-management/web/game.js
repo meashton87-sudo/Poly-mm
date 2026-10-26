@@ -10367,6 +10367,12 @@
     ezShown.add(id);
     // (after the caller puts the card on the page)
     setTimeout(() => ezq((z) => { if (!ph.isConnected) return; if (again) z.destroyPlaceholders(id); z.showAds(id); }), 0);
+    // nothing to show (no buyer for the view: Ezoic's placeholder stands tall and empty, its no-ad mark in the corner):
+    // the box folds away after a few seconds, and comes back the moment an ad (its frame) lands in it
+    const filled = () => !!ph.querySelector('iframe');
+    const fold = () => { if (!ph.isConnected) return; box.classList.toggle('empty', !filled()); };
+    [3000, 7000, 15000].forEach((ms) => setTimeout(fold, ms));
+    new MutationObserver(() => { if (filled()) box.classList.remove('empty'); }).observe(ph, { childList: true, subtree: true });
     return box;
   }
   // An ad bar pinned to the bottom (or the top) of the screen (an anchor ad, any network's: it comes outside the game)
