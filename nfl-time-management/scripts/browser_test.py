@@ -2182,8 +2182,8 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                 if mob:
                     # everything on the sheet in view with no scrolling (game.html: phones, the calls' sheet), every
                     # phone size: each receiver's row, the protection, the options, Back
-                    # (the simple screen first, the default: the receivers, More, no protection or option rows; then
-                    # More: every row in view too)
+                    # (the simple screen first, the default: the receivers, the options row, More, no protection row;
+                    # then More: every row in view too)
                     for sel in ("#snapGo", "#passMore", "#dock .ask .chip"):
                         await check("pass", sel, 300)
                     if await page.locator("#dock .prots").count():

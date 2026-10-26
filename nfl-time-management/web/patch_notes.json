@@ -6,7 +6,8 @@
       "title": "Faster on phones",
       "items": [
         "The game starts sooner on phones: the simulator loads while the page does, so the first call is ready earlier.",
-        "Smoother plays on iPhones: the stands are drawn as one picture instead of hundreds of shapes every frame."
+        "Smoother plays on iPhones: the stands are drawn as one picture instead of hundreds of shapes every frame.",
+        "Play action and Roll out are back on the pass screen itself; only the protection is behind More."
       ]
     },
     {

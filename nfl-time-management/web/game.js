@@ -6788,14 +6788,15 @@
     pen.addEventListener('click', () => { if (!busy) setDraw(!P.draw); });
     head.append(pen);
     // the simple pass screen by default (a player: "getting way too complicated, can barely see the defense"): the
-    // receivers, the quick throws and Snap; the protection and the play action and rollout toggles behind More (kept
-    // per device), and shown anyway while one of them is on
-    const full = passMore() || (G.prot && G.prot !== 'std') || P.pa || P.roll;
+    // receivers, the play action and rollout toggles, the quick throws and Snap; the protection behind More (kept per
+    // device), and shown anyway while it is not the standard one (the owner, Oct 26: play action and the rollout were
+    // behind More too, and players lost them)
+    const full = passMore() || (G.prot && G.prot !== 'std');
     if (!VS && !P.draw) {
       const mo = el('button', `chip more${passMore() ? ' on' : ''}`, bcast() ? '⋯' : passMore() ? 'Less' : 'More');     // (a phone: the head's one line)
       mo.type = 'button'; mo.id = 'passMore';
       mo.setAttribute('aria-pressed', String(passMore()));
-      mo.setAttribute('aria-label', passMore() ? 'Fewer pass options' : 'More pass options: protection, play action, rollout');
+      mo.setAttribute('aria-label', passMore() ? 'Fewer pass options' : 'More pass options: protection');
       mo.addEventListener('click', () => {
         if (busy) return;
         save(PASS_MORE_KEY, !passMore()); track('pass_more', { on: passMore() }); redrawPass();
@@ -6894,12 +6895,14 @@
     };
     const opts = el('div', 'opts-row');
     // (a toggle tapped takes back a rollout drawn: the quarterback's line goes with it)
-    if (full || VS) opts.append(opt('Play action', 'Fake the handoff first: it freezes a loaded box.', P.pa, (v) => { P.pa = v; if (v) { P.roll = false; P.qb = null; P.rollSide = null; } }),
+    opts.append(opt('Play action', 'Fake the handoff first: it freezes a loaded box.', P.pa, (v) => { P.pa = v; if (v) { P.roll = false; P.qb = null; P.rollSide = null; } }),
       opt(P.roll && P.rollSide ? `Roll out ${P.rollSide === 'strong' ? 'strong' : 'weak'}` : 'Roll out', 'Move the pocket toward your receiver’s side (or drag the quarterback the way to go).', P.roll, (v) => { P.roll = v; P.qb = null; P.rollSide = null; if (v) P.pa = false; }));
     if (oobMatters(r)) opts.append(opt('⏱ Out of bounds', 'Going out stops the clock now.', ui.oob, setOob, 'oobSwitch'));
     if (!VS && !listRoom()) opts.append(opt(`👥 Receivers ${rcvList() ? '▴' : '▾'}`, 'The list of receivers: each one’s route and odds, a tap to throw to him.', rcvList(),
       (v) => { save(RCV_KEY, v); track('pass_list', { on: v }); }, 'rcvBtn'));
-    if (opts.childElementCount) d.append(opts);
+    // (above the hint: in the classic view on a phone the hint's three lines pushed the row under the Snap key's bar,
+    // the chips peeking out from under it)
+    if (opts.childElementCount) { const hint = d.querySelector(':scope > p.hint'); if (hint) d.insertBefore(opts, hint); else d.append(opts); }
     // Versus: the playbook on the sheet itself, a row of plays, the one set marked (the owner: players don't need a list
     // of who to throw to, a tap on the man on the field picks him; the plays were behind a small chip)
     if (VS && !P.draw && sc) {
