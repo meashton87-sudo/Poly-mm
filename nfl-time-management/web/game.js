@@ -9590,6 +9590,8 @@
     crowdEnd(box, decs, share, pre, !!(rEnd && rEnd.half !== 1 && rEnd.mine > rEnd.theirs));
     box.append(countdown(streak >= 1 ? 'Keep the streak: next drive in ' : null));
     if (!DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY) box.append(a2hsSlotEl(), reminderNodes());     // the habit: an icon on the phone, a reminder
+    const ad2 = adBox('done2');                        // (a second spot at the card's foot, for the ones who scroll)
+    if (ad2) box.append(ad2);
     box.append(disclaimer());
   }
   // ---- Practice (#practice): after the day's drive, one more real drive at a time. The spot: survivor's pool (every
@@ -10319,7 +10321,7 @@
   // is used again (Ezoic: dynamic content), and while a drive is on screen no interstitial or floating video comes over it
   const EZ = !!document.querySelector('meta[name="ezoic"]');
   const EZ_IDS = ((document.querySelector('meta[name="ezoic-ids"]') || {}).content || '').split(',').map(Number).filter((n) => n > 0);
-  const EZ_KINDS = ['done', 'surv', 'survend'];
+  const EZ_KINDS = ['done', 'surv', 'survend', 'home', 'done2'];        // (the ids' order in <meta name="ezoic-ids">)
   const ezShown = new Set();
   let ezPlay = null;
   function ezq(fn) {
@@ -10329,31 +10331,20 @@
       (z.cmd = z.cmd || []).push(() => { try { fn(window.ezstandalone); } catch (e) { /* never in the way */ } });
     } catch (e) { /* no Ezoic */ }
   }
-  // A full-screen ad (interstitial) only at a break: never as the site opens or on the menus (players met a blank or
-  // look-alike "Continue" page over the game), only once a drive or a Survivor game is over (its card, ezBreak), for a
-  // minute and a half or until the next drive, never in a visit's first EZ_FIRST, and at most once in EZ_GAP (players:
-  // "giant ads popping up every 15 seconds")
-  const EZ_GAP = 10 * 60e3, EZ_OPEN = 90e3, EZ_FIRST = 5 * 60e3, EZ_T0 = Date.now();
-  let ezLastBreak = -Infinity, ezShut = 0;
-  const ezNoFull = (why) => ezq((z) => z.setInterstitialAllowed(false, { reason: why }));
-  ezNoFull('page-open');
-  function ezBreak() {
-    if (!EZ || Date.now() - ezLastBreak < EZ_GAP || Date.now() - EZ_T0 < EZ_FIRST) return;
-    ezLastBreak = Date.now();
-    ezq((z) => z.setInterstitialAllowed(true, { reason: 'drive-over' }));
-    clearTimeout(ezShut);
-    ezShut = setTimeout(() => ezNoFull('break-over'), EZ_OPEN);
-  }
+  // A full-screen ad (interstitial) and the floating video whenever no drive is being played (the owner, Oct 26: as
+  // many ads as the experience bears, the site's opening and the menus included; Ezoic and Google cap how often a
+  // full-screen one shows), and never over a drive: ezDrive(true) shuts both as the play starts, ezDrive(false) opens
+  // them again on the card after it
+  const ezFull = (ok, why) => ezq((z) => { z.setInterstitialAllowed(ok, { reason: why }); z.setOutstreamAllowed(ok, { reason: why }); });
+  ezFull(true, 'page-open');
+  function ezBreak() { if (EZ && !ezPlay) ezFull(true, 'drive-over'); }
   function ezDrive(on) {
     if (!EZ || ezPlay === on) return;
     ezPlay = on;
     const ids = on ? [...ezShown] : [];
     ids.forEach((i) => ezShown.delete(i));
-    if (on) { clearTimeout(ezShut); ezNoFull('drive-on'); }
-    ezq((z) => {
-      if (ids.length) z.destroyPlaceholders(...ids);       // (the cards' spots went with the cards)
-      z.setOutstreamAllowed(!on, { reason: on ? 'drive-on' : 'between-drives' });
-    });
+    ezq((z) => { if (ids.length) z.destroyPlaceholders(...ids); });       // (the cards' spots went with the cards)
+    ezFull(!on, on ? 'drive-on' : 'between-drives');
   }
   function ezBox(kind) {
     const id = EZ_IDS[EZ_KINDS.indexOf(kind)];
@@ -12216,7 +12207,8 @@
     modes.append(homeSurv());
     if (PRO_ON) modes.append(homePro(n));
     if (VS_ON) modes.append(homeVs());
-    box.append(h, day.el, modes, homeTools());
+    const had = adBox('home');                         // (between the day's card and the modes, labeled, never a card)
+    box.append(h, day.el, ...(had ? [had] : []), modes, homeTools());
     const ls = myLeagues();
     if (ls.length) {
       const sec = el('div', 'hsec'), list = el('div', 'llist');

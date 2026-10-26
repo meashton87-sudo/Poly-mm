@@ -527,8 +527,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         extra = GA_TAG.format(id=ga) + extra
     extra += ads_head(adsense, ad_slot, later=True)       # (the game's page: game.js loads the script)
     if EZOIC:                                # Ezoic's spots in the game's own cards (game.js ezBox): their placeholder ids
-        if ezoic_ids and not re.fullmatch(r"\d+(,\d+){0,2}", ezoic_ids):
-            raise SystemExit(f"--ezoic-ids wants up to three placeholder ids like 101,102,103, not {ezoic_ids!r}")
+        if ezoic_ids and not re.fullmatch(r"\d+(,\d+){0,5}", ezoic_ids):
+            raise SystemExit(f"--ezoic-ids wants up to six placeholder ids like 101,102,103, not {ezoic_ids!r}")
         extra += '<meta name="ezoic" content="on">' + (f'<meta name="ezoic-ids" content="{ezoic_ids}">' if ezoic_ids else "")
     if board_api:
         extra += f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">"
