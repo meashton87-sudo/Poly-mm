@@ -61,7 +61,7 @@ def own_fonts(page: str, stamps: dict) -> str:
 # as they were. Everything else keeps Pages' default (asked again every time). An address here without its stamp would
 # keep a phone on old bytes for a year: check_stamps fails the build on one.
 IMMUTABLE = ["/game.js", "/motion.js", "/engine.js", "/game_worker.js", "/vs_core.js", "/scenario.js", "/game.json", "/playbook.json",
-             "/engine_data.json", "/teams.json", "/engine_data.pack", "/playbook.pack", "/spots/*", "/fonts/*", "/rosters/*"]
+             "/engine_data.json", "/teams.json", "/midlogo.png", "/engine_data.pack", "/playbook.pack", "/spots/*", "/fonts/*", "/rosters/*"]
 HEADERS = "".join(f"{p}\n  Cache-Control: public, max-age=31536000, immutable\n" for p in IMMUTABLE)
 _stamp = lambda b: hashlib.sha256(b).hexdigest()[:12]
 
@@ -609,6 +609,14 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     # game.json (the intro needs it) downloads alongside game.js instead of after it: the same request game.js makes
     # (fetch: cors, same-origin credentials), so the browser hands that one over
     extra = f"<link rel=\"preload\" href=\"game.json?v={stamps['game.json']}\" as=\"fetch\" crossorigin>" + extra
+    # the simulator's first worker starts here, in the head (game.js startWorker takes it: TMD_W0, the same address as
+    # its workerUrl): its script, engine.js and vs_core.js download alongside game.js, not one after the other once
+    # game.js has run and the day's spots are in (the bot check, Oct 26: engine.js 17.6 s on an iPhone, the first call
+    # 19.6 s at worst). Not on Versus's pages (the room plays the football); a load error is kept for game.js to say
+    extra += ("<script>try{if(!/^#vs/.test(location.hash)&&self.Worker){const s=JSON.parse(document.querySelector('meta[name=\"stamps\"]').content),"
+              "q=['engine.js','vs_core.js','engine_data.json','playbook.json'].filter((f)=>s[f]).map((f)=>`&${f}=${encodeURIComponent(s[f])}`).join(''),"
+              "u=`game_worker.js?v=${encodeURIComponent(s['game_worker.js'])}${q}`,w=new Worker(u);self.TMD_W0={u,w,err:null};"
+              "w.addEventListener('error',(e)=>{self.TMD_W0&&(self.TMD_W0.err=e.message||'worker error')})}}catch(e){}</script>")
     extra += ('<script type="application/ld+json">' + json.dumps({"@context": "https://schema.org", "@type": "WebSite",
               "name": "Two-Minute Drill", "url": site_url.rstrip("/") + "/", "description": desc}) + "</script>")
     page = own_fonts((WEB / "game.html").read_text(), stamps)

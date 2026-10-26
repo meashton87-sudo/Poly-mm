@@ -665,10 +665,15 @@
     return !q ? w : w.includes('?') ? w + q : `${w}?${q.slice(1)}`;
   }
   function startWorker() {
-    const w = new Worker(workerUrl());
+    // (the first: the one the page's head started, if it is this address: site.py TMD_W0, already loading its scripts)
+    const early = self.TMD_W0 && self.TMD_W0.u === workerUrl() ? self.TMD_W0 : null;
+    if (self.TMD_W0 && !early) self.TMD_W0.w.terminate();        // (another address: of no use)
+    self.TMD_W0 = null;
+    const w = early ? early.w : new Worker(workerUrl());
     const slot = { w, ready: false, busy: false };
     w.onmessage = (ev) => onMsg(slot, ev.data);
     w.onerror = (e) => fatal('The simulator could not start: ' + (e.message || 'worker error'));
+    if (early && early.err) { fatal('The simulator could not start: ' + early.err); return; }
     pool.push(slot);
     initWorker(slot);
   }
@@ -1150,9 +1155,15 @@
           + (up ? `<path d="M${(xx - 1.4).toFixed(2)} ${(yy + 1.2).toFixed(2)}l-.6 -2.6M${(xx + 1.4).toFixed(2)} ${(yy + 1.2).toFixed(2)}l.6 -2.6" stroke="${SKIN[Math.floor(rnd() * SKIN.length)]}" stroke-width=".7" stroke-linecap="round"/>` : '');
       }
     }
+    // the tile drawn once as a picture (an image of its own), not hundreds of shapes in the pattern: the pattern moves with
+    // the camera every frame, and Safari draws a pattern's shapes all over again each time (the bot check: an iPhone's
+    // frames over 200 ms 3 to 6 times a Chromium's; the tile as an image: the same look, a frame on the stands a third
+    // of the work)
+    const tile = '<svg xmlns="http://www.w3.org/2000/svg" width="180" height="30" viewBox="0 0 180 30">'
+      + `<rect width="180" height="30" fill="#1b2029"/><path d="M0 4.9H180M0 9.9H180M0 14.9H180M0 19.9H180M0 24.9H180M0 29.9H180" stroke="#2f3541" stroke-width="1.1"/>${dots}</svg>`;
     const defs = S('defs', {});
     defs.innerHTML = `<pattern id="${id}" patternUnits="userSpaceOnUse" width="180" height="30">`
-      + `<rect width="180" height="30" fill="#1b2029"/><path d="M0 4.9H180M0 9.9H180M0 14.9H180M0 19.9H180M0 24.9H180M0 29.9H180" stroke="#2f3541" stroke-width="1.1"/>${dots}</pattern>`
+      + `<image width="180" height="30" href="data:image/svg+xml;charset=utf-8,${encodeURIComponent(tile)}"/></pattern>`
       + `<linearGradient id="${id}s" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".55"/></linearGradient>`;
     svg.append(defs);
     return id;
@@ -1259,8 +1270,9 @@
       return e;
     };
     // the midfield logo (players asked: it shows where the ball is at a glance): sideways at the 50, as on an NFL
-    // field, about 15 yards long (midlogo.png: the 2MD logo cut out of its navy)
-    const logo = put(S('image', { class: 'midlogo', href: 'midlogo.png', preserveAspectRatio: 'xMidYMid meet' }), (Y) => {
+    // field, about 15 yards long (midlogo.png: the 2MD logo cut out of its navy; stamped and cached for good: it was the
+    // one file the field asked the site for again on every page, 46-61 s in the bot check's busiest runs)
+    const logo = put(S('image', { class: 'midlogo', href: asset('midlogo.png'), preserveAspectRatio: 'xMidYMid meet' }), (Y) => {
       const len = clip(Math.abs(Y(42.5) - Y(57.5)), 50, 270), wid = len / 1.44, y = Y(50);
       logo.setAttribute('x', (-len / 2).toFixed(1)); logo.setAttribute('y', (-wid / 2).toFixed(1));
       logo.setAttribute('width', len.toFixed(1)); logo.setAttribute('height', wid.toFixed(1));
