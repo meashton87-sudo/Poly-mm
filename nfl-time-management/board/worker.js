@@ -704,6 +704,12 @@ async function signedByStripe(req, body, secret) {
 //                                          best run) merged into the account's, the best of each kept (statsMerge),
 //                                          and the merged record back; without stats, a read
 //   POST /auth/remind  { session, on }  -> the account, { remind }   the daily email (Resend; off: 503 without it)
+//   POST /auth/blast   { id, subject, text, html? } (Authorization: Bearer <ADMIN_TOKEN>) -> { sent, skipped, failed, done }
+//                                          one email to every account with an address, once an id (blast:<id>:s:<acct>),
+//                                          BLAST_CAP a call (1000; a capped call keeps where it stopped, blast:<id>:from,
+//                                          the next goes on from there, done when the end is reached); never to an
+//                                          account that turned the daily email off or unsubscribed; the same unsubscribe
+//                                          link. GET /auth/blast?id= (admin) -> { sent, inProgress } (counts only)
 //   POST /auth/unsub?r=&t=  (or { r, t }) -> { ok }               the email's unsubscribe link (one click, no sign-in):
 //                                          r the account's opaque reference, t its HMAC (mailSecret); a mail app's
 //                                          one-click (RFC 8058, List-Unsubscribe-Post) lands here too
@@ -715,7 +721,7 @@ async function signedByStripe(req, body, secret) {
 // /pro/data and /race/* take { session } in place of { code, key }: the account's code, without the device limit (the
 // account is its own protection; the code is the same, so the Gauntlet entry is the same).
 const AUTH_PATHS = ['/auth', '/auth/google', '/auth/email', '/auth/email/verify', '/auth/me', '/auth/logout', '/auth/link', '/auth/name',
-  '/auth/stats', '/auth/remind', '/auth/unsub'];
+  '/auth/stats', '/auth/remind', '/auth/unsub', '/auth/blast'];
 const UNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9 _.'-]{1,18})[A-Za-z0-9.]$/;
 // a session lasts SESS_DAYS; a link LOGIN_MS; an address is at most 198 characters (e:<address> fits Stripe's
 // 200-character client_reference_id)
@@ -823,6 +829,17 @@ const siteFor = (req, env) => {
 };
 async function auth(req, env, storage, hits, h, url) {
   if (url.pathname === '/auth') return req.method === 'GET' ? json({ google: googleOn(env), email: emailOn(env) }, 200, h) : json({ error: 'method' }, 405, h);
+  if (url.pathname === '/auth/blast') {                                   // the owner's one-time email (admin)
+    if (!isAdmin(req, env)) return json({ error: 'forbidden' }, 403, h);
+    if (req.method === 'GET') return json(await blastCounts(storage, url.searchParams.get('id') || ''), 200, h);
+    if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
+    if (!emailOn(env)) return json({ error: 'email is not set up' }, 503, h);
+    const b = await readBody(req);
+    if (b === null) return json({ error: 'bad json' }, 400, h);
+    if (b === false) return json({ error: 'too big' }, 413, h);
+    const out = await blast(env, storage, b);
+    return json(out, out.error ? 400 : 200, h);
+  }
   if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
   const p = url.pathname;
   if (p === '/auth/unsub') return unsub(req, env, storage, h, url);       // from an email: no session, no rate limit (an HMAC)
@@ -1124,14 +1141,26 @@ async function leaguesOf(storage, a) {
 // together): every FREEZE_EVERY days in a row earn a freeze (FREEZE_MAX held), a missed day is covered by a freeze
 // held or one already spent (frozen), and a gap before a day not played yet is pending (the streak still alive)
 const FREEZE_EVERY = 7, FREEZE_MAX = 2;
+// the amnesty week after the launch spike (game.js AMNESTY_FROM, AMNESTY_DAYS: the same numbers): one gap of missed days
+// begun on day 5 (Oct 16, 2026) or later is covered, freeze or not, when the day that ends it is one of days 16-22
+// (Oct 27 to Nov 2): the latest such gap, once
+const AMNESTY_FROM = 5, AMNESTY_DAYS = [16, 22];
+function amnestyEnd(ks, d) {
+  let last = 0, end = 0;
+  const fits = (b) => last > 0 && b - last > 1 && last + 1 >= AMNESTY_FROM && b >= AMNESTY_DAYS[0] && b <= AMNESTY_DAYS[1];
+  for (const k of ks) { if (fits(k)) end = k; last = k; }
+  return end || (last < d && fits(d) ? d : 0);
+}
 function streakOf(days, frozen, d) {
   const ks = Object.keys(days).map(Number).filter((k) => k > 0 && k <= d).sort((a, b) => a - b);
+  const amn = amnestyEnd(ks, d);
   let run = 0, held = 0, last = 0;
   // the missed days after the last one played and before day b: covered, or the streak over
   const bridge = (b) => {
     const gap = Array.from({ length: Math.max(0, b - last - 1) }, (_, j) => last + 1 + j);
     if (!gap.length) return true;
     if (run > 0 && (gap.length <= held || gap.every((j) => frozen[j]))) { held = Math.max(0, held - gap.length); run += gap.length; return true; }
+    if (run > 0 && b === amn) { run += gap.length; return true; }      // (the amnesty: no freeze spent)
     run = 0;
     return false;
   };
@@ -1419,6 +1448,57 @@ async function reminders(env, storage, date) {
   return { sent, failed, due: due.length };
 }
 
+// ---- The owner's one-time email (POST /auth/blast, admin): one to every account with an address, once an id (the
+// mark blast:<id>:s:<acct>, so a call made again sends nobody twice), BLAST_CAP a call (the var, else 1000) in Resend
+// batches as the reminders; a capped call keeps where it stopped (blast:<id>:from) and the next call goes on from there
+// (done: true once the end of the accounts is reached). Never to an account that turned the daily email off or
+// unsubscribed (rmd on: false); every email carries the same unsubscribe link (which also turns the daily email off).
+const BLAST_CAP = 1000, BLAST_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const blastCap = (env) => { const n = Math.floor(Number(env.BLAST_CAP)); return n > 0 ? n : BLAST_CAP; };
+async function blastCounts(storage, id) {
+  if (!BLAST_ID_RE.test(id)) return { error: 'id' };
+  return { sent: [...(await storage.list({ prefix: `blast:${id}:s:` }))].length, inProgress: !!(await storage.get(`blast:${id}:from`)) };
+}
+async function blast(env, storage, body) {
+  const id = String(body.id || ''), subject = String(body.subject || '').trim(), text = String(body.text || '').trim();
+  const html = body.html == null ? '' : String(body.html).trim();
+  if (!BLAST_ID_RE.test(id)) return { error: 'id: letters, digits and dashes, up to 40' };
+  if (!subject || subject.length > 120 || !text || text.length > 5000 || html.length > 20000) return { error: 'subject (up to 120) and text (up to 5000) wanted' };
+  const cap = blastCap(env), fromKey = `blast:${id}:from`, from = (await storage.get(fromKey)) || '', due = [];
+  let skipped = 0, capped = false;
+  for (const [k, a] of await storage.list({ prefix: 'acct:' })) {
+    if (k <= from) continue;
+    if (due.length >= cap) { capped = true; break; }
+    const acct = k.slice(5), rm = await storage.get(`rmd:${acct}`);
+    if (!a || !EMAIL_RE.test(String(a.email || '')) || (rm && rm.on === false) || await storage.get(`blast:${id}:s:${acct}`)) { skipped++; continue; }
+    due.push({ k, acct, email: a.email });
+  }
+  const site = siteOf(env), api = String(env.API_URL || '').replace(/\/+$/, '');
+  const esc = (x) => x.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  let sent = 0, failed = 0;
+  for (let i = 0; i < due.length; i += REMIND_BATCH) {
+    const batch = [];
+    for (const { acct, email } of due.slice(i, i + REMIND_BATCH)) {
+      const ref = await acctRef(storage, acct), t = await unsubTok(env, storage, ref), stop = `${site}/?unsub=${ref}.${t}`;
+      batch.push({ acct, mail: { from: env.MAIL_FROM, to: [email], subject,
+        text: `${text}\n\nYou have a Two-Minute Drill account. No more email: ${stop}`,
+        html: `${html || text.split(/\n{2,}/).map((para) => `<p>${esc(para).replace(/\n/g, '<br>')}</p>`).join('')}<p style="color:#5a675e;font-size:13px">You have a Two-Minute Drill account. <a href="${stop}">Unsubscribe</a></p>`,
+        ...(api ? { headers: { 'List-Unsubscribe': `<${api}/auth/unsub?r=${ref}&t=${t}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } } : {}) } });
+    }
+    let r;
+    try {
+      r = await fetch('https://api.resend.com/emails/batch', { method: 'POST', body: JSON.stringify(batch.map((x) => x.mail)),
+        headers: { Authorization: `Bearer ${env.RESEND_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': `blast-${id}-${(await sha256(batch.map((x) => x.acct).join('\n'))).slice(0, 24)}` } });
+    } catch (e) { r = null; }
+    // (a refused batch: the rest wait too, and the next call goes on from just before it: nobody passed over)
+    if (!r || !r.ok) { failed = due.length - i; console.error('resend refused the blast', id, r ? r.status : 'unreachable', failed); break; }
+    for (const { acct } of batch) await storage.put(`blast:${id}:s:${acct}`, Date.now());
+    sent += batch.length;
+  }
+  const done = !capped && !failed, stop = failed ? (sent ? due[sent - 1].k : from) : capped ? due[due.length - 1].k : '';
+  if (done || !stop) { if (from) await storage.delete(fromKey); } else await storage.put(fromKey, stop);
+  return { sent, skipped, failed, done };
+}
 
 async function pro(req, env, storage, hits, h, url) {
   if (url.pathname === '/pro') return req.method === 'GET' ? json({ on: proOn(env), price: PRO_PRICE }, 200, h) : json({ error: 'method' }, 405, h);

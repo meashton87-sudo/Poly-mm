@@ -1266,6 +1266,24 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.strictEqual(d.rows.find((x) => x.name === 'Ben Bolt').streak, 8, 'the freeze held covers day 8');
   d = await ok(await lg('board', { session: sa, code, day: 10 }), 'two missed');
   assert.strictEqual(d.rows.find((x) => x.name === 'Ben Bolt').streak, 0, 'one freeze, two days missed: over');
+  // the amnesty week (worker.js AMNESTY_FROM 5, AMNESTY_DAYS 16-22, as game.js): Ben played days 1-4, missed 5-15 and
+  // came back on day 16: the gap counts, no freeze spent; not before the window opens, not a gap begun before day 5,
+  // and the latest such gap only
+  const benAmn = (ds) => store.set('stats:d:g:700002', Object.fromEntries(ds.map((k) => [k, { p: 0.5, wpa: 0, coach: null }])));
+  benAmn([1, 2, 3, 4, 16]);
+  d = await ok(await lg('board', { session: sa, code, day: 16 }), 'the amnesty');
+  assert.strictEqual(d.rows.find((x) => x.name === 'Ben Bolt').streak, 16, 'back on day 16: the streak back, the gap counted');
+  benAmn([1, 2, 3, 4]);
+  d = await ok(await lg('board', { session: sa, code, day: 15 }), 'before the window');
+  assert.strictEqual(d.rows.find((x) => x.name === 'Ben Bolt').streak, 0, 'day 15 is before the window: over');
+  d = await ok(await lg('board', { session: sa, code, day: 16 }), 'the window, not played yet');
+  assert.strictEqual(d.rows.find((x) => x.name === 'Ben Bolt').streak, 15, 'day 16 not played yet: alive, the gap pending');
+  benAmn([1, 2, 3, 16]);
+  d = await ok(await lg('board', { session: sa, code, day: 16 }), 'a gap from day 4');
+  assert.strictEqual(d.rows.find((x) => x.name === 'Ben Bolt').streak, 1, 'a gap begun before day 5: not covered');
+  benAmn([1, 2, 3, 4, 16, 19]);
+  d = await ok(await lg('board', { session: sa, code, day: 19 }), 'two gaps');
+  assert.strictEqual(d.rows.find((x) => x.name === 'Ben Bolt').streak, 4, 'the latest gap (17-18) only: 16, 17, 18, 19');
   store.set('stats:d:g:700002', benDays);
   // limits: 10 leagues an account, 50 members a league
   for (let i = 0; i < 9; i++) await ok(await lg('create', { session: sa, name: `League ${i}` }), `league ${i}`);
@@ -1502,8 +1520,57 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   unset('RESEND_KEY', 'MAIL_FROM');
   await cron('2026-10-24T08:05:00Z');
   assert.strictEqual(batches.length, b0, 'Resend off: nothing sent');
+  // the owner's one-time email (/auth/blast, admin): once an account an id, never to one that turned the email off or
+  // unsubscribed, BLAST_CAP a call with the next call going on from there, a refused batch sent again by the next call
+  const adm = { auth: `Bearer ${env.ADMIN_TOKEN}` };
+  const blast = (body, o = {}) => call('POST', body, { path: '/auth/blast', ...adm, ...o });
+  const note = { id: 'winback-test', subject: 'Versus is free this week', text: 'Versus is free this week.\n\nPlay: https://nfl2mindrill.com/' };
+  assert.strictEqual((await blast(note)).status, 503, 'no Resend: off');
+  set({ RESEND_KEY: 're_test_key', MAIL_FROM: 'Two-Minute Drill <daily@nfl2mindrill.com>' });
+  assert.strictEqual((await call('POST', note, { path: '/auth/blast' })).status, 403, 'no token');
+  assert.strictEqual((await call('POST', note, { path: '/auth/blast', auth: 'Bearer wrong' })).status, 403, 'a wrong token');
+  assert.strictEqual((await worker.fetch(new Request('https://w.example/auth/blast', { method: 'POST', body: JSON.stringify(note), headers: { Authorization: 'Bearer ' } }), { ...env, ADMIN_TOKEN: undefined })).status, 403, 'off without a token');
+  for (const bad of [{}, { subject: 'x', text: 'y' }, { id: 'Bad Id', subject: 'x', text: 'y' }, { id: 'a', subject: '', text: 'y' }, { id: 'a', subject: 'x', text: '' }]) assert.strictEqual((await blast(bad)).status, 400, `400: ${JSON.stringify(bad)}`);
+  // amy unsubscribed (one-click, above) and ben turned his off: both passed over; cal never asked: sent (a one-time
+  // note goes to every account that has not said no)
+  b0 = batches.length;
+  let d2 = await ok(await blast(note), 'blast');
+  const got0 = to(b0), n1 = d2.sent, nAll = d2.sent + d2.skipped;      // (the store holds other tests' accounts too)
+  assert.ok(got0.includes('cal@example.com') && !got0.includes('amy@example.com') && !got0.includes('ben@example.com') && d2.failed === 0 && d2.done, 'cal, not amy (unsubscribed) or ben (off)');
+  assert.strictEqual(new Set(got0).size, got0.length, 'one email an account');
+  const bm = batches[b0].mails[0];
+  assert.deepStrictEqual([bm.subject, bm.from], ['Versus is free this week', 'Two-Minute Drill <daily@nfl2mindrill.com>']);
+  assert.ok(bm.text.startsWith('Versus is free this week.') && /\?unsub=a_[0-9a-f]{40}\.[0-9a-f]{32}/.test(bm.text) && bm.html.includes('<p>Versus is free this week.</p>') && bm.html.includes('Unsubscribe'), 'the text, the unsubscribe link');
+  assert.match(batches[b0].headers['Idempotency-Key'], /^blast-winback-test-[0-9a-f]{24}$/);
+  assert.deepStrictEqual(await ok(await blast(note), 'again'), { sent: 0, skipped: nAll, failed: 0, done: true }, 'a second call sends nobody twice');
+  assert.deepStrictEqual(await ok(await call('GET', null, { path: '/auth/blast?id=winback-test', ...adm }), 'counts'), { sent: n1, inProgress: false });
+  assert.strictEqual((await call('GET', null, { path: '/auth/blast?id=winback-test' })).status, 403, 'counts: admin only');
+  // the cap and the continuation: 250 a call, the rest in the next calls, done at the end; a refused batch goes again
+  set({ BLAST_CAP: '250' });
+  for (let i = 0; i < 600; i++) store.set(`acct:e:r${i}@example.com`, { email: `r${i}@example.com` });
+  store.set('rmd:e:r7@example.com', { on: false, at: 1 });        // (unsubscribed)
+  b0 = batches.length;
+  d2 = await ok(await blast(note), 'call 1');
+  assert.deepStrictEqual([d2.sent, d2.done, to(b0).length], [250, false, 250], '250 a call');
+  const got1 = to(b0);
+  assert.ok(!got1.includes('r7@example.com') && !got1.includes('cal@example.com'), 'the unsubscribed and the ones sent before are passed over');
+  b0 = batches.length; resendDown = true;
+  d2 = await ok(await blast(note), 'call 2, Resend down');
+  assert.deepStrictEqual([d2.sent, d2.failed, d2.done, batches.length], [0, 250, false, b0], 'nothing sent, nothing marked');
+  resendDown = false;
+  d2 = await ok(await blast(note), 'call 3');
+  const got3 = to(b0);
+  assert.ok(d2.sent === 250 && !d2.done && !got3.some((x) => got1.includes(x)), 'the next 250, none twice');
+  b0 = batches.length;
+  d2 = await ok(await blast(note), 'call 4');
+  assert.deepStrictEqual([d2.sent, d2.done], [99, true], 'the rest, done (600 less the unsubscribed, 250 + 250 + 99)');
+  assert.deepStrictEqual(await ok(await call('GET', null, { path: '/auth/blast?id=winback-test', ...adm }), 'counts'), { sent: n1 + 599, inProgress: false });
+  assert.deepStrictEqual(await ok(await blast(note), 'call 5'), { sent: 0, skipped: nAll + 600, failed: 0, done: true }, 'done: nobody again');
+  assert.ok(!store.has('blast:winback-test:from'));
+  for (let i = 0; i < 600; i++) { store.delete(`acct:e:r${i}@example.com`); store.delete(`blast:winback-test:s:e:r${i}@example.com`); }
+  store.delete('rmd:e:r7@example.com'); unset('BLAST_CAP');
   console.error = realErr; console.log = realLog;
-  unset('GOOGLE_CLIENT_ID', 'SITE', 'API_URL');
+  unset('GOOGLE_CLIENT_ID', 'SITE', 'API_URL', 'RESEND_KEY', 'MAIL_FROM');
   globalThis.fetch = realFetch;
 }
 // A lost code (/recover): the email the buyer paid with in, the code out by email only (Resend and Stripe stubbed).
