@@ -9551,7 +9551,7 @@
       chMine(p).then((id) => { if (id && share.text.includes(legacy)) { share.text = share.text.replace(legacy, cLink(id)); pre.textContent = share.text; } });
     }
     chEnd(box, p, (box.querySelector(':scope > .chbtn') || btn).nextSibling);
-    // (Versus free this week: the button right under the result, above Share; Up next then offers Survivor, not Versus twice)
+    // (Versus free for everyone: the button right under the result, above Share; Up next then offers Survivor, not Versus twice)
     const vsBtn = !DRIVE && !RUN_N && !CUSTOM && !ARCH_DAY && vsFreeWeek();
     if (vsBtn) btn.before(vsFreeCard('daily'));
     const img = el('button', 'btn ghostbtn xshare', 'Share as a picture');
@@ -9608,19 +9608,21 @@
   }
   // a new practice drive on the next visit (the finished one's card is kept until then)
   const practiceNext = () => { const st = load(PRACTICE_KEY, null); if (st && st.done) save(PRACTICE_KEY, { ...st, stale: true }); };
-  // Versus free for everyone this week (Season 1, site.py --vs-free-at): a button on the daily's end card and a line on
-  // Home's Versus card, until the Season 1 Championship starts (the owner, Oct 26: players don't know it is free)
-  const vsFreeWeek = () => VS_ON && !VS_PRO && !!BOARD.api && Date.now() < Date.parse(VS_SEASON.cupAt);
+  // Versus free for everyone, for good (site.py --vs-free-at; the owner, Oct 26: players don't know it is free): a button
+  // on the daily's end card and a line on Home's Versus card; the Championship's day and hour with it until it starts
+  const vsFreeWeek = () => VS_ON && !VS_PRO && !!BOARD.api;
   const vsCupLine = () => {
     const d = new Date(VS_SEASON.cupAt), days = Math.ceil((d - Date.now()) / 864e5);
+    if (!(days >= 0)) return '';
     const when = `${d.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'America/New_York' })} ${d.toLocaleTimeString('en-US', { hour: 'numeric', timeZone: 'America/New_York' })} ET`;
     return `${VS_SEASON.cup}: ${when}${days > 1 ? ` · in ${days} days` : days === 1 ? ' · tomorrow' : ' · today'}`;
   };
   function vsFreeCard(from) {
-    const w = el('div', 'vsfree'), a = el('a', 'btn vsfreebtn', 'Play a live opponent, free this week');
+    const w = el('div', 'vsfree'), a = el('a', 'btn vsfreebtn', 'Play a live opponent, free for everyone');
     a.href = '#vs';
     a.addEventListener('click', () => { track(from === 'home' ? 'vs_home_free' : 'vs_endcard', { day: dayN }); scrollTo(0, 0); });
-    w.append(a, el('p', 'note', vsCupLine()));
+    w.append(a);
+    if (vsCupLine()) w.append(el('p', 'note', vsCupLine()));
     return w;
   }
   // Up next on the daily's end card: Versus for whoever can play it (someone live, the computer if nobody is on), else
@@ -12304,8 +12306,8 @@
     a.href = '#vs';
     a.dataset.to = VS_PRO && !isPro() ? 'versus_pitch' : 'versus';
     const free = vsFreeWeek();
-    a.append(el('div', 'hk', VS_PRO && !isPro() ? 'Versus, with Pro' : `Versus · ${VS_SEASON.name}`), el('div', 'hpitch', free ? 'Free this week' : 'Play someone'),
-      ...(free ? [el('p', '', `Play someone live. ${vsCupLine()}.`)] : []),
+    a.append(el('div', 'hk', VS_PRO && !isPro() ? 'Versus, with Pro' : `Versus · ${VS_SEASON.name}`), el('div', 'hpitch', free ? 'Free for everyone' : 'Play someone'),
+      ...(free ? [el('p', '', `Play someone live.${vsCupLine() ? ` ${vsCupLine()}.` : ''}`)] : []),
       el('span', 'cta', VS_PRO && !isPro() ? 'Take a look' : 'Play'));
     if (free) a.addEventListener('click', () => track('vs_home_free', { day: dayN }));
     return a;
