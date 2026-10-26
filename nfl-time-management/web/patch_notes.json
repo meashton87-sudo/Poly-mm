@@ -3,6 +3,14 @@
   "notes": [
     {
       "date": "2026-10-26",
+      "title": "Faster on phones",
+      "items": [
+        "The game starts sooner on phones: the simulator loads while the page does, so the first call is ready earlier.",
+        "Smoother plays on iPhones: the stands are drawn as one picture instead of hundreds of shapes every frame."
+      ]
+    },
+    {
+      "date": "2026-10-26",
       "title": "Versus: Season 1",
       "items": [
         "Versus is open to everyone from 10 a.m. ET Monday, October 26.",
