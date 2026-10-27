@@ -211,6 +211,10 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .arch .vsdraft .bidrow .bids .btn:disabled { opacity: .4; cursor: default; }
 .arch .vsdraft .bidrow .bids .ghostbtn { grid-column: 1 / -1; min-height: 44px; }
 .arch .vsdraft .bidrow .bids .pass { grid-column: 1 / -1; min-height: 40px; font-size: 14px; }
+.arch .vsdraft .still { display: grid; gap: 6px; padding: 12px 14px; border-radius: 14px; background: var(--chain); color: var(--chain-ink); }
+.arch .vsdraft .still b { font: 900 18px/1.1 var(--display); text-transform: uppercase; letter-spacing: .04em; }
+.arch .vsdraft .still span { font-size: 13.5px; }
+.arch .vsdraft .still .btn { justify-self: start; margin-top: 4px; }
 .arch .vsdraft .slots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .arch .vsdraft .slots .col { display: grid; gap: 4px; align-content: start; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); }
 .arch .vsdraft .slots .col.holds { border-color: var(--ink); }
