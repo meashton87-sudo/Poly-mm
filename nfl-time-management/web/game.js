@@ -13389,10 +13389,12 @@
   // Versus Draft (board/match.js draftView; the rules in web/vs_core.js DRAFT): a blind auction before the match, slot by
   // slot (the quarterbacks, then the backs, receivers, tight ends, lines, defenses). A card is a team and a slot, never
   // the player's name or rating: that is shown when the draft is done. Bidding is open and back and forth: a card opens
-  // with no bid and a clock; a side that still needs the kind bids at least a dollar over the price (a $0 claim counts)
-  // and never over its max (d.max, a dollar kept for each slot still open); the high bidder cannot raise itself; each
-  // bid resets the clock (a soft close). At the clock the high bidder takes the card at its bid; a card nobody claimed
-  // goes to nobody. The two drafted sides then play as DRAFT_SIDES. The phone sends { t: 'bid', i, amount }.
+  // with no bid and a clock; a side that still needs the kind opens at the card's floor (d.floor: the man's sticker, a
+  // dollar to $8 by how good he is at the slot, or half what the other coach paid for the kind, whichever is more) or
+  // bids at least a dollar over the price, never over its max (d.max, a dollar kept for each slot still open); the high
+  // bidder cannot raise itself; each bid resets the clock (a soft close). At the clock the high bidder takes the card
+  // at its bid; a card nobody claimed goes to nobody. The two drafted sides then play as DRAFT_SIDES. The phone sends
+  // { t: 'bid', i, amount }.
   const DRAFT_KIND = { QB: 'Quarterback', RB: 'Running back', WR: 'Receiver', TE: 'Tight end', OL: 'Offensive line', DST: 'Defense & special teams' };
   const DRAFT_SLOTS = ['QB', 'RB', 'WR', 'WR', 'TE', 'OL', 'DST'], DRAFT_RAISES = [1, 2, 5];
   const VS_DRAFT_REVEAL_MS = 5000;             // the names, once drafted, before the kickoff
@@ -13457,8 +13459,11 @@
     head.append(el('span', 'kind', draftSlotName(c.k)), el('span', 'n', `${d.i + 1} of ${d.n}`));
     who.append(sw, el('b', '', teamName(c.team)), el('span', 'tm', `${DRAFT_KIND[c.k] || c.k}: who it is shows when the draft ends`));
     const price = el('div', 'price');
+    const floor = (d.floor || [])[me] || 0, sticker = c.sticker || 0, raised = floor > sticker;
+    const theirs = Math.max(0, ...(d.picks[them] || []).filter((p) => p.k === c.k).map((p) => p.paid || 0));
+    const kindOf = c.k === 'WR' ? 'a receiver' : c.k === 'DST' ? 'a defense' : c.k === 'OL' ? 'a line' : `a ${DRAFT_KIND[c.k].toLowerCase()}`;
     if (d.bid) price.append(el('b', '', `$${d.bid.amount}`), el('span', 'hold', ` · ${d.bid.seat === me ? 'you' : nm(them)}`));
-    else price.append(el('span', 'hold', 'No bid yet'));
+    else price.append(el('b', '', `$${floor}`), el('span', 'hold', raised ? ` to open: ${nm(them)} paid $${theirs} for ${kindOf}, so this one starts at half` : ` to open: the sticker (the best at the slot is $${VSCore.DRAFT.sticker[c.k]})`));
     const bar = el('div', 'clock'), fill = el('i');
     bar.append(fill);
     const tick = () => {
@@ -13477,20 +13482,22 @@
     else {
       const btns = el('div', 'bids');
       if (!d.bid) {
-        const claim = el('button', 'btn ghostbtn', 'Take for $0');
+        const claim = el('button', 'btn ghostbtn', `Open at $${floor}`);
         claim.type = 'button';
-        claim.addEventListener('click', () => vsBid(0));
+        claim.disabled = floor > max;
+        claim.addEventListener('click', () => vsBid(floor));
         btns.append(claim);
       }
       DRAFT_RAISES.forEach((r) => {
-        const amt = Math.max(0, cur) + r, b = el('button', 'btn', `+$${r}`);
+        const amt = (d.bid ? cur : floor) + r, b = el('button', 'btn', `+$${r}`);
         b.type = 'button';
         b.append(el('small', '', `$${amt}`));
         b.disabled = mine || amt > max;
         b.addEventListener('click', () => vsBid(amt));
         btns.append(b);
       });
-      row.append(btns, el('p', 'note', mine ? 'You hold the bid.' : max < Math.max(0, cur) + 1 ? `You can’t go over $${max} here (a dollar for each slot still open).` : `Up to $${max} on this card.`));
+      const least = d.bid ? cur + 1 : floor;
+      row.append(btns, el('p', 'note', mine ? 'You hold the bid.' : max < least ? `You can’t go to $${least} here: $${max} is your most (a dollar for each slot still open).` : `Up to $${max} on this card.`));
     }
     wrap.append(row, slots);
   }

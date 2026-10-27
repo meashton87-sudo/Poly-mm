@@ -111,11 +111,14 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   Versus Draft (web/vs_core.js DRAFT, match.js draftStart/draftBid/draftSettle; mode 'draft' in the queue, or draft=1 on
   the computer's or a friend's room; never rated): a blind auction before the toss. Both sides get DRAFT.budget ($50);
   cards come up slot by slot (DRAFT.order), each a team's man at the slot drawn by draftPool, blind to the phones (the
-  team and the slot; draftMask, the names revealed with the last 'draft' message); the bidding is open (a $0 claim, a
-  dollar or more over the bid in, never over draftMax: a dollar kept for each slot still open, never your own bid
-  raised), each bid putting DRAFT.raiseMs back on the clock (closeMs when the other side cannot top it), the high bid
-  taking the card at the deadline, a card nobody claimed to nobody, a kind both sides have skipped; what is still open
-  when the pool is out is filled for nothing (draftFill). The sides play as DRAFT.teams (draftTeam: the ratings blended
+  team and the slot; draftMask, the names revealed with the last 'draft' message); the bidding is open (the first bid
+  the card's floor or more, then a dollar or more over the bid in, never over draftMax: a dollar kept for each slot
+  still open, never your own bid raised), each bid putting DRAFT.raiseMs back on the clock (closeMs when the other
+  side cannot top it), the high bid taking the card at the deadline, a card nobody claimed to nobody, a kind both
+  sides have skipped. The floor (draftFloor; the owner: the second quarterback is never a dollar after the first went
+  for twenty): the man's sticker (draftCards: his place among all the teams' men at the slot, $1 to DRAFT.sticker[k]),
+  or half the most the other side paid for the kind, whichever is more; a slot still open when the pool is out gets
+  the worst man left at his floor or what the side has (draftFill). The sides play as DRAFT.teams (draftTeam: the ratings blended
   from the picks' teams, the lineups the men picked). The computer bids on the room's alarm a beat after each card or
   bid, up to draftCpuValue. match_test.mjs covers the rules; vs_draft_test.mjs plays it with the real engine.
 - The defense (every mode): the defense calls personnel, front, coverage and rush (engine.js DC). The offense's play is a
