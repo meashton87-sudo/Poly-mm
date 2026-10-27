@@ -1,4 +1,4 @@
-# Handoff: Two-Minute Drill (2mindrills.com), Oct 26 2026
+# Handoff: Two-Minute Drill (2mindrills.com), Oct 27 2026
 
 Repo: `meashton87-sudo/Poly-mm`, project in `nfl-time-management/`. Read `nfl-time-management/CLAUDE.md` first; it has
 the project rules (patch notes in every game PR, never commit generated data, teams by city only, bots and tests never
@@ -18,6 +18,14 @@ reach ads/analytics/the real board, no model names in commits/PRs, commit traile
   ladder's `past` table); the Season 1 Championship takes the top 16 (5+ games) at season end, bracket Sun Nov 1 6 PM
   ET, no prize. Lobby: Invitational champion banner on top, one Play button, Season 1 ladder.
 - **Cup race fix is live** (#249): cup events run one at a time (blockConcurrencyWhile); cup_test covers it.
+- **Versus Draft** (`claude/vs-draft`, Oct 27): a blind auction before a match (the owner's format, from a TikTok: the
+  team and the slot shown, open bidding back and forth, $50 each, the names revealed at the end). The rules in
+  `web/vs_core.js` DRAFT, the room's draft phase in `board/match.js` (draftStart/draftBid/draftSettle, the queue's
+  `mode=draft`, the computer's draft, a rematch drafts again), the auction screen in `web/game.js` (renderVsDraft, the
+  lobby's Draft tile), CLAUDE.md has the paragraph. Checked: match_test, vs_draft_test (real engine), and two real pages
+  drafting against the real room code through a local bridge (scratchpad bridge.mjs: the in-memory World behind a
+  WebSocket server; the World's gate needs the engine preloaded). Not built: Draft with a friend (the room takes
+  `?draft=1`; the lobby's friend flow does not send it yet).
 - **Unknown:** whether the Invitational (Oct 25) finished with a champion before #248 deployed. If not, the lobby's
   champion banner is empty: the champion can be set with POST `/vs/cup/admin`, or the banner data (`cupPast` in the
   'cup' Durable Object) needs a small admin addition. Ask the owner who won.

@@ -109,6 +109,8 @@
     OSU: ['Ohio State', '#BB0000'], IU: ['Indiana', '#990000'], ALA: ['Alabama', '#9E1B32'], TENN: ['Tennessee', '#FF8200'],
   };
   const COLLEGE = new Set(['OSU', 'IU', 'ALA', 'TENN']);
+  // Versus Draft's two drafted sides (web/vs_core.js DRAFT.teams): a color each, never a real team, never picked
+  const DRAFT_SIDES = { DR1: ['Blue', '#1f4fbf'], DR2: ['Red', '#c0392b'] };
   const FAM = { run: 'Run', pass: 'Pass', rpo: 'RPO', trick: 'Trick' };
   // the trick plays (playbook.py): what each one is, on its key
   const TRICK_SUB = { trick_flea: 'Hand off, pitch it back, go deep', trick_reverse: 'Fake one way, a receiver comes back the other',
@@ -398,7 +400,8 @@
     if (i != null) { b.classList.add('pop'); b.style.setProperty('--i', i); }
     return b;
   }
-  const teamName = (c) => (TEAMS[c] ? TEAMS[c][0] : c);
+  const teamName = (c) => (TEAMS[c] ? TEAMS[c][0] : DRAFT_SIDES[c] ? DRAFT_SIDES[c][0] : c);
+  const teamAb = (c) => (DRAFT_SIDES[c] ? DRAFT_SIDES[c][0].toUpperCase() : c);      // the code on the scoreboard (a drafted side by its color)
   // where room is tight (the stands' wall): "LA (NFC)", "NY (AFC)"
   const teamShort = (c) => teamName(c).replace(/^Los Angeles/, 'LA').replace(/^New York/, 'NY');
   // a team in a season it played in another city (Los Angeles (NFC) in 1999 and 2001: St. Louis; web/scenario.js eraName), else today's
@@ -406,7 +409,7 @@
   const cityIn = (c, y) => eraOf(c, y) || teamName(c);
   // a historic game's two teams by their cities of the time, for the page that plays it (the page is that one game)
   const eraTeams = (sc) => [sc.home, sc.away].forEach((c) => { const n = eraOf(c, sc.real && sc.real.season); if (n && TEAMS[c]) TEAMS[c] = [n, TEAMS[c][1]]; });
-  const color = (c) => (TEAMS[c] ? TEAMS[c][1] : '#556');
+  const color = (c) => (TEAMS[c] ? TEAMS[c][1] : DRAFT_SIDES[c] ? DRAFT_SIDES[c][1] : '#556');
   const code = (i) => (i === 0 ? G.scen.home : G.scen.away);
   // a team as the spot has it, and as it plays: yours with the quarterback you put in (Who plays: G.qb, a name from its
   // lineup.qbs; web/scenario.js withQb: his adjustment for the starter's and his level on the passes he throws), kept
@@ -2582,7 +2585,8 @@
       DRAWN_RANGE, CALL, ROUTES, routeName, blocks: (sc, i) => blocks(sc, i), passTap, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, goalCheck, qbCheck, speedLog, get: () => ({ G, ui, scene, busy }),
       passPick: (i) => passPick(i), readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
       promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k),
-      drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock(), crowdKey: (r, k) => crowdKey(r, k) };
+      drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock(), crowdKey: (r, k) => crowdKey(r, k),
+      vsDraft: (st) => { Object.assign(vs, st); renderVsDraft(); return vs; } };
   }
   // who gets the ball, by his row in the list (the field may be redrawn under the buttons: a resize, the phone's
   // address bar); his row tapped again: back to the open man
@@ -5789,7 +5793,7 @@
       const tos = el('span', 'tos');
       // (the one just called flashes while the clock is stopped for it)
       for (let k = 0; k < 3; k++) tos.append(el('i', k < r.to[i] ? '' : r.timeout && r.timeout.team === i && k === r.to[i] ? 'used just' : 'used'));
-      const ab = el('span', 'ab', c);
+      const ab = el('span', 'ab', teamAb(c));
       if (i === G.me) ab.append(el('small', '', 'YOU'));
       meta.append(ab, tos);
       d.append(sw, meta);
@@ -6165,7 +6169,7 @@
     const mu = el('div', 'matchup');
     const t = (c, i) => {
       const d = el('div', 't');
-      const sw = el('span', `sw${darkOn(color(c)) ? ' dk' : ''}`, c); sw.style.background = color(c);
+      const sw = el('span', `sw${darkOn(color(c)) ? ' dk' : ''}`, teamAb(c)); sw.style.background = color(c);
       d.append(sw, el('span', 'nm', teamName(c)));
       if (i === G.me) d.append(el('span', 'you', 'YOU'));
       return d;
@@ -12395,6 +12399,7 @@
     ranked: ['M6 3.5h12v5a6 6 0 0 1-12 0zM6 5H3.5v1.5A3.5 3.5 0 0 0 6.3 10M18 5h2.5v1.5a3.5 3.5 0 0 1-2.8 3.5M9 20.5h6M12 14.5v6'],
     cpu: ['M7 7h10v10H7zM10 10h4v4h-4zM9.5 3.5V7M14.5 3.5V7M9.5 17v3.5M14.5 17v3.5M3.5 9.5H7M3.5 14.5H7M17 9.5h3.5M17 14.5h3.5'],
     friend: ['M10 14a4 4 0 0 0 5.7 0l3.5-3.5a4 4 0 0 0-5.7-5.7l-1.2 1.2M14 10a4 4 0 0 0-5.7 0l-3.5 3.5a4 4 0 0 0 5.7 5.7l1.2-1.2'],
+    draft: ['M3.5 3.5h8.5l8.5 8.5-8.5 8.5-8.5-8.5z', 'M7.8 7.8h.01'],
   };
   function proCard(kind, title, sub, go, o = {}) {
     const a = el(typeof go === 'string' ? 'a' : 'button', `pcard ${kind}${o.big ? ' big' : ''}`);
@@ -13139,14 +13144,15 @@
   // the season (board/match.js SEASON and CUP; the ladder's answer has the season's own times)
   const VS_SEASON = { name: 'Season 1', startAt: '2026-10-26T14:00:00Z', endAt: '2026-11-01T17:00:00Z', cup: 'Season 1 Championship', cupAt: '2026-11-01T23:00:00Z' };
   const VS_CUP_MIN = 5;
-  const VS_MODES = { ranked: VS_SEASON.name, casual: 'Quick match', friend: 'Friend match', cpu: 'Versus the computer', cup: VS_SEASON.cup };
+  const VS_MODES = { ranked: VS_SEASON.name, casual: 'Quick match', friend: 'Friend match', cpu: 'Versus the computer', cup: VS_SEASON.cup, draft: 'Draft' };
   const VS_CPU_KEY = `${STORE}:vscpu`, VS_CPU_LEVELS = { rookie: 'Rookie', pro: 'Pro' };
   const vsCpuLevel = () => (VS_CPU_LEVELS[load(VS_CPU_KEY, 'pro')] ? load(VS_CPU_KEY, 'pro') : 'pro');
   const VS_CPU_DECIDE_MS = 10 * 60e3;       // against the computer: no play clock to speak of (match.js CPU_DECIDE_MS)
   const VS_FORFEIT = 60;             // seconds a phone can be gone before its side forfeits (match.js FORFEIT_MS)
   const vs = { ws: null, seat: -1, mode: 'friend', teams: [null, null], taken: '', names: ['', ''], full: false, online: [false, false], off: [0, 0],
     phase: 'wait', n: 0, ms: null, ms0: null, got: {}, waiting: -1, last: null, deadline: 0, skew: 0, result: null, rated: null, started: false,
-    timer: null, retry: 0, closedByUs: false, pool: null, banner: '', oppLocked: -1, ui: 'none', cardTimer: null, q: null };
+    timer: null, retry: 0, closedByUs: false, pool: null, banner: '', oppLocked: -1, ui: 'none', cardTimer: null, q: null,
+    draft: null, draftTeams: null, draftDl: 0, draftDur: 1, bidAt: 0, revealAt: 0, draftTimer: null };     // (Versus Draft: the auction's view and clock, the drafted sides)
   const vsNow = () => Date.now() + vs.skew;                       // the room's clock
   const vsLink = (room) => `${location.origin}${location.pathname}#vs-${room}`;
   const vsMyTeam = () => { const t = load(VS_TEAM_KEY, ''); return TEAMS[t] ? t : ''; };
@@ -13188,14 +13194,16 @@
   setInterval(() => vsSend({ t: 'ping' }), 25000);
   function vsSendTeam() {
     const t = vsMyTeam();
-    if (t && vs.seat >= 0 && vs.phase === 'wait' && !vs.teams[vs.seat] && !vs.taken) vsSend({ t: 'team', team: t, name: myName() });
+    if (t && vs.seat >= 0 && vs.phase === 'wait' && !vs.teams[vs.seat] && !vs.taken && !vs.draft && vs.mode !== 'draft') vsSend({ t: 'team', team: t, name: myName() });
   }
   function vsOn(m) {
     if (typeof m.now === 'number') vs.skew = m.now - Date.now();
     if (m.t === 'hello') {
       vs.retry = 0;
       Object.assign(vs, { seat: m.seat, mode: m.mode || vs.mode, teams: m.teams, names: m.names, full: !!m.full, online: m.online, off: m.off || [0, 0],
-        phase: m.phase, n: m.n, ms: m.ms, ms0: m.ms0 || vs.ms0, deadline: m.deadline || 0, dl: m.dl || null, result: m.result || null, rated: m.rated || vs.rated });
+        phase: m.phase, n: m.n, ms: m.ms, ms0: m.ms0 || vs.ms0, deadline: m.deadline || 0, dl: m.dl || null, result: m.result || null, rated: m.rated || vs.rated,
+        draft: m.draft || null, draftTeams: m.draftTeams || null });
+      if (m.draft && m.draft.budget) vsDraftClock(m.draft.left);
       (m.decisions || []).forEach((d) => { if (d) vs.got[d.n] = d; });
       if (vs.last && vs.last.n === m.n && m.phase === 'live') vsSend(vs.last);    // a call sent as the line dropped
       vsBanner('');
@@ -13212,6 +13220,22 @@
     } else if (m.t === 'taken') {
       vs.taken = m.team;
       renderVsWaiting();
+    } else if (m.t === 'draft') {                    // Versus Draft: a card up (the last one settled), or the drafted sides
+      vs.draft = m.d || vs.draft;
+      if (m.d && m.d.budget) vsDraftClock(m.d.left);
+      if (m.teams) vs.teams = m.teams;
+      if (m.draftTeams) {
+        vs.draftTeams = m.draftTeams;
+        vs.revealAt = Date.now() + VS_DRAFT_REVEAL_MS;          // (the names, a moment, before the kickoff)
+        if (vs.seat >= 0 && m.d && m.d.budget) track('vs_draft_done', { spent: VSCore.DRAFT.budget - m.d.budget[vs.seat] });
+      }
+      if (!vs.started) vsMaybeStart();
+    } else if (m.t === 'bid') {                      // a bid the room took on the card up (yours or theirs): the price, the clock
+      if (vs.draft && m.i === vs.draft.i) {
+        vs.draft.bid = { seat: m.seat, amount: m.amount };
+        vsDraftClock(m.left);
+        if (!vs.started) renderVsDraft();
+      }
     } else if (m.t === 'start') {
       Object.assign(vs, { phase: 'live', ms: m.ms, ms0: m.ms, n: 0, deadline: m.deadline, dl: m.dl || null });
       vsMaybeStart();
@@ -13243,7 +13267,7 @@
       if (btn && m.seat !== vs.seat) { btn.textContent = 'Your opponent wants a rematch: play again'; btn.classList.add('ask'); }
     } else if (m.t === 'rematch') {
       vs.closedByUs = true;
-      try { sessionStorage.setItem(`tmd:vsmode:${m.room}`, vs.mode === 'friend' ? 'friend' : 'casual'); } catch (e) { /* none */ }
+      try { sessionStorage.setItem(`tmd:vsmode:${m.room}`, vs.mode === 'friend' || vs.mode === 'draft' ? vs.mode : 'casual'); } catch (e) { /* none */ }
       location.hash = `#vs-${m.room}`;
     }
   }
@@ -13266,10 +13290,15 @@
   async function vsMaybeStart() {
     if (vs.started || vs.seat < 0) return;
     if (vs.phase === 'over' && !vs.ms) return vsCalledOff();
-    if ((!vs.teams[vs.seat] && (!vsMyTeam() || vs.taken)) || !vs.ms || !vs.teams[0] || !vs.teams[1]) return renderVsWaiting();
+    if (vs.draft || vs.mode === 'draft') {         // Versus Draft: the auction first; the two drafted sides play once it is done
+      if (!vs.draftTeams || !vs.ms || !vs.teams[0] || !vs.teams[1]) return renderVsDraft();
+      if (Date.now() < vs.revealAt) { renderVsDraft(); setTimeout(vsMaybeStart, vs.revealAt - Date.now() + 50); return undefined; }
+    } else if ((!vs.teams[vs.seat] && (!vsMyTeam() || vs.taken)) || !vs.ms || !vs.teams[0] || !vs.teams[1]) return renderVsWaiting();
     vs.started = true;
+    clearInterval(vs.draftTimer);
     let pool;
     try { pool = await vsLoadPool(); } catch (e) { vsNote('The teams did not load (' + e.message + '). Reload to try again.'); return; }
+    if (vs.draftTeams) Object.assign(pool.teams, vs.draftTeams);                       // (the drafted sides, as the room built them)
     const H = vs.teams[0], A = vs.teams[1], TH = pool.teams[H], TA = pool.teams[A];
     if (!TH || !TA) { vsNote('A team in this match is not in this version of the game. Reload the page.'); return; }
     const sp = { id: `vs:${VS_ROOM}`, category: 'ot', home: H, away: A, player: vs.seat === 0 ? H : A, indoor: false, wind: 0, spread: 0,
@@ -13324,14 +13353,15 @@
   }
   function renderVsIntro() {
     const box = $('intro'), me = code(G.me), op = code(1 - G.me), first = G.cot ? G.cot.toss : 0;
-    const oppName = vs.names[1 - vs.seat];
+    const oppName = vs.names[1 - vs.seat], drafted = vsDrafted();
     box.append(el('div', 'cat', `${VS_MODES[vs.mode] || 'Versus'} · College overtime`),
-      el('div', 'game', `Your ${teamName(me)} vs ${oppName ? `${oppName}’s` : 'their'} ${teamName(op)}`), el('div', 'big', 'Overtime'));
+      el('div', 'game', drafted ? `Your draft vs ${oppName ? `${oppName}’s` : 'their'} draft` : `Your ${teamName(me)} vs ${oppName ? `${oppName}’s` : 'their'} ${teamName(op)}`), el('div', 'big', 'Overtime'));
+    if (drafted) box.append(el('p', 'story', `You: ${vsDraftLine(me)}`), el('p', 'story', `${oppName || 'They'}: ${vsDraftLine(op)}`));
     const seen = load(`${STORE}:vsintro`, 0);
     save(`${STORE}:vsintro`, seen + 1);
     if (seen >= 2) {          // (you know the rules: who chooses, and go)
-      box.append(el('p', 'story', first === G.me ? 'You won the toss: offense, defense or the end of the field.' : `${teamName(op)} won the toss and chooses first.`));
-    } else box.append(el('p', 'story', first === G.me ? 'You won the toss: you choose.' : `${teamName(op)} won the toss.`),
+      box.append(el('p', 'story', first === G.me ? 'You won the toss: offense, defense or the end of the field.' : drafted ? 'They won the toss and choose first.' : `${teamName(op)} won the toss and chooses first.`));
+    } else box.append(el('p', 'story', first === G.me ? 'You won the toss: you choose.' : drafted ? 'They won the toss.' : `${teamName(op)} won the toss.`),
       moreEl('Overtime rules', 'Each team gets the ball at the other’s 25, no clock. Ahead after both teams have had it, you win. From the second overtime, a touchdown has to go for two, and the team that went second goes first; from the third, it’s a two-point play each.'));
     if (seen < 2) box.append(el('div', 'who', vs.mode === 'cpu' ? 'You call your side: the offense when you have it, the defense when they do. No play clock against the computer: take your time.'
       : 'You call your side: the offense when you have it, the defense when they do. Both calls lock in before the snap. The defense has 10 seconds to call (miss it and a standard defense goes in), the offense 20 (miss two in a row and you forfeit).'));
@@ -13356,6 +13386,114 @@
     requestAnimationFrame(() => { const on = wrap.querySelector('.on'); if (on) wrap.scrollTop = on.offsetTop - 4; });   // your team in view
     return wrap;
   }
+  // Versus Draft (board/match.js draftView; the rules in web/vs_core.js DRAFT): a blind auction before the match, slot by
+  // slot (the quarterbacks, then the backs, receivers, tight ends, lines, defenses). A card is a team and a slot, never
+  // the player's name or rating: that is shown when the draft is done. Bidding is open and back and forth: a card opens
+  // with no bid and a clock; a side that still needs the kind bids at least a dollar over the price (a $0 claim counts)
+  // and never over its max (d.max, a dollar kept for each slot still open); the high bidder cannot raise itself; each
+  // bid resets the clock (a soft close). At the clock the high bidder takes the card at its bid; a card nobody claimed
+  // goes to nobody. The two drafted sides then play as DRAFT_SIDES. The phone sends { t: 'bid', i, amount }.
+  const DRAFT_KIND = { QB: 'Quarterback', RB: 'Running back', WR: 'Receiver', TE: 'Tight end', OL: 'Offensive line', DST: 'Defense & special teams' };
+  const DRAFT_SLOTS = ['QB', 'RB', 'WR', 'WR', 'TE', 'OL', 'DST'], DRAFT_RAISES = [1, 2, 5];
+  const VS_DRAFT_REVEAL_MS = 5000;             // the names, once drafted, before the kickoff
+  const draftSlotName = (k) => (k === 'DST' ? 'D/ST' : k);
+  const draftCardName = (c) => `${teamName(c.team)} ${draftSlotName(c.k)}`;            // (the card as it is called: the city and the slot)
+  // a pick as the intro and the end card say it (its name once revealed; a line or a defense by its city)
+  const draftShort = (p) => (p.k === 'OL' ? `${teamShort(p.team)} line` : p.k === 'DST' ? `${teamShort(p.team)} D/ST` : p.name || `${teamShort(p.team)} ${p.k}`);
+  const vsDrafted = () => !!vs.draftTeams && !!G && !!DRAFT_SIDES[code(G.me)];
+  const vsDraftLine = (c) => (((vs.draftTeams || {})[c] || {}).draft || []).map(draftShort).join(', ');
+  // the card's clock as the room last set it (ms left; the bar is full at that moment)
+  function vsDraftClock(left) {
+    const ms = Math.max(0, Number(left) || 0);
+    vs.draftDl = Date.now() + ms; vs.draftDur = Math.max(1, ms);
+  }
+  function vsBid(amount) {
+    const d = vs.draft;
+    if (!d || !d.card || Date.now() - vs.bidAt < 400) return;            // (one tap at a time: the room answers each)
+    if (!vsSend({ t: 'bid', i: d.i, amount })) { toast('No connection. Reconnecting…'); return; }
+    vs.bidAt = Date.now();
+    track('vs_draft_bid', { i: d.i, amount });
+    renderVsDraft();
+  }
+  function renderVsDraft() {
+    if (vs.started) return;
+    clearInterval(vs.draftTimer);
+    show('arch');
+    const box = $('arch'), d = vs.draft, me = vs.seat, them = 1 - vs.seat;
+    box.textContent = '';
+    const wrap = el('div', 'vsdraft');
+    box.append(wrap);
+    if (!d || d.pending || !d.budget) {
+      wrap.append(el('h2', '', 'Draft'), el('p', 'lead', vs.full || vs.mode !== 'friend' ? 'Opponent found. Setting up the draft…' : 'Waiting for your opponent…'));
+      return;
+    }
+    const nm = (s) => (s === me ? 'You' : vs.names[s] || 'Them'), toWhom = (s) => (s === me ? 'you' : vs.names[s] || 'them');
+    wrap.append(el('h2', '', 'Draft'));
+    // each coach and the money left, over a column of slots: a filled one is ???? until the reveal, then the name
+    const slots = el('div', 'slots');
+    [me, them].forEach((s) => {
+      const col = el('div', `col${d.bid && d.bid.seat === s ? ' holds' : ''}`), head = el('div', 'coach');
+      head.append(el('span', 'pk', nm(s)), el('b', '', `$${d.budget[s]}`));
+      col.append(head);
+      const left = (d.picks[s] || []).slice();
+      DRAFT_SLOTS.forEach((k) => {
+        const j = left.findIndex((p) => p.k === k), p = j >= 0 ? left.splice(j, 1)[0] : null;
+        const row = el('div', `slot${p ? ' got' : ''}${p && d.done ? ' shown' : ''}`);
+        row.append(el('span', 'k', draftSlotName(k)), el('span', 'nm', !p ? '—' : d.done ? draftShort(p) : `${teamShort(p.team)} ????`), el('span', 'px', p ? `$${p.paid}` : ''));
+        col.append(row);
+      });
+      slots.append(col);
+    });
+    // the last card settled
+    const L = d.last;
+    if (L && L.card) wrap.append(el('p', 'last', L.seat >= 0 ? `${draftCardName(L.card)} to ${toWhom(L.seat)} for $${L.amount}` : `Nobody took ${draftCardName(L.card)}`));
+    if (d.done || !d.card) {
+      wrap.append(el('p', 'lead', d.done ? 'Your lineup is set: the names are in. Kicking it off…' : 'Settling the last card…'), slots);
+      return;
+    }
+    // the card up: the city and the slot, the price and who holds it, the clock as a thin bar
+    const c = d.card, card = el('div', 'card'), head = el('div', 'head'), who = el('div', 'who'), sw = el('span', 'sw');
+    sw.style.background = color(c.team);
+    head.append(el('span', 'kind', draftSlotName(c.k)), el('span', 'n', `${d.i + 1} of ${d.n}`));
+    who.append(sw, el('b', '', teamName(c.team)), el('span', 'tm', `${DRAFT_KIND[c.k] || c.k}: who it is shows when the draft ends`));
+    const price = el('div', 'price');
+    if (d.bid) price.append(el('b', '', `$${d.bid.amount}`), el('span', 'hold', ` · ${d.bid.seat === me ? 'you' : nm(them)}`));
+    else price.append(el('span', 'hold', 'No bid yet'));
+    const bar = el('div', 'clock'), fill = el('i');
+    bar.append(fill);
+    const tick = () => {
+      if (!bar.isConnected) { clearInterval(vs.draftTimer); return; }
+      fill.style.width = `${Math.max(0, Math.min(100, ((vs.draftDl - Date.now()) / vs.draftDur) * 100)).toFixed(1)}%`;
+    };
+    tick();
+    vs.draftTimer = setInterval(tick, 100);
+    card.append(head, who, price, bar);
+    wrap.append(card);
+    // your bids: a dollar, two or five over the price (never over your max, never on your own bid, never for a kind
+    // you have), or the card for nothing when nobody has bid
+    const max = (d.max || [])[me] || 0, need = (d.need[me] || {})[c.k] > 0, cur = d.bid ? d.bid.amount : -1, mine = !!d.bid && d.bid.seat === me;
+    const row = el('div', 'bidrow');
+    if (!need) row.append(el('p', 'note', `Not for you: your ${DRAFT_KIND[c.k].toLowerCase()} ${c.k === 'WR' ? 'slots are' : 'slot is'} filled.`));
+    else {
+      const btns = el('div', 'bids');
+      if (!d.bid) {
+        const claim = el('button', 'btn ghostbtn', 'Take for $0');
+        claim.type = 'button';
+        claim.addEventListener('click', () => vsBid(0));
+        btns.append(claim);
+      }
+      DRAFT_RAISES.forEach((r) => {
+        const amt = Math.max(0, cur) + r, b = el('button', 'btn', `+$${r}`);
+        b.type = 'button';
+        b.append(el('small', '', `$${amt}`));
+        b.disabled = mine || amt > max;
+        b.addEventListener('click', () => vsBid(amt));
+        btns.append(b);
+      });
+      row.append(btns, el('p', 'note', mine ? 'You hold the bid.' : max < Math.max(0, cur) + 1 ? `You can’t go over $${max} here (a dollar for each slot still open).` : `Up to $${max} on this card.`));
+    }
+    wrap.append(row, slots);
+  }
   // before the kickoff: your team (if you came in on a link, or the other side has yours), the code to send a friend
   function renderVsWaiting() {
     if (vs.started) return;
@@ -13363,7 +13501,7 @@
     const box = $('arch');
     box.textContent = '';
     box.append(el('h2', '', VS_MODES[vs.mode] || 'Versus'));
-    if (vs.seat >= 0 && !vs.teams[vs.seat] && (!vsMyTeam() || vs.taken)) {
+    if (vs.seat >= 0 && !vs.teams[vs.seat] && (!vsMyTeam() || vs.taken) && !vs.draft && vs.mode !== 'draft') {
       const lead = vs.taken ? `Your opponent already has ${teamName(vs.taken)}. Pick another team.` : 'Pick your team for this match: its real lineup this week.';
       box.append(el('p', 'lead', lead), vsTeamPicker(() => { vs.taken = ''; vsSendTeam(); renderVsWaiting(); }, vs.taken));
       return;
@@ -13408,7 +13546,7 @@
       track('vs_cpu', { mode, secs: Math.round((Date.now() - t0) / 1000) });
       try { ws.send(JSON.stringify({ t: 'cpu', level: vsCpuLevel() })); } catch (e) { cpu.disabled = false; }
     });
-    box.append(el('h2', '', VS_MODES[mode]), el('p', 'note', `Your team: ${teamName(vsMyTeam())}`), line, info, cpu, cancel);
+    box.append(el('h2', '', VS_MODES[mode]), el('p', 'note', mode === 'draft' ? 'A draft: no team to bring' : `Your team: ${teamName(vsMyTeam())}`), line, info, cpu, cancel);
     let ws, closed = false, tries = 0, size = 0, rating = 0;
     const done = () => { closed = true; clearInterval(tk); try { ws && ws.close(); } catch (e) { /* gone */ } };
     const draw = () => {
@@ -13421,7 +13559,7 @@
     cancel.addEventListener('click', () => { done(); track('vs_queue_cancel', { mode, secs: Math.round((Date.now() - t0) / 1000) }); renderVsLobby(); });
     const open = () => {
       if (closed) return;
-      const q = new URLSearchParams({ key: deviceKey(), mode, team: vsMyTeam(), name: myName(), ...(mode === 'cpu' ? { level: vsCpuLevel() } : {}) });
+      const q = new URLSearchParams({ key: deviceKey(), mode, ...(mode === 'draft' ? {} : { team: vsMyTeam() }), name: myName(), ...(mode === 'cpu' ? { level: vsCpuLevel() } : {}) });
       try { ws = new WebSocket(`${BOARD.api.replace(/^http/, 'ws')}/vs/queue?${q}`); } catch (e) { return setTimeout(open, 2000); }
       vs.q = ws;
       ws.onmessage = (ev) => {
@@ -13555,7 +13693,7 @@
     box.append(sbox);
     if (BOARD.api) box.append(vsCupBox(champ));
     const go = (mode) => {
-      if (!vsMyTeam()) { toast('Pick your team first'); return; }
+      if (mode !== 'draft' && !vsMyTeam()) { toast('Pick your team first'); return; }
       if (mode === 'play') mode = vsInSeason(season) ? 'ranked' : 'casual';
       if (mode === 'ranked' && !myName()) { toast(`Set your name for the ${season.name} ladder`); nameIn.focus(); return; }
       if (mode === 'friend') {
@@ -13570,8 +13708,11 @@
     // one Play (in the season a rated match, else a quick one), the computer and a friend beside it
     const modes = el('div', 'ptiles vsmodes');
     const playSub = () => (vsInSeason(season) ? `${season.name} match` : 'Quick match');
-    [['play', 'play', 'Play', playSub(), { big: true }], ['cpu', 'cpu', 'Computer', '', {}], ['friend', 'friend', 'Play a friend', '', {}]].forEach(([m, kind, title, sub, o]) => {
+    // (the Draft: nobody brings a team; both bid for a lineup first, VSCore.DRAFT.budget dollars each)
+    [['play', 'play', 'Play', playSub(), { big: true }], ['cpu', 'cpu', 'Computer', '', {}], ['friend', 'friend', 'Play a friend', '', {}],
+      ['draft', 'draft', 'Draft', `Bid for your lineup, $${VSCore.DRAFT.budget} each`, { wide: true }]].forEach(([m, kind, title, sub, o]) => {
       const b = proCard(kind, title, sub, () => go(m), o);
+      if (o.wide) b.classList.add('wide');
       b.dataset.mode = m;
       b.disabled = !BOARD.api;
       modes.append(b);
@@ -13983,7 +14124,8 @@
     if (res.by === 'forfeit') card.append(el('p', 'note', won ? (res.why === 'afk' ? 'They let the play clock run out on two calls in a row.' : 'They left the match for more than a minute.')
       : (res.why === 'afk' ? 'The play clock ran out on two of your calls in a row.' : `You were away from the match for more than ${VS_FORFEIT} seconds.`)));
     if (res.by === 'error') card.append(el('p', 'note', 'Something went wrong in the match. Nobody’s rating changed.'));
-    card.append(el('p', 'note', `Your ${teamName(code(G.me))} vs ${vs.names[1 - vs.seat] ? `${vs.names[1 - vs.seat]}’s` : 'their'} ${teamName(code(1 - G.me))} · ${VS_MODES[vs.mode] || 'Versus'}`));
+    card.append(el('p', 'note', vsDrafted() ? `Your draft vs ${vs.names[1 - vs.seat] ? `${vs.names[1 - vs.seat]}’s` : 'their'} draft · ${VS_MODES[vs.mode] || 'Versus'}`
+      : `Your ${teamName(code(G.me))} vs ${vs.names[1 - vs.seat] ? `${vs.names[1 - vs.seat]}’s` : 'their'} ${teamName(code(1 - G.me))} · ${VS_MODES[vs.mode] || 'Versus'}`));
     card.append(el('p', 'vsrating', ''));
     const row = el('div', 'row');
     if (vs.mode === 'ranked') {
@@ -14010,7 +14152,7 @@
     // the result to a group chat (how a two-player game gets its next player): the score, who, and the way in
     if (res.by === 'score') {
       const opp = vs.mode === 'cpu' ? 'the computer' : vs.names[1 - vs.seat] || 'my opponent';
-      const text = `${won ? `I beat ${opp}` : `${opp === 'the computer' ? 'The computer' : opp} beat me`} ${won ? `${mine}–${theirs}` : `${theirs}–${mine}`}${ot} on Two-Minute Drill Versus (${teamName(code(G.me))} vs ${teamName(code(1 - G.me))}). ${won ? 'Think you can beat me?' : 'Get me a rematch.'} https://${SITE}/#vs`;
+      const text = `${won ? `I beat ${opp}` : `${opp === 'the computer' ? 'The computer' : opp} beat me`} ${won ? `${mine}–${theirs}` : `${theirs}–${mine}`}${ot} on Two-Minute Drill Versus (${vsDrafted() ? 'drafted lineups' : `${teamName(code(G.me))} vs ${teamName(code(1 - G.me))}`}). ${won ? 'Think you can beat me?' : 'Get me a rematch.'} https://${SITE}/#vs`;
       const pre = el('p', 'note sharetext', text), sh = el('button', 'btn ghostbtn', 'Share the result');
       sh.type = 'button';
       sh.addEventListener('click', () => shareText(text, pre, 'vs_result'));

@@ -28,6 +28,10 @@
 //                 {t:'clock', n, deadline, now}  this seat's deadline for decision n (dl: both seats')
 //                 {t:'locked', n, seat}  {t:'peer', online, off, now}  {t:'teams', teams, names}  {t:'taken', team}
 //                 {t:'over', result}  {t:'rated', rated}  {t:'rematch-ask', seat}  {t:'rematch', room}
+// The draft (mode 'draft', or ?draft=1 on a friend's or the computer's room; VSCore.DRAFT): hello.draft is null, {pending:true}
+// (the other side not in yet) or the view (draftView: i, n, card {k, team, pos}, budget, need, picks, bid {seat, amount},
+// max, left, last, done); {t:'draft', d} a new card up, the last one with teams and draftTeams; {t:'bid', i, seat, amount,
+// left} a bid in. Client -> room: {t:'bid', i, amount} (a $0 claim, or over the bid in, within max[seat]).
 // Lobby -> client: {t:'queued', mode, size, wait, rating, cpu}  {t:'match', room, mode}
 // Client -> lobby: {t:'cpu'}  play the computer now (offered once a ticket has waited CPU_AFTER_S)
 //
@@ -48,7 +52,7 @@ export const ROOM_RE = /^[A-HJ-KM-NP-Z2-9]{6}$/;
 const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const KEY_RE = /^[A-Za-z0-9_-]{16,128}$/;
 const TEAM_RE = /^[A-Z]{2,3}$/;
-const MODES = ['ranked', 'casual', 'friend', 'cpu', 'cup'];
+const MODES = ['ranked', 'casual', 'friend', 'cpu', 'cup', 'draft'];    // (draft: Versus Draft, two players who bid for their lineups first; never rated)
 export const CPU_SEAT = 1, CPU_KEY = 'cpu', CPU_NAME = 'Computer';
 export const CPU_AFTER_S = 20;             // waiting this long in the queue: the computer is offered (casual or ranked)
 // against the computer nobody waits on you: no 30-second play clock (a call has this long, the room's clock only to
@@ -144,9 +148,21 @@ export function cupSettle(c) {
   return c.matches.filter((m) => m.w === null && !m.room && m.p[0] !== null && m.p[1] !== null);
 }
 
+// the draft as a phone sees it: the card up (the team and the slot only: the man is blind until the draft is over,
+// as are the picks), the money, the slots, the bid in and what each side may bid, the clock, the last card's fate;
+// never the cards still to come, nor what the computer would pay
+function draftView(R, now = Date.now()) {
+  const d = R.draft, done = VSCore.draftDone(d), card = d.pool[d.i] || null;
+  const mask = (p) => (done ? p : { k: p.k, team: p.team, pos: p.pos, paid: p.paid });
+  return { i: d.i, n: d.pool.length, card: VSCore.draftMask(card), budget: d.budget, need: d.need, picks: d.picks.map((ps) => ps.map(mask)), bid: d.bid,
+    max: [0, 1].map((s) => VSCore.draftMax(d, s, card)), left: Math.max(0, d.deadline - now), last: d.last ? { ...d.last, card: VSCore.draftMask(d.last.card) } : null, done };
+}
 const clean = (n) => String(n ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
 const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 const rand = () => crypto.getRandomValues(new Uint32Array(1))[0];       // the server's coin: the toss, each snap's seed
+const rndf = () => rand() / 4294967296;
+export const { openMs: OPEN_MS, raiseMs: RAISE_MS, closeMs: CLOSE_MS } = VSCore.DRAFT;   // the draft's clocks: a card up, after a bid, when the other side cannot top it
+const CPU_BID_MS = 1200;                         // the draft: the computer bids this long (plus up to as much again) after the card or the other bid
 export const roomCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => ALPHABET[b % ALPHABET.length]).join('');
 async function hashKey(k) {
   const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`vs:${k}`)));
@@ -209,14 +225,20 @@ export class Match {
     const kh = await hashKey(key), now = Date.now();
     const mode = MODES.includes(url.searchParams.get('mode')) ? url.searchParams.get('mode') : 'friend';
     let R = await this.room();
-    if (!R) R = this.fresh(room, mode === 'ranked' || mode === 'cpu' || mode === 'cup' ? 'casual' : mode, now);    // a ranked room (the computer's, the Cup's) is only ever made by the lobby (the Cup)
+    if (!R) {
+      R = this.fresh(room, mode === 'ranked' || mode === 'cpu' || mode === 'cup' ? 'casual' : mode, now);    // a ranked room (the computer's, the Cup's) is only ever made by the lobby (the Cup)
+      if (url.searchParams.get('draft') === '1') R.draft = { pool: null };          // (a friend's draft: the pool is drawn when both are in)
+    }
     let seat = R.seats.indexOf(kh);
     if (seat < 0 && !R.pre) seat = R.seats.indexOf(null);
     if (seat < 0) return new Response('the room is full', { status: 409 });
     R.seats[seat] = kh;
     R.seen[seat] = true;
     R.off[seat] = 0;
-    if (R.phase === 'wait' && R.seen[0] && R.seen[1] && R.teams[0] && R.teams[1]) this.begin(R, now);
+    if (R.phase === 'wait' && R.seen[0] && R.seen[1]) {
+      if (R.draft) R.phase = 'draft';                                // (the draft first, its pool drawn by the alarm at once: the engine may take a moment to load; the toss once both sides are made)
+      else if (R.teams[0] && R.teams[1]) this.begin(R, now);
+    }
     await this.save(R);
     // the computer's call now (a toss it won plays at once): the phone's hello is the room after it, with that step in
     // its decisions (the step's own message went out before this socket was open; a hello from before it left the
@@ -232,7 +254,7 @@ export class Match {
     for (let i = since; i < R.n; i++) { const d = await this.ctx.storage.get(`d:${i}`); delete d.seed; decisions.push(d); }
     server.send(JSON.stringify({ t: 'hello', seat, mode: R.mode, room: R.room, teams: R.teams, names: R.names, full: R.seen[0] && R.seen[1],
       online: this.online(), off: R.off, phase: R.phase, n: R.n, ms: R.ms, ms0: since === 0 ? R.ms0 || null : null, decisions, deadline: R.deadline, dl: dls(R), now,
-      result: R.result, rated: R.rated, level: R.cpuLevel || null }));
+      result: R.result, rated: R.rated, level: R.cpuLevel || null, draft: R.draft && R.draft.pool ? draftView(R) : R.draft ? { pending: true } : null, draftTeams: R.draftTeams || null }));
     this.broadcast({ t: 'peer', online: this.online(), off: R.off, full: R.seen[0] && R.seen[1], now });
     const pend = await this.ctx.storage.get('pend');
     if (pend && pend.n === R.n) for (const s of Object.keys(pend.halves)) server.send(JSON.stringify({ t: 'locked', n: pend.n, seat: Number(s) }));
@@ -269,6 +291,7 @@ export class Match {
     if (R.teams[0] && R.teams[0] === R.teams[1]) R.teams[1] = null;
     R.names = [clean(b.names && b.names[0]), clean(b.names && b.names[1])];
     if (R.mode === 'cup') { R.cup = String(b.cup || ''); R.cupId = String(b.cupId || ''); R.showBy = Number(b.showBy) || now + CUP.showMs; }
+    if (b.draft) { R.draft = { pool: null }; R.teams = [null, null]; }        // (the sides are drafted, not brought)
     await this.save(R);
     await this.schedule(R);
     return reply({ ok: true });
@@ -295,15 +318,81 @@ export class Match {
       for (const s of [0, 1]) if (R.off[s]) t.push(R.off[s] + (R.cpu != null ? CPU_DECIDE_MS : FORFEIT_MS));
     }
     if (R.phase === 'wait' && R.pre) t.push(R.mode === 'cup' ? R.showBy : R.created + NOSHOW_MS);
+    if (R.phase === 'draft' && R.draft) { t.push(R.draft.pool ? R.draft.deadline : R.draft.retryAt || Date.now() + 50); if (R.draft.cpuAt) t.push(R.draft.cpuAt); }
     if (R.phase === 'over' && R.mode === 'ranked' && R.result && R.result.winner >= 0 && !R.rated) t.push(Date.now() + 5000);
     if (R.phase === 'over' && R.mode === 'cup' && !R.reported) t.push(Date.now() + 5000);
     await this.ctx.storage.setAlarm(Math.min(...t));
   }
 
   stepper(R, E) {
-    const k = `${R.teams[0]}|${R.teams[1]}`;
-    if (!this.steppers.has(k)) this.steppers.set(k, VSCore.stepper(E.eng, E.pool, R.teams[0], R.teams[1], E.eng.lib ? lazySimulator : undefined));
+    const k = R.draftTeams ? `draft:${R.room}` : `${R.teams[0]}|${R.teams[1]}`;
+    const pool = R.draftTeams ? VSCore.draftPoolWith(E.pool, R.draftTeams) : E.pool;
+    if (!this.steppers.has(k)) this.steppers.set(k, VSCore.stepper(E.eng, pool, R.teams[0], R.teams[1], E.eng.lib ? lazySimulator : undefined));
     return this.steppers.get(k);
+  }
+
+  // ---- the draft (VSCore.DRAFT, a blind auction): the pool once both are in, a card up at a time with a clock, the
+  // bids open and back and forth (draftBid), the high bid takes the card when the clock runs out (draftSettle); the
+  // computer bids on the alarm, a beat after each card or bid (draftCpu). Every card settled: the two sides are made
+  // (draftTeam) and the toss follows
+  async draftStart(R, now) {
+    let E;
+    try { E = await loadEngine(this.env); } catch (e) { console.error('vs engine', e && e.message); R.draft.retryAt = now + 5000; return; }    // (the alarm tries again)
+    R.draft = VSCore.draftNew(VSCore.draftPool(E.pool, rndf));
+    R.phase = 'draft';
+    VSCore.draftAdvance(R.draft);
+    this.draftPost(R, now);
+    this.broadcast({ t: 'draft', d: draftView(R, now) });
+  }
+  draftPost(R, now) {
+    const d = R.draft;
+    d.deadline = now + OPEN_MS;
+    d.bid = null;
+    d.cpuV = R.cpu != null ? VSCore.draftCpuValue(d, R.cpu, rndf) : 0;
+    d.cpuAt = R.cpu != null ? now + CPU_BID_MS * (1 + rndf()) : 0;
+  }
+  // a bid in (a seat's, or the computer's): the clock goes back to RAISE_MS, or CLOSE_MS when the other side cannot
+  // top it; the computer's turn to answer a phone's bid is set
+  draftBid(R, seat, amount, now) {
+    const d = R.draft;
+    d.bid = { seat, amount };
+    d.deadline = now + (VSCore.draftCanTop(d, 1 - seat) ? RAISE_MS : CLOSE_MS);
+    d.cpuAt = R.cpu != null && seat !== R.cpu && VSCore.draftCanTop(d, R.cpu) ? now + CPU_BID_MS * (1 + rndf()) : 0;
+    this.broadcast({ t: 'bid', i: d.i, seat, amount, left: d.deadline - now });
+  }
+  draftCpu(R, now) {
+    const d = R.draft;
+    d.cpuAt = 0;
+    const amount = VSCore.draftCpuBid(d, R.cpu, d.cpuV, rndf);
+    if (amount != null) this.draftBid(R, R.cpu, amount, now);
+  }
+  async draftSettle(R, now) {
+    const d = R.draft;
+    VSCore.draftResolve(d);
+    if (!VSCore.draftDone(d)) {
+      this.draftPost(R, now);
+      await this.save(R);
+      this.broadcast({ t: 'draft', d: draftView(R, now) });
+      return this.schedule(R);
+    }
+    let E;
+    try { E = await loadEngine(this.env); } catch (e) {
+      console.error('vs engine', e && e.message);
+      d.deadline = now + 5000;                                   // (the alarm settles again, with the engine)
+      await this.save(R);
+      return this.schedule(R);
+    }
+    VSCore.draftFill(d, E.pool, rndf);
+    const [c0, c1] = VSCore.DRAFT.teams;
+    R.draftTeams = { [c0]: VSCore.draftTeam(E.pool, d.picks[0], c0, R.names[0]), [c1]: VSCore.draftTeam(E.pool, d.picks[1], c1, R.names[1]) };
+    R.teams = [c0, c1];
+    d.bid = null; d.cpuAt = 0; d.cpuV = 0;
+    this.broadcast({ t: 'draft', d: draftView(R, now), teams: R.teams, draftTeams: R.draftTeams });
+    this.begin(R, now);
+    await this.save(R);
+    await this.schedule(R);
+    if (R.cpu != null) await this.cpuTurn();
+    return undefined;
   }
 
   async webSocketMessage(ws, raw) {
@@ -324,7 +413,15 @@ export class Match {
     const R = await this.room();
     if (!R) return;
     const now = Date.now();
+    if (m.t === 'bid') {
+      const d = R.draft, amount = Number(m.amount);
+      if (R.phase !== 'draft' || !d || !d.pool || m.i !== d.i || now >= d.deadline || !VSCore.draftCanBid(d, seat, amount)) return;
+      this.draftBid(R, seat, amount, now);
+      await this.save(R);
+      return this.schedule(R);
+    }
     if (m.t === 'team') {
+      if (R.draft) return;                                           // (the sides are drafted)
       if (R.phase !== 'wait' || R.teams[seat] || !TEAM_RE.test(String(m.team || '')) || !E.pool.teams[m.team]) return;
       if (R.teams[1 - seat] === m.team) { ws.send(JSON.stringify({ t: 'taken', team: m.team })); return; }   // never the same team on both sides
       R.teams[seat] = m.team;
@@ -498,7 +595,7 @@ export class Match {
         for (let i = 0; i < 5; i++) {
           const code = roomCode();
           const r = await this.env.MATCH.get(this.env.MATCH.idFromName(`room:${code}`)).fetch(new Request('https://room/vs/init', {
-            method: 'POST', body: JSON.stringify({ room: code, mode: R2.mode === 'friend' || R2.mode === 'cpu' ? R2.mode : 'casual', seats: R2.seats, teams: R2.teams, names: R2.names, level: R2.cpuLevel }) }));
+            method: 'POST', body: JSON.stringify({ room: code, mode: R2.mode === 'friend' || R2.mode === 'cpu' || R2.mode === 'draft' ? R2.mode : 'casual', seats: R2.seats, teams: R2.draft ? [null, null] : R2.teams, names: R2.names, level: R2.cpuLevel, draft: !!R2.draft }) }));
           if (r.ok) { R2.next = code; await this.save(R2); return code; }
         }
         return null;
@@ -518,6 +615,13 @@ export class Match {
       for (const ws of this.ctx.getWebSockets()) { try { ws.close(4001, 'expired'); } catch (e) { /* gone */ } }
       await this.ctx.storage.deleteAll();
       return;
+    }
+    if (R.phase === 'draft' && R.draft) {
+      if (!R.draft.pool) { await this.draftStart(R, now); await this.save(R); return this.schedule(R); }
+      if (R.cpu != null && R.draft.cpuAt && now >= R.draft.cpuAt - 50) this.draftCpu(R, now);
+      if (now >= R.draft.deadline - 50) return this.draftSettle(R, now);
+      await this.save(R);
+      return this.schedule(R);
     }
     if (R.phase === 'live') {
       // a phone gone too long: that side forfeits (both gone: the one who left first; at the same time: nobody wins)
@@ -568,7 +672,7 @@ export class Match {
       }
     } else if (R.phase === 'wait' && R.pre && now >= R.created + NOSHOW_MS) {
       // ranked: matched and never came (or never picked a team) is a loss, so nobody dodges an opponent; else called off
-      const missing = [0, 1].filter((s) => !R.seen[s] || !R.teams[s]);
+      const missing = [0, 1].filter((s) => !R.seen[s] || (!R.draft && !R.teams[s]));
       if (R.mode === 'ranked' && missing.length === 1) return this.finish(R, { winner: 1 - missing[0], by: 'forfeit', loser: missing[0], why: 'noshow' });
       return this.finish(R, { winner: -1, by: 'noshow', missing });
     }
@@ -598,9 +702,10 @@ export class Match {
   // Every tick it pairs who it can: ranked by rating (a window that widens while they wait), casual first come.
   async queue(req, url) {
     if (req.headers.get('Upgrade') !== 'websocket') return new Response('websocket wanted', { status: 426 });
-    const want = url.searchParams.get('mode'), key = url.searchParams.get('key') || '', mode = want === 'ranked' ? 'ranked' : 'casual';
+    const want = url.searchParams.get('mode'), key = url.searchParams.get('key') || '', mode = want === 'ranked' ? 'ranked' : want === 'draft' ? 'draft' : 'casual';
+    const draft = mode === 'draft' || url.searchParams.get('draft') === '1';        // (a draft: no team brought)
     const team = url.searchParams.get('team') || '';
-    if (!KEY_RE.test(key) || !TEAM_RE.test(team)) return new Response('bad key or team', { status: 400 });
+    if (!KEY_RE.test(key) || !(TEAM_RE.test(team) || (draft && !team))) return new Response('bad key or team', { status: 400 });
     const kh = await hashKey(key), name = clean(url.searchParams.get('name'));
     let rating = ELO.START;
     if (mode === 'ranked') {
@@ -618,13 +723,13 @@ export class Match {
     // (the computer asked for straight away: its room, no time in the queue, nobody paired with it)
     if (want === 'cpu') {
       this.ctx.acceptWebSocket(server, ['cpuq']);
-      const t = { q: true, kh, mode: 'casual', team, name, rating, since: Date.now(), now: true };
+      const t = { q: true, kh, mode: 'casual', team, name, rating, since: Date.now(), now: true, draft };
       server.serializeAttachment(t);
       await this.cpuMatch(server, t, url.searchParams.get('level'));
       return new Response(null, { status: 101, webSocket: client });
     }
     this.ctx.acceptWebSocket(server, ['q']);
-    server.serializeAttachment({ q: true, kh, mode, team, name, rating, since: Date.now() });
+    server.serializeAttachment({ q: true, kh, mode, team, name, rating, since: Date.now(), draft });
     await this.pairTick();
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -643,7 +748,7 @@ export class Match {
   }
   async pairNow() {
     const now = Date.now();
-    for (const mode of ['ranked', 'casual']) {
+    for (const mode of ['ranked', 'casual', 'draft']) {
       const list = this.tickets().filter((t) => t.mode === mode).sort((a, b) => a.since - b.since);
       const used = new Set();
       for (const a of list) {
@@ -657,7 +762,7 @@ export class Match {
           if (cost < bestCost) { best = b; bestCost = cost; }
         }
         if (!best) continue;
-        const room = await this.makeRoom(mode, a, best);
+        const room = await this.makeRoom(mode, a, best, undefined, mode === 'draft');
         if (!room) continue;
         used.add(a); used.add(best);
         for (const t of [a, best]) {
@@ -693,16 +798,16 @@ export class Match {
     const teams = Object.keys(E.pool.teams).filter((c) => c !== t.team && TEAM_RE.test(c));
     if (!teams.length) return;
     const other = teams[rand() % teams.length];
-    const room = await this.makeRoom('cpu', t, { kh: CPU_KEY, team: other, name: CPU_NAME }, CPU_LEVELS.includes(level) ? level : 'pro');
+    const room = await this.makeRoom('cpu', t, { kh: CPU_KEY, team: other, name: CPU_NAME }, CPU_LEVELS.includes(level) ? level : 'pro', !!t.draft);
     if (!room) return;
     ws.serializeAttachment({ ...t, paired: room });
     try { ws.send(JSON.stringify({ t: 'match', room, mode: 'cpu' })); ws.close(1000, 'matched'); } catch (e) { /* gone: the room calls it off */ }
   }
-  async makeRoom(mode, a, b, level) {
+  async makeRoom(mode, a, b, level, draft) {
     for (let i = 0; i < 5; i++) {
       const room = roomCode();
       const r = await this.env.MATCH.get(this.env.MATCH.idFromName(`room:${room}`)).fetch(new Request('https://room/vs/init', {
-        method: 'POST', body: JSON.stringify({ room, mode, seats: [a.kh, b.kh], teams: [a.team, b.team], names: [a.name, b.name], level }) }));
+        method: 'POST', body: JSON.stringify({ room, mode, seats: [a.kh, b.kh], teams: draft ? [null, null] : [a.team, b.team], names: [a.name, b.name], level, draft: !!draft }) }));
       if (r.ok) return room;
     }
     return null;

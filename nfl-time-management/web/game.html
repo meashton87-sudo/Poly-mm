@@ -169,6 +169,42 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .arch .vsrank b { font-variant-numeric: tabular-nums; }
 .pcard.play { --c1: #34e0a1; --c2: #0f8a6a; } .pcard.ranked { --c1: #ffd54a; --c2: #c98a00; }
 .pcard.cpu { --c1: #5ab8ff; --c2: #2c5fd6; } .pcard.friend { --c1: #c18cff; --c2: #7a3fe0; }
+.pcard.draft { --c1: #ffb84a; --c2: #d9541e; }
+/* Versus Draft (game.js renderVsDraft): the card up (a city and a slot), its price and clock, your bids, the two rosters filling */
+.arch .vsdraft { display: grid; gap: 12px; }
+.arch .vsdraft .last { margin: 0; font: 700 14px/1.3 var(--body); color: var(--muted); }
+.arch .vsdraft .card { display: grid; gap: 10px; padding: 14px; border-radius: 16px; background: var(--card); border: 1px solid var(--line); }
+.arch .vsdraft .card .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.arch .vsdraft .card .kind { font: 900 12px var(--display); letter-spacing: .14em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; background: var(--ink); color: var(--paper); }
+.arch .vsdraft .card .n { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.arch .vsdraft .card .who { display: grid; grid-template-columns: 14px minmax(0, 1fr); column-gap: 10px; align-items: center; }
+.arch .vsdraft .card .who .sw { width: 14px; height: 14px; border-radius: 50%; grid-row: span 2; box-shadow: 0 0 0 2px var(--card), 0 0 0 3px var(--line); }
+.arch .vsdraft .card .who b { font: 900 30px/1.05 var(--display); text-transform: uppercase; letter-spacing: .02em; overflow-wrap: anywhere; }
+.arch .vsdraft .card .who .tm { font-size: 13px; color: var(--muted); }
+.arch .vsdraft .card .price { display: flex; align-items: baseline; gap: 2px; min-height: 40px; }
+.arch .vsdraft .card .price b { font: 900 40px/1 var(--display); font-variant-numeric: tabular-nums; }
+.arch .vsdraft .card .price .hold { font: 700 15px var(--body); color: var(--muted); }
+.arch .vsdraft .card .clock { height: 5px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.arch .vsdraft .card .clock i { display: block; height: 100%; width: 100%; background: var(--ink); transition: width .1s linear; }
+.arch .vsdraft .bidrow { display: grid; gap: 8px; }
+.arch .vsdraft .bidrow .note { margin: 0; font-size: 12.5px; color: var(--muted); }
+.arch .vsdraft .bidrow .bids { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.arch .vsdraft .bidrow .bids .btn { display: grid; gap: 2px; place-items: center; width: auto; min-height: 56px; padding: 6px 8px; font-size: 16px; letter-spacing: .04em; }
+.arch .vsdraft .bidrow .bids .btn small { font: 600 11px/1 var(--body); letter-spacing: .08em; opacity: .8; }
+.arch .vsdraft .bidrow .bids .btn:disabled { opacity: .4; cursor: default; }
+.arch .vsdraft .bidrow .bids .ghostbtn { grid-column: 1 / -1; min-height: 44px; }
+.arch .vsdraft .slots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.arch .vsdraft .slots .col { display: grid; gap: 4px; align-content: start; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); }
+.arch .vsdraft .slots .col.holds { border-color: var(--ink); }
+.arch .vsdraft .slots .coach { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin-bottom: 4px; min-width: 0; }
+.arch .vsdraft .slots .coach .pk { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arch .vsdraft .slots .coach b { font: 900 22px/1 var(--display); font-variant-numeric: tabular-nums; }
+.arch .vsdraft .slot { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 5px; align-items: baseline; font-size: 12.5px; color: var(--muted); }
+.arch .vsdraft .slot.got { color: var(--ink); }
+.arch .vsdraft .slot.shown .nm { font-weight: 700; }
+.arch .vsdraft .slot .k { font: 800 10.5px var(--body); letter-spacing: .1em; text-transform: uppercase; }
+.arch .vsdraft .slot .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arch .vsdraft .slot .px { font-variant-numeric: tabular-nums; font-weight: 700; }
 .pcard.big.play { background: linear-gradient(160deg, #1fc98e, #0b6b55 78%); }
 .pcard:disabled { opacity: .55; cursor: default; }
 .pcard.wide { grid-column: 1 / -1; aspect-ratio: auto; flex-direction: row; align-items: center; justify-content: flex-start; gap: 14px; }
