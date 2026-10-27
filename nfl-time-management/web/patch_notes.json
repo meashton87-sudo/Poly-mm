@@ -3,11 +3,11 @@
   "notes": [
     {
       "date": "2026-10-27",
-      "title": "Versus Draft",
+      "title": "Versus Draft: the blind auction",
       "items": [
-        "A new way to play Versus: Draft. Nobody picks a team. Both coaches get $50 and bid on players as they come up: a quarterback, a back, two receivers, a tight end, an offensive line and a whole defense and special teams.",
-        "A player comes up, you both bid once in secret, and the higher bid takes him; a tie goes to whoever has more spots to fill. Twenty seconds a card.",
-        "Your side is built from your picks: the passing game from your quarterback, line and receivers, the running game from your line and back, the defense and kickers from the unit you won.",
+        "A new way to play Versus: Draft. Nobody picks a team. Both coaches get $50 and build a side at auction: a quarterback, a back, two receivers, a tight end, an offensive line and a whole defense and special teams.",
+        "The cards are blind: you see the team and the slot, not the man. Bid back and forth against the other coach; every bid puts seven seconds back on the clock, and the high bid takes the card when it runs out. Claim an open card for $0 if nobody wants it.",
+        "The names are revealed when the draft ends, and your side is built from your picks: the passing game from your quarterback, line and receivers, the running game from your line and back, the defense and kickers from the unit you won.",
         "Draft from the Versus lobby, against another coach or the computer; a rematch drafts again. Draft games are not rated."
       ]
     },

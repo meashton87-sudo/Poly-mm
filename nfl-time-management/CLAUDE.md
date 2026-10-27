@@ -28,6 +28,7 @@ node web/score_sweep.js               # daily score: real spots played out by ra
 node web/motion_test.js               # daily game animation: player motion stays in the tracking envelope, routes, coverage
 node board/worker_test.mjs            # the website's survivor leaderboard (Cloudflare Worker + Durable Object), storage in memory
 node board/match_test.mjs             # Versus: rooms, lobby, ladder in memory (board/vs_world.mjs), a stand-in engine (a second)
+node board/vs_draft_test.mjs 12       # Versus Draft: the blind auction against the computer with the real engine (board/assets/vs), the drafted sides, the match to the end
 node board/lazy_sim_test.mjs          # Versus: the room's lazily built simulator equals the engine's, table by table and play by play
 node board/cup_test.mjs               # Versus: the Invitational (the standings at the qualifying time, the bracket, its rooms, no-shows, the claim code)
 node board/vs_pairs_test.mjs          # Versus: every one of the 992 matchups (32 teams, home and away) played to the end, the rules on every snap
@@ -107,6 +108,16 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   own call), in at once (cpuTurn), never late, away or a forfeit; a rematch needs only the player. vs_cpu_test.mjs plays
   it with the real engine. The load test (.github/workflows/versus-load.yml, board/vs_load.mjs) deploys the board as
   its own worker (wrangler.loadtest.toml: its own Durable Objects), never the real one, and deletes it after.
+  Versus Draft (web/vs_core.js DRAFT, match.js draftStart/draftBid/draftSettle; mode 'draft' in the queue, or draft=1 on
+  the computer's or a friend's room; never rated): a blind auction before the toss. Both sides get DRAFT.budget ($50);
+  cards come up slot by slot (DRAFT.order), each a team's man at the slot drawn by draftPool, blind to the phones (the
+  team and the slot; draftMask, the names revealed with the last 'draft' message); the bidding is open (a $0 claim, a
+  dollar or more over the bid in, never over draftMax: a dollar kept for each slot still open, never your own bid
+  raised), each bid putting DRAFT.raiseMs back on the clock (closeMs when the other side cannot top it), the high bid
+  taking the card at the deadline, a card nobody claimed to nobody, a kind both sides have skipped; what is still open
+  when the pool is out is filled for nothing (draftFill). The sides play as DRAFT.teams (draftTeam: the ratings blended
+  from the picks' teams, the lineups the men picked). The computer bids on the room's alarm a beat after each card or
+  bid, up to draftCpuValue. match_test.mjs covers the rules; vs_draft_test.mjs plays it with the real engine.
 - The defense (every mode): the defense calls personnel, front, coverage and rush (engine.js DC). The offense's play is a
   real NFL play run against that defense, as charted (sampleVsDefense: the pass rush, then the shell, then man or zone;
   a run's box, then the blitz), widening the situation before letting a filter go, never across the goal line, the

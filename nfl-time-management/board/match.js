@@ -28,6 +28,10 @@
 //                 {t:'clock', n, deadline, now}  this seat's deadline for decision n (dl: both seats')
 //                 {t:'locked', n, seat}  {t:'peer', online, off, now}  {t:'teams', teams, names}  {t:'taken', team}
 //                 {t:'over', result}  {t:'rated', rated}  {t:'rematch-ask', seat}  {t:'rematch', room}
+// The draft (mode 'draft', or ?draft=1 on a friend's or the computer's room; VSCore.DRAFT): hello.draft is null, {pending:true}
+// (the other side not in yet) or the view (draftView: i, n, card {k, team, pos}, budget, need, picks, bid {seat, amount},
+// max, left, last, done); {t:'draft', d} a new card up, the last one with teams and draftTeams; {t:'bid', i, seat, amount,
+// left} a bid in. Client -> room: {t:'bid', i, amount} (a $0 claim, or over the bid in, within max[seat]).
 // Lobby -> client: {t:'queued', mode, size, wait, rating, cpu}  {t:'match', room, mode}
 // Client -> lobby: {t:'cpu'}  play the computer now (offered once a ticket has waited CPU_AFTER_S)
 //
@@ -144,18 +148,21 @@ export function cupSettle(c) {
   return c.matches.filter((m) => m.w === null && !m.room && m.p[0] !== null && m.p[1] !== null);
 }
 
-// the draft as a phone sees it: the card up, the money and the slots, each side's picks, whose bid is in; never the
-// cards still to come (only how many of each kind)
-function draftView(R) {
-  const d = R.draft, left = {};
-  d.pool.slice(d.i + 1).forEach((c) => { left[c.k] = (left[c.k] || 0) + 1; });
-  return { i: d.i, n: d.pool.length, card: d.pool[d.i] || null, budget: d.budget, need: d.need, picks: d.picks, deadline: d.deadline, in: [0, 1].map((s) => s in d.bids), last: d.last, left, done: VSCore.draftDone(d) };
+// the draft as a phone sees it: the card up (the team and the slot only: the man is blind until the draft is over,
+// as are the picks), the money, the slots, the bid in and what each side may bid, the clock, the last card's fate;
+// never the cards still to come, nor what the computer would pay
+function draftView(R, now = Date.now()) {
+  const d = R.draft, done = VSCore.draftDone(d), card = d.pool[d.i] || null;
+  const mask = (p) => (done ? p : { k: p.k, team: p.team, pos: p.pos, paid: p.paid });
+  return { i: d.i, n: d.pool.length, card: VSCore.draftMask(card), budget: d.budget, need: d.need, picks: d.picks.map((ps) => ps.map(mask)), bid: d.bid,
+    max: [0, 1].map((s) => VSCore.draftMax(d, s, card)), left: Math.max(0, d.deadline - now), last: d.last ? { ...d.last, card: VSCore.draftMask(d.last.card) } : null, done };
 }
 const clean = (n) => String(n ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
 const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 const rand = () => crypto.getRandomValues(new Uint32Array(1))[0];       // the server's coin: the toss, each snap's seed
 const rndf = () => rand() / 4294967296;
-export const BID_MS = VSCore.DRAFT.bidMs;        // the draft: a bid's clock on each player up
+export const { openMs: OPEN_MS, raiseMs: RAISE_MS, closeMs: CLOSE_MS } = VSCore.DRAFT;   // the draft's clocks: a card up, after a bid, when the other side cannot top it
+const CPU_BID_MS = 1200;                         // the draft: the computer bids this long (plus up to as much again) after the card or the other bid
 export const roomCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => ALPHABET[b % ALPHABET.length]).join('');
 async function hashKey(k) {
   const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`vs:${k}`)));
@@ -229,7 +236,7 @@ export class Match {
     R.seen[seat] = true;
     R.off[seat] = 0;
     if (R.phase === 'wait' && R.seen[0] && R.seen[1]) {
-      if (R.draft) await this.draftStart(R, now);                   // (the draft first; the toss once both sides are made)
+      if (R.draft) R.phase = 'draft';                                // (the draft first, its pool drawn by the alarm at once: the engine may take a moment to load; the toss once both sides are made)
       else if (R.teams[0] && R.teams[1]) this.begin(R, now);
     }
     await this.save(R);
@@ -311,7 +318,7 @@ export class Match {
       for (const s of [0, 1]) if (R.off[s]) t.push(R.off[s] + (R.cpu != null ? CPU_DECIDE_MS : FORFEIT_MS));
     }
     if (R.phase === 'wait' && R.pre) t.push(R.mode === 'cup' ? R.showBy : R.created + NOSHOW_MS);
-    if (R.phase === 'draft' && R.draft) t.push(R.draft.pool ? R.draft.deadline : Date.now() + 5000);
+    if (R.phase === 'draft' && R.draft) { t.push(R.draft.pool ? R.draft.deadline : R.draft.retryAt || Date.now() + 50); if (R.draft.cpuAt) t.push(R.draft.cpuAt); }
     if (R.phase === 'over' && R.mode === 'ranked' && R.result && R.result.winner >= 0 && !R.rated) t.push(Date.now() + 5000);
     if (R.phase === 'over' && R.mode === 'cup' && !R.reported) t.push(Date.now() + 5000);
     await this.ctx.storage.setAlarm(Math.min(...t));
@@ -324,30 +331,48 @@ export class Match {
     return this.steppers.get(k);
   }
 
-  // ---- the draft (VSCore.DRAFT): the pool once both are in, a card up at a time with a clock, both bids in secret,
-  // the higher one takes him; the computer bids as the card goes up. Every card settled: the two sides are made
+  // ---- the draft (VSCore.DRAFT, a blind auction): the pool once both are in, a card up at a time with a clock, the
+  // bids open and back and forth (draftBid), the high bid takes the card when the clock runs out (draftSettle); the
+  // computer bids on the alarm, a beat after each card or bid (draftCpu). Every card settled: the two sides are made
   // (draftTeam) and the toss follows
   async draftStart(R, now) {
     let E;
-    try { E = await loadEngine(this.env); } catch (e) { console.error('vs engine', e && e.message); R.phase = 'draft'; return; }    // (the alarm tries again)
+    try { E = await loadEngine(this.env); } catch (e) { console.error('vs engine', e && e.message); R.draft.retryAt = now + 5000; return; }    // (the alarm tries again)
     R.draft = VSCore.draftNew(VSCore.draftPool(E.pool, rndf));
     R.phase = 'draft';
+    VSCore.draftAdvance(R.draft);
     this.draftPost(R, now);
-    this.broadcast({ t: 'draft', d: draftView(R) });
+    this.broadcast({ t: 'draft', d: draftView(R, now) });
   }
   draftPost(R, now) {
     const d = R.draft;
-    d.deadline = now + BID_MS;
-    d.bids = {};
-    if (R.cpu != null) d.bids[R.cpu] = VSCore.draftCpuBid(d, R.cpu, rndf);
+    d.deadline = now + OPEN_MS;
+    d.bid = null;
+    d.cpuV = R.cpu != null ? VSCore.draftCpuValue(d, R.cpu, rndf) : 0;
+    d.cpuAt = R.cpu != null ? now + CPU_BID_MS * (1 + rndf()) : 0;
+  }
+  // a bid in (a seat's, or the computer's): the clock goes back to RAISE_MS, or CLOSE_MS when the other side cannot
+  // top it; the computer's turn to answer a phone's bid is set
+  draftBid(R, seat, amount, now) {
+    const d = R.draft;
+    d.bid = { seat, amount };
+    d.deadline = now + (VSCore.draftCanTop(d, 1 - seat) ? RAISE_MS : CLOSE_MS);
+    d.cpuAt = R.cpu != null && seat !== R.cpu && VSCore.draftCanTop(d, R.cpu) ? now + CPU_BID_MS * (1 + rndf()) : 0;
+    this.broadcast({ t: 'bid', i: d.i, seat, amount, left: d.deadline - now });
+  }
+  draftCpu(R, now) {
+    const d = R.draft;
+    d.cpuAt = 0;
+    const amount = VSCore.draftCpuBid(d, R.cpu, d.cpuV, rndf);
+    if (amount != null) this.draftBid(R, R.cpu, amount, now);
   }
   async draftSettle(R, now) {
     const d = R.draft;
-    VSCore.draftResolve(d, d.bids, rndf);
+    VSCore.draftResolve(d);
     if (!VSCore.draftDone(d)) {
       this.draftPost(R, now);
       await this.save(R);
-      this.broadcast({ t: 'draft', d: draftView(R) });
+      this.broadcast({ t: 'draft', d: draftView(R, now) });
       return this.schedule(R);
     }
     let E;
@@ -361,7 +386,8 @@ export class Match {
     const [c0, c1] = VSCore.DRAFT.teams;
     R.draftTeams = { [c0]: VSCore.draftTeam(E.pool, d.picks[0], c0, R.names[0]), [c1]: VSCore.draftTeam(E.pool, d.picks[1], c1, R.names[1]) };
     R.teams = [c0, c1];
-    this.broadcast({ t: 'draft', d: draftView(R), teams: R.teams, draftTeams: R.draftTeams });
+    d.bid = null; d.cpuAt = 0; d.cpuV = 0;
+    this.broadcast({ t: 'draft', d: draftView(R, now), teams: R.teams, draftTeams: R.draftTeams });
     this.begin(R, now);
     await this.save(R);
     await this.schedule(R);
@@ -388,12 +414,10 @@ export class Match {
     if (!R) return;
     const now = Date.now();
     if (m.t === 'bid') {
-      const d = R.draft;
-      if (R.phase !== 'draft' || !d || !d.pool || m.i !== d.i || seat in d.bids) return;
-      d.bids[seat] = Math.max(0, Math.floor(Number(m.amount) || 0));
-      if ([0, 1].every((s) => s in d.bids)) return this.draftSettle(R, now);
+      const d = R.draft, amount = Number(m.amount);
+      if (R.phase !== 'draft' || !d || !d.pool || m.i !== d.i || now >= d.deadline || !VSCore.draftCanBid(d, seat, amount)) return;
+      this.draftBid(R, seat, amount, now);
       await this.save(R);
-      this.broadcast({ t: 'bidin', i: d.i, seat });
       return this.schedule(R);
     }
     if (m.t === 'team') {
@@ -594,7 +618,9 @@ export class Match {
     }
     if (R.phase === 'draft' && R.draft) {
       if (!R.draft.pool) { await this.draftStart(R, now); await this.save(R); return this.schedule(R); }
+      if (R.cpu != null && R.draft.cpuAt && now >= R.draft.cpuAt - 50) this.draftCpu(R, now);
       if (now >= R.draft.deadline - 50) return this.draftSettle(R, now);
+      await this.save(R);
       return this.schedule(R);
     }
     if (R.phase === 'live') {

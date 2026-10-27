@@ -406,15 +406,18 @@
   }
 
   // ------------------------------------------------------------------------------------------------- the draft ---
-  // Versus Draft (the owner, Oct 26): nobody brings a team. Both players get DRAFT.budget dollars; players come up one
-  // at a time from a pool drawn across the league (draftPool: DRAFT.pool of each kind, each from a different team),
-  // both bid in secret, and the higher bid takes him at its price (draftResolve). A side bids only on a kind it still
-  // needs (DRAFT.slots: a quarterback, a back, two receivers, a tight end, a line, a defense with its kickers) and never
-  // more than leaves a dollar for each slot still open (draftMax). A player nobody bids on goes for nothing to a side
-  // that needs him (the one with more slots open; a coin for a tie), so a draft always fills; what the pool runs out
-  // of, draftFill gives for nothing. The two sides play as DRAFT.teams, each put together by draftTeam.
+  // Versus Draft (the owner, Oct 26-27: a blind auction). Nobody brings a team. Both players get DRAFT.budget dollars;
+  // cards come up one at a time, slot by slot (DRAFT.order: the quarterbacks, then the backs...), each a TEAM's man at
+  // that slot (draftPool: DRAFT.pool of each kind, each from a different team). A card is blind: the phones see the
+  // team and the slot, never the man (draftMask), until the draft is over. The bidding is open, back and forth: a card
+  // opens with no bid and DRAFT.openMs on the clock; a side that still needs the kind (DRAFT.slots) claims it for $0 or
+  // beats the bid by a dollar or more (draftCanBid), never over what leaves a dollar for each slot still open
+  // (draftMax), never raising its own bid; every bid puts DRAFT.raiseMs back on the clock (DRAFT.closeMs when the
+  // other side cannot top it). At the deadline the high bid takes the card at its price (draftResolve); a card nobody
+  // claimed passes to nobody; a kind both sides have is skipped (draftAdvance). What a side still needs when the pool
+  // is out, draftFill gives for nothing. The two sides play as DRAFT.teams, each put together by draftTeam.
   const DRAFT = { budget: 50, slots: { QB: 1, RB: 1, WR: 2, TE: 1, OL: 1, DST: 1 }, pool: { QB: 3, RB: 3, WR: 5, TE: 3, OL: 3, DST: 3 },
-    order: ['QB', 'RB', 'WR', 'TE', 'OL', 'DST'], teams: ['DR1', 'DR2'], bidMs: 20000 };
+    order: ['QB', 'RB', 'WR', 'TE', 'OL', 'DST'], teams: ['DR1', 'DR2'], openMs: 15000, raiseMs: 7000, closeMs: 2500 };
   const OL_POS = ['LT', 'LG', 'C', 'RG', 'RT'];
   const TEAM_CODE = /^[A-Z]{2,3}$/;
   const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
@@ -440,7 +443,9 @@
     }
     return null;
   }
-  // the pool: DRAFT.pool cards of each kind, each kind's from different teams, shuffled into one order
+  // the card as a phone sees it while the draft is on: the team and the slot only
+  const draftMask = (c) => (c ? { k: c.k, team: c.team, pos: c.pos } : null);
+  // the pool: DRAFT.pool cards of each kind, each kind's from different teams, in DRAFT.order (shuffled within a kind)
   function draftPool(pool, rnd) {
     const codes = Object.keys(pool.teams).filter((c) => TEAM_CODE.test(c) && pool.teams[c] && pool.teams[c].lineup);
     const cards = [];
@@ -453,9 +458,9 @@
         if (++n >= DRAFT.pool[k]) break;
       }
     }
-    return shuffled(cards, rnd);
+    return cards;
   }
-  const draftNew = (cards) => ({ budget: [DRAFT.budget, DRAFT.budget], need: [{ ...DRAFT.slots }, { ...DRAFT.slots }], picks: [[], []], pool: cards, i: 0, bids: {}, deadline: 0, last: null });
+  const draftNew = (cards) => ({ budget: [DRAFT.budget, DRAFT.budget], need: [{ ...DRAFT.slots }, { ...DRAFT.slots }], picks: [[], []], pool: cards, i: 0, bid: null, deadline: 0, last: null });
   const draftOpen = (d, s) => Object.values(d.need[s]).reduce((a, b) => a + b, 0);
   const draftNeeds = (d, s, k) => (d.need[s][k] || 0) > 0;
   // the most a side may bid: a dollar kept for each slot still open after this one
@@ -463,27 +468,39 @@
     if (!card || !draftNeeds(d, s, card.k)) return 0;
     return Math.max(0, d.budget[s] - (draftOpen(d, s) - 1));
   }
+  // may this side bid so much on the card up: it needs the kind, it is not the high bidder, the amount is a whole
+  // dollar within its most and over the bid in (a $0 claim when there is none)
+  function draftCanBid(d, s, amount) {
+    const card = d.pool[d.i], b = d.bid;
+    if (!card || !Number.isInteger(amount) || amount < 0) return false;
+    if (b && b.seat === s) return false;
+    if (b && amount <= b.amount) return false;
+    return amount <= draftMax(d, s, card);
+  }
+  // can this side still top the bid in
+  const draftCanTop = (d, s) => { const b = d.bid; return b ? draftCanBid(d, s, b.amount + 1) : draftCanBid(d, s, 0); };
   const draftDone = (d) => d.i >= d.pool.length || (draftOpen(d, 0) === 0 && draftOpen(d, 1) === 0);
-  // the card up now: both bids in (a missing one is 0): who gets him, at what price. Mutates d (the next card is up
-  // after it) and returns the outcome, or null when the card was nobody's
-  function draftResolve(d, bids, rnd) {
+  // past the cards nobody needs any more (a kind both sides have)
+  function draftAdvance(d) {
+    while (d.i < d.pool.length && !draftNeeds(d, 0, d.pool[d.i].k) && !draftNeeds(d, 1, d.pool[d.i].k)) d.i += 1;
+    return d;
+  }
+  // the clock ran out on the card up: the high bid takes it at its price, or nobody does. Mutates d (the next card
+  // wanted is up after it) and returns the outcome, or null when no card was up
+  function draftResolve(d) {
     const card = d.pool[d.i];
     if (!card) return null;
-    const b = [0, 1].map((s) => { const m = draftMax(d, s, card); const x = Math.floor(Number((bids || {})[s]) || 0); return Math.max(0, Math.min(m, x)); });
-    const can = [0, 1].map((s) => draftNeeds(d, s, card.k));
-    let seat = -1;
-    if (b[0] !== b[1]) seat = b[0] > b[1] ? 0 : 1;
-    else if (can[0] && can[1]) seat = draftOpen(d, 0) !== draftOpen(d, 1) ? (draftOpen(d, 0) > draftOpen(d, 1) ? 0 : 1) : (rnd() < 0.5 ? 0 : 1);
-    else if (can[0] || can[1]) seat = can[0] ? 0 : 1;
-    const out = { i: d.i, card, seat, amount: seat >= 0 ? b[seat] : 0, bids: b };
-    if (seat >= 0) {
-      d.budget[seat] -= out.amount;
-      d.need[seat][card.k] -= 1;
-      d.picks[seat].push({ ...card, paid: out.amount });
+    const b = d.bid && draftNeeds(d, d.bid.seat, card.k) ? d.bid : null;
+    const out = { i: d.i, card, seat: b ? b.seat : -1, amount: b ? b.amount : 0 };
+    if (b) {
+      d.budget[b.seat] -= b.amount;
+      d.need[b.seat][card.k] -= 1;
+      d.picks[b.seat].push({ ...card, paid: b.amount });
     }
     d.i += 1;
-    d.bids = {};
+    d.bid = null;
     d.last = out;
+    draftAdvance(d);
     return out;
   }
   // what the pool ran out of: a player of that kind from a team not yet on the side, for nothing
@@ -502,16 +519,24 @@
     }
     return d;
   }
-  // the computer's bid: what the slot is worth of its money, more for a better player and a scarcer kind, a little
-  // noise; its last chance at a kind, half again as much
+  // the computer: what the card up is worth to it (draftCpuValue, worked out as the card goes up: its share of its
+  // money for the slot, more for a better man and a scarcer kind, a little noise; its last chance at a kind, half
+  // again as much) and its move in the bidding (draftCpuBid: a $0 claim, or a dollar over the bid in, sometimes two,
+  // up to that worth; null when it sits)
   const DRAFT_W = { QB: 1.8, OL: 1.1, DST: 1.3, WR: 1.0, RB: 0.8, TE: 0.7 };
-  function draftCpuBid(d, s, rnd) {
+  function draftCpuValue(d, s, rnd) {
     const card = d.pool[d.i], max = draftMax(d, s, card);
     if (!max) return 0;
     const per = d.budget[s] / Math.max(1, draftOpen(d, s)), q = Math.max(0.3, Math.min(1.6, (card.ovr - 55) / 25));
     const left = d.pool.slice(d.i + 1).filter((c) => c.k === card.k).length, last = left < d.need[s][card.k];
-    const bid = Math.round(per * (DRAFT_W[card.k] || 1) * q * (0.8 + 0.4 * rnd()) * (last ? 1.5 : 1));
-    return Math.max(1, Math.min(max, bid));
+    const v = Math.round(per * (DRAFT_W[card.k] || 1) * q * (0.8 + 0.4 * rnd()) * (last ? 1.5 : 1));
+    return Math.max(1, Math.min(max, v));
+  }
+  function draftCpuBid(d, s, value, rnd) {
+    if (!draftCanTop(d, s)) return null;
+    const next = d.bid ? d.bid.amount + 1 + (rnd() < 0.3 ? 1 : 0) : 0;
+    const amount = Math.min(next, draftMax(d, s, d.pool[d.i]));
+    return amount <= Math.max(0, value) && draftCanBid(d, s, amount) ? amount : null;
   }
   // a side's team from its picks: the ratings a blend of its players' teams' (the quarterback and the line most of the
   // passing and the running; the defense and the kickers the defense's team's), the quarterback's own adjustment, the
@@ -550,7 +575,7 @@
 
   const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, INTENTS, KICK_DEF, FAKES, intentsAt, VS_OT, TEAM_BOOST, boostPool, hash, rng, buildGame, possRoot, start, chooser, need, role,
     cleanAction, cleanDef, cleanHalf, apply, after, describe, called, noToss, stepper, unpack,
-    DRAFT, draftPool, draftCard, draftNew, draftOpen, draftNeeds, draftMax, draftDone, draftResolve, draftFill, draftCpuBid, draftTeam, draftPoolWith };
+    DRAFT, draftPool, draftCard, draftMask, draftNew, draftOpen, draftNeeds, draftMax, draftCanBid, draftCanTop, draftDone, draftAdvance, draftResolve, draftFill, draftCpuValue, draftCpuBid, draftTeam, draftPoolWith };
   if (typeof module !== 'undefined' && module && module.exports) module.exports = VSCore;
   if (global) global.VSCore = VSCore;       // (always: a page with some other script's global `module` still gets it)
 })(typeof self !== 'undefined' ? self : this);
