@@ -1,0 +1,95 @@
+name: Test server
+
+# The test server: the game from any branch, on its own unlisted site (https://nfl2mindrill-test.pages.dev, robots told
+# to stay out) with its own board worker (test-site/wrangler.toml: two-minute-drill-test, its own Durable Objects, so
+# nothing it does reaches the real board, ladder or players; no accounts, mail or payments). Pro and Versus on, no ads.
+# (The worker's config lives in nfl-time-management/test-site/, outside the paths the site workflow watches.)
+# Runs on demand from the branch picked in the Actions tab; each run replaces the last. The site workflow and the real
+# board are untouched.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: test-site
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: nfl-time-management
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: nfl-time-management/pyproject.toml
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - id: week
+        run: echo "w=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache nflverse downloads (refreshed weekly)
+        uses: actions/cache@v4
+        with:
+          path: nfl-time-management/data/raw
+          key: site-nflverse-${{ steps.week.outputs.w }}
+
+      - name: Build the game's data (models, engine, the daily game, Pro)
+        run: |
+          python -m nflclock.cli build
+          python -c "from nflclock import webexport as w; w.export_engine()"
+          python -c "from nflclock import dailygame as G; print(G.build())"
+          python -c "from nflclock import pro; print(pro.build())"
+
+      - name: Check the game before it goes up
+        run: |
+          python -m pytest -q
+          npx --yes eslint@8.57.0 --no-eslintrc -c web/eslint.json web/game.js web/motion.js web/engine.js web/game_worker.js web/vs_core.js web/scenario.js web/move.js
+          node board/worker_test.mjs
+          node board/match_test.mjs
+
+      - name: The worker's engine packs (the site's own)
+        run: |
+          python scripts/site.py _site_packs
+          rm -rf board/assets-test && mkdir -p board/assets-test/vs
+          cp _site_packs/engine_data.pack _site_packs/playbook.pack web/teams.json board/assets-test/vs/
+          rm -rf board/assets/vs && mkdir -p board/assets/vs && cp board/assets-test/vs/* board/assets/vs/
+          node board/vs_draft_test.mjs 6
+
+      - name: Deploy the test board (its own name and storage)
+        id: board
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        working-directory: nfl-time-management/test-site
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "::error::no Cloudflare token"; exit 1; fi
+          npx --yes wrangler@4.144.0 deploy --config wrangler.toml | tee deploy.log
+          url=$(grep -o 'https://two-minute-drill-test[^ ]*workers.dev' deploy.log | head -1)
+          if [ -z "$url" ]; then echo "::error::no workers.dev address in the deploy output"; exit 1; fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          for i in $(seq 1 30); do curl -sf "$url/vs/ladder" >/dev/null && break; sleep 2; done
+
+      - name: Build and publish the test site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          python scripts/site.py _site_test --board-api "${{ steps.board.outputs.url }}" --site-url https://nfl2mindrill-test.pages.dev --pro --vs --fulldef --no-ads
+          printf 'User-agent: *\nDisallow: /\n' > _site_test/robots.txt
+          npx --yes wrangler@4.144.0 pages project create nfl2mindrill-test --production-branch main 2>/dev/null || true
+          npx --yes wrangler@4.144.0 pages deploy _site_test --project-name nfl2mindrill-test --branch main --commit-dirty=true
+          echo "### Test server" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Site: https://nfl2mindrill-test.pages.dev (branch \`${GITHUB_REF_NAME}\`, ${GITHUB_SHA::7})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Board: ${{ steps.board.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
