@@ -473,13 +473,21 @@
     for (const k of DRAFT.order) cards.push(...shuffled(draftCards(pool, k), rnd).slice(0, DRAFT.pool[k]));
     return shuffled(cards, rnd);
   }
-  const draftNew = (cards) => ({ budget: [DRAFT.budget, DRAFT.budget], need: [{ ...DRAFT.slots }, { ...DRAFT.slots }], picks: [[], []], pool: cards, i: 0, bid: null, deadline: 0, last: null });
+  // (pass: each side's pass on the card up; steal: each side's one Steal, unused: the owner, Oct 27)
+  const draftNew = (cards) => ({ budget: [DRAFT.budget, DRAFT.budget], need: [{ ...DRAFT.slots }, { ...DRAFT.slots }], picks: [[], []], pool: cards, i: 0, bid: null,
+    pass: [false, false], steal: [true, true], deadline: 0, last: null });
   const draftOpen = (d, s) => Object.values(d.need[s]).reduce((a, b) => a + b, 0);
   const draftNeeds = (d, s, k) => (d.need[s][k] || 0) > 0;
-  // the most a side may bid: a dollar kept for each slot still open after this one
+  // the Steal (once a draft a side): a card of a kind the side has filled can still be bid for; won, the new man takes
+  // the slot and the man it had there goes to the other side (draftResolve)
+  const draftCanSteal = (d, s, card) => !!card && !!(d.steal || [])[s] && !draftNeeds(d, s, card.k) && d.picks[s].some((p) => p.k === card.k);
+  // the most a side may bid: a dollar kept for each slot still open after this one (a Steal fills no slot: one for
+  // each still open)
   function draftMax(d, s, card) {
-    if (!card || !draftNeeds(d, s, card.k)) return 0;
-    return Math.max(0, d.budget[s] - (draftOpen(d, s) - 1));
+    if (!card) return 0;
+    if (draftNeeds(d, s, card.k)) return Math.max(0, d.budget[s] - (draftOpen(d, s) - 1));
+    if (draftCanSteal(d, s, card)) return Math.max(0, d.budget[s] - draftOpen(d, s));
+    return 0;
   }
   // the least a side pays for the card: his sticker, or half the most the other side paid for the kind
   function draftFloor(d, s, card) {
@@ -487,49 +495,80 @@
     const paid = Math.max(0, ...d.picks[1 - s].filter((p) => p.k === card.k && !p.filler).map((p) => p.paid));
     return Math.max(card.sticker || 1, Math.ceil(paid / 2));
   }
-  // may this side bid so much on the card up: it needs the kind, it is not the high bidder, the amount is a whole
-  // dollar within its most, at least the floor and over the bid in
+  // may this side bid so much on the card up: it needs the kind (or can steal it), it has not passed, it is not the
+  // high bidder, the amount is a whole dollar within its most, at least the floor and over the bid in
   function draftCanBid(d, s, amount) {
     const card = d.pool[d.i], b = d.bid;
     if (!card || !Number.isInteger(amount) || amount < 0) return false;
+    if ((d.pass || [])[s]) return false;
     if (b && b.seat === s) return false;
     if (b ? amount <= b.amount : amount < draftFloor(d, s, card)) return false;
     return amount <= draftMax(d, s, card);
   }
   // can this side still top the bid in (or open at the floor)
   const draftCanTop = (d, s) => { const b = d.bid; return b ? draftCanBid(d, s, b.amount + 1) : draftCanBid(d, s, draftFloor(d, s, d.pool[d.i])); };
+  // a pass: this side is out of the card (the owner, Oct 27: no waiting out the clock). Returns true when the card
+  // is settled by it (the other side holds the bid, has passed too, or cannot bid), false when the other side may
+  // still open it, null when there was nothing to pass (no card, or its own bid in)
+  function draftPass(d, s) {
+    if (!d.pool[d.i] || (d.bid && d.bid.seat === s)) return null;
+    d.pass[s] = true;
+    const o = 1 - s;
+    return !!(d.bid || d.pass[o] || !draftCanTop(d, o));
+  }
   const draftDone = (d) => d.i >= d.pool.length || (draftOpen(d, 0) === 0 && draftOpen(d, 1) === 0);
-  // past the cards nobody needs any more (a kind both sides have)
+  // past the cards nobody can take: a kind both sides have, with no Steal left on either side
   function draftAdvance(d) {
-    while (d.i < d.pool.length && !draftNeeds(d, 0, d.pool[d.i].k) && !draftNeeds(d, 1, d.pool[d.i].k)) d.i += 1;
+    while (d.i < d.pool.length) {
+      const c = d.pool[d.i];
+      if ([0, 1].some((s) => draftNeeds(d, s, c.k) || draftCanSteal(d, s, c))) break;
+      d.i += 1;
+    }
     return d;
   }
-  // the clock ran out on the card up: the high bid takes it at its price, or nobody does. Mutates d (the next card
-  // wanted is up after it) and returns the outcome, or null when no card was up
+  // the clock ran out on the card up (or both sides are done with it): the high bid takes it at its price, or nobody
+  // does. A Steal won: the new man takes the slot, and the man the side had there (its worst of the kind) goes to
+  // the other side: into its open slot, else in place of its worst of the kind when he is better, else nowhere.
+  // Mutates d (the next card wanted is up after it) and returns the outcome, or null when no card was up
   function draftResolve(d) {
     const card = d.pool[d.i];
     if (!card) return null;
-    const b = d.bid && draftNeeds(d, d.bid.seat, card.k) ? d.bid : null;
-    const out = { i: d.i, card, seat: b ? b.seat : -1, amount: b ? b.amount : 0 };
+    const b = d.bid && (draftNeeds(d, d.bid.seat, card.k) || draftCanSteal(d, d.bid.seat, card)) ? d.bid : null;
+    const out = { i: d.i, card, seat: b ? b.seat : -1, amount: b ? b.amount : 0, steal: null };
     if (b) {
-      d.budget[b.seat] -= b.amount;
-      d.need[b.seat][card.k] -= 1;
-      d.picks[b.seat].push({ ...card, paid: b.amount });
+      const s = b.seat, o = 1 - s;
+      d.budget[s] -= b.amount;
+      if (draftNeeds(d, s, card.k)) {
+        d.need[s][card.k] -= 1;
+        d.picks[s].push({ ...card, paid: b.amount });
+      } else {
+        const byOvr = (ps) => ps.filter((p) => p.k === card.k).sort((x, y) => x.ovr - y.ovr);
+        const old = byOvr(d.picks[s])[0];
+        d.picks[s].splice(d.picks[s].indexOf(old), 1);
+        d.picks[s].push({ ...card, paid: b.amount, stolen: true });
+        d.steal[s] = false;
+        const gift = { ...old, paid: 0, swapped: true };
+        let to = -1;
+        if (draftNeeds(d, o, card.k)) { d.need[o][card.k] -= 1; d.picks[o].push(gift); to = o; }
+        else { const theirs = byOvr(d.picks[o])[0]; if (theirs && old.ovr > theirs.ovr) { d.picks[o].splice(d.picks[o].indexOf(theirs), 1); d.picks[o].push(gift); to = o; } }
+        out.steal = { out: { k: old.k, team: old.team, name: old.name, pos: old.pos }, to };
+      }
     }
     d.i += 1;
     d.bid = null;
+    d.pass = [false, false];
     d.last = out;
     draftAdvance(d);
     return out;
   }
-  // what the pool ran out of: the worst man left of the kind (a team not yet on the side), at his floor or what the
-  // side has left for the slot; so a side that let every card pass gets the dregs, and still pays
+  // what the pool ran out of: the worst man left of the kind (one on neither side), at his floor or what the side
+  // has left for the slot; so a side that let every card pass gets the dregs, and still pays
   function draftFill(d, pool, rnd) {
     for (const s of [0, 1]) {
       for (const k of DRAFT.order) {
         const worst = draftCards(pool, k).sort((a, b) => a.ovr - b.ovr || (rnd() < 0.5 ? -1 : 1));
         while (draftNeeds(d, s, k)) {
-          const have = new Set(d.picks[s].map((p) => `${p.k}:${p.team}`));
+          const have = new Set([...d.picks[0], ...d.picks[1]].map((p) => `${p.k}:${p.team}`));      // (nobody already on either side)
           const card = worst.find((c) => !have.has(`${k}:${c.team}`)) || worst[0] || { k, team: 'NA', name: `${k}`, pos: k, ovr: 60, stat: '', sticker: 1 };
           const paid = Math.max(0, Math.min(draftFloor(d, s, card), d.budget[s] - (draftOpen(d, s) - 1)));
           d.budget[s] -= paid;
@@ -548,6 +587,8 @@
   function draftCpuValue(d, s, rnd) {
     const card = d.pool[d.i], max = draftMax(d, s, card);
     if (!max) return 0;
+    // its Steal: only for a man clearly better than the one it has at the slot
+    if (!draftNeeds(d, s, card.k)) { const mine = d.picks[s].filter((p) => p.k === card.k).sort((x, y) => x.ovr - y.ovr)[0]; if (!mine || card.ovr < mine.ovr + 6) return 0; }
     const per = d.budget[s] / Math.max(1, draftOpen(d, s)), q = Math.max(0.3, Math.min(1.6, (card.ovr - 55) / 25));
     const left = d.pool.slice(d.i + 1).filter((c) => c.k === card.k).length, last = left < d.need[s][card.k];
     const v = Math.round(per * (DRAFT_W[card.k] || 1) * q * (0.8 + 0.4 * rnd()) * (last ? 1.5 : 1));
@@ -596,7 +637,7 @@
 
   const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, INTENTS, KICK_DEF, FAKES, intentsAt, VS_OT, TEAM_BOOST, boostPool, hash, rng, buildGame, possRoot, start, chooser, need, role,
     cleanAction, cleanDef, cleanHalf, apply, after, describe, called, noToss, stepper, unpack,
-    DRAFT, draftPool, draftCards, draftCard, draftMask, draftNew, draftOpen, draftNeeds, draftMax, draftFloor, draftCanBid, draftCanTop, draftDone, draftAdvance, draftResolve, draftFill, draftCpuValue, draftCpuBid, draftTeam, draftPoolWith };
+    DRAFT, draftPool, draftCards, draftCard, draftMask, draftNew, draftOpen, draftNeeds, draftMax, draftFloor, draftCanBid, draftCanSteal, draftPass, draftCanTop, draftDone, draftAdvance, draftResolve, draftFill, draftCpuValue, draftCpuBid, draftTeam, draftPoolWith };
   if (typeof module !== 'undefined' && module && module.exports) module.exports = VSCore;
   if (global) global.VSCore = VSCore;       // (always: a page with some other script's global `module` still gets it)
 })(typeof self !== 'undefined' ? self : this);

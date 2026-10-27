@@ -42,6 +42,7 @@ for (let i = 0; i < N; i++) {
     const mx = VSCore.draftMax(d, 0, card), goal = Math.floor(mx * (0.2 + 0.8 * R()));
     const b = d.bid, want = b ? b.amount + 1 : VSCore.draftFloor(d, 0, card);
     if (mx && R() < 0.67 && !(b && b.seat === 0) && want <= goal) { A.send({ t: 'bid', i: d.i, amount: want }); await w.settle(); }
+    else if (!(b && b.seat === 0) && R() < 0.3) { A.send({ t: 'pass', i: d.i }); await w.settle(); out.passes = (out.passes || 0) + 1; }
     await w.advance(700);
   }
   const S0 = room();
@@ -49,12 +50,14 @@ for (let i = 0; i < N; i++) {
   const d = S0.draft, T = S0.draftTeams;
   assert.deepStrictEqual(S0.teams, ['DR1', 'DR2']);
   out.cards += d.i; out.spent.push(50 - d.budget[0]);
+  out.steals = (out.steals || 0) + [0, 1].filter((s) => !d.steal[s]).length;
   out.passed += d.pool.slice(0, d.i).filter((c, j) => !d.picks[0].some((p) => p.name === c.name && p.team === c.team) && !d.picks[1].some((p) => p.name === c.name && p.team === c.team)).length;
   for (const s of [0, 1]) {
     const code = VSCore.DRAFT.teams[s], t = T[code], picks = d.picks[s];
     assert.strictEqual(picks.length, 7, 'seven picks a side');
-    assert.strictEqual(picks.reduce((a, p) => a + p.paid, 0), 50 - d.budget[s], 'the money adds up');
-    for (const p of picks.filter((x) => !x.filler)) assert.ok(p.paid >= (p.sticker || 1), `${p.name} went for his sticker or more ($${p.paid}, sticker $${p.sticker})`);
+    // (a man stolen away took his price with him: the roster shows at most what was spent)
+    assert.ok(picks.reduce((a, p) => a + p.paid, 0) <= 50 - d.budget[s], 'the money adds up');
+    for (const p of picks.filter((x) => !x.filler && !x.swapped)) assert.ok(p.paid >= (p.sticker || 1), `${p.name} went for his sticker or more ($${p.paid}, sticker $${p.sticker})`);
     assert.ok(d.budget[s] >= 0, 'never in debt');
     out.fillers += picks.filter((p) => p.filler).length;
     assert.strictEqual(t.lineup.off.length, 11, 'eleven on offense');
@@ -95,5 +98,5 @@ for (let i = 0; i < N; i++) {
 }
 const lad = (await w.http('ladder', '/vs/ladder')).body;
 assert.strictEqual(lad.players, 0, 'nobody on the ladder from a draft');
-console.log(`vs draft ok: ${N} drafts and matches, the player won ${out.won}, spent ${JSON.stringify(out.spent)} of 50, ${out.cards} cards up, ${out.passed} passed, ${out.fillers} filled from the dregs, ${out.snaps} snaps called, ${Math.round(OPEN_MS / 1000)}/${Math.round(RAISE_MS / 1000)} s clocks`);
+console.log(`vs draft ok: ${N} drafts and matches, the player won ${out.won}, spent ${JSON.stringify(out.spent)} of 50, ${out.cards} cards up, ${out.passed} passed, ${out.fillers} filled from the dregs, ${out.passes || 0} passes, ${out.steals || 0} steals, ${out.snaps} snaps called, ${Math.round(OPEN_MS / 1000)}/${Math.round(RAISE_MS / 1000)} s clocks`);
 w.close();

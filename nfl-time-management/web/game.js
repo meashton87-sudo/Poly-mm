@@ -13300,6 +13300,12 @@
         vsDraftClock(m.left);
         if (!vs.started) renderVsDraft();
       }
+    } else if (m.t === 'pass') {                     // a side is out of the card up
+      if (vs.draft && m.i === vs.draft.i) {
+        vs.draft.pass = (vs.draft.pass || [false, false]).slice();
+        vs.draft.pass[m.seat] = true;
+        if (!vs.started) renderVsDraft();
+      }
     } else if (m.t === 'start') {
       Object.assign(vs, { phase: 'live', ms: m.ms, ms0: m.ms, n: 0, deadline: m.deadline, dl: m.dl || null });
       vsMaybeStart();
@@ -13512,7 +13518,10 @@
     });
     // the last card settled
     const L = d.last;
-    if (L && L.card) wrap.append(el('p', 'last', L.seat >= 0 ? `${draftCardName(L.card)} to ${toWhom(L.seat)} for $${L.amount}` : `Nobody took ${draftCardName(L.card)}`));
+    if (L && L.card) {
+      const st = L.steal && L.steal.out ? ` A Steal: ${draftShort(L.steal.out)} ${L.steal.to >= 0 ? `goes to ${toWhom(L.steal.to)}` : 'is let go'}.` : '';
+      wrap.append(el('p', 'last', L.seat >= 0 ? `${draftCardName(L.card)} to ${toWhom(L.seat)} for $${L.amount}.${st}` : `Nobody took ${draftCardName(L.card)}.`));
+    }
     if (d.done || !d.card) {
       wrap.append(el('p', 'lead', d.done ? 'Your lineup is set. Kicking it off…' : 'Settling the last card…'), slots);
       return;
@@ -13540,13 +13549,19 @@
     wrap.append(card);
     // your bids: a dollar, two or five over the price (never over your max, never on your own bid, never for a kind
     // you have), or the card for nothing when nobody has bid
+    // Pass (the owner: no waiting out the clock): out of this card; it settles at once when the other side holds the
+    // bid, has passed too or cannot bid. The Steal (once a draft): a card of a kind you have filled can still be bid
+    // for; won, he takes the slot and the man you had there goes to the other coach
     const max = (d.max || [])[me] || 0, need = (d.need[me] || {})[c.k] > 0, cur = d.bid ? d.bid.amount : -1, mine = !!d.bid && d.bid.seat === me;
+    const passed = !!(d.pass || [])[me], theyPassed = !!(d.pass || [])[them], canSteal = !need && !!(d.canSteal || [])[me] && max > 0;
     const row = el('div', 'bidrow');
-    if (!need) row.append(el('p', 'note', `Not for you: your ${DRAFT_KIND[c.k].toLowerCase()} ${c.k === 'WR' ? 'slots are' : 'slot is'} filled.`));
+    const myOld = canSteal ? (d.picks[me] || []).filter((p) => p.k === c.k).sort((x, y) => (x.ovr || 0) - (y.ovr || 0))[0] : null;
+    if (passed) row.append(el('p', 'note', `You passed on him.${d.bid ? '' : theyPassed ? '' : ` ${nm(them)} can still take him.`}`));
+    else if (!need && !canSteal) row.append(el('p', 'note', `Not for you: your ${DRAFT_KIND[c.k].toLowerCase()} ${c.k === 'WR' ? 'slots are' : 'slot is'} filled${(d.steal || [])[me] ? '' : ' and your Steal is used'}.`));
     else {
       const btns = el('div', 'bids');
       if (!d.bid) {
-        const claim = el('button', 'btn ghostbtn', `Open at $${floor}`);
+        const claim = el('button', 'btn ghostbtn', `${canSteal ? 'Steal: open' : 'Open'} at $${floor}`);
         claim.type = 'button';
         claim.disabled = floor > max;
         claim.addEventListener('click', () => vsBid(floor));
@@ -13560,9 +13575,17 @@
         b.addEventListener('click', () => vsBid(amt));
         btns.append(b);
       });
+      const pass = el('button', 'btn ghostbtn pass', 'Pass');
+      pass.type = 'button';
+      pass.disabled = mine;
+      pass.title = mine ? 'You hold the bid' : 'Out of this card';
+      pass.addEventListener('click', () => { if (vsSend({ t: 'pass', i: d.i })) { track('vs_draft_pass', { i: d.i }); vs.draft.pass = (vs.draft.pass || [false, false]).slice(); vs.draft.pass[me] = true; renderVsDraft(); } });
+      btns.append(pass);
       const least = d.bid ? cur + 1 : floor;
-      row.append(btns, el('p', 'note', mine ? 'You hold the bid.' : max < least ? `You can’t go to $${least} here: $${max} is your most (a dollar for each slot still open).` : `Up to $${max} on this card.`));
+      const why = mine ? 'You hold the bid.' : max < least ? `You can’t go to $${least} here: $${max} is your most (a dollar for each slot still open).` : `Up to $${max} on this card.`;
+      row.append(btns, el('p', 'note', canSteal ? `Your Steal, once a draft: win him and ${myOld ? draftShort(myOld) : 'the man you have there'} goes to ${nm(them)}. ${why}` : `${why}${theyPassed ? ` ${nm(them)} passed.` : ''}`));
     }
+    if (!passed && (d.steal || [])[me] && need) row.append(el('p', 'note', 'Your Steal is still unused: it lets you bid on a slot you have filled, once.'));
     wrap.append(row, slots);
   }
   // before the kickoff: your team (if you came in on a link, or the other side has yours), the code to send a friend

@@ -121,7 +121,12 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   or half the most the other side paid for the kind, whichever is more; a slot still open when the pool is out gets
   the worst man left at his floor or what the side has (draftFill). The sides play as DRAFT.teams (draftTeam: the ratings blended
   from the picks' teams, the lineups the men picked). The computer bids on the room's alarm a beat after each card or
-  bid, up to draftCpuValue. match_test.mjs covers the rules; vs_draft_test.mjs plays it with the real engine.
+  bid, up to draftCpuValue. A pass ({t:'pass'}, draftPass): the side is out of the card, which settles at once when the
+  other side holds the bid, has passed too or cannot bid. The Steal (once a draft a side, d.steal; draftCanSteal): a
+  card of a kind the side has filled can still be bid for (draftMax: a dollar kept for each slot still open); won, the
+  new man takes the slot and the man it had there (its worst of the kind) goes to the other side, into its open slot,
+  else in place of its worst of the kind when he is better, else nowhere; the computer steals only a man clearly
+  better than its own. match_test.mjs covers the rules; vs_draft_test.mjs plays it with the real engine.
 - The defense (every mode): the defense calls personnel, front, coverage and rush (engine.js DC). The offense's play is a
   real NFL play run against that defense, as charted (sampleVsDefense: the pass rush, then the shell, then man or zone;
   a run's box, then the blitz), widening the situation before letting a filter go, never across the goal line, the
