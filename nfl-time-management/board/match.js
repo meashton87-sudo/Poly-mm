@@ -30,8 +30,10 @@
 //                 {t:'over', result}  {t:'rated', rated}  {t:'rematch-ask', seat}  {t:'rematch', room}
 // The draft (mode 'draft', or ?draft=1 on a friend's or the computer's room; VSCore.DRAFT): hello.draft is null, {pending:true}
 // (the other side not in yet) or the view (draftView: i, n, card {k, team, pos, name, sticker}, budget, need, picks, bid {seat, amount},
-// max, floor (the least each side may open at), left, last, done); {t:'draft', d} a new card up, the last one with teams and draftTeams; {t:'bid', i, seat, amount,
-// left} a bid in. Client -> room: {t:'bid', i, amount} (the floor or more to open, over the bid in after, within max[seat]).
+// max, floor (the least each side may open at), pass, steal (each side's one Steal still unused), canSteal (on this card), left, last, done); {t:'draft', d} a new card up, the last one with teams and draftTeams; {t:'bid', i, seat, amount,
+// left} a bid in; {t:'pass', i, seat} a pass. Client -> room: {t:'bid', i, amount} (the floor or more to open, over the bid in
+// after, within max[seat]; on a kind the side has filled, its Steal), {t:'pass', i} (out of this card: settled at once when
+// the other side holds the bid, has passed too or cannot bid).
 // Lobby -> client: {t:'queued', mode, size, wait, rating, cpu}  {t:'match', room, mode}
 // Client -> lobby: {t:'cpu'}  play the computer now (offered once a ticket has waited CPU_AFTER_S)
 //
@@ -155,7 +157,8 @@ function draftView(R, now = Date.now()) {
   const d = R.draft, done = VSCore.draftDone(d), card = d.pool[d.i] || null;
   const mask = (p) => (done ? p : { k: p.k, team: p.team, pos: p.pos, name: p.name, paid: p.paid });
   return { i: d.i, n: d.pool.length, card: VSCore.draftMask(card), budget: d.budget, need: d.need, picks: d.picks.map((ps) => ps.map(mask)), bid: d.bid,
-    max: [0, 1].map((s) => VSCore.draftMax(d, s, card)), floor: [0, 1].map((s) => VSCore.draftFloor(d, s, card)), left: Math.max(0, d.deadline - now), last: d.last ? { ...d.last, card: VSCore.draftMask(d.last.card) } : null, done };
+    max: [0, 1].map((s) => VSCore.draftMax(d, s, card)), floor: [0, 1].map((s) => VSCore.draftFloor(d, s, card)), pass: d.pass || [false, false], steal: d.steal || [true, true],
+    canSteal: [0, 1].map((s) => VSCore.draftCanSteal(d, s, card)), left: Math.max(0, d.deadline - now), last: d.last ? { ...d.last, card: VSCore.draftMask(d.last.card) } : null, done };
 }
 const clean = (n) => String(n ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
 const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
@@ -417,6 +420,16 @@ export class Match {
       const d = R.draft, amount = Number(m.amount);
       if (R.phase !== 'draft' || !d || !d.pool || m.i !== d.i || now >= d.deadline || !VSCore.draftCanBid(d, seat, amount)) return;
       this.draftBid(R, seat, amount, now);
+      await this.save(R);
+      return this.schedule(R);
+    }
+    if (m.t === 'pass') {
+      const d = R.draft;
+      if (R.phase !== 'draft' || !d || !d.pool || m.i !== d.i || now >= d.deadline || d.pass[seat]) return;
+      const settles = VSCore.draftPass(d, seat);
+      if (settles === null) return;
+      this.broadcast({ t: 'pass', i: d.i, seat });
+      if (settles) return this.draftSettle(R, now);
       await this.save(R);
       return this.schedule(R);
     }
