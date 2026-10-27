@@ -119,7 +119,8 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   sides have skipped. The floor (draftFloor; the owner: the second quarterback is never a dollar after the first went
   for twenty): the man's sticker (draftCards: his place among all the teams' men at the slot, $1 to DRAFT.sticker[k]),
   or half the most the other side paid for the kind, whichever is more; a slot still open when the pool is out gets
-  the worst man left at his floor or what the side has (draftFill). The sides play as DRAFT.teams (draftTeam: the ratings blended
+  the worst man left at his floor or what the side has (draftFill), and plays as a replacement: draftTeam rates a filler
+  FILL_BELOW of the league's spread under the league's worst at every factor (a slot passed on costs). The sides play as DRAFT.teams (draftTeam: the ratings blended
   from the picks' teams, the lineups the men picked). The computer bids on the room's alarm a beat after each card or
   bid, up to draftCpuValue. A pass ({t:'pass'}, draftPass): the side is out of the card, which settles at once when the
   other side holds the bid, has passed too or cannot bid. The Steal (once a draft a side, d.steal; draftCanSteal): a

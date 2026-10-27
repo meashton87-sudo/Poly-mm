@@ -221,7 +221,7 @@ async function runAnswering(w, a, ms) {
   assert.strictEqual(a.last('over'), undefined, 'back in time: no forfeit');
   b2.drop();
   await runAnswering(w, a, FORFEIT_MS + 1000);
-  assert.deepStrictEqual([a.last('over').result.winner, a.last('over').result.by, a.last('over').result.loser], [0, 'forfeit', 1], 'gone a minute (or its calls left to the clock): a forfeit');
+  assert.deepStrictEqual([a.last('over').result.winner, a.last('over').result.by, a.last('over').result.loser], [0, 'forfeit', 1], 'gone FORFEIT_MS (or its calls left to the clock): a forfeit');
   w.close();
 }
 {
@@ -547,6 +547,13 @@ async function runAnswering(w, a, ms) {
     assert.deepStrictEqual([open(d.need[0]), open(d.need[1]), d.picks[0].length + d.picks[1].length], [0, 0, 14], 'filled: seven a side');
     assert.ok(d.picks[0].filter((p) => p.filler).every((p) => p.paid >= 1) && d.budget[0] < before[0] && d.budget[1] < before[1] && d.budget[0] >= 0 && d.budget[1] >= 0, 'the fill is paid for, at the floor, never into debt');
     const t = VSCore.draftTeam(stubD.pool, d.picks[0], 'DR1', 'Max');
+    // a replacement plays below the league's worst: the filled side's passing and defense under every real team's
+    {
+      const lo = Math.min(...codes.map((c) => stubD.pool.teams[c].base.off_pass)), loD = Math.min(...codes.map((c) => stubD.pool.teams[c].base.def_pass));
+      const dr = VSCore.draftNew([]); VSCore.draftFill(dr, stubD.pool, rnd);
+      const tr = VSCore.draftTeam(stubD.pool, dr.picks[0], 'DR1', 'Nobody');
+      assert.ok(tr.base.off_pass < lo && tr.base.def_pass < loD && tr.draft.every((p) => p.filler), 'a side of replacements: rated under the league at every factor');
+    }
     assert.deepStrictEqual([t.team, t.coach, t.lineup.off.length, t.lineup.off.filter((p) => p.pos === 'QB').length, typeof t.base.off_pass, !!t.kicker.name], ['DR1', 'Max', 11, 1, 'number', true], 'a side: eleven on offense, one quarterback, ratings and a kicker');
     assert.doesNotThrow(() => VSCore.buildGame(VSCore.draftPoolWith(stubD.pool, { DR1: t, DR2: VSCore.draftTeam(stubD.pool, d.picks[1], 'DR2', 'Ann') }), 'DR1', 'DR2'), 'the engine builds the game from the two sides');
     // a pass: out of the card; it settles the card when the other side holds the bid, has passed too or cannot bid

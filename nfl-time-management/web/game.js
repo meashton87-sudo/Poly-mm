@@ -13212,7 +13212,7 @@
   const VS_CPU_KEY = `${STORE}:vscpu`, VS_CPU_LEVELS = { rookie: 'Rookie', pro: 'Pro' };
   const vsCpuLevel = () => (VS_CPU_LEVELS[load(VS_CPU_KEY, 'pro')] ? load(VS_CPU_KEY, 'pro') : 'pro');
   const VS_CPU_DECIDE_MS = 10 * 60e3;       // against the computer: no play clock to speak of (match.js CPU_DECIDE_MS)
-  const VS_FORFEIT = 60;             // seconds a phone can be gone before its side forfeits (match.js FORFEIT_MS)
+  const VS_FORFEIT = 20;             // seconds a phone can be gone before its side forfeits (match.js FORFEIT_MS)
   const vs = { ws: null, seat: -1, mode: 'friend', teams: [null, null], taken: '', names: ['', ''], full: false, online: [false, false], off: [0, 0],
     phase: 'wait', n: 0, ms: null, ms0: null, got: {}, waiting: -1, last: null, deadline: 0, skew: 0, result: null, rated: null, started: false,
     timer: null, retry: 0, closedByUs: false, pool: null, banner: '', oppLocked: -1, ui: 'none', cardTimer: null, q: null,
@@ -13478,7 +13478,7 @@
   const VS_DRAFT_REVEAL_MS = 5000;             // the names, once drafted, before the kickoff
   const draftSlotName = (k) => (k === 'DST' ? 'D/ST' : k);
   // a card or a pick as it is called: the man by name, a line or a defense by its city
-  const draftShort = (p) => (p.k === 'OL' ? `${teamShort(p.team)} line` : p.k === 'DST' ? `${teamShort(p.team)} D/ST` : p.name || `${teamShort(p.team)} ${p.k}`);
+  const draftShort = (p) => `${p.k === 'OL' ? `${teamShort(p.team)} line` : p.k === 'DST' ? `${teamShort(p.team)} D/ST` : p.name || `${teamShort(p.team)} ${p.k}`}${p.filler ? ' (replacement)' : ''}`;
   const draftCardName = (c) => (c.k === 'OL' || c.k === 'DST' ? draftShort(c) : `${draftShort(c)} (${teamShort(c.team)} ${draftSlotName(c.k)})`);
   const vsDrafted = () => !!vs.draftTeams && !!G && !!DRAFT_SIDES[code(G.me)];
   const vsDraftLine = (c) => (((vs.draftTeams || {})[c] || {}).draft || []).slice().sort((x, y) => DRAFT_SLOTS.indexOf(x.k) - DRAFT_SLOTS.indexOf(y.k)).map(draftShort).join(', ');    // (slot by slot, however they were won)
@@ -14235,7 +14235,7 @@
       : res.by === 'forfeit' ? (won ? 'You win: they forfeited' : 'You forfeited')
         : res.by === 'abandoned' ? 'No result: both sides left' : 'No result';
     card.append(el('h2', '', head));
-    if (res.by === 'forfeit') card.append(el('p', 'note', won ? (res.why === 'afk' ? 'They let the play clock run out on two calls in a row.' : 'They left the match for more than a minute.')
+    if (res.by === 'forfeit') card.append(el('p', 'note', won ? (res.why === 'afk' ? 'They let the play clock run out on two calls in a row.' : `They left the match for more than ${VS_FORFEIT} seconds.`)
       : (res.why === 'afk' ? 'The play clock ran out on two of your calls in a row.' : `You were away from the match for more than ${VS_FORFEIT} seconds.`)));
     if (res.by === 'error') card.append(el('p', 'note', 'Something went wrong in the match. Nobody’s rating changed.'));
     card.append(el('p', 'note', vsDrafted() ? `Your draft vs ${vs.names[1 - vs.seat] ? `${vs.names[1 - vs.seat]}’s` : 'their'} draft · ${VS_MODES[vs.mode] || 'Versus'}`
