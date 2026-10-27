@@ -13403,7 +13403,7 @@
   // a pick as the intro and the end card say it (its name once revealed; a line or a defense by its city)
   const draftShort = (p) => (p.k === 'OL' ? `${teamShort(p.team)} line` : p.k === 'DST' ? `${teamShort(p.team)} D/ST` : p.name || `${teamShort(p.team)} ${p.k}`);
   const vsDrafted = () => !!vs.draftTeams && !!G && !!DRAFT_SIDES[code(G.me)];
-  const vsDraftLine = (c) => (((vs.draftTeams || {})[c] || {}).draft || []).map(draftShort).join(', ');
+  const vsDraftLine = (c) => (((vs.draftTeams || {})[c] || {}).draft || []).slice().sort((x, y) => DRAFT_SLOTS.indexOf(x.k) - DRAFT_SLOTS.indexOf(y.k)).map(draftShort).join(', ');    // (slot by slot, however they were won)
   // the card's clock as the room last set it (ms left; the bar is full at that moment)
   function vsDraftClock(left) {
     const ms = Math.max(0, Number(left) || 0);
