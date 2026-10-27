@@ -1907,7 +1907,7 @@
   // the snap he runs the line as drawn. The depth a drawing is read at stays within what real throws on the route
   // reach (air yards on throws to it, 10th to 90th percentile):
   const DRAWN_RANGE = { go: [11, 40], post: [8, 41], corner: [7, 33], wheel: [3, 26], out: [-1, 8], deep_out: [7, 19], in: [5, 20],
-    slant: [3, 10], cross: [-1, 14], hitch: [2, 13], screen: [-6, -1], flat: [-6, 3], angle: [0, 6] };
+    slant: [3, 10], cross: [-1, 14], hitch: [2, 9], curl: [8, 16], comeback: [10, 20], screen: [-6, -1], flat: [-6, 3], angle: [0, 6] };
   // how far along the break the ball meets him (yards across), as on the routes he is given (motion.js route)
   const DRAWN_ALONG = { out: 5.5, deep_out: 7, in: 8, cross: 12, flat: 7.5, angle: 3 };
   const DRAW_MIN = 1.5, DRAW_MAX = 60, DRAW_TOL = 0.9;     // yards: shorter is a tap, longer is cut off; tidied to within
@@ -2030,7 +2030,9 @@
   }
   // which real route a drawn one is (by its last leg: up the field, back to the ball, on a slant, or across, and
   // which way) and the depth it is thrown at: where it ends on a vertical route, slant or screen; the depth it
-  // breaks across at; the top of a hitch or comeback
+  // breaks across at; the top of a hitch, a curl or a comeback. A line that comes back to the ball at the end (the
+  // owner, Oct 27: comebacks and curls could not be drawn, every one read as a hitch): back toward the sideline from
+  // ten yards or more is a comeback, back inside or straight from eight or more a curl, shorter a hitch
   function readDrawn(pts, label) {
     const n = pts.length, a = pts[n - 2], b = pts[n - 1], dx = b[0] - a[0], dy = b[1] - a[1];
     const th = (Math.atan2(dy, Math.abs(dx)) * 180) / Math.PI, brk = n > 2 ? a[1] : 0, legD = (a[1] + b[1]) / 2;
@@ -2038,14 +2040,14 @@
     let name;
     if (maxD < 0.5) name = b[0] - pts[0][0] > 2.5 ? 'flat' : 'screen';
     else if (th > 58) name = n === 2 && b[1] < 8 ? 'hitch' : n > 2 && wide >= 3.5 && brk <= 3 ? 'wheel' : 'go';
-    else if (th < -20) name = 'hitch';
+    else if (th < -20) name = maxD >= 10 && dx > 0.8 ? 'comeback' : maxD >= 8 ? 'curl' : 'hitch';
     else if (th >= 20) name = dx < 0 ? (brk <= 3.5 ? 'slant' : 'post') : b[1] <= 4 ? 'flat' : brk <= 3.5 ? 'go' : 'corner';
     else if (dx >= 0) name = legD <= 1 ? 'flat' : legD < 8 ? 'out' : 'deep_out';
     else name = label === 'RB' && wide >= 2 && legD < 5 ? 'angle' : legD < 5 ? 'cross' : 'in';
-    const at = name === 'hitch' ? maxD : DEEP_ROUTES.has(name) || name === 'slant' || name === 'screen' ? b[1] : legD;
+    const at = SIT_ROUTES.has(name) ? maxD : DEEP_ROUTES.has(name) || name === 'slant' || name === 'screen' ? b[1] : legD;
     const [lo, hi] = DRAWN_RANGE[name];
     const r = { name, depth: Math.round(clip(at, lo, hi)), atDepth: at };
-    if (name === 'hitch' || name === 'screen') r.at = 'end';
+    if (SIT_ROUTES.has(name) || name === 'screen') r.at = 'end';
     else if (DRAWN_ALONG[name]) r.at = Math.sign(dx || 1) * Math.min(DRAWN_ALONG[name], Math.abs(dx) * 0.9);
     else {
       r.at = 'depth';
@@ -2583,7 +2585,7 @@
   // (browser tests only, window.__sepLog: the drawing and the play, for bots that draw thousands of lines and plays)
   if (window.__sepLog) {
     window.__draw = { eligibles, rawDrawn, drawFault, shapeDrawn, passOption, passCallOf, makeScene, choreograph, send, simScen, outOf, drawField,
-      DRAWN_RANGE, CALL, ROUTES, routeName, blocks: (sc, i) => blocks(sc, i), passTap, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, goalCheck, qbCheck, speedLog, get: () => ({ G, ui, scene, busy }),
+      DRAWN_RANGE, readDrawn, CALL, ROUTES, routeName, blocks: (sc, i) => blocks(sc, i), passTap, ROUTE_DEPTH, SX0, XYD, Motion, at, ballAt, place, animatePlay, offField, goalCheck, qbCheck, speedLog, get: () => ({ G, ui, scene, busy }),
       passPick: (i) => passPick(i), readRun, readQb, readDefLine, readDef, readKick, lineOf, drawFrom, drawCtx, callOptions, sketchRead, SKETCH_FAULT, DEFS, PRESET, vsSealed, camY, dotOff, lineYards,
       promptDefense: () => promptDefense(), drawAll: () => drawAll(), promptChoice: (k) => promptChoice(k),
       drawFullDefDock: () => drawFullDefDock(), drawDefDock: () => drawDefDock(), crowdKey: (r, k) => crowdKey(r, k),
