@@ -514,37 +514,44 @@ async function runAnswering(w, a, ms) {
     const rnd = VSCore.rng(11), cards = VSCore.draftPool(stubD.pool, rnd), by = {};
     cards.forEach((c) => { by[c.k] = (by[c.k] || 0) + 1; });
     assert.deepStrictEqual(by, VSCore.DRAFT.pool, 'the pool: so many of each kind');
-    assert.deepStrictEqual([...new Set(cards.map((c) => c.k))], VSCore.DRAFT.order, 'slot by slot, in order');
+    assert.ok(cards.some((c, i) => i && c.k !== cards[i - 1].k && cards.slice(i + 1).some((x) => x.k === cards[i - 1].k)), 'in a random order: a kind comes back after another cut in');
     for (const k of Object.keys(by)) assert.strictEqual(new Set(cards.filter((c) => c.k === k).map((c) => c.team)).size, by[k], `${k}: each from a different team`);
-    assert.deepStrictEqual(VSCore.draftMask(cards[0]), { k: 'QB', team: cards[0].team, pos: 'QB' }, 'a card masked: the team and the slot, no man');
-    const d = VSCore.draftNew([{ k: 'QB', team: 'KC', name: 'a', ovr: 80 }, { k: 'QB', team: 'BUF', name: 'b', ovr: 80 }, { k: 'QB', team: 'DAL', name: 'c', ovr: 80 }, { k: 'RB', team: 'DAL', name: 'd', ovr: 70 }]);
+    assert.deepStrictEqual(VSCore.draftMask(cards[0]), { k: cards[0].k, team: cards[0].team, pos: cards[0].pos, name: cards[0].name, sticker: cards[0].sticker }, 'a card masked: the man, the team, the slot and the sticker, no rating');
+    // the stickers: a dollar for the worst at the slot, DRAFT.sticker[k] for the best (the stub league: every quarterback 80, every line 70)
+    const all = VSCore.draftCards(stubD.pool, 'QB');
+    assert.ok(all.every((c) => c.sticker >= 1 && c.sticker <= VSCore.DRAFT.sticker.QB) && new Set(all.map((c) => c.sticker)).size === 1, 'the same man everywhere: the same sticker');
+    const d = VSCore.draftNew([{ k: 'QB', team: 'KC', name: 'a', ovr: 80, sticker: 6 }, { k: 'QB', team: 'BUF', name: 'b', ovr: 80, sticker: 2 }, { k: 'QB', team: 'DAL', name: 'c', ovr: 80, sticker: 1 }, { k: 'RB', team: 'DAL', name: 'd', ovr: 70, sticker: 3 }]);
     assert.strictEqual(VSCore.draftMax(d, 0, d.pool[0]), 50 - 6, 'the most at the start: a dollar kept for each of the six other slots');
-    assert.deepStrictEqual([0, 1, 44, 45, 1.5, -1].map((a) => VSCore.draftCanBid(d, 0, a)), [true, true, true, false, false, false], 'a claim for $0 up to the most, whole dollars');
-    d.bid = { seat: 0, amount: 7 };
-    assert.deepStrictEqual([VSCore.draftCanBid(d, 0, 9), VSCore.draftCanBid(d, 1, 7), VSCore.draftCanBid(d, 1, 8), VSCore.draftCanTop(d, 1)], [false, false, true, true], 'never your own bid raised; the other side a dollar over');
+    assert.deepStrictEqual([0, 5, 6, 44, 45, 6.5, -1].map((a) => VSCore.draftCanBid(d, 0, a)), [false, false, true, true, false, false, false], 'the first bid is the floor (his sticker) or more, up to the most, whole dollars');
+    d.bid = { seat: 0, amount: 20 };
+    assert.deepStrictEqual([VSCore.draftCanBid(d, 0, 22), VSCore.draftCanBid(d, 1, 20), VSCore.draftCanBid(d, 1, 21), VSCore.draftCanTop(d, 1)], [false, false, true, true], 'never your own bid raised; the other side a dollar over');
     let r = VSCore.draftResolve(d);
-    assert.deepStrictEqual([r.seat, r.amount, d.budget, d.need[0].QB, d.i, d.bid], [0, 7, [43, 50], 0, 1, null], 'the high bid takes the card at its price; the next card is up');
+    assert.deepStrictEqual([r.seat, r.amount, d.budget, d.need[0].QB, d.i, d.bid], [0, 20, [30, 50], 0, 1, null], 'the high bid takes the card at its price; the next card is up');
+    // the owner's case: the first quarterback went for $20, so the next one is no dollar: his floor is half of that
+    assert.deepStrictEqual([VSCore.draftFloor(d, 1, d.pool[1]), VSCore.draftCanBid(d, 1, 9), VSCore.draftCanBid(d, 1, 10)], [10, false, true], 'the other side opens at half the $20, not at the $2 sticker');
     d.bid = { seat: 0, amount: 1 };
     r = VSCore.draftResolve(d);
     assert.deepStrictEqual([r.seat, r.amount, d.picks[0].length], [-1, 0, 1], 'a bid from a side with its quarterback already counts for nothing: nobody takes him');
-    d.bid = { seat: 1, amount: 0 };
+    d.bid = { seat: 1, amount: 10 };
     r = VSCore.draftResolve(d);
-    assert.deepStrictEqual([r.seat, r.amount, d.budget[1], d.i], [1, 0, 50, 3], 'a $0 claim takes him for nothing');
+    assert.deepStrictEqual([r.seat, r.amount, d.budget[1], d.i], [1, 10, 40, 3], 'at the floor, he is theirs');
     const d2 = VSCore.draftNew([{ k: 'QB', team: 'KC', name: 'a', ovr: 80 }, { k: 'QB', team: 'BUF', name: 'b', ovr: 80 }, { k: 'RB', team: 'DAL', name: 'd', ovr: 70 }]);
     d2.need[0].QB = 0; d2.need[1].QB = 0;
     VSCore.draftAdvance(d2);
     assert.strictEqual(d2.i, 2, 'cards of a kind both sides have are skipped');
     r = VSCore.draftResolve(d);
     assert.ok(r.seat === -1 && VSCore.draftDone(d) && open(d.need[0]) > 0, 'nobody claimed the back; the pool is out, slots still open');
+    const before = [d.budget[0], d.budget[1]];
     VSCore.draftFill(d, stubD.pool, rnd);
-    assert.deepStrictEqual([open(d.need[0]), open(d.need[1]), d.picks[0].length + d.picks[1].length], [0, 0, 14], 'filled for nothing: seven a side');
+    assert.deepStrictEqual([open(d.need[0]), open(d.need[1]), d.picks[0].length + d.picks[1].length], [0, 0, 14], 'filled: seven a side');
+    assert.ok(d.picks[0].filter((p) => p.filler).every((p) => p.paid >= 1) && d.budget[0] < before[0] && d.budget[1] < before[1] && d.budget[0] >= 0 && d.budget[1] >= 0, 'the fill is paid for, at the floor, never into debt');
     const t = VSCore.draftTeam(stubD.pool, d.picks[0], 'DR1', 'Max');
     assert.deepStrictEqual([t.team, t.coach, t.lineup.off.length, t.lineup.off.filter((p) => p.pos === 'QB').length, typeof t.base.off_pass, !!t.kicker.name], ['DR1', 'Max', 11, 1, 'number', true], 'a side: eleven on offense, one quarterback, ratings and a kicker');
     assert.doesNotThrow(() => VSCore.buildGame(VSCore.draftPoolWith(stubD.pool, { DR1: t, DR2: VSCore.draftTeam(stubD.pool, d.picks[1], 'DR2', 'Ann') }), 'DR1', 'DR2'), 'the engine builds the game from the two sides');
     // the computer: a value within its most, a $0 claim on an open card, a dollar or two over the bid in up to its value, then it sits
     const d3 = VSCore.draftNew(cards), v = VSCore.draftCpuValue(d3, 1, rnd);
-    assert.ok(v >= 1 && v <= VSCore.draftMax(d3, 1, cards[0]), 'a value within the most');
-    assert.strictEqual(VSCore.draftCpuBid(d3, 1, v, rnd), 0, 'an open card: claimed for $0');
+    assert.ok(v >= cards[0].sticker && v <= VSCore.draftMax(d3, 1, cards[0]), 'a value from the sticker to the most');
+    assert.strictEqual(VSCore.draftCpuBid(d3, 1, v, rnd), cards[0].sticker, 'an open card: opened at the floor');
     d3.bid = { seat: 0, amount: v - 1 };
     const over = VSCore.draftCpuBid(d3, 1, v, rnd);
     assert.ok(over === v || (over === null && v - 1 + 1 > v), 'a dollar over, up to its value');
@@ -566,24 +573,24 @@ async function runAnswering(w, a, ms) {
   assert.deepStrictEqual([h.phase, h.teams, h.draft], ['draft', [null, null], { pending: true }], 'the draft is on, its pool a moment away');
   await w.advance(100);
   h = { ...h, draft: C.last('draft').d };
-  assert.deepStrictEqual([h.phase, h.teams, !!h.draft && !h.draft.pending, h.draft.n, h.draft.i, h.draft.bid, h.draft.card.k], ['draft', [null, null], true, 20, 0, null, 'QB'], 'the draft is on: no teams yet, 20 cards, the first quarterback up, no bid');
-  assert.deepStrictEqual([Object.keys(h.draft.card).sort(), h.draft.budget, h.draft.max, h.draft.left > OPEN_MS - 1000], [['k', 'pos', 'team'], [50, 50], [44, 44], true], 'the card is blind; the money and the most; the clock');
+  assert.deepStrictEqual([h.phase, h.teams, !!h.draft && !h.draft.pending, h.draft.n, h.draft.i, h.draft.bid, VSCore.DRAFT.order.includes(h.draft.card.k)], ['draft', [null, null], true, 20, 0, null, true], 'the draft is on: no teams yet, 20 cards, the first up, no bid');
+  assert.deepStrictEqual([Object.keys(h.draft.card).sort(), h.draft.budget, h.draft.max, h.draft.left > OPEN_MS - 1000], [['k', 'name', 'pos', 'sticker', 'team'], [50, 50], [44, 44], true], 'the card: the man, the team, the slot and the sticker, no rating; the money and the most; the clock');
   await w.advance(3000);
-  assert.deepStrictEqual(C.last('bid') && [C.last('bid').seat, C.last('bid').amount, C.last('bid').i], [CPU_SEAT, 0, 0], 'the computer claimed the first card for $0 within a beat');
+  assert.deepStrictEqual(C.last('bid') && [C.last('bid').seat, C.last('bid').amount, C.last('bid').i], [CPU_SEAT, h.draft.floor[CPU_SEAT], 0], 'the computer opened the first card at its floor within a beat');
   let spent = 0, got = 0, rounds = 0, outbid = 0;
   for (; rounds < 40; rounds++) {
     const R = await state(w, m.room);
     if (R.phase !== 'draft') break;
     const v = C.last('draft') ? C.last('draft').d : h.draft;
     assert.strictEqual(v.i, R.draft.i, 'the view is the room');
-    assert.ok(!('name' in v.card) && !('ovr' in v.card) && v.picks.every((ps) => ps.every((p) => !('name' in p))), 'blind: no man named while the draft is on');
+    assert.ok('name' in v.card && !('ovr' in v.card) && v.picks.every((ps) => ps.every((p) => 'name' in p && !('ovr' in p))), 'the men named, the ratings never, while the draft is on');
     const max = VSCore.draftMax({ budget: v.budget, need: v.need }, 0, v.card);
     if (max && rounds % 2 === 0) {
       // bid it up: a dollar over the computer each time it answers, until it sits or the most is reached
       for (let k = 0; k < 60; k++) {
         const Rk = await state(w, m.room);
         if (Rk.phase !== 'draft' || Rk.draft.i !== v.i) break;
-        const b = Rk.draft.bid, want = b ? b.amount + 1 : 0, mx = VSCore.draftMax(Rk.draft, 0, Rk.draft.pool[Rk.draft.i]);
+        const b = Rk.draft.bid, want = b ? b.amount + 1 : VSCore.draftFloor(Rk.draft, 0, Rk.draft.pool[Rk.draft.i]), mx = VSCore.draftMax(Rk.draft, 0, Rk.draft.pool[Rk.draft.i]);
         if (b && b.seat === 0) { await w.advance(500); continue; }
         if (want > mx) break;
         C.send({ t: 'bid', i: v.i, amount: want });
@@ -603,7 +610,8 @@ async function runAnswering(w, a, ms) {
     if (last.seat === 0) { spent += last.amount; got += 1; }
   }
   const R = await state(w, m.room);
-  assert.deepStrictEqual([R.phase, R.teams, got, R.draft.budget[0]], ['live', ['DR1', 'DR2'], 7, 50 - spent], 'seven picks, the money adds up, the match is on');
+  const fillers = R.draft.picks[0].filter((p) => p.filler);
+  assert.deepStrictEqual([R.phase, R.teams, got + fillers.length, R.draft.budget[0]], ['live', ['DR1', 'DR2'], 7, 50 - spent - fillers.reduce((a, p) => a + p.paid, 0)], 'seven picks (the dregs for a slot left open, paid for), the money adds up, the match is on');
   assert.ok(outbid >= 5, `the phone bid against the computer (${outbid} bids)`);
   assert.ok(R.draftTeams && R.draftTeams.DR1.lineup.off.length === 11 && R.draftTeams.DR2.lineup.off.length === 11, 'two sides, eleven each');
   const dm = C.all('draft'), st = C.last('start'), fin = dm[dm.length - 1];
@@ -647,40 +655,52 @@ async function runAnswering(w, a, ms) {
   await w.advance(100);
   let v = B.last('draft').d;
   assert.strictEqual(A.last('draft').d.i, 0, 'the first card went to both');
-  assert.deepStrictEqual([v.i, v.bid, v.card.k], [0, null, 'QB'], 'both in: the first card is up, no bid yet');
-  const card0 = (await state(w, ma.room)).draft.pool[0];
-  A.send({ t: 'bid', i: 0, amount: 7 });
+  assert.deepStrictEqual([v.i, v.bid, VSCore.DRAFT.order.includes(v.card.k)], [0, null, true], 'both in: the first card is up, no bid yet');
+  const card0 = (await state(w, ma.room)).draft.pool[0], f0 = v.floor[0];
+  assert.ok(f0 >= 1 && f0 === card0.sticker && v.card.sticker === f0, 'the floor on an open card is the sticker, shown on the card');
+  A.send({ t: 'bid', i: 0, amount: f0 - 1 });                            // (under the floor: nothing)
   await w.settle();
-  assert.deepStrictEqual(B.last('bid') && [B.last('bid').seat, B.last('bid').amount], [0, 7], 'the other side hears the bid, and how much');
-  B.send({ t: 'bid', i: 0, amount: 7 });                                 // (not over it: nothing)
+  assert.strictEqual((await state(w, ma.room)).draft.bid, null, 'under the floor is no bid');
+  A.send({ t: 'bid', i: 0, amount: 20 });
+  await w.settle();
+  assert.deepStrictEqual(B.last('bid') && [B.last('bid').seat, B.last('bid').amount], [0, 20], 'the other side hears the bid, and how much');
+  B.send({ t: 'bid', i: 0, amount: 20 });                                // (not over it: nothing)
   B.send({ t: 'bid', i: 0, amount: 45 });                                // (over the most: nothing)
   await w.settle();
-  assert.deepStrictEqual((await state(w, ma.room)).draft.bid, { seat: 0, amount: 7 }, 'a bid not over, or over the most, is nothing');
-  B.send({ t: 'bid', i: 0, amount: 9 });
+  assert.deepStrictEqual((await state(w, ma.room)).draft.bid, { seat: 0, amount: 20 }, 'a bid not over, or over the most, is nothing');
+  B.send({ t: 'bid', i: 0, amount: 22 });
   await w.settle();
   const Ra = await state(w, ma.room);
-  assert.deepStrictEqual([Ra.draft.bid, Ra.draft.i], [{ seat: 1, amount: 9 }, 0], 'a bid over it is in; the card is still up');
+  assert.deepStrictEqual([Ra.draft.bid, Ra.draft.i], [{ seat: 1, amount: 22 }, 0], 'a bid over it is in; the card is still up');
   await w.advance(RAISE_MS + 100);
   v = A.last('draft').d;
-  assert.deepStrictEqual([v.last.seat, v.last.amount, v.budget, v.picks[1][0].team, 'name' in v.picks[1][0], v.need[1][card0.k], v.i], [1, 9, [50, 41], card0.team, false, SLOTS[card0.k] - 1, 1], 'the clock ran out: the high bid took him at its price, blind');
+  assert.deepStrictEqual([v.last.seat, v.last.amount, v.budget, v.picks[1][0].team, v.picks[1][0].name, v.need[1][card0.k], v.i], [1, 22, [50, 28], card0.team, card0.name, SLOTS[card0.k] - 1, 1], 'the clock ran out: the high bid took him at its price');
+  // the owner's case: the first man of a kind went for $22, so the next of that kind opens at $11 for the side without one, not his sticker
+  const nextSame = v.card.k === card0.k;
+  if (nextSame) assert.deepStrictEqual([v.floor[0], SLOTS[card0.k] > 1 ? v.floor[1] : v.max[1]], [Math.max(11, v.card.sticker), SLOTS[card0.k] > 1 ? Math.max(11, v.card.sticker) : 0], 'the floor is half what the other side paid');
+  else assert.strictEqual(v.floor[0], v.card.sticker, 'another kind: its sticker');
   // a card nobody claims passes to nobody when the clock runs out
   const Rb = await state(w, ma.room);
   await w.advance(OPEN_MS + 100);
   const Rc = await state(w, ma.room);
   assert.deepStrictEqual([Rc.draft.i, Rc.draft.last.seat, Rc.draft.last.amount, Rc.draft.picks[0].length + Rc.draft.picks[1].length], [Rb.draft.i + 1, -1, 0, 1], 'nobody claimed it: nobody has it');
-  // a bid on a card that is gone counts for nothing; a $0 claim stands when nobody answers; the other side a dollar over with a short clock when the first cannot answer
+  // a bid on a card that is gone counts for nothing; an opening bid at the floor stands when nobody answers
   v = A.last('draft').d;
   A.send({ t: 'bid', i: v.i - 1, amount: 30 });
   await w.settle();
   assert.strictEqual((await state(w, ma.room)).draft.bid, null, 'a stale bid is dropped');
-  A.send({ t: 'bid', i: v.i, amount: 0 });
-  await w.settle();
-  assert.deepStrictEqual((await state(w, ma.room)).draft.bid, { seat: 0, amount: 0 }, 'a $0 claim is a bid');
-  await w.advance(RAISE_MS + 100);
-  const Rd = await state(w, ma.room);
-  assert.deepStrictEqual([Rd.draft.last.seat, Rd.draft.last.amount, Rd.draft.need[0].QB], [0, 0, 0], 'unanswered, it stands: the card for nothing');
-  // both quarterbacks taken: the back is up next, the third quarterback skipped
-  assert.strictEqual(Rd.draft.pool[Rd.draft.i].k, 'RB', 'a kind both sides have is skipped');
-  w.close();
+  const kindUp = v.card.k, needBefore = v.need[0][kindUp];
+  if (!v.floor[0] || v.floor[0] > v.max[0]) { w.close(); } else {
+    A.send({ t: 'bid', i: v.i, amount: v.floor[0] });
+    await w.settle();
+    assert.deepStrictEqual((await state(w, ma.room)).draft.bid, { seat: 0, amount: v.floor[0] }, 'the floor opens the card');
+    await w.advance(RAISE_MS + 100);
+    const Rd = await state(w, ma.room);
+    assert.deepStrictEqual([Rd.draft.last.seat, Rd.draft.last.amount, Rd.draft.need[0][kindUp]], [0, v.floor[0], needBefore - 1], 'unanswered, it stands: the card at its floor');
+    // the card up next is always one somebody still needs (a kind both sides have is skipped: draftAdvance)
+    const up = Rd.draft.pool[Rd.draft.i];
+    assert.ok(!up || Rd.draft.need[0][up.k] > 0 || Rd.draft.need[1][up.k] > 0, 'a kind both sides have is skipped');
+    w.close();
+  }
 }
 console.log('match rooms ok');
