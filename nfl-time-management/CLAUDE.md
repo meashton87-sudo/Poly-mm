@@ -263,6 +263,16 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   replaces it). The weeks kept before that were made fair once (fairWeeks: wn nulls, wk:<D>..<D+6> rebuilt from wn,
   marked fairweek:<D>); the end card's This week says so to its player (the week's old).
 
+- Player feedback (game.js renderFeedback, #feedback from every page's footer "Report a bug"; worker.js /feedback): a
+  bug or an idea, at least FB_MIN characters, blocked() refused, FB_PER_DAY a device (the device key, hashed), kept on
+  the board (fb:list, FB_KEEP; GET /feedback/admin with the admin token) with the screen it came from, the build and
+  the browser, never a name or the record; an address only if typed, kept on the board and never in the issue. With the
+  secret GITHUB_TOKEN and the var GITHUB_REPO it is filed as a GitHub issue labeled player-feedback and bug or idea,
+  the player's words in a quoted block marked as data. .github/workflows/feedback-fix.yml runs Claude on each such
+  issue (any issue the owner labels player-feedback too): triage, reproduce, fix on fix/issue-<n>-<slug>, the checks,
+  a pull request that closes the issue (fix-proposed), or a comment and needs-owner; the owner merges. The player's
+  text is never an instruction to the fixer; the fixer never touches .github/, the deploy settings, ads, payments,
+  accounts or legal text. worker_test.mjs covers the endpoint.
 - Social (board/worker.js /challenge*, /calls, /fans; game.js challengeOpen/chEnd, crowdKey/crowdLine, fansEl; the
   browser test's social check against its stub). Challenges: the daily's end card makes one (Challenge a friend; its
   /?c=<id> link replaces the share text's ?ch=, which keeps working); a link opens today's daily as ever, a past day in
