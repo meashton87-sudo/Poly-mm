@@ -610,7 +610,8 @@ async function runAnswering(w, a, ms) {
     if (last.seat === 0) { spent += last.amount; got += 1; }
   }
   const R = await state(w, m.room);
-  assert.deepStrictEqual([R.phase, R.teams, got, R.draft.budget[0]], ['live', ['DR1', 'DR2'], 7, 50 - spent], 'seven picks, the money adds up, the match is on');
+  const fillers = R.draft.picks[0].filter((p) => p.filler);
+  assert.deepStrictEqual([R.phase, R.teams, got + fillers.length, R.draft.budget[0]], ['live', ['DR1', 'DR2'], 7, 50 - spent - fillers.reduce((a, p) => a + p.paid, 0)], 'seven picks (the dregs for a slot left open, paid for), the money adds up, the match is on');
   assert.ok(outbid >= 5, `the phone bid against the computer (${outbid} bids)`);
   assert.ok(R.draftTeams && R.draftTeams.DR1.lineup.off.length === 11 && R.draftTeams.DR2.lineup.off.length === 11, 'two sides, eleven each');
   const dm = C.all('draft'), st = C.last('start'), fin = dm[dm.length - 1];
