@@ -38,9 +38,9 @@ for (let i = 0; i < N; i++) {
   for (let k = 0; k < 400 && room().phase === 'draft'; k++) {
     const S = room(), d = S.draft, card = d.pool[d.i];
     const v = A.last('draft') ? A.last('draft').d : A.last('hello').draft;
-    assert.ok(v && !('name' in v.card) && v.picks.every((ps) => ps.every((p) => !('name' in p))), 'blind while it is on');
+    assert.ok(v && 'name' in v.card && !('ovr' in v.card) && v.picks.every((ps) => ps.every((p) => 'name' in p && !('ovr' in p))), 'the men named, the ratings never, while it is on');
     const mx = VSCore.draftMax(d, 0, card), goal = Math.floor(mx * (0.2 + 0.8 * R()));
-    const b = d.bid, want = b ? b.amount + 1 : 0;
+    const b = d.bid, want = b ? b.amount + 1 : VSCore.draftFloor(d, 0, card);
     if (mx && R() < 0.67 && !(b && b.seat === 0) && want <= goal) { A.send({ t: 'bid', i: d.i, amount: want }); await w.settle(); }
     await w.advance(700);
   }
@@ -54,6 +54,7 @@ for (let i = 0; i < N; i++) {
     const code = VSCore.DRAFT.teams[s], t = T[code], picks = d.picks[s];
     assert.strictEqual(picks.length, 7, 'seven picks a side');
     assert.strictEqual(picks.reduce((a, p) => a + p.paid, 0), 50 - d.budget[s], 'the money adds up');
+    for (const p of picks.filter((x) => !x.filler)) assert.ok(p.paid >= (p.sticker || 1), `${p.name} went for his sticker or more ($${p.paid}, sticker $${p.sticker})`);
     assert.ok(d.budget[s] >= 0, 'never in debt');
     out.fillers += picks.filter((p) => p.filler).length;
     assert.strictEqual(t.lineup.off.length, 11, 'eleven on offense');
@@ -94,5 +95,5 @@ for (let i = 0; i < N; i++) {
 }
 const lad = (await w.http('ladder', '/vs/ladder')).body;
 assert.strictEqual(lad.players, 0, 'nobody on the ladder from a draft');
-console.log(`vs draft ok: ${N} drafts and matches, the player won ${out.won}, spent ${JSON.stringify(out.spent)} of 50, ${out.cards} cards up, ${out.passed} passed, ${out.fillers} filled for nothing, ${out.snaps} snaps called, ${Math.round(OPEN_MS / 1000)}/${Math.round(RAISE_MS / 1000)} s clocks`);
+console.log(`vs draft ok: ${N} drafts and matches, the player won ${out.won}, spent ${JSON.stringify(out.spent)} of 50, ${out.cards} cards up, ${out.passed} passed, ${out.fillers} filled from the dregs, ${out.snaps} snaps called, ${Math.round(OPEN_MS / 1000)}/${Math.round(RAISE_MS / 1000)} s clocks`);
 w.close();

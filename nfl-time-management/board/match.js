@@ -29,9 +29,9 @@
 //                 {t:'locked', n, seat}  {t:'peer', online, off, now}  {t:'teams', teams, names}  {t:'taken', team}
 //                 {t:'over', result}  {t:'rated', rated}  {t:'rematch-ask', seat}  {t:'rematch', room}
 // The draft (mode 'draft', or ?draft=1 on a friend's or the computer's room; VSCore.DRAFT): hello.draft is null, {pending:true}
-// (the other side not in yet) or the view (draftView: i, n, card {k, team, pos}, budget, need, picks, bid {seat, amount},
-// max, left, last, done); {t:'draft', d} a new card up, the last one with teams and draftTeams; {t:'bid', i, seat, amount,
-// left} a bid in. Client -> room: {t:'bid', i, amount} (a $0 claim, or over the bid in, within max[seat]).
+// (the other side not in yet) or the view (draftView: i, n, card {k, team, pos, name, sticker}, budget, need, picks, bid {seat, amount},
+// max, floor (the least each side may open at), left, last, done); {t:'draft', d} a new card up, the last one with teams and draftTeams; {t:'bid', i, seat, amount,
+// left} a bid in. Client -> room: {t:'bid', i, amount} (the floor or more to open, over the bid in after, within max[seat]).
 // Lobby -> client: {t:'queued', mode, size, wait, rating, cpu}  {t:'match', room, mode}
 // Client -> lobby: {t:'cpu'}  play the computer now (offered once a ticket has waited CPU_AFTER_S)
 //
@@ -148,14 +148,14 @@ export function cupSettle(c) {
   return c.matches.filter((m) => m.w === null && !m.room && m.p[0] !== null && m.p[1] !== null);
 }
 
-// the draft as a phone sees it: the card up (the team and the slot only: the man is blind until the draft is over,
-// as are the picks), the money, the slots, the bid in and what each side may bid, the clock, the last card's fate;
+// the draft as a phone sees it: the card up (the man, his team and the slot; his rating never, nor the picks' until
+// the draft is over), the money, the slots, the bid in and what each side may bid, the clock, the last card's fate;
 // never the cards still to come, nor what the computer would pay
 function draftView(R, now = Date.now()) {
   const d = R.draft, done = VSCore.draftDone(d), card = d.pool[d.i] || null;
-  const mask = (p) => (done ? p : { k: p.k, team: p.team, pos: p.pos, paid: p.paid });
+  const mask = (p) => (done ? p : { k: p.k, team: p.team, pos: p.pos, name: p.name, paid: p.paid });
   return { i: d.i, n: d.pool.length, card: VSCore.draftMask(card), budget: d.budget, need: d.need, picks: d.picks.map((ps) => ps.map(mask)), bid: d.bid,
-    max: [0, 1].map((s) => VSCore.draftMax(d, s, card)), left: Math.max(0, d.deadline - now), last: d.last ? { ...d.last, card: VSCore.draftMask(d.last.card) } : null, done };
+    max: [0, 1].map((s) => VSCore.draftMax(d, s, card)), floor: [0, 1].map((s) => VSCore.draftFloor(d, s, card)), left: Math.max(0, d.deadline - now), last: d.last ? { ...d.last, card: VSCore.draftMask(d.last.card) } : null, done };
 }
 const clean = (n) => String(n ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
 const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
