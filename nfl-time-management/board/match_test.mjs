@@ -3,7 +3,7 @@
 // (vs_stress.mjs plays thousands of whole matches with the real engine.)
 import assert from 'node:assert';
 import { World, FakeClient } from './vs_world.mjs';
-import { ROOM_RE, PLAY_MS, WATCH_MS, DECIDE_MS, OFF_MS, DEF_MS, decideMs, FIRST_MS, FORFEIT_MS, AFK_LIMIT, NOSHOW_MS, ELO, MM, CPU_AFTER_S, CPU_SEAT, CPU_TURN_MS } from './match.js';
+import { BID_MS, ROOM_RE, PLAY_MS, WATCH_MS, DECIDE_MS, OFF_MS, DEF_MS, decideMs, FIRST_MS, FORFEIT_MS, AFK_LIMIT, NOSHOW_MS, ELO, MM, CPU_AFTER_S, CPU_SEAT, CPU_TURN_MS } from './match.js';
 
 // the play clock by role: the defense 15 seconds, the offense 20 (from the defense's call in), a pick or a try 30 (the owner, Oct 23)
 {
@@ -491,6 +491,136 @@ async function runAnswering(w, a, ms) {
   const F = new FakeClient(w, K(71));
   await F.open('CPU234', { mode: 'cpu' });
   assert.notStrictEqual((await state(w, 'CPU234')).mode, 'cpu', 'only the lobby makes a computer room');
+  w.close();
+}
+// ---- Versus Draft (VSCore.DRAFT, match.js draftStart/draftSettle): no team brought; $50 each, players up one at a
+// time from a pool across the league, the higher secret bid takes him, a side bids only on what it still needs and
+// never more than leaves a dollar a slot, nobody's player goes for nothing to a side that needs him; the sides are made
+// from the picks and the match follows. The computer bids as the card goes up. Never rated; a rematch drafts again
+{
+  const mkTeam = (c, q) => ({ team: c, coach: `Coach ${c}`, base: { off_pass: q, off_rush: q / 2, def_pass: -q, def_rush: -q / 2 }, qb: { name: `QB ${c}`, adjustment: q / 10 },
+    kicker: { name: `K ${c}`, rating: 1, ovr: 80 }, punter: { name: `P ${c}`, ovr: 70 }, calls: { inside: { off: q, def: -q }, slant: { off: q, def: -q } },
+    lineup: { off: [{ pos: 'QB', name: `QB ${c}`, ovr: 80 }, { pos: 'RB', name: `RB ${c}`, ovr: 75 }, { pos: 'WR', name: `WR1 ${c}`, ovr: 85 }, { pos: 'WR', name: `WR2 ${c}`, ovr: 72 }, { pos: 'TE', name: `TE ${c}`, ovr: 70 },
+      { pos: 'LT', name: `LT ${c}`, ovr: 70 }, { pos: 'LG', name: `LG ${c}`, ovr: 70 }, { pos: 'C', name: `C ${c}`, ovr: 70 }, { pos: 'RG', name: `RG ${c}`, ovr: 70 }, { pos: 'RT', name: `RT ${c}`, ovr: 70 }, { pos: 'WR', name: `WR3 ${c}`, ovr: 60 }],
+      def: [{ pos: 'EDGE', name: `E ${c}`, ovr: 80 }, { pos: 'CB', name: `CB ${c}`, ovr: 75 }], bench: [], qbs: [] } });
+  const codes = ['KC', 'BUF', 'CHI', 'GB', 'DAL', 'PHI', 'DET', 'SF'];
+  const stubD = { ...stub, pool: { ...stub.pool, teams: Object.fromEntries(codes.map((c, i) => [c, mkTeam(c, (i - 4) / 20)])) } };
+  const w = new World({ engine: stubD });
+  const SLOTS = VSCore.DRAFT.slots, open = (need) => Object.values(need).reduce((x, y) => x + y, 0);
+  // the pool and the rules, on their own (vs_core.js)
+  {
+    const rnd = VSCore.rng(11), cards = VSCore.draftPool(stubD.pool, rnd), by = {};
+    cards.forEach((c) => { by[c.k] = (by[c.k] || 0) + 1; });
+    assert.deepStrictEqual(by, VSCore.DRAFT.pool, 'the pool: so many of each kind');
+    for (const k of Object.keys(by)) assert.strictEqual(new Set(cards.filter((c) => c.k === k).map((c) => c.team)).size, by[k], `${k}: each from a different team`);
+    const d = VSCore.draftNew([{ k: 'QB', team: 'KC', name: 'a', ovr: 80 }, { k: 'QB', team: 'BUF', name: 'b', ovr: 80 }, { k: 'RB', team: 'DAL', name: 'c', ovr: 70 }]);
+    assert.strictEqual(VSCore.draftMax(d, 0, d.pool[0]), 50 - 6, 'the most at the start: a dollar kept for each of the six other slots');
+    let r = VSCore.draftResolve(d, { 0: 60, 1: 44 }, rnd);
+    assert.deepStrictEqual([r.bids, r.seat !== -1, d.budget[r.seat], d.need[r.seat].QB], [[44, 44], true, 6, 0], 'a bid over the most is the most; a tie goes to someone');
+    const loser = 1 - r.seat;
+    r = VSCore.draftResolve(d, { [r.seat]: 40, [loser]: 1 }, rnd);
+    assert.deepStrictEqual([r.seat, r.amount, r.bids[1 - loser]], [loser, 1, 0], 'a side with its quarterback cannot bid for another: the other gets him for his 1');
+    r = VSCore.draftResolve(d, {}, rnd);
+    assert.deepStrictEqual([r.seat >= 0, r.amount], [true, 0], 'nobody bid: a side that needs the back takes him for nothing');
+    assert.ok(VSCore.draftDone(d) && open(d.need[0]) > 0, 'the pool is out, slots still open');
+    VSCore.draftFill(d, stubD.pool, rnd);
+    assert.deepStrictEqual([open(d.need[0]), open(d.need[1]), d.picks[0].length + d.picks[1].length], [0, 0, 14], 'filled for nothing: seven a side');
+    const t = VSCore.draftTeam(stubD.pool, d.picks[0], 'DR1', 'Max');
+    assert.deepStrictEqual([t.team, t.coach, t.lineup.off.length, t.lineup.off.filter((p) => p.pos === 'QB').length, typeof t.base.off_pass, !!t.kicker.name], ['DR1', 'Max', 11, 1, 'number', true], 'a side: eleven on offense, one quarterback, ratings and a kicker');
+    assert.doesNotThrow(() => VSCore.buildGame(VSCore.draftPoolWith(stubD.pool, { DR1: t, DR2: VSCore.draftTeam(stubD.pool, d.picks[1], 'DR2', 'Ann') }), 'DR1', 'DR2'), 'the engine builds the game from the two sides');
+  }
+  // the queue: a draft ticket brings no team; a plain one still must
+  const noTeam = new FakeClient(w, K(80));
+  assert.strictEqual(await noTeam.queue({ mode: 'casual', team: '', name: 'X' }), 400, 'a quick match needs a team');
+  // the computer's draft: a room at once, the pool drawn as the phone comes in, the computer's bid in with each card
+  const c = new FakeClient(w, K(81));
+  assert.strictEqual(await c.queue({ mode: 'cpu', draft: '1', team: '', name: 'Drafter' }), 101);
+  const m = c.last('match');
+  assert.ok(m && m.mode === 'cpu', 'a computer room');
+  const C = new FakeClient(w, c.key);
+  assert.strictEqual(await C.open(m.room, { mode: 'cpu' }), 101);
+  let h = C.last('hello');
+  assert.deepStrictEqual([h.phase, h.teams, !!h.draft && !h.draft.pending, h.draft.n, h.draft.i], ['draft', [null, null], true, 20, 0], 'the draft is on: no teams yet, 20 cards, the first up');
+  assert.ok(h.draft.card && h.draft.in[CPU_SEAT] && !h.draft.in[0], 'a card up; the computer has bid, you have not');
+  assert.deepStrictEqual(h.draft.budget, [50, 50]);
+  let spent = 0, got = 0, rounds = 0;
+  for (; rounds < 40; rounds++) {
+    const R = await state(w, m.room);
+    if (R.phase !== 'draft') break;
+    const v = C.last('draft') ? C.last('draft').d : h.draft;
+    assert.strictEqual(v.i, R.draft.i, 'the view is the room');
+    const max = VSCore.draftMax({ budget: v.budget, need: v.need }, 0, v.card);
+    const bid = max ? Math.min(max, 2 + (rounds % 5)) : 0;
+    C.send({ t: 'bid', i: v.i, amount: bid });
+    C.send({ t: 'bid', i: v.i, amount: 99 });                     // (a second bid on the same card: ignored)
+    await w.settle();
+    const R2 = await state(w, m.room);
+    const last = R2.draft.last;
+    assert.ok(last && last.i === v.i, 'the card settled as soon as both bids were in');
+    assert.ok(last.bids[0] <= max, 'never over the most');
+    if (last.seat === 0) { spent += last.amount; got += 1; }
+  }
+  const R = await state(w, m.room);
+  assert.deepStrictEqual([R.phase, R.teams, got, R.draft.budget[0]], ['live', ['DR1', 'DR2'], 7, 50 - spent], 'seven picks, the money adds up, the match is on');
+  assert.ok(R.draftTeams && R.draftTeams.DR1.lineup.off.length === 11 && R.draftTeams.DR2.lineup.off.length === 11, 'two sides, eleven each');
+  const dm = C.all('draft'), st = C.last('start');
+  assert.ok(dm[dm.length - 1].draftTeams && dm[dm.length - 1].teams[0] === 'DR1' && st && st.ms, 'the sides and the toss went to the phone, in that order');
+  assert.strictEqual(dm.length, rounds, 'a message a card settled (the last one with the sides)');
+  // the hello after it carries the sides; the match plays out as any other
+  const C2 = new FakeClient(w, c.key);
+  await C2.open(m.room, { mode: 'cpu' });
+  h = C2.last('hello');
+  assert.ok(h.draftTeams && h.teams[0] === 'DR1' && h.phase === 'live', 'a reload has the sides');
+  for (let i = 0; i < 400; i++) {
+    const Rl = await state(w, m.room);
+    if (Rl.phase !== 'live') break;
+    const need = VSCore.need(Rl.ms);
+    if (!need.includes(0)) { await w.advance(1000); continue; }
+    const r0 = VSCore.role(Rl.ms, 0), role = r0 === 'offense' ? 'off' : r0 === 'defense' ? 'def' : r0;
+    const half = nh(r0, Rl.ms) || (role === 'pick' ? { pick: 'offense' } : role === 'pat' ? { action: { pat: 'xp' } } : role === 'off' ? { action: { call: i % 3 ? 'inside' : 'slant', play: 'run' } } : role === 'def' ? { dc: { pers: 0, front: 0, cov: 0, rush: 0 } } : null);
+    C2.send({ t: 'half', n: Rl.n, half });
+    await w.settle();
+  }
+  const end = await state(w, m.room);
+  assert.deepStrictEqual([end.phase, end.result && end.result.by, end.rated], ['over', 'score', null], 'played to the end on the scoreboard, never rated');
+  C2.send({ t: 'rematch' });
+  await w.settle();
+  const re = C2.last('rematch');
+  assert.ok(re && re.room, 'a rematch');
+  const Rr = await state(w, re.room);
+  assert.deepStrictEqual([Rr.mode, !!Rr.draft, Rr.teams], ['cpu', true, [null, null]], 'and it drafts again');
+  // two players: paired from the draft queue, both bid; the clock settles a card a side never bid on
+  const a = new FakeClient(w, K(82)), b = new FakeClient(w, K(83));
+  await a.queue({ mode: 'draft', team: '', name: 'Ann' });
+  await b.queue({ mode: 'draft', team: '', name: 'Bob' });
+  const ma = a.last('match'), mb = b.last('match');
+  assert.ok(ma && mb && ma.room === mb.room && ma.mode === 'draft', 'paired into one draft room');
+  const A = new FakeClient(w, a.key), B = new FakeClient(w, b.key);
+  await A.open(ma.room, { mode: 'draft' });
+  assert.strictEqual(A.last('hello').draft.pending, true, 'alone: the pool waits for the other');
+  await B.open(mb.room, { mode: 'draft' });
+  let v = B.last('draft') ? B.last('draft').d : B.last('hello').draft;
+  assert.deepStrictEqual([v.i, v.in], [0, [false, false]], 'both in: the first card is up, no bid yet');
+  const card0 = v.card;
+  A.send({ t: 'bid', i: 0, amount: 7 });
+  await w.settle();
+  assert.deepStrictEqual(B.last('bidin') && B.last('bidin').seat, 0, 'the other side hears a bid landed, not how much');
+  assert.strictEqual((await state(w, ma.room)).draft.i, 0, 'the card waits for the second bid');
+  B.send({ t: 'bid', i: 0, amount: 9 });
+  await w.settle();
+  v = A.last('draft').d;
+  assert.deepStrictEqual([v.last.seat, v.last.amount, v.last.bids, v.budget, v.picks[1][0].name, v.need[1][card0.k]], [1, 9, [7, 9], [50, 41], card0.name, SLOTS[card0.k] - 1], 'the higher bid takes him at its price');
+  // the clock: a card nobody answers goes at 0 to a side that needs him when it runs out
+  const Rb = await state(w, ma.room);
+  await w.advance(BID_MS + 100);
+  const Rc = await state(w, ma.room);
+  assert.deepStrictEqual([Rc.draft.i, Rc.draft.last.bids, Rc.draft.last.amount], [Rb.draft.i + 1, [0, 0], 0], 'the deadline settles the card for nothing');
+  assert.ok(Rc.draft.last.seat >= 0, 'to a side that needs him');
+  // a bid on a card that is gone, or from a side that does not need the kind, counts for nothing
+  v = A.last('draft').d;
+  A.send({ t: 'bid', i: v.i - 1, amount: 30 });
+  await w.settle();
+  assert.strictEqual((await state(w, ma.room)).draft.i, v.i, 'a stale bid is dropped');
   w.close();
 }
 console.log('match rooms ok');

@@ -2,6 +2,16 @@
   "about": "Every change to the game, newest first. Each update adds its notes here (scripts/site.py builds /patch-notes from this file). Game changes only: no ads, analytics, payments or behind-the-scenes work, and nothing that is not live yet.",
   "notes": [
     {
+      "date": "2026-10-27",
+      "title": "Versus Draft",
+      "items": [
+        "A new way to play Versus: Draft. Nobody picks a team. Both coaches get $50 and bid on players as they come up: a quarterback, a back, two receivers, a tight end, an offensive line and a whole defense and special teams.",
+        "A player comes up, you both bid once in secret, and the higher bid takes him; a tie goes to whoever has more spots to fill. Twenty seconds a card.",
+        "Your side is built from your picks: the passing game from your quarterback, line and receivers, the running game from your line and back, the defense and kickers from the unit you won.",
+        "Draft from the Versus lobby, against another coach or the computer; a rematch drafts again. Draft games are not rated."
+      ]
+    },
+    {
       "date": "2026-10-26",
       "title": "Famous Endings Week, faster on phones",
       "items": [

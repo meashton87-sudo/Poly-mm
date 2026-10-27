@@ -405,8 +405,152 @@
     return walk(JSON.parse(new TextDecoder().decode(u8.subarray(8, base))));
   }
 
+  // ------------------------------------------------------------------------------------------------- the draft ---
+  // Versus Draft (the owner, Oct 26): nobody brings a team. Both players get DRAFT.budget dollars; players come up one
+  // at a time from a pool drawn across the league (draftPool: DRAFT.pool of each kind, each from a different team),
+  // both bid in secret, and the higher bid takes him at its price (draftResolve). A side bids only on a kind it still
+  // needs (DRAFT.slots: a quarterback, a back, two receivers, a tight end, a line, a defense with its kickers) and never
+  // more than leaves a dollar for each slot still open (draftMax). A player nobody bids on goes for nothing to a side
+  // that needs him (the one with more slots open; a coin for a tie), so a draft always fills; what the pool runs out
+  // of, draftFill gives for nothing. The two sides play as DRAFT.teams, each put together by draftTeam.
+  const DRAFT = { budget: 50, slots: { QB: 1, RB: 1, WR: 2, TE: 1, OL: 1, DST: 1 }, pool: { QB: 3, RB: 3, WR: 5, TE: 3, OL: 3, DST: 3 },
+    order: ['QB', 'RB', 'WR', 'TE', 'OL', 'DST'], teams: ['DR1', 'DR2'], bidMs: 20000 };
+  const OL_POS = ['LT', 'LG', 'C', 'RG', 'RT'];
+  const TEAM_CODE = /^[A-Z]{2,3}$/;
+  const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+  const shuffled = (xs, rnd) => { const a = xs.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const ovrOf = (p) => (p && Number.isFinite(p.ovr) ? p.ovr : 70);
+  const best = (ps) => ps.slice().sort((a, b) => ovrOf(b) - ovrOf(a))[0] || null;
+  // one card of a kind from a team (null when the team has nobody for it)
+  function draftCard(team, code, k) {
+    const L = (team && team.lineup) || {}, off = L.off || [], def = L.def || [];
+    const card = (p, extra) => (p ? { k, team: code, name: p.name, pos: p.pos || k, num: p.num, ovr: ovrOf(p), stat: p.stat || '', ...extra } : null);
+    if (k === 'QB') return card(off.find((p) => p.pos === 'QB'), { adj: (team.qb && team.qb.adjustment) || 0 });
+    if (k === 'RB') return card(best(off.filter((p) => p.pos === 'RB' || p.pos === 'FB')));
+    if (k === 'WR') return card(best(off.filter((p) => p.pos === 'WR')));
+    if (k === 'TE') return card(best(off.filter((p) => p.pos === 'TE')));
+    if (k === 'OL') {
+      const line = off.filter((p) => OL_POS.includes(p.pos));
+      return line.length ? { k, team: code, name: `${code} offensive line`, pos: 'OL', ovr: Math.round(mean(line.map(ovrOf))), stat: line.map((p) => p.name).join(', ') } : null;
+    }
+    if (k === 'DST') {
+      if (!def.length) return null;
+      const kk = team.kicker && team.kicker.name ? `K ${team.kicker.name}` : '';
+      return { k, team: code, name: `${code} defense & special teams`, pos: 'DST', ovr: Math.round(mean(def.map(ovrOf))), stat: [best(def) && `${best(def).pos} ${best(def).name}`, kk].filter(Boolean).join(' · ') };
+    }
+    return null;
+  }
+  // the pool: DRAFT.pool cards of each kind, each kind's from different teams, shuffled into one order
+  function draftPool(pool, rnd) {
+    const codes = Object.keys(pool.teams).filter((c) => TEAM_CODE.test(c) && pool.teams[c] && pool.teams[c].lineup);
+    const cards = [];
+    for (const k of DRAFT.order) {
+      let n = 0;
+      for (const c of shuffled(codes, rnd)) {
+        const card = draftCard(pool.teams[c], c, k);
+        if (!card) continue;
+        cards.push(card);
+        if (++n >= DRAFT.pool[k]) break;
+      }
+    }
+    return shuffled(cards, rnd);
+  }
+  const draftNew = (cards) => ({ budget: [DRAFT.budget, DRAFT.budget], need: [{ ...DRAFT.slots }, { ...DRAFT.slots }], picks: [[], []], pool: cards, i: 0, bids: {}, deadline: 0, last: null });
+  const draftOpen = (d, s) => Object.values(d.need[s]).reduce((a, b) => a + b, 0);
+  const draftNeeds = (d, s, k) => (d.need[s][k] || 0) > 0;
+  // the most a side may bid: a dollar kept for each slot still open after this one
+  function draftMax(d, s, card) {
+    if (!card || !draftNeeds(d, s, card.k)) return 0;
+    return Math.max(0, d.budget[s] - (draftOpen(d, s) - 1));
+  }
+  const draftDone = (d) => d.i >= d.pool.length || (draftOpen(d, 0) === 0 && draftOpen(d, 1) === 0);
+  // the card up now: both bids in (a missing one is 0): who gets him, at what price. Mutates d (the next card is up
+  // after it) and returns the outcome, or null when the card was nobody's
+  function draftResolve(d, bids, rnd) {
+    const card = d.pool[d.i];
+    if (!card) return null;
+    const b = [0, 1].map((s) => { const m = draftMax(d, s, card); const x = Math.floor(Number((bids || {})[s]) || 0); return Math.max(0, Math.min(m, x)); });
+    const can = [0, 1].map((s) => draftNeeds(d, s, card.k));
+    let seat = -1;
+    if (b[0] !== b[1]) seat = b[0] > b[1] ? 0 : 1;
+    else if (can[0] && can[1]) seat = draftOpen(d, 0) !== draftOpen(d, 1) ? (draftOpen(d, 0) > draftOpen(d, 1) ? 0 : 1) : (rnd() < 0.5 ? 0 : 1);
+    else if (can[0] || can[1]) seat = can[0] ? 0 : 1;
+    const out = { i: d.i, card, seat, amount: seat >= 0 ? b[seat] : 0, bids: b };
+    if (seat >= 0) {
+      d.budget[seat] -= out.amount;
+      d.need[seat][card.k] -= 1;
+      d.picks[seat].push({ ...card, paid: out.amount });
+    }
+    d.i += 1;
+    d.bids = {};
+    d.last = out;
+    return out;
+  }
+  // what the pool ran out of: a player of that kind from a team not yet on the side, for nothing
+  function draftFill(d, pool, rnd) {
+    const codes = Object.keys(pool.teams).filter((c) => TEAM_CODE.test(c) && pool.teams[c] && pool.teams[c].lineup);
+    for (const s of [0, 1]) {
+      for (const k of DRAFT.order) {
+        while (draftNeeds(d, s, k)) {
+          const have = new Set(d.picks[s].map((p) => `${p.k}:${p.team}`));
+          const c = shuffled(codes, rnd).find((x) => !have.has(`${k}:${x}`) && draftCard(pool.teams[x], x, k)) || codes[0];
+          const card = draftCard(pool.teams[c], c, k) || { k, team: c, name: `${c} ${k}`, pos: k, ovr: 60, stat: '' };
+          d.picks[s].push({ ...card, paid: 0, filler: true });
+          d.need[s][k] -= 1;
+        }
+      }
+    }
+    return d;
+  }
+  // the computer's bid: what the slot is worth of its money, more for a better player and a scarcer kind, a little
+  // noise; its last chance at a kind, half again as much
+  const DRAFT_W = { QB: 1.8, OL: 1.1, DST: 1.3, WR: 1.0, RB: 0.8, TE: 0.7 };
+  function draftCpuBid(d, s, rnd) {
+    const card = d.pool[d.i], max = draftMax(d, s, card);
+    if (!max) return 0;
+    const per = d.budget[s] / Math.max(1, draftOpen(d, s)), q = Math.max(0.3, Math.min(1.6, (card.ovr - 55) / 25));
+    const left = d.pool.slice(d.i + 1).filter((c) => c.k === card.k).length, last = left < d.need[s][card.k];
+    const bid = Math.round(per * (DRAFT_W[card.k] || 1) * q * (0.8 + 0.4 * rnd()) * (last ? 1.5 : 1));
+    return Math.max(1, Math.min(max, bid));
+  }
+  // a side's team from its picks: the ratings a blend of its players' teams' (the quarterback and the line most of the
+  // passing and the running; the defense and the kickers the defense's team's), the quarterback's own adjustment, the
+  // lineups made of the men picked (the line's team filling the rest of its offense), named and colored as the side
+  function draftTeam(pool, picks, code, name) {
+    const T = (c) => pool.teams[c] || {};
+    const by = (k) => picks.filter((p) => p.k === k);
+    const qb = by('QB')[0], rb = by('RB')[0], wrs = by('WR'), te = by('TE')[0], ol = by('OL')[0], dst = by('DST')[0];
+    const base = (p, f) => { const t = p && T(p.team); return t && t.base && Number.isFinite(t.base[f]) ? t.base[f] : null; };
+    const blend = (f, parts) => { const xs = parts.filter(([p]) => base(p, f) != null); const w = xs.reduce((a, [, k]) => a + k, 0); return w ? xs.reduce((a, [p, k]) => a + base(p, f) * k, 0) / w : 0; };
+    const off_pass = blend('off_pass', [[qb, 0.35], [ol, 0.25], [wrs[0], 0.15], [wrs[1], 0.1], [te, 0.1], [rb, 0.05]]);
+    const off_rush = blend('off_rush', [[ol, 0.4], [rb, 0.3], [qb, 0.1], [te, 0.1], [wrs[0], 0.05], [wrs[1], 0.05]]);
+    const D = dst ? T(dst.team) : {}, Q = qb ? T(qb.team) : {}, O = ol ? T(ol.team) : Q;
+    const anchor = Q.lineup ? Q : O.lineup ? O : D.lineup ? D : {};
+    const player = (p) => { const t = T(p.team), x = ((t.lineup || {}).off || []).find((y) => y.name === p.name); return { ...(x || { name: p.name, ovr: p.ovr, stat: p.stat, num: p.num }), pos: p.pos }; };
+    const skill = [qb, rb, ...wrs, te].filter(Boolean).map(player);
+    const lineTeam = ((O.lineup || {}).off || []);
+    const line = lineTeam.filter((p) => OL_POS.includes(p.pos));
+    // the line's team's offense as the shape (its count at each spot): the picks take their spots first, the line's
+    // team's own men fill what is left (a third receiver, a fullback)
+    const shape = {};
+    lineTeam.forEach((p) => { shape[p.pos] = (shape[p.pos] || 0) + 1; });
+    const off = [...skill, ...line], count = (pos) => off.filter((q) => q.pos === pos).length;
+    for (const p of lineTeam) if (off.length < 11 && !OL_POS.includes(p.pos) && !off.some((q) => q.name === p.name) && count(p.pos) < (shape[p.pos] || 0)) off.push(p);
+    const calls = {};
+    for (const c of new Set([...Object.keys(Q.calls || {}), ...Object.keys(D.calls || {})])) {
+      calls[c] = { off: ((Q.calls || {})[c] || (D.calls || {})[c] || {}).off, def: ((D.calls || {})[c] || (Q.calls || {})[c] || {}).def };
+    }
+    return { ...anchor, team: code, coach: name || code, qb: { name: qb ? qb.name : (anchor.qb || {}).name, adjustment: qb ? qb.adj || 0 : 0 },
+      base: { ...(anchor.base || {}), off_pass, off_rush, def_pass: D.base ? D.base.def_pass : (anchor.base || {}).def_pass || 0, def_rush: D.base ? D.base.def_rush : (anchor.base || {}).def_rush || 0 },
+      injury_adjustment: { off_pass: 0, off_rush: 0, def_pass: 0, def_rush: 0 }, kicker: D.kicker || anchor.kicker, punter: D.punter || anchor.punter, kickers: [],
+      lineup: { off: off.slice(0, 11), def: ((D.lineup || {}).def || (anchor.lineup || {}).def || []).slice(), bench: [], qbs: [] }, calls, draft: picks.map((p) => ({ k: p.k, team: p.team, name: p.name, paid: p.paid })) };
+  }
+  // the pool with the two drafted sides in it (buildGame reads DRAFT.teams out of it)
+  const draftPoolWith = (pool, teams) => ({ ...pool, teams: { ...pool.teams, ...teams } });
+
   const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, INTENTS, KICK_DEF, FAKES, intentsAt, VS_OT, TEAM_BOOST, boostPool, hash, rng, buildGame, possRoot, start, chooser, need, role,
-    cleanAction, cleanDef, cleanHalf, apply, after, describe, called, noToss, stepper, unpack };
+    cleanAction, cleanDef, cleanHalf, apply, after, describe, called, noToss, stepper, unpack,
+    DRAFT, draftPool, draftCard, draftNew, draftOpen, draftNeeds, draftMax, draftDone, draftResolve, draftFill, draftCpuBid, draftTeam, draftPoolWith };
   if (typeof module !== 'undefined' && module && module.exports) module.exports = VSCore;
   if (global) global.VSCore = VSCore;       // (always: a page with some other script's global `module` still gets it)
 })(typeof self !== 'undefined' ? self : this);
