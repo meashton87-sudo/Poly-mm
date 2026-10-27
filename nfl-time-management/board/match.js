@@ -89,7 +89,7 @@ export const decideMs = (ms, seat) => {
 const ON_DEF = (ms) => VSCore.need(ms).length === 2 && !ms.cot.pick;
 export const PLAY_MS = WATCH_MS + DEF_MS + OFF_MS + 5000;    // a decision's last moment after the last snap
 export const FIRST_MS = 75_000;            // the first decision (the coin toss): the intro too, then the clock
-export const FORFEIT_MS = 60_000;          // a phone gone this long in a live match: that side forfeits
+export const FORFEIT_MS = 20_000;          // a phone gone this long in a live match or a draft: that side forfeits (the owner, Oct 27: 20 seconds)
 export const AFK_LIMIT = 2;                // decisions in a row left to the play clock: that side forfeits
 export const DRAFT_IDLE_CARDS = 3;         // the draft: cards in a row a side could have bid on and did not (passed, or let the clock run): "still here?"
 export const STILL_MS = 20_000;            // ... answered (a tap, a bid, a pass) within this, or that side is out and the draft is over (the owner, Oct 27)
@@ -324,6 +324,7 @@ export class Match {
       for (const s of VSCore.need(R.ms)) if (!(pend && pend.n === R.n && s in pend.halves)) t.push(dl[s]);    // the calls still out
       for (const s of [0, 1]) if (R.off[s]) t.push(R.off[s] + (R.cpu != null ? CPU_DECIDE_MS : FORFEIT_MS));
     }
+    if (R.phase === 'draft') for (const s of [0, 1]) if (R.off[s] && s !== R.cpu) t.push(R.off[s] + FORFEIT_MS);
     if (R.phase === 'wait' && R.pre) t.push(R.mode === 'cup' ? R.showBy : R.created + NOSHOW_MS);
     if (R.phase === 'draft' && R.draft) { t.push(R.draft.pool ? R.draft.deadline : R.draft.retryAt || Date.now() + 50); if (R.draft.cpuAt) t.push(R.draft.cpuAt); (R.draft.ask || []).forEach((a) => { if (a) t.push(a); }); }
     if (R.phase === 'over' && R.mode === 'ranked' && R.result && R.result.winner >= 0 && !R.rated) t.push(Date.now() + 5000);
@@ -668,6 +669,10 @@ export class Match {
       // "still here?" unanswered: that side is out, the draft is over (unrated; the other side goes back to the lobby)
       const gone = (R.draft.ask || []).findIndex((a) => a && now >= a - 50);
       if (gone >= 0) return this.finish(R, { winner: 1 - gone, by: 'forfeit', loser: gone, why: 'away' });
+      // a phone gone FORFEIT_MS during the draft: the same (the computer is never gone)
+      const left = [0, 1].filter((s) => s !== R.cpu && R.off[s] && now >= R.off[s] + FORFEIT_MS);
+      if (left.length === 2) return this.finish(R, { winner: -1, by: 'abandoned' });
+      if (left.length === 1) return this.finish(R, { winner: 1 - left[0], by: 'forfeit', loser: left[0], why: 'left' });
       if (R.cpu != null && R.draft.cpuAt && now >= R.draft.cpuAt - 50) this.draftCpu(R, now);
       if (now >= R.draft.deadline - 50) return this.draftSettle(R, now);
       await this.save(R);

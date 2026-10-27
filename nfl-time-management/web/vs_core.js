@@ -603,11 +603,16 @@
   // a side's team from its picks: the ratings a blend of its players' teams' (the quarterback and the line most of the
   // passing and the running; the defense and the kickers the defense's team's), the quarterback's own adjustment, the
   // lineups made of the men picked (the line's team filling the rest of its offense), named and colored as the side
+  // a slot nobody bid for is filled with a replacement (draftFill, filler: true): rated below the league's worst at
+  // every factor, FILL_BELOW of the league's spread under its least (the owner, Oct 27: passing on a position costs)
+  const FILL_BELOW = 0.25;
   function draftTeam(pool, picks, code, name) {
     const T = (c) => pool.teams[c] || {};
     const by = (k) => picks.filter((p) => p.k === k);
     const qb = by('QB')[0], rb = by('RB')[0], wrs = by('WR'), te = by('TE')[0], ol = by('OL')[0], dst = by('DST')[0];
-    const base = (p, f) => { const t = p && T(p.team); return t && t.base && Number.isFinite(t.base[f]) ? t.base[f] : null; };
+    const league = Object.keys(pool.teams).filter((c) => TEAM_CODE.test(c) && pool.teams[c] && pool.teams[c].base).map((c) => pool.teams[c].base);
+    const floorOf = (f) => { const xs = league.map((b) => b[f]).filter(Number.isFinite); if (!xs.length) return 0; const lo = Math.min(...xs), hi = Math.max(...xs); return lo - FILL_BELOW * (hi - lo); };
+    const base = (p, f) => { if (p && p.filler) return floorOf(f); const t = p && T(p.team); return t && t.base && Number.isFinite(t.base[f]) ? t.base[f] : null; };
     const blend = (f, parts) => { const xs = parts.filter(([p]) => base(p, f) != null); const w = xs.reduce((a, [, k]) => a + k, 0); return w ? xs.reduce((a, [p, k]) => a + base(p, f) * k, 0) / w : 0; };
     const off_pass = blend('off_pass', [[qb, 0.35], [ol, 0.25], [wrs[0], 0.15], [wrs[1], 0.1], [te, 0.1], [rb, 0.05]]);
     const off_rush = blend('off_rush', [[ol, 0.4], [rb, 0.3], [qb, 0.1], [te, 0.1], [wrs[0], 0.05], [wrs[1], 0.05]]);
@@ -628,9 +633,10 @@
       calls[c] = { off: ((Q.calls || {})[c] || (D.calls || {})[c] || {}).off, def: ((D.calls || {})[c] || (Q.calls || {})[c] || {}).def };
     }
     return { ...anchor, team: code, coach: name || code, qb: { name: qb ? qb.name : (anchor.qb || {}).name, adjustment: qb ? qb.adj || 0 : 0 },
-      base: { ...(anchor.base || {}), off_pass, off_rush, def_pass: D.base ? D.base.def_pass : (anchor.base || {}).def_pass || 0, def_rush: D.base ? D.base.def_rush : (anchor.base || {}).def_rush || 0 },
+      base: { ...(anchor.base || {}), off_pass, off_rush, def_pass: dst && dst.filler ? floorOf('def_pass') : D.base ? D.base.def_pass : (anchor.base || {}).def_pass || 0,
+        def_rush: dst && dst.filler ? floorOf('def_rush') : D.base ? D.base.def_rush : (anchor.base || {}).def_rush || 0 },
       injury_adjustment: { off_pass: 0, off_rush: 0, def_pass: 0, def_rush: 0 }, kicker: D.kicker || anchor.kicker, punter: D.punter || anchor.punter, kickers: [],
-      lineup: { off: off.slice(0, 11), def: ((D.lineup || {}).def || (anchor.lineup || {}).def || []).slice(), bench: [], qbs: [] }, calls, draft: picks.map((p) => ({ k: p.k, team: p.team, name: p.name, paid: p.paid })) };
+      lineup: { off: off.slice(0, 11), def: ((D.lineup || {}).def || (anchor.lineup || {}).def || []).slice(), bench: [], qbs: [] }, calls, draft: picks.map((p) => ({ k: p.k, team: p.team, name: p.name, paid: p.paid, filler: !!p.filler })) };
   }
   // the pool with the two drafted sides in it (buildGame reads DRAFT.teams out of it)
   const draftPoolWith = (pool, teams) => ({ ...pool, teams: { ...pool.teams, ...teams } });
