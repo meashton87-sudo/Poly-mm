@@ -26,4 +26,5 @@ daily_check_out/
 board/assets/pro/*.json
 board/assets/vs/
 board/assets-loadtest/
+board/assets-test/
 web/rosters/
