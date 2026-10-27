@@ -453,7 +453,8 @@ FOOT_CSS = ("<style>.sitefoot{max-width:680px;margin:28px auto 0;padding:14px 16
             "h1 a.home{color:inherit;text-decoration:none}</style>")
 FOOT = ('<footer class="sitefoot"><nav aria-label="Site">'
         + "".join(f'<a href="{p or "./"}">{label}</a>' for p, label, _ in PAGES)
-        + '<a href="https://x.com/TwoMinuteDrill0" rel="noopener">Contact (X)</a></nav>'
+        + '<a href="./#feedback">Report a bug</a>'
+        '<a href="https://x.com/TwoMinuteDrill0" rel="noopener">Contact (X)</a></nav>'
         '<p>Two-Minute Drill is an independent, fan-made game. It is not affiliated with, endorsed by or sponsored by the '
         'National Football League, its teams, its players or the NFL Players Association. NFL, team names and player names '
         'are trademarks or property of their respective owners and are used only to identify real games.</p>'

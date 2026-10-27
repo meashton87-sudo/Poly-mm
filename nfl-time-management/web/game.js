@@ -335,6 +335,7 @@
   const VS_ON = !!document.querySelector('meta[name="vs"]') && Date.now() >= VS_AT;
   const VS_PRO = VS_ON && !!document.querySelector('meta[name="vs-pro"]') && !(VS_FREE_AT && Date.now() >= VS_FREE_AT);
   const VS_LOBBY = VS_ON && location.hash === '#vs';
+  const FEEDBACK = location.hash === '#feedback';          // report a bug or an idea (the footer's link; renderFeedback)
   const VS_ROOM = VS_ON ? ((location.hash.match(/^#vs-([A-HJ-KM-NP-Z2-9]{6})$/) || [])[1] || '') : '';
   const VS = !!VS_ROOM;
   // the full defensive call (personnel, front, coverage, rush) everywhere: Versus always; elsewhere only when the site
@@ -13053,6 +13054,67 @@
     }
     btn.disabled = false;
   }
+  // Report a bug or an idea (#feedback, the footer's link): the words go to the board (worker.js /feedback), which keeps
+  // them and files a GitHub issue that the repository's fixer (.github/workflows/feedback-fix.yml) picks up and turns
+  // into a pull request. With it: which screen they came from (FB_FROM_KEY, kept as the page loads), the screen size,
+  // the build and the browser; never a name, a score or the record. The device key only for the three-a-day limit; an
+  // address only if they type one (kept on the board, never in the issue)
+  const FB_FROM_KEY = 'tmd:fb:from';
+  function renderFeedback() {
+    show('arch');
+    try { history.scrollRestoration = 'manual'; } catch (e) { /* older browsers */ }
+    scrollTo(0, 0);                                            // (from the footer's link: the form at the top, not the foot)
+    track('feedback_open');
+    const box = $('arch');
+    box.textContent = '';
+    const back = el('a', 'linkbtn', '← Home');
+    back.href = '#home';
+    box.append(back, el('h2', '', 'Report a bug or an idea'));
+    if (!BOARD.api) { box.append(el('p', 'lead', 'Feedback is off on this copy of the game.')); return; }
+    box.append(el('p', 'lead', 'Tell us what broke, or what you wish the game did. We read every one, and fixes show up in the patch notes.'));
+    const wrap = el('div', 'fb');
+    let kind = 'bug';
+    const seg = el('div', 'seg fbkind');
+    seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', 'What is it');
+    const ta = el('textarea', 'fbtext');
+    ta.maxLength = 1500; ta.rows = 6; ta.required = true;
+    ta.setAttribute('aria-label', 'Your report');
+    const hint = { bug: 'What happened, and where? The day or mode, the play, what you expected instead.', idea: 'What would you add or change, and why?' };
+    ta.placeholder = hint.bug;
+    [['bug', 'Something broke'], ['idea', 'An idea']].forEach(([k, t]) => {
+      const b = el('button', `segb${k === kind ? ' on' : ''}`);
+      b.type = 'button'; b.append(el('b', '', t));
+      b.addEventListener('click', () => { kind = k; ta.placeholder = hint[k]; [...seg.children].forEach((x) => x.classList.toggle('on', x === b)); });
+      seg.append(b);
+    });
+    seg.style.setProperty('--cols', '2'); seg.classList.add('n');
+    const mail = el('input', 'fbmail');
+    mail.type = 'email'; mail.maxLength = 120; mail.autocomplete = 'email'; mail.placeholder = 'Email (optional, for a reply)';
+    const send = el('button', 'btn', 'Send'), note = el('p', 'note');
+    send.type = 'button';
+    note.setAttribute('aria-live', 'polite');
+    send.addEventListener('click', async () => {
+      const text = ta.value.trim();
+      if (text.length < 10) { note.textContent = 'Say a little more, so we can find it.'; ta.focus(); return; }
+      send.disabled = true; note.textContent = 'Sending…';
+      let from = '';
+      try { from = sessionStorage.getItem(FB_FROM_KEY) || ''; } catch (e) { /* none */ }
+      const where = [from || 'home', `${innerWidth}x${innerHeight}`, isPro() ? 'pro' : '', navigator.userAgent.slice(0, 110)].filter(Boolean).join(' · ');
+      try {
+        const r = await fetch(`${BOARD.api}/feedback`, POST_JSON({ key: deviceKey(), kind, text, contact: mail.value.trim(), where, build: BUILD }));
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { note.textContent = j.error || 'That did not go through. Try again in a minute.'; send.disabled = false; return; }
+        track('feedback_sent', { kind });
+        box.textContent = '';
+        box.append(back, el('h2', '', 'Thank you'), el('p', 'lead', kind === 'bug' ? 'We will look into it. Fixes show up in the patch notes.' : 'We will think it over. New things show up in the patch notes.'));
+        const again = el('a', 'linkbtn', 'Send another');
+        again.href = '#feedback'; again.addEventListener('click', (e) => { e.preventDefault(); renderFeedback(); });
+        box.append(again);
+      } catch (e) { note.textContent = 'No connection. Try again in a minute.'; send.disabled = false; }
+    });
+    wrap.append(seg, ta, mail, send, note);
+    box.append(wrap);
+  }
   async function renderCommunity() {
     show('arch');
     track('scen_comm_open', { pro: isPro() });
@@ -14321,6 +14383,8 @@
         return;
       }
       if (VS_LOBBY) { renderVsLobby(); return; }
+      if (FEEDBACK) { renderFeedback(); return; }
+      try { sessionStorage.setItem(FB_FROM_KEY, `${location.hash || '#daily'}${location.hash ? '' : ` day ${dayOf(now)}`}`); } catch (e) { /* none */ }
       if (VS) {
         await BOARD.ready;
         if (!BOARD.api) { vsNote('Versus needs the website’s backend.'); return; }
