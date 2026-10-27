@@ -13216,7 +13216,7 @@
   const vs = { ws: null, seat: -1, mode: 'friend', teams: [null, null], taken: '', names: ['', ''], full: false, online: [false, false], off: [0, 0],
     phase: 'wait', n: 0, ms: null, ms0: null, got: {}, waiting: -1, last: null, deadline: 0, skew: 0, result: null, rated: null, started: false,
     timer: null, retry: 0, closedByUs: false, pool: null, banner: '', oppLocked: -1, ui: 'none', cardTimer: null, q: null,
-    draft: null, draftTeams: null, draftDl: 0, draftDur: 1, bidAt: 0, revealAt: 0, draftTimer: null };     // (Versus Draft: the auction's view and clock, the drafted sides)
+    draft: null, draftTeams: null, draftDl: 0, draftDur: 1, bidAt: 0, revealAt: 0, draftTimer: null, still: 0 };     // (Versus Draft: the auction's view and clock, the drafted sides, the "still here?" deadline)
   const vsNow = () => Date.now() + vs.skew;                       // the room's clock
   const vsLink = (room) => `${location.origin}${location.pathname}#vs-${room}`;
   const vsMyTeam = () => { const t = load(VS_TEAM_KEY, ''); return TEAMS[t] ? t : ''; };
@@ -13287,6 +13287,7 @@
     } else if (m.t === 'draft') {                    // Versus Draft: a card up (the last one settled), or the drafted sides
       vs.draft = m.d || vs.draft;
       if (m.d && m.d.budget) vsDraftClock(m.d.left);
+      if (m.d && m.d.ask && vs.seat >= 0 && !m.d.ask[vs.seat]) vs.still = 0;
       if (m.teams) vs.teams = m.teams;
       if (m.draftTeams) {
         vs.draftTeams = m.draftTeams;
@@ -13306,6 +13307,9 @@
         vs.draft.pass[m.seat] = true;
         if (!vs.started) renderVsDraft();
       }
+    } else if (m.t === 'stillhere') {                // three cards without a bid: answer, or the draft is over for you
+      vs.still = Date.now() + Math.max(1000, (m.by || 0) - (m.now || Date.now()));
+      if (!vs.started) renderVsDraft();
     } else if (m.t === 'start') {
       Object.assign(vs, { phase: 'live', ms: m.ms, ms0: m.ms, n: 0, deadline: m.deadline, dl: m.dl || null });
       vsMaybeStart();
@@ -13401,7 +13405,11 @@
     const box = $('arch');
     box.textContent = '';
     const r = vs.result || {}, them = (r.missing || []).includes(1 - vs.seat) || (r.by === 'forfeit' && r.winner === vs.seat);
-    if (r.by === 'forfeit') {       // ranked: one side never came, a loss for it
+    if (r.by === 'forfeit' && r.why === 'away') {      // the draft: a side stopped bidding and did not answer "still here?"
+      box.append(el('h2', '', r.winner === vs.seat ? 'They left the draft' : 'The draft went on without you'),
+        el('p', 'lead', r.winner === vs.seat ? `${vs.names[1 - vs.seat] || 'Your opponent'} stopped bidding and didn’t answer. Draft games aren’t rated; find another one.`
+          : 'You let three cards go by without a bid and didn’t answer “still here?”. Nothing is held against you: draft games aren’t rated.'));
+    } else if (r.by === 'forfeit') {       // ranked: one side never came, a loss for it
       box.append(el('h2', '', r.winner === vs.seat ? 'You win: they didn’t show' : 'You forfeited'),
         el('p', 'lead', r.winner === vs.seat ? 'Your opponent never joined the match. It counts as a win.' : `You were matched but didn’t join in time. In a ${VS_SEASON.name} match that counts as a loss.`));
       const p = el('p', 'vsrating', '');
@@ -13410,8 +13418,8 @@
       box.append(p);
     } else box.append(el('h2', '', 'Match called off'), el('p', 'lead', them ? 'Your opponent didn’t show up. Nobody’s rating changed.' : 'The match didn’t start in time. Nobody’s rating changed.'));
     const row = el('div', 'row');
-    if (vs.mode === 'ranked' || vs.mode === 'casual') {
-      const again = el('button', 'btn', 'Find another match');
+    if (vs.mode === 'ranked' || vs.mode === 'casual' || vs.mode === 'draft') {
+      const again = el('button', 'btn', vs.mode === 'draft' ? 'Find another draft' : 'Find another match');
       again.type = 'button';
       again.addEventListener('click', () => { location.hash = '#vs'; try { sessionStorage.setItem('tmd:vsqueue', vs.mode); } catch (e) { /* none */ } });
       row.append(again);
@@ -13483,7 +13491,7 @@
     const d = vs.draft;
     if (!d || !d.card || Date.now() - vs.bidAt < 400) return;            // (one tap at a time: the room answers each)
     if (!vsSend({ t: 'bid', i: d.i, amount })) { toast('No connection. Reconnecting…'); return; }
-    vs.bidAt = Date.now();
+    vs.bidAt = Date.now(); vs.still = 0;
     track('vs_draft_bid', { i: d.i, amount });
     renderVsDraft();
   }
@@ -13501,6 +13509,16 @@
     }
     const nm = (s) => (s === me ? 'You' : vs.names[s] || 'Them'), toWhom = (s) => (s === me ? 'you' : vs.names[s] || 'them');
     wrap.append(el('h2', '', 'Draft'));
+    // "still here?": three cards in a row without a bid from you; a tap (or a bid, or a pass) keeps your seat, else the
+    // draft is over for you when the room's clock runs out
+    if (vs.still > Date.now() && !d.done) {
+      const ask = el('div', 'still'), yes = el('button', 'btn', 'I’m here');
+      yes.type = 'button';
+      yes.addEventListener('click', () => { if (vsSend({ t: 'here' })) { vs.still = 0; track('vs_draft_here'); renderVsDraft(); } });
+      ask.append(el('b', '', 'Still here?'), el('span', '', `You haven’t bid in a while. Tap within ${Math.max(1, Math.ceil((vs.still - Date.now()) / 1000))} seconds or the draft goes on without you.`), yes);
+      wrap.append(ask);
+      setTimeout(() => { if (vs.still > Date.now() && !vs.started && ask.isConnected) renderVsDraft(); }, 1000);
+    }
     // each coach and the money left, over a column of slots: a filled one is ???? until the reveal, then the name
     const slots = el('div', 'slots');
     [me, them].forEach((s) => {
@@ -13579,7 +13597,7 @@
       pass.type = 'button';
       pass.disabled = mine;
       pass.title = mine ? 'You hold the bid' : 'Out of this card';
-      pass.addEventListener('click', () => { if (vsSend({ t: 'pass', i: d.i })) { track('vs_draft_pass', { i: d.i }); vs.draft.pass = (vs.draft.pass || [false, false]).slice(); vs.draft.pass[me] = true; renderVsDraft(); } });
+      pass.addEventListener('click', () => { if (vsSend({ t: 'pass', i: d.i })) { track('vs_draft_pass', { i: d.i }); vs.still = 0; vs.draft.pass = (vs.draft.pass || [false, false]).slice(); vs.draft.pass[me] = true; renderVsDraft(); } });
       btns.append(pass);
       const least = d.bid ? cur + 1 : floor;
       const why = mine ? 'You hold the bid.' : max < least ? `You can’t go to $${least} here: $${max} is your most (a dollar for each slot still open).` : `Up to $${max} on this card.`;
@@ -13850,6 +13868,7 @@
     // straight back into the queue (a no-show's "find another match")
     let again = null;
     try { again = sessionStorage.getItem('tmd:vsqueue'); sessionStorage.removeItem('tmd:vsqueue'); } catch (e) { /* none */ }
+    if (again === 'draft') { vsQueue('draft'); return; }
     if ((again === 'ranked' || again === 'casual') && vsMyTeam()) { vsQueue(again === 'ranked' && !vsInSeason(season) ? 'casual' : again); return; }
     // the ladder, and you on it
     const lad = el('section', 'phub vsladder'), ladK = el('span', 'pk', `${season.name} ladder`);

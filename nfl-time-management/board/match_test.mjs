@@ -3,7 +3,7 @@
 // (vs_stress.mjs plays thousands of whole matches with the real engine.)
 import assert from 'node:assert';
 import { World, FakeClient } from './vs_world.mjs';
-import { OPEN_MS, RAISE_MS, CLOSE_MS, ROOM_RE, PLAY_MS, WATCH_MS, DECIDE_MS, OFF_MS, DEF_MS, decideMs, FIRST_MS, FORFEIT_MS, AFK_LIMIT, NOSHOW_MS, ELO, MM, CPU_AFTER_S, CPU_SEAT, CPU_TURN_MS } from './match.js';
+import { OPEN_MS, RAISE_MS, CLOSE_MS, DRAFT_IDLE_CARDS, STILL_MS, ROOM_RE, PLAY_MS, WATCH_MS, DECIDE_MS, OFF_MS, DEF_MS, decideMs, FIRST_MS, FORFEIT_MS, AFK_LIMIT, NOSHOW_MS, ELO, MM, CPU_AFTER_S, CPU_SEAT, CPU_TURN_MS } from './match.js';
 
 // the play clock by role: the defense 15 seconds, the offense 20 (from the defense's call in), a pick or a try 30 (the owner, Oct 23)
 {
@@ -641,7 +641,7 @@ async function runAnswering(w, a, ms) {
       }
     }
     let R2 = await state(w, m.room);
-    for (let k = 0; k < 80 && R2.phase === 'draft' && R2.draft.i === v.i; k++) { await w.advance(500); R2 = await state(w, m.room); }
+    for (let k = 0; k < 80 && R2.phase === 'draft' && R2.draft.i === v.i; k++) { if ((R2.draft.ask || [])[0]) { C.send({ t: 'here' }); await w.settle(); } await w.advance(500); R2 = await state(w, m.room); }
     const last = R2.draft.last;
     assert.ok(last && last.i === v.i, `the clock settled the card (${last && last.i} vs ${v.i})`);
     if (last.seat === 0) { spent += last.amount; got += 1; }
@@ -732,7 +732,7 @@ async function runAnswering(w, a, ms) {
   await w.settle();
   assert.strictEqual((await state(w, ma.room)).draft.bid, null, 'a stale bid is dropped');
   const kindUp = v.card.k, needBefore = v.need[0][kindUp];
-  if (!v.floor[0] || v.floor[0] > v.max[0]) { w.close(); } else {
+  if (!v.floor[0] || v.floor[0] > v.max[0]) { /* (an unaffordable card: skip the floor check) */ } else {
     A.send({ t: 'bid', i: v.i, amount: v.floor[0] });
     await w.settle();
     assert.deepStrictEqual((await state(w, ma.room)).draft.bid, { seat: 0, amount: v.floor[0] }, 'the floor opens the card');
@@ -742,7 +742,40 @@ async function runAnswering(w, a, ms) {
     // the card up next is always one somebody still needs (a kind both sides have is skipped: draftAdvance)
     const up = Rd.draft.pool[Rd.draft.i];
     assert.ok(!up || Rd.draft.need[0][up.k] > 0 || Rd.draft.need[1][up.k] > 0, 'a kind both sides have is skipped');
-    w.close();
   }
+  // "still here?": a side that lets DRAFT_IDLE_CARDS cards it could have bid on go by (passing, or the clock) is asked;
+  // a tap keeps its seat, no answer within STILL_MS and the draft is over, a forfeit by it (unrated)
+  {
+    const idle = async (who) => { for (let k = 0; k < 40; k++) { const Rk = await state(w, ma.room); if (Rk.phase !== 'draft' || (Rk.draft.idle || [])[who] >= DRAFT_IDLE_CARDS) return Rk; const o = Rk.draft.pool[Rk.draft.i]; if (!o) return Rk;
+      if (VSCore.draftMax(Rk.draft, who, o) > 0 && k % 2) { (who === 1 ? B : A).send({ t: 'pass', i: Rk.draft.i }); await w.settle(); } await w.advance(OPEN_MS + RAISE_MS + 200); } return state(w, ma.room); };
+    const R1 = await idle(1);
+    assert.ok(R1.phase === 'draft' && R1.draft.idle[1] >= DRAFT_IDLE_CARDS && R1.draft.ask[1] > 0, `Bob asked after ${DRAFT_IDLE_CARDS} cards without a bid`);
+    assert.ok(B.last('stillhere') && B.last('stillhere').by === R1.draft.ask[1] && !A.last('stillhere'), 'the question went to Bob alone');
+    B.send({ t: 'here' });
+    await w.settle();
+    const R2 = await state(w, ma.room);
+    assert.deepStrictEqual([R2.draft.ask[1], R2.draft.idle[1], R2.phase], [0, 0, 'draft'], 'a tap keeps the seat; the count starts over');
+    // a fresh pair: the one asked never answers
+    const c = new FakeClient(w, K(84)), e = new FakeClient(w, K(85));
+    await c.queue({ mode: 'draft', team: '', name: 'Cal' });
+    await e.queue({ mode: 'draft', team: '', name: 'Eve' });
+    const mc = c.last('match');
+    const Cc = new FakeClient(w, c.key), Ee = new FakeClient(w, e.key);
+    await Cc.open(mc.room, { mode: 'draft' }); await Ee.open(mc.room, { mode: 'draft' });
+    await w.advance(100);
+    let R3 = await state(w, mc.room);
+    for (let k = 0; k < 40 && R3.phase === 'draft' && !(R3.draft.ask || [])[1]; k++) {
+      const o = R3.draft.pool[R3.draft.i];
+      if (o && VSCore.draftMax(R3.draft, 0, o) > 0) { Cc.send({ t: 'bid', i: R3.draft.i, amount: VSCore.draftFloor(R3.draft, 0, o) }); await w.settle(); }
+      await w.advance(OPEN_MS + RAISE_MS + 200);
+      R3 = await state(w, mc.room);
+    }
+    assert.ok(R3.phase === 'draft' && R3.draft.ask[1] > 0 && Ee.last('stillhere'), 'Eve asked');
+    await w.advance(STILL_MS + 100);
+    const R4 = await state(w, mc.room);
+    assert.deepStrictEqual([R4.phase, R4.result.by, R4.result.why, R4.result.loser, R4.result.winner, R4.rated], ['over', 'forfeit', 'away', 1, 0, null], 'no answer: Eve is out, the draft is over, nothing rated');
+    assert.ok(Cc.last('over') && Cc.last('over').result.why === 'away' && Ee.last('over'), 'both phones told');
+  }
+  w.close();
 }
 console.log('match rooms ok');

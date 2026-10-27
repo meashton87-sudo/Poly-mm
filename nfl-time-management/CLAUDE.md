@@ -126,7 +126,11 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   card of a kind the side has filled can still be bid for (draftMax: a dollar kept for each slot still open); won, the
   new man takes the slot and the man it had there (its worst of the kind) goes to the other side, into its open slot,
   else in place of its worst of the kind when he is better, else nowhere; the computer steals only a man clearly
-  better than its own. match_test.mjs covers the rules; vs_draft_test.mjs plays it with the real engine.
+  better than its own. "Still here?" (match.js DRAFT_IDLE_CARDS, STILL_MS): a side that could have bid on that many
+  cards in a row and did not (a pass or the clock) is asked ({t:'stillhere'} to its phone alone); any message of its
+  own ({t:'here'}, a bid, a pass) clears it, no answer in time and the room finishes the draft as its forfeit
+  (why 'away', never rated; the page's called-off screen says so). match_test.mjs covers the rules; vs_draft_test.mjs
+  plays it with the real engine.
 - The defense (every mode): the defense calls personnel, front, coverage and rush (engine.js DC). The offense's play is a
   real NFL play run against that defense, as charted (sampleVsDefense: the pass rush, then the shell, then man or zone;
   a run's box, then the blitz), widening the situation before letting a filter go, never across the goal line, the

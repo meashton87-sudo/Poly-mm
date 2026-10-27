@@ -39,6 +39,7 @@ for (let i = 0; i < N; i++) {
     const S = room(), d = S.draft, card = d.pool[d.i];
     const v = A.last('draft') ? A.last('draft').d : A.last('hello').draft;
     assert.ok(v && 'name' in v.card && !('ovr' in v.card) && v.picks.every((ps) => ps.every((p) => 'name' in p && !('ovr' in p))), 'the men named, the ratings never, while it is on');
+    if ((d.ask || [])[0]) { A.send({ t: 'here' }); await w.settle(); out.asked = (out.asked || 0) + 1; }      // ("still here?": the bot answers)
     const mx = VSCore.draftMax(d, 0, card), goal = Math.floor(mx * (0.2 + 0.8 * R()));
     const b = d.bid, want = b ? b.amount + 1 : VSCore.draftFloor(d, 0, card);
     if (mx && R() < 0.67 && !(b && b.seat === 0) && want <= goal) { A.send({ t: 'bid', i: d.i, amount: want }); await w.settle(); }
@@ -98,5 +99,5 @@ for (let i = 0; i < N; i++) {
 }
 const lad = (await w.http('ladder', '/vs/ladder')).body;
 assert.strictEqual(lad.players, 0, 'nobody on the ladder from a draft');
-console.log(`vs draft ok: ${N} drafts and matches, the player won ${out.won}, spent ${JSON.stringify(out.spent)} of 50, ${out.cards} cards up, ${out.passed} passed, ${out.fillers} filled from the dregs, ${out.passes || 0} passes, ${out.steals || 0} steals, ${out.snaps} snaps called, ${Math.round(OPEN_MS / 1000)}/${Math.round(RAISE_MS / 1000)} s clocks`);
+console.log(`vs draft ok: ${N} drafts and matches, the player won ${out.won}, spent ${JSON.stringify(out.spent)} of 50, ${out.cards} cards up, ${out.passed} passed, ${out.fillers} filled from the dregs, ${out.passes || 0} passes, ${out.steals || 0} steals, asked still here ${out.asked || 0} times, ${out.snaps} snaps called, ${Math.round(OPEN_MS / 1000)}/${Math.round(RAISE_MS / 1000)} s clocks`);
 w.close();

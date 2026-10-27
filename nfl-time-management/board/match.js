@@ -31,9 +31,11 @@
 // The draft (mode 'draft', or ?draft=1 on a friend's or the computer's room; VSCore.DRAFT): hello.draft is null, {pending:true}
 // (the other side not in yet) or the view (draftView: i, n, card {k, team, pos, name, sticker}, budget, need, picks, bid {seat, amount},
 // max, floor (the least each side may open at), pass, steal (each side's one Steal still unused), canSteal (on this card), left, last, done); {t:'draft', d} a new card up, the last one with teams and draftTeams; {t:'bid', i, seat, amount,
-// left} a bid in; {t:'pass', i, seat} a pass. Client -> room: {t:'bid', i, amount} (the floor or more to open, over the bid in
-// after, within max[seat]; on a kind the side has filled, its Steal), {t:'pass', i} (out of this card: settled at once when
-// the other side holds the bid, has passed too or cannot bid).
+// left} a bid in; {t:'pass', i, seat} a pass; {t:'stillhere', by} to a side DRAFT_IDLE_CARDS cards without a bid (answered by
+// any message of its own within STILL_MS, else it forfeits: {t:'over', result {by:'forfeit', why:'away'}}). Client -> room:
+// {t:'bid', i, amount} (the floor or more to open, over the bid in after, within max[seat]; on a kind the side has filled, its
+// Steal), {t:'pass', i} (out of this card: settled at once when the other side holds the bid, has passed too or cannot bid),
+// {t:'here'} (still here).
 // Lobby -> client: {t:'queued', mode, size, wait, rating, cpu}  {t:'match', room, mode}
 // Client -> lobby: {t:'cpu'}  play the computer now (offered once a ticket has waited CPU_AFTER_S)
 //
@@ -89,6 +91,8 @@ export const PLAY_MS = WATCH_MS + DEF_MS + OFF_MS + 5000;    // a decision's las
 export const FIRST_MS = 75_000;            // the first decision (the coin toss): the intro too, then the clock
 export const FORFEIT_MS = 60_000;          // a phone gone this long in a live match: that side forfeits
 export const AFK_LIMIT = 2;                // decisions in a row left to the play clock: that side forfeits
+export const DRAFT_IDLE_CARDS = 3;         // the draft: cards in a row a side could have bid on and did not (passed, or let the clock run): "still here?"
+export const STILL_MS = 20_000;            // ... answered (a tap, a bid, a pass) within this, or that side is out and the draft is over (the owner, Oct 27)
 export const NOSHOW_MS = 60_000;           // a matched room nobody filled (or no team picked) in this long: called off
 const ROOM_TTL_MS = 6 * 3600_000;          // a room is cleared this long after it was made
 const MAX_MSG = 4096, MAX_N = 2000, CATCHUP = 40;
@@ -158,7 +162,7 @@ function draftView(R, now = Date.now()) {
   const mask = (p) => (done ? p : { k: p.k, team: p.team, pos: p.pos, name: p.name, paid: p.paid });
   return { i: d.i, n: d.pool.length, card: VSCore.draftMask(card), budget: d.budget, need: d.need, picks: d.picks.map((ps) => ps.map(mask)), bid: d.bid,
     max: [0, 1].map((s) => VSCore.draftMax(d, s, card)), floor: [0, 1].map((s) => VSCore.draftFloor(d, s, card)), pass: d.pass || [false, false], steal: d.steal || [true, true],
-    canSteal: [0, 1].map((s) => VSCore.draftCanSteal(d, s, card)), left: Math.max(0, d.deadline - now), last: d.last ? { ...d.last, card: VSCore.draftMask(d.last.card) } : null, done };
+    canSteal: [0, 1].map((s) => VSCore.draftCanSteal(d, s, card)), ask: d.ask || [0, 0], left: Math.max(0, d.deadline - now), last: d.last ? { ...d.last, card: VSCore.draftMask(d.last.card) } : null, done };
 }
 const clean = (n) => String(n ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
 const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
@@ -321,7 +325,7 @@ export class Match {
       for (const s of [0, 1]) if (R.off[s]) t.push(R.off[s] + (R.cpu != null ? CPU_DECIDE_MS : FORFEIT_MS));
     }
     if (R.phase === 'wait' && R.pre) t.push(R.mode === 'cup' ? R.showBy : R.created + NOSHOW_MS);
-    if (R.phase === 'draft' && R.draft) { t.push(R.draft.pool ? R.draft.deadline : R.draft.retryAt || Date.now() + 50); if (R.draft.cpuAt) t.push(R.draft.cpuAt); }
+    if (R.phase === 'draft' && R.draft) { t.push(R.draft.pool ? R.draft.deadline : R.draft.retryAt || Date.now() + 50); if (R.draft.cpuAt) t.push(R.draft.cpuAt); (R.draft.ask || []).forEach((a) => { if (a) t.push(a); }); }
     if (R.phase === 'over' && R.mode === 'ranked' && R.result && R.result.winner >= 0 && !R.rated) t.push(Date.now() + 5000);
     if (R.phase === 'over' && R.mode === 'cup' && !R.reported) t.push(Date.now() + 5000);
     await this.ctx.storage.setAlarm(Math.min(...t));
@@ -351,6 +355,7 @@ export class Match {
     const d = R.draft;
     d.deadline = now + OPEN_MS;
     d.bid = null;
+    d.bidders = {};
     d.cpuV = R.cpu != null ? VSCore.draftCpuValue(d, R.cpu, rndf) : 0;
     d.cpuAt = R.cpu != null ? now + CPU_BID_MS * (1 + rndf()) : 0;
   }
@@ -359,6 +364,7 @@ export class Match {
   draftBid(R, seat, amount, now) {
     const d = R.draft;
     d.bid = { seat, amount };
+    (d.bidders = d.bidders || {})[seat] = true;
     d.deadline = now + (VSCore.draftCanTop(d, 1 - seat) ? RAISE_MS : CLOSE_MS);
     d.cpuAt = R.cpu != null && seat !== R.cpu && VSCore.draftCanTop(d, R.cpu) ? now + CPU_BID_MS * (1 + rndf()) : 0;
     this.broadcast({ t: 'bid', i: d.i, seat, amount, left: d.deadline - now });
@@ -369,8 +375,28 @@ export class Match {
     const amount = VSCore.draftCpuBid(d, R.cpu, d.cpuV, rndf);
     if (amount != null) this.draftBid(R, R.cpu, amount, now);
   }
-  async draftSettle(R, now) {
+  // a side here: its idle count and any "still here?" cleared (a bid, a pass, a tap)
+  draftHere(R, seat) {
     const d = R.draft;
+    if (!d || !d.pool) return;
+    d.idle = d.idle || [0, 0]; d.ask = d.ask || [0, 0];
+    d.idle[seat] = 0; d.ask[seat] = 0;
+  }
+  async draftSettle(R, now) {
+    const d = R.draft, card = d.pool[d.i];
+    // a side that could have bid on the card and did not (passed, or let the clock run), DRAFT_IDLE_CARDS cards in a
+    // row: "still here?" to its phone, STILL_MS to answer (the alarm: a forfeit)
+    d.idle = d.idle || [0, 0]; d.ask = d.ask || [0, 0];
+    for (const s of [0, 1]) {
+      if (s === R.cpu || !card) continue;
+      if ((d.bidders || {})[s]) d.idle[s] = 0;
+      else if (VSCore.draftMax(d, s, card) > 0) d.idle[s] += 1;
+      if (d.idle[s] >= DRAFT_IDLE_CARDS && !d.ask[s]) {
+        d.ask[s] = now + STILL_MS;
+        const msg = JSON.stringify({ t: 'stillhere', by: d.ask[s], now });
+        for (const ws of this.ctx.getWebSockets(`s${s}`)) { try { ws.send(msg); } catch (e) { /* closing */ } }
+      }
+    }
     VSCore.draftResolve(d);
     if (!VSCore.draftDone(d)) {
       this.draftPost(R, now);
@@ -416,9 +442,16 @@ export class Match {
     const R = await this.room();
     if (!R) return;
     const now = Date.now();
+    if (m.t === 'here') {
+      if (R.phase !== 'draft' || !R.draft || !R.draft.pool) return;
+      this.draftHere(R, seat);
+      await this.save(R);
+      return this.schedule(R);
+    }
     if (m.t === 'bid') {
       const d = R.draft, amount = Number(m.amount);
       if (R.phase !== 'draft' || !d || !d.pool || m.i !== d.i || now >= d.deadline || !VSCore.draftCanBid(d, seat, amount)) return;
+      this.draftHere(R, seat);
       this.draftBid(R, seat, amount, now);
       await this.save(R);
       return this.schedule(R);
@@ -426,6 +459,7 @@ export class Match {
     if (m.t === 'pass') {
       const d = R.draft;
       if (R.phase !== 'draft' || !d || !d.pool || m.i !== d.i || now >= d.deadline || d.pass[seat]) return;
+      this.draftHere(R, seat);
       const settles = VSCore.draftPass(d, seat);
       if (settles === null) return;
       this.broadcast({ t: 'pass', i: d.i, seat });
@@ -631,6 +665,9 @@ export class Match {
     }
     if (R.phase === 'draft' && R.draft) {
       if (!R.draft.pool) { await this.draftStart(R, now); await this.save(R); return this.schedule(R); }
+      // "still here?" unanswered: that side is out, the draft is over (unrated; the other side goes back to the lobby)
+      const gone = (R.draft.ask || []).findIndex((a) => a && now >= a - 50);
+      if (gone >= 0) return this.finish(R, { winner: 1 - gone, by: 'forfeit', loser: gone, why: 'away' });
       if (R.cpu != null && R.draft.cpuAt && now >= R.draft.cpuAt - 50) this.draftCpu(R, now);
       if (now >= R.draft.deadline - 50) return this.draftSettle(R, now);
       await this.save(R);
