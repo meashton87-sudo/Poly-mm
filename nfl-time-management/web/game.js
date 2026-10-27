@@ -13724,16 +13724,19 @@
       box.append(...proNodes(), authNodes());
       return;
     }
-    // (the owner, Oct 25: clean and simple. The champion on top, you, the season, one Play, the ladder)
-    box.append(el('h2', '', 'Versus'));
+    // (the owner, Oct 27: every mode on the first screen, the rating in the corner. The title row with the rating
+    // chip, your team on one line, the four modes as compact tiles; the champion, the season, the settings and the
+    // ladder below)
+    const top = el('div', 'vstop'), rk = el('div', 'vsrate'), rB = el('b', '', '1000'), rS = el('span', 'ps', 'No games yet');
+    rk.append(el('span', 'pk', 'Rating'), rB, rS);
+    rk.setAttribute('aria-label', 'Your rating');
+    top.append(el('h2', '', 'Versus'), rk);
+    box.append(top);
     const champ = el('div', 'vschamp');
-    box.append(champ);
     const fan = load(FAN_KEY, null);
     if (!vsMyTeam() && fan && TEAMS[fan] && !COLLEGE.has(fan)) save(VS_TEAM_KEY, fan);
     let open = !vsMyTeam();
-    const hub = el('section', 'phub vshub'), rk = el('div', 'prank vsrank'), pick = el('div', 'vspick');
-    const rB = el('b', '', '1000'), rS = el('span', 'ps', 'No games yet');
-    rk.append(el('span', 'pk', 'Your rating'), rB, rS);
+    const hub = el('section', 'phub vshub'), pick = el('div', 'vspick');
     const drawPick = () => {
       pick.textContent = '';
       const t = vsMyTeam();
@@ -13749,7 +13752,7 @@
       }
       pick.append(el('span', 'pk', t ? `Your team: ${teamName(t)}` : 'Pick your team'), vsTeamPicker(() => { open = false; drawPick(); }));
     };
-    hub.append(rk, pick);
+    hub.append(pick);
     box.append(hub);
     // the season: when, and how the Championship is made
     let season = { ...VS_SEASON };
@@ -13761,8 +13764,6 @@
       if (now < s1) sbox.append(el('p', 'note', `The top 16 (${VS_CUP_MIN} games or more) play the ${VS_SEASON.cup}, ${vsWhen(VS_SEASON.cupAt)}.`));
     };
     drawSeason();
-    box.append(sbox);
-    if (BOARD.api) box.append(vsCupBox(champ));
     const go = (mode) => {
       if (mode !== 'draft' && !vsMyTeam()) { toast('Pick your team first'); return; }
       if (mode === 'play') mode = vsInSeason(season) ? 'ranked' : 'casual';
@@ -13776,20 +13777,20 @@
       }
       vsQueue(mode);
     };
-    // one Play (in the season a rated match, else a quick one), the computer and a friend beside it
+    // the four modes, two by two, every one on the first screen: Play (in the season a rated match, else a quick one),
+    // the computer, a friend, the Draft (nobody brings a team; both bid for a lineup first, VSCore.DRAFT.budget each)
     const modes = el('div', 'ptiles vsmodes');
     const playSub = () => (vsInSeason(season) ? `${season.name} match` : 'Quick match');
-    // (the Draft: nobody brings a team; both bid for a lineup first, VSCore.DRAFT.budget dollars each)
-    [['play', 'play', 'Play', playSub(), { big: true }], ['cpu', 'cpu', 'Computer', '', {}], ['friend', 'friend', 'Play a friend', '', {}],
-      ['draft', 'draft', 'Draft', `Bid for your lineup, $${VSCore.DRAFT.budget} each`, { wide: true }]].forEach(([m, kind, title, sub, o]) => {
-      const b = proCard(kind, title, sub, () => go(m), o);
-      if (o.wide) b.classList.add('wide');
+    [['play', 'play', 'Play', playSub()], ['cpu', 'cpu', 'Computer', 'Practice, unrated'], ['friend', 'friend', 'Friend', 'A code to share'],
+      ['draft', 'draft', 'Draft', `Bid for a lineup, $${VSCore.DRAFT.budget} each`]].forEach(([m, kind, title, sub]) => {
+      const b = proCard(kind, title, sub, () => go(m), {});
       b.dataset.mode = m;
       b.disabled = !BOARD.api;
       modes.append(b);
     });
     drawPick();
-    box.append(modes);
+    box.append(modes, champ, sbox);
+    if (BOARD.api) box.append(vsCupBox(champ));
     // the smaller things, one card: the computer's level, your name on the ladder, a friend's code
     const more = el('section', 'phub vsmore');
     const lv = el('div', 'opts-row vslevel');
