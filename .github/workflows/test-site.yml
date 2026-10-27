@@ -1,8 +1,9 @@
 name: Test server
 
 # The test server: the game from any branch, on its own unlisted site (https://nfl2mindrill-test.pages.dev, robots told
-# to stay out) with its own board worker (board/wrangler.test.toml: two-minute-drill-test, its own Durable Objects, so
+# to stay out) with its own board worker (test-site/wrangler.toml: two-minute-drill-test, its own Durable Objects, so
 # nothing it does reaches the real board, ladder or players; no accounts, mail or payments). Pro and Versus on, no ads.
+# (The worker's config lives in nfl-time-management/test-site/, outside the paths the site workflow watches.)
 # Runs on demand from the branch picked in the Actions tab; each run replaces the last. The site workflow and the real
 # board are untouched.
 on:
@@ -71,10 +72,10 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        working-directory: nfl-time-management/board
+        working-directory: nfl-time-management/test-site
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "::error::no Cloudflare token"; exit 1; fi
-          npx --yes wrangler@4.144.0 deploy --config wrangler.test.toml | tee deploy.log
+          npx --yes wrangler@4.144.0 deploy --config wrangler.toml | tee deploy.log
           url=$(grep -o 'https://two-minute-drill-test[^ ]*workers.dev' deploy.log | head -1)
           if [ -z "$url" ]; then echo "::error::no workers.dev address in the deploy output"; exit 1; fi
           echo "url=$url" >> "$GITHUB_OUTPUT"
