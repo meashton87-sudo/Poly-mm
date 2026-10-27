@@ -437,7 +437,7 @@
     const L = (team && team.lineup) || {}, off = L.off || [], def = L.def || [];
     const card = (p, extra) => (p ? { k, team: code, name: p.name, pos: p.pos || k, num: p.num, ovr: ovrOf(p), stat: p.stat || '', ...extra } : null);
     if (k === 'QB') return card(off.find((p) => p.pos === 'QB'), { adj: (team.qb && team.qb.adjustment) || 0 });
-    if (k === 'RB') return card(best(off.filter((p) => p.pos === 'RB' || p.pos === 'FB')));
+    if (k === 'RB') return card(best(off.filter((p) => p.pos === 'RB')) || best(off.filter((p) => p.pos === 'FB')));      // (a fullback only when the drive's lineup has no back)
     if (k === 'WR') return card(best(off.filter((p) => p.pos === 'WR')));
     if (k === 'TE') return card(best(off.filter((p) => p.pos === 'TE')));
     if (k === 'OL') {
