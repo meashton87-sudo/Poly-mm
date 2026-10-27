@@ -1808,6 +1808,8 @@ async def qb_swap(browser, base: str, shots: str = "") -> list[str]:
 
 # your grouping as the page has it, the men swapped in, and the calls snapped so far (WORKER_SPY)
 PERS_NOW = """() => { const { G } = window.__draw.get(); return { pers: G.pers || null, who: G.persWho || null, acts: window.__stepActs || [] }; }"""
+# your ball (the page's own G: the Who plays sheet opens only on your snaps, game.js openPers)
+MY_BALL = """() => { const { G } = window.__draw.get(); return !!G && !!G.root && G.root.pos === G.me; }"""
 
 
 # the formation as the page has it, and your quarterback's and your back's dots on the field (page x, y: down the screen)
@@ -1977,12 +1979,22 @@ async def pers_group(browser, base: str) -> list[str]:
                 await page.click("#field", timeout=2000)
             elif await page.locator("#dock .result .btn:visible").count():
                 await page.locator("#dock .result .btn").first.click(timeout=2000)
-            elif await page.locator("#persBtn:visible").count() and await page.locator("#dock .key.big:visible", has_text="Pass").count():
+            elif (await page.locator("#persBtn:visible").count() and await page.locator("#dock .key.big:visible", has_text="Pass").count()
+                  and await page.evaluate(MY_BALL)):
                 break
         else:
             return out + errs
-        await page.click("#persBtn", timeout=3000)
-        await page.wait_for_selector("#mBody .pgroup", timeout=5000)
+        # the sheet opens only once the page is done with the last snap (game.js openPers: not while busy); the first
+        # tap after the result can land before that, and the hidden modal still holds the last sheet: tap until it opens
+        for _ in range(40):
+            await page.click("#persBtn", timeout=3000)
+            try:
+                await page.wait_for_selector("#modal:not([hidden]) #mBody .pgroup", timeout=500)
+                break
+            except Exception:  # noqa: BLE001
+                continue
+        else:
+            raise RuntimeError("Who plays never opened for the second snap (the page stayed busy, or the sheet is not the one)")
         g = page.locator("#mBody .pgroup:not(.on)").first
         want = int((await g.locator("b").text_content()).strip())
         await g.click(timeout=3000)
