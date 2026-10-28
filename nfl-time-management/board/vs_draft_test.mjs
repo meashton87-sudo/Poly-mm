@@ -64,7 +64,9 @@ for (let i = 0; i < N; i++) {
     assert.strictEqual(t.lineup.off.length, 11, 'eleven on offense');
     assert.strictEqual(t.lineup.off.filter((p) => p.pos === 'QB').length, 1, 'one quarterback');
     assert.ok(t.lineup.def.length >= 11, 'a defense');
-    for (const f of Object.keys(RANGE)) assert.ok(t.base[f] >= RANGE[f][0] - 1e-9 && t.base[f] <= RANGE[f][1] + 1e-9, `${f} within the league (${t.base[f]})`);
+    // (a side with a replacement is rated under the league's worst on purpose: vs_core.js FILL_BELOW of the spread under its least)
+    const under = picks.some((p) => p.filler) ? 0.25 : 0;
+    for (const f of Object.keys(RANGE)) assert.ok(t.base[f] >= RANGE[f][0] - under * (RANGE[f][1] - RANGE[f][0]) - 1e-9 && t.base[f] <= RANGE[f][1] + 1e-9, `${f} within the league${under ? ', or the replacement\'s margin under it' : ''} (${t.base[f]})`);
     for (const p of picks.filter((x) => ['QB', 'RB', 'WR', 'TE'].includes(x.k))) assert.ok(t.lineup.off.some((y) => y.name === p.name), `${p.name} on the field`);
     assert.ok(t.kicker && t.kicker.name, 'a kicker');
     assert.strictEqual(t.team, code);
