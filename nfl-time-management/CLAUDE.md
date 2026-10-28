@@ -93,6 +93,7 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   /vs/cup/admin { match: '1-3', winner: 0|1 } (Authorization: Bearer <ADMIN_TOKEN>; with no body it returns the whole
   bracket, the champion's claim code included). The champion's phone shows that claim code. Another one: the worker
   vars CUP_ID, CUP_QUALIFY_AT, CUP_START_AT, CUP_PRIZE, CUP_SIZE, CUP_MIN_GAMES (or a new CUP). cup_test.mjs checks it.
+- Versus teams (pro.py versus_teams, history.py _season_units full strength): the season's starters by snap share, injured or not; the quarterback by history.py _qb_now (the last three games, the latest counting most; the season's leader kept when he missed them hurt: INA or RES on the weekly roster).
 - Versus (board/match.js): the room plays the football (web/vs_core.js holds the college-overtime rules, shared with the
   page); phones only send calls. Each snap's seed is drawn fresh by the room and never sent to a phone (a phone that
   knew it could see what a call does before making it). lazy_sim_test.mjs and vs_stress.mjs need board/assets/vs (the
@@ -110,7 +111,7 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   its own worker (wrangler.loadtest.toml: its own Durable Objects), never the real one, and deletes it after.
   Versus Draft (web/vs_core.js DRAFT, match.js draftStart/draftBid/draftSettle; mode 'draft' in the queue, or draft=1 on
   the computer's or a friend's room; never rated): an open auction before the toss. Both sides get DRAFT.budget ($50);
-  cards come up in a random order (draftPool: DRAFT.pool of each kind, shuffled together), each a man at a slot, shown
+  cards come up in a random order (draftPool: DRAFT.pool of each kind drawn leaning to the better men, drawLeaning: a man's chance 1 + DRAFT.lean times his place at the slot; shuffled together), each a man at a slot, shown
   by name with his team and the slot, his rating never (draftMask; the full picks with the last 'draft' message); the
   bidding is open (the first bid
   the card's floor or more, then a dollar or more over the bid in, never over draftMax: a dollar kept for each slot

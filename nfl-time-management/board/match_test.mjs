@@ -516,6 +516,13 @@ async function runAnswering(w, a, ms) {
     assert.deepStrictEqual(by, VSCore.DRAFT.pool, 'the pool: so many of each kind');
     assert.ok(cards.some((c, i) => i && c.k !== cards[i - 1].k && cards.slice(i + 1).some((x) => x.k === cards[i - 1].k)), 'in a random order: a kind comes back after another cut in');
     for (const k of Object.keys(by)) assert.strictEqual(new Set(cards.filter((c) => c.k === k).map((c) => c.team)).size, by[k], `${k}: each from a different team`);
+    {   // the draw leans to the better men: a man's chance 1 + DRAFT.lean times his place at the slot; over many draws the best is up far more often than the worst, and the worst still comes up (the stub's quarterbacks are all alike, so made-up cards)
+      const men = [...Array(8)].map((_, i) => ({ k: 'QB', team: `T${i}`, pct: i / 7 })), seen = {};
+      for (let i = 0; i < 1500; i++) for (const c of VSCore.drawLeaning(men, 3, VSCore.rng(1000 + i))) seen[c.team] = (seen[c.team] || 0) + 1;
+      assert.ok(seen.T7 > seen.T0 * 2 && seen.T0 > 100 && Object.keys(seen).length === 8, `the best up far more often than the worst, the worst still up: ${JSON.stringify(seen)}`);
+      assert.strictEqual(VSCore.drawLeaning(men, 3, VSCore.rng(5)).length, 3, 'three drawn');
+      assert.strictEqual(new Set(VSCore.drawLeaning(men, 8, VSCore.rng(6)).map((c) => c.team)).size, 8, 'drawn without replacement');
+    }
     assert.deepStrictEqual(VSCore.draftMask(cards[0]), { k: cards[0].k, team: cards[0].team, pos: cards[0].pos, name: cards[0].name, sticker: cards[0].sticker }, 'a card masked: the man, the team, the slot and the sticker, no rating');
     // the stickers: a dollar for the worst at the slot, DRAFT.sticker[k] for the best (the stub league: every quarterback 80, every line 70)
     const all = VSCore.draftCards(stubD.pool, 'QB');
@@ -598,7 +605,7 @@ async function runAnswering(w, a, ms) {
     assert.strictEqual(VSCore.draftCpuBid(d3, 1, v, rnd), cards[0].sticker, 'an open card: opened at the floor');
     d3.bid = { seat: 0, amount: v - 1 };
     const over = VSCore.draftCpuBid(d3, 1, v, rnd);
-    assert.ok(over === v || (over === null && v - 1 + 1 > v), 'a dollar over, up to its value');
+    assert.ok(over === v || over === null, 'a dollar over, up to its value (two over would pass it: it sits)');
     d3.bid = { seat: 0, amount: v };
     assert.strictEqual(VSCore.draftCpuBid(d3, 1, v, rnd), null, 'over its value: it sits');
   }

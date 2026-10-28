@@ -9454,7 +9454,7 @@
       box.append(driveCard(p, driveRec, drivePrev), driveActions(driveRec));
     } else if (CUSTOM) box.append(scenCard(p, scenRec, scenPrev), scenActions(scenRec));
     else {
-      box.append(el('div', 'note', RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · your run` : (dayTitle(dayN) && !SURV ? `Day ${dayN} · ${dayTitle(dayN)}` : `Day ${dayN} · your score`)), el('div', 'big-pct', `${Math.round(p * 100)}`),
+      box.append(el('div', 'note', RUN_N ? `${PRO_RUNS.runs[RUN_N - 1].title} · your run` : (SURV ? `Day ${dayN} · your score` : `Day ${dayN} · ${dayTitle(dayN) || (today[0] && matchLine(today[0])) || 'your score'}`)), el('div', 'big-pct', `${Math.round(p * 100)}`),
         el('div', 'pct-lab', `Better than ${Math.round(p * 100)}% of NFL play\u2011callers${resultScored() ? ', the calls and the result' : ''}`),
         ...(scoreWhy(p) ? [el('p', 'pct-why', scoreWhy(p))] : []),
         Object.assign(el('div', 'pct-lab brag'), { hidden: true }),
@@ -9487,6 +9487,9 @@
     }
     if (cc) box.append(cc.el);
     box.append(el('p', 'verdict', callsLine(decs)));
+    // the one call that cost the most, and the call that was there (the fan bots, Oct 27: "a 31 and no idea why")
+    const worst = decs.filter((x) => x.g === 2 && x.cost > 0 && x.best !== x.chosen && x.bestLabel && x.chosenLabel).sort((a, b) => b.cost - a.cost)[0];
+    if (worst) box.append(el('p', 'verdict costly', `What cost the most: ${worst.situation}. You called ${worst.chosenLabel}; ${worst.bestLabel} was the call there, ${(worst.cost * 100).toFixed(1)} points of win chance better.`));
     // a day finished before the fair score came in keeps the score it was given; on the day the old way ran high, it says so
     if (!DRIVE && !RUN_N && !PRACTICE && !ARCH_DAY && OLD_WAY_DAYS.includes(dayN) && decs.some((x) => x.g !== 2)) {
       box.append(el('p', 'note old-way', 'Scored before the fair-score fix. On this drive almost nothing anyone called changed the win chance, and the old way let the simulation’s noise count, so scores ran high; scored the fair way, it would come down mostly to the result.'));
@@ -10740,7 +10743,7 @@
   const TOUR = [
     // (past: below, it goes under Play, not over it; keep: what it never covers, the score and the clock it talks about)
     { id: 'spot', at: () => qs('#intro .chips'), side: 'below', past: () => qs('#intro .btn'), keep: '#intro .big, #intro .matchup', title: 'Your spot',
-      text: () => `A real game situation: the real score, clock, ball and timeouts. ${SURV ? 'Win it to stay alive.' : 'Tap Play to take over.'}` },
+      text: () => `A real game situation: the real score, clock, ball and timeouts. ${SURV ? 'Win it to stay alive.' : 'Tap Play to take over. Your grade is your calls against what real play-callers do here, not the final score.'}` },
     { id: 'bar', at: () => $('bar'), side: 'below', title: 'The scoreboard',
       text: () => 'Score, quarter and clock. The dashes under each team are its timeouts left. Tap it for the game details.' },
     { id: 'call', at: () => qs('#dock .keys.fam'), side: 'below', title: 'Your call',
@@ -13478,7 +13481,7 @@
   const VS_DRAFT_REVEAL_MS = 5000;             // the names, once drafted, before the kickoff
   const draftSlotName = (k) => (k === 'DST' ? 'D/ST' : k);
   // a card or a pick as it is called: the man by name, a line or a defense by its city
-  const draftShort = (p) => `${p.k === 'OL' ? `${teamShort(p.team)} line` : p.k === 'DST' ? `${teamShort(p.team)} D/ST` : p.name || `${teamShort(p.team)} ${p.k}`}${p.filler ? ' (replacement)' : ''}`;
+  const draftShort = (p) => `${p.k === 'OL' ? `${teamShort(p.team)} line` : p.k === 'DST' ? `${teamShort(p.team)} D/ST` : p.name || `${teamShort(p.team)} ${p.k}`}${p.filler ? ' (replacement: nobody bid)' : ''}`;
   const draftCardName = (c) => (c.k === 'OL' || c.k === 'DST' ? draftShort(c) : `${draftShort(c)} (${teamShort(c.team)} ${draftSlotName(c.k)})`);
   const vsDrafted = () => !!vs.draftTeams && !!G && !!DRAFT_SIDES[code(G.me)];
   const vsDraftLine = (c) => (((vs.draftTeams || {})[c] || {}).draft || []).slice().sort((x, y) => DRAFT_SLOTS.indexOf(x.k) - DRAFT_SLOTS.indexOf(y.k)).map(draftShort).join(', ');    // (slot by slot, however they were won)

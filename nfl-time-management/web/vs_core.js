@@ -425,7 +425,7 @@
   // fills a slot for nothing while the pool has anyone: a card's first bid is its floor.
   const DRAFT = { budget: 50, slots: { QB: 1, RB: 1, WR: 2, TE: 1, OL: 1, DST: 1 }, pool: { QB: 3, RB: 3, WR: 5, TE: 3, OL: 3, DST: 3 },
     order: ['QB', 'RB', 'WR', 'TE', 'OL', 'DST'], teams: ['DR1', 'DR2'], openMs: 15000, raiseMs: 7000, closeMs: 2500,
-    sticker: { QB: 8, OL: 5, DST: 5, WR: 4, RB: 4, TE: 3 } };
+    sticker: { QB: 8, OL: 5, DST: 5, WR: 4, RB: 4, TE: 3 }, lean: 2 };
   const OL_POS = ['LT', 'LG', 'C', 'RG', 'RT'];
   const TEAM_CODE = /^[A-Z]{2,3}$/;
   const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
@@ -463,14 +463,27 @@
       const below = sorted.filter((x) => x < c.ovr).length, same = sorted.filter((x) => x === c.ovr).length;
       const pct = n > 1 ? (below + (same - 1) / 2) / (n - 1) : 1;
       c.sticker = Math.max(1, Math.min(DRAFT.sticker[k], 1 + Math.round((DRAFT.sticker[k] - 1) * pct)));
+      c.pct = pct;
     }
     return cards;
+  }
+  // n of the cards drawn without replacement, each card's chance 1 + DRAFT.lean times his place at the slot (the owner,
+  // Oct 27: random, but the better men come up a little more often: the best three times as often as the worst)
+  function drawLeaning(cards, n, rnd) {
+    const left = cards.slice(), out = [];
+    while (left.length && out.length < n) {
+      const w = left.map((c) => 1 + DRAFT.lean * (c.pct || 0)), total = w.reduce((a, b) => a + b, 0);
+      let r = rnd() * total, i = 0;
+      while (i < left.length - 1 && (r -= w[i]) >= 0) i++;
+      out.push(left.splice(i, 1)[0]);
+    }
+    return out;
   }
   // the pool: DRAFT.pool cards of each kind, each kind's from different teams, all shuffled together (the owner: a
   // random slot each card, never quarterback, quarterback, back, back)
   function draftPool(pool, rnd) {
     const cards = [];
-    for (const k of DRAFT.order) cards.push(...shuffled(draftCards(pool, k), rnd).slice(0, DRAFT.pool[k]));
+    for (const k of DRAFT.order) cards.push(...drawLeaning(draftCards(pool, k), DRAFT.pool[k], rnd));
     return shuffled(cards, rnd);
   }
   // (pass: each side's pass on the card up; steal: each side's one Steal, unused: the owner, Oct 27)
@@ -643,7 +656,7 @@
 
   const VSCore = { SNAP, PAT, KICKOFF, DONE, COT_T, DC, PICKS, INTENTS, KICK_DEF, FAKES, intentsAt, VS_OT, TEAM_BOOST, boostPool, hash, rng, buildGame, possRoot, start, chooser, need, role,
     cleanAction, cleanDef, cleanHalf, apply, after, describe, called, noToss, stepper, unpack,
-    DRAFT, draftPool, draftCards, draftCard, draftMask, draftNew, draftOpen, draftNeeds, draftMax, draftFloor, draftCanBid, draftCanSteal, draftPass, draftCanTop, draftDone, draftAdvance, draftResolve, draftFill, draftCpuValue, draftCpuBid, draftTeam, draftPoolWith };
+    DRAFT, draftPool, drawLeaning, draftCards, draftCard, draftMask, draftNew, draftOpen, draftNeeds, draftMax, draftFloor, draftCanBid, draftCanSteal, draftPass, draftCanTop, draftDone, draftAdvance, draftResolve, draftFill, draftCpuValue, draftCpuBid, draftTeam, draftPoolWith };
   if (typeof module !== 'undefined' && module && module.exports) module.exports = VSCore;
   if (global) global.VSCore = VSCore;       // (always: a page with some other script's global `module` still gets it)
 })(typeof self !== 'undefined' ? self : this);
