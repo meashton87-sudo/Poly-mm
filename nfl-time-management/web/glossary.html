@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!--SITE-HEAD-->
+<title>Two-Minute Football Glossary</title>
+<meta name="description" content="The words of the last two minutes: clock rules, the calls, the defense, how the grade works, and the game&#x27;s own terms, in plain language.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800;900&family=Libre+Franklin:wght@400;600;700&display=swap">
+<style>
+/* Same tokens as the game and the stats page */
+:root {
+  --paper: #f3f5f2; --card: #ffffff; --ink: #121a15; --muted: #5a675e; --line: #d3dbd5; --turf: #2c7549;
+  --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "Libre Franklin", "Franklin Gothic Medium", "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; color-scheme: dark;
+} }
+:root[data-theme="dark"] { --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.55 var(--body); padding-top: env(safe-area-inset-top, 0px); }
+.wrap { max-width: 640px; margin: 0 auto; padding: 14px 16px 48px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 8px; }
+h1 { margin: 0; font: 900 30px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
+h1 small { display: block; font: 700 11px var(--body); letter-spacing: .16em; color: var(--muted); margin-top: 4px; }
+h2 { font: 800 20px/1.15 var(--display); text-transform: uppercase; letter-spacing: .02em; margin: 26px 0 6px; text-wrap: balance; }
+p, li { max-width: 65ch; }
+a { color: var(--turf); }
+a.play { font-weight: 700; color: var(--ink); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; background: var(--card); white-space: nowrap; }
+.note { color: var(--muted); font-size: 13px; }
+dl { margin: 0; } dt { font-weight: 700; margin-top: 12px; } dd { margin: 2px 0 0; max-width: 65ch; }
+h3 { font: 700 16px/1.3 var(--body); margin: 18px 0 4px; } .drive { margin: 0 0 18px; } .drive time, .drive .tag { color: var(--muted); font-size: 12.5px; }
+.callers table { border-collapse: collapse; width: 100%; font-size: 13.5px; } .callers th, .callers td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.callers th { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); } .callers h2 { margin-top: 30px; } .unc { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><a href="./#home" class="home">Two-Minute Drill</a><small>Glossary</small></h1>
+    <a class="play" href="./">Play today ›</a>
+  </header>
+<main>
+
+  <p>The words you hear in the last two minutes of a football game, and the ones this game uses to grade you. Terms
+    are grouped: the clock, the calls, the defense, the grade, and the game's own modes.</p>
+  <!--AD-MID-->
+  <h2>The clock</h2>
+  <dl>
+    <dt>Two-minute warning</dt><dd>In the NFL the clock stops automatically at 2:00 of each half, whatever just happened. It is a free timeout for both sides, and the whole reason the last two minutes play differently from the rest of the game. College football has no two-minute warning.</dd>
+    <dt>Clock stops</dt><dd>The game clock stops on an incomplete pass, a runner out of bounds, a penalty, a change of possession, a score, a timeout and the two-minute warning. After a runner goes out of bounds the clock restarts when the referee signals ready for play, except inside the last two minutes of the first half and the last five minutes of the second, when it stays stopped until the snap. That exception is why getting out of bounds matters so much late.</dd>
+    <dt>Play clock</dt><dd>The 40 seconds the offense has to snap the ball after the last play ends (25 after some stoppages). Letting it run down is how a leading team burns time; snapping it early is how a trailing one saves it.</dd>
+    <dt>Timeout</dt><dd>Each team gets three a half. A timeout stops the clock until the snap. The trailing team spends them to save seconds; the leading team saves them to answer a late score. A defense can call one too, which is how a defense stops the clock when the offense is kneeling.</dd>
+    <dt>Spike</dt><dd>The quarterback throws the ball into the ground right after the snap, on purpose, to stop the clock. It counts as an incomplete pass, so it costs a down. It is legal only straight from under center, immediately after the snap.</dd>
+    <dt>Kneel</dt><dd>The quarterback takes the snap and goes to a knee. The play takes a second or two and the offense can then let the whole play clock run, so each kneel burns about 40 seconds. Three kneels with the defense out of timeouts ends a game from about two minutes.</dd>
+    <dt>Hurry-up, no-huddle</dt><dd>Lining up and snapping without a huddle, to save the time a huddle costs. The engine's tempo setting is this: hurry when you need seconds, take your time when you want them to run off.</dd>
+    <dt>Run it out</dt><dd>What a leading offense does with the ball and the clock on its side: runs and kneels, nothing that can stop the clock, until the game ends.</dd>
+  </dl>
+  <h2>The calls</h2>
+  <dl>
+    <dt>Run, Pass, RPO, Trick</dt><dd>The four families you pick from on every snap, then the play inside the family. A run is a handoff; a pass is a dropback; an RPO (run-pass option) is a play where the quarterback reads one defender after the snap and either hands off or throws; a trick is a flea-flicker, a reverse, a halfback pass and the like.</dd>
+    <dt>Play action</dt><dd>A pass that starts with a fake handoff, to freeze the linebackers for a beat. It is slow to develop, so it needs time and protection, which the last minute rarely gives.</dd>
+    <dt>Screen</dt><dd>A short pass behind or at the line to a back or receiver with blockers in front of him. An answer to a heavy pass rush.</dd>
+    <dt>Draw</dt><dd>A run that looks like a pass at the snap. An answer to a defense that is rushing upfield.</dd>
+    <dt>Sneak</dt><dd>The quarterback takes the snap and goes straight ahead behind his center. The highest-percentage play for a yard, and almost nothing more.</dd>
+    <dt>Routes: hitch, curl, comeback, out, slant, go</dt><dd>The paths receivers run. A hitch is a short stop and turn; a curl is a deeper stop, turning inside; a comeback is deeper still, turning back toward the sideline; an out breaks to the sideline; a slant cuts inside at an angle; a go runs straight downfield. In this game you can draw a route and the game reads which one you drew.</dd>
+    <dt>Chip shot</dt><dd>A short field goal, roughly inside 35 yards, that a kicker is expected to make.</dd>
+    <dt>Field goal range</dt><dd>The spot from which a team trusts its kicker, about the 35-yard line for a 52-yard try in good conditions. It moves with the kicker, the wind and the stadium.</dd>
+    <dt>Go for it</dt><dd>Trying for the first down on fourth down instead of kicking. In this game the offense says first whether it is going, kicking or punting, and the defense calls knowing it.</dd>
+    <dt>Onside kick</dt><dd>A short kickoff the kicking team tries to recover. The last resort of a team that is behind with little time, and a long shot.</dd>
+    <dt>Hail Mary</dt><dd>A deep throw into a crowd at the end of a half, hoping for a catch or a tip. It works about as often as you would guess.</dd>
+  </dl>
+  <h2>The defense</h2>
+  <dl>
+    <dt>The box</dt><dd>The defenders lined up near the line of scrimmage, between the tackles and a few yards back. A loaded box (seven or eight men) stuffs the run and leaves the receivers in single coverage; a light box (six or fewer) does the opposite.</dd>
+    <dt>Blitz</dt><dd>Sending more rushers than the usual four. It gets to the quarterback faster and leaves fewer men in coverage, so it beats slow passes and loses to quick ones.</dd>
+    <dt>Man and zone</dt><dd>In man coverage each defender follows one receiver; in zone each guards an area. Man can be beaten by a receiver winning his matchup; zone by finding the seams between areas.</dd>
+    <dt>Shell: Cover 2, Cover 3, Cover 4</dt><dd>How the deep part of the field is divided: two safeties deep, one deep with corners taking the outside thirds, or four deep. More men deep means fewer shots over the top and more room underneath, which is the trade a defense makes when it is protecting a lead late.</dd>
+    <dt>Pressure</dt><dd>A rusher reaching the quarterback before the throw. It turns a good call into a sack, a throwaway or a hurried ball.</dd>
+    <dt>Prevent</dt><dd>The deep, soft coverage a defense plays when it only has to stop a long play. It gives up the short stuff on purpose, which is why trailing teams move the ball so easily late and then run out of time.</dd>
+  </dl>
+  <h2>The grade</h2>
+  <dl>
+    <dt>Win chance</dt><dd>The chance a team wins from a given situation, as a percentage. Every call in this game is graded by how much win chance it keeps or gives away compared with the best call in the same spot, found by simulating the rest of the game many times for every option.</dd>
+    <dt>The best call</dt><dd>The option with the highest win chance in that spot, among the calls real play-callers would consider there. Your grade is the distance from it, snap by snap, not the final score.</dd>
+    <dt>Nothing at stake</dt><dd>A snap where no call changes the win chance much: a game already decided, a deep hole. Those snaps count for nothing, for or against you, and the end card says so.</dd>
+    <dt>Better than X% of play-callers</dt><dd>Your score. Thousands of typical NFL play-callers are simulated making the same drive's decisions with the real league's mix of calls, and your calls are placed among them. A 60 means you out-called six in ten of them.</dd>
+    <dt>Coached like</dt><dd>The real play-caller whose tendencies your calls most resembled on this drive: how often you ran, how fast you went, how much you gambled. It is a likeness, not a grade.</dd>
+    <dt>Costliest call</dt><dd>The one snap on the drive where your call gave up the most win chance, and the call that was there instead. It is on every end card.</dd>
+  </dl>
+  <h2>The game's modes</h2>
+  <dl>
+    <dt>The daily</dt><dd>One real late-game spot a day, the same for everyone, new at your local midnight. Finish it and you are on the day's list; play again and it is practice.</dd>
+    <dt>Streak and freeze</dt><dd>Days in a row with the daily finished. Every seven days in a row earns a freeze (two held at most), and a freeze covers a day you miss once you play the next one.</dd>
+    <dt>Survivor</dt><dd>Real fourth quarters back to back. Win to keep going; one loss ends the run. A tie goes to overtime where both teams get the ball, then the next score wins.</dd>
+    <dt>Versus</dt><dd>Live against another coach: you both call plays on your own phones, the room plays the football. Ranked games count on the season's ladder; the top of the ladder plays the Championship bracket as the season ends.</dd>
+    <dt>The Draft</dt><dd>A Versus match that starts with an auction. Both sides get $50 and bid, card by card, on a quarterback, a back, two receivers, a tight end, an offensive line and a defense, each card a real player at that slot. Then the two drafted sides play.</dd>
+    <dt>Floor, Pass, Steal, replacement</dt><dd>Draft terms. The floor is the least a card can open at: the player's sticker, or half what the other side paid for that position if that is more. Pass takes you out of a card. The Steal, once a draft, lets you bid on a position you already filled; win it and the player you had there goes to the other side. A slot you never filled gets a replacement, rated below the league's worst starter.</dd>
+    <dt>Still here?</dt><dd>What the Draft asks a side that has let three cards in a row go by without a bid. Tap, bid or pass to keep your seat; no answer in time and the draft ends as your forfeit.</dd>
+    <dt>Pro</dt><dd>The one-time purchase: the historic drives and playoff runs, the scenario builder, the archive of past dailies, an ad-free game.</dd>
+  </dl>
+
+</main>
+<!--SITE-FOOT-->
+</div>
+</body>
+</html>
