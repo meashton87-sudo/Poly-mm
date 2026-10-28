@@ -334,7 +334,8 @@
   const VS_FREE_AT = Date.parse((document.querySelector('meta[name="vs-free-at"]') || {}).content || '') || 0;
   const VS_ON = !!document.querySelector('meta[name="vs"]') && Date.now() >= VS_AT;
   const VS_PRO = VS_ON && !!document.querySelector('meta[name="vs-pro"]') && !(VS_FREE_AT && Date.now() >= VS_FREE_AT);
-  const HOOPS_PRO = !!document.querySelector('meta[name="hoops-pro"]');      // Hoops (hoops.html) as part of Pro: the tile pitches it (site.py --hoops-pro)
+  const HOOPS_ON = !!document.querySelector('meta[name="hoops-on"]');        // Hoops (hoops.html) on this build (site.py --hoops: Home's tile)
+  const HOOPS_PRO = HOOPS_ON && !!document.querySelector('meta[name="hoops-pro"]');      // ... as part of Pro: the tile pitches it (--hoops-pro)
   const VS_LOBBY = VS_ON && location.hash === '#vs';
   const FEEDBACK = location.hash === '#feedback';          // report a bug or an idea (the footer's link; renderFeedback)
   const VS_ROOM = VS_ON ? ((location.hash.match(/^#vs-([A-HJ-KM-NP-Z2-9]{6})$/) || [])[1] || '') : '';
@@ -12220,7 +12221,7 @@
     modes.append(homeSurv());
     if (PRO_ON) modes.append(homePro(n));
     if (VS_ON) modes.append(homeVs());
-    modes.append(homeHoops());
+    if (HOOPS_ON) modes.append(homeHoops());
     const had = adBox('home');                         // (between the day's card and the modes, labeled, never a card)
     box.append(h, day.el, ...(had ? [had] : []), modes, homeTools());
     const ls = myLeagues();
