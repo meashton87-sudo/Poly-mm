@@ -350,7 +350,20 @@
     }
     renderIntro(practice);
   }
+  // Hoops as part of Pro (<meta name="hoops-pro">, site.py --hoops-pro): the device's Pro code, as the game keeps it, opens it
+  const HOOPS_PRO = !!document.querySelector('meta[name="hoops-pro"]');
+  const hasPro = () => !!String((load('tmd:v3:pro', null) || {}).code || '');
+  function renderPitch() {
+    const box = $('card'); box.textContent = '';
+    box.append(el('div', 'eyebrow', 'Hoops · part of Pro'), el('h2', '', 'The last two minutes of a real basketball game, every day'),
+      el('p', 'lead', 'One real game a day: the real score, clock, timeouts and bonus, and you coach one bench, possession by possession. Every call graded on win chance, the real ending beside yours.'),
+      el('p', '', 'Hoops comes with Two-Minute Drill Pro, a one-time purchase with the historic drives, the playoff runs, the scenario builder and no ads.'));
+    const a = el('a', 'btn big', 'Get Pro'); a.href = './#archive'; box.append(a);
+    box.append(el('p', 'note', 'Already have Pro? Open the football game on this phone once so it knows, then come back.'));
+    $('board').hidden = true;
+  }
   async function boot() {
+    if (HOOPS_PRO && !hasPro()) return renderPitch();
     const src = document.querySelector('meta[name="hoops-data"]');
     try {
       const r = await fetch((src && src.content) || 'hoops/hoops_data.json');

@@ -334,6 +334,7 @@
   const VS_FREE_AT = Date.parse((document.querySelector('meta[name="vs-free-at"]') || {}).content || '') || 0;
   const VS_ON = !!document.querySelector('meta[name="vs"]') && Date.now() >= VS_AT;
   const VS_PRO = VS_ON && !!document.querySelector('meta[name="vs-pro"]') && !(VS_FREE_AT && Date.now() >= VS_FREE_AT);
+  const HOOPS_PRO = !!document.querySelector('meta[name="hoops-pro"]');      // Hoops (hoops.html) as part of Pro: the tile pitches it (site.py --hoops-pro)
   const VS_LOBBY = VS_ON && location.hash === '#vs';
   const FEEDBACK = location.hash === '#feedback';          // report a bug or an idea (the footer's link; renderFeedback)
   const VS_ROOM = VS_ON ? ((location.hash.match(/^#vs-([A-HJ-KM-NP-Z2-9]{6})$/) || [])[1] || '') : '';
@@ -12316,10 +12317,11 @@
   // Hoops: the basketball daily (hoops.html, its own page and script)
   function homeHoops() {
     const a = el('a', 'hcard hhoops');
-    a.href = 'hoops';
-    a.dataset.to = 'hoops';
-    a.append(el('div', 'hk', 'Hoops'), el('div', 'hpitch', 'New: the last two minutes'),
-      el('p', '', 'A real basketball game a day: the last two minutes, one bench yours, every call graded.'), el('span', 'cta', 'Play'));
+    const locked = HOOPS_PRO && !isPro();
+    a.href = locked ? '#archive' : 'hoops';
+    a.dataset.to = locked ? 'hoops_pitch' : 'hoops';
+    a.append(el('div', 'hk', locked ? 'Hoops, with Pro' : 'Hoops'), el('div', 'hpitch', 'New: the last two minutes'),
+      el('p', '', 'A real basketball game a day: the last two minutes, one bench yours, every call graded.'), el('span', 'cta', locked ? 'Take a look' : 'Play'));
     a.addEventListener('click', () => track('hoops_home', { day: dayN }));
     return a;
   }
