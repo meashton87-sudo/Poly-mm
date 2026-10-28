@@ -278,6 +278,19 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   replaces it). The weeks kept before that were made fair once (fairWeeks: wn nulls, wk:<D>..<D+6> rebuilt from wn,
   marked fairweek:<D>); the end card's This week says so to its player (the week's old).
 
+- Hoops (web/hoops.html, web/hoops.js; the data web/hoops/hoops_data.json from src/hoops/build.py: two seasons of public
+  basketball play-by-play, shufinskiy/nba_data on GitHub, cached under data/raw/hoops; generated, never committed; site.yml
+  builds it, never blocking the deploy). The basketball daily: one real game's last two minutes a day (the data's
+  schedule by local date, hoops.js dayISO, a hash of the date when the schedule runs out), the player one bench. hoops.js
+  holds the rules it keeps (the bonus: five team fouls a period or the second in the last two minutes; overtime 5:00 with
+  two timeouts each; at most two timeouts in the last two minutes; a timeout advances the ball; 14 on the shot clock after
+  an offensive rebound), the approaches (APPROACH: the offense's calls; DEFENSE: the defense's), the typical benches
+  (typicalOffense/typicalDefense: the opponent, the simulations and the mix the score is measured against) and the grade
+  (evaluate: every option's win chance from the spot, N_EVAL games each on the same seeds; the score the share of typical
+  coaches giving up more win chance in total, percentile). A day's game replays from its saved calls on the same seed. Its
+  record is its own (tmd:hoops:stats, days and the streak from them) and posts nowhere yet. Teams by city (the data's
+  "city"; the two Los Angeles teams tagged, no nicknames). Home's tile (game.js homeHoops), the footer nav and the
+  sitemap (site.py PAGES "hoops").
 - Player feedback (game.js renderFeedback, #feedback from every page's footer "Report a bug"; worker.js /feedback): a
   bug or an idea, at least FB_MIN characters, blocked() refused, FB_PER_DAY a device (the device key, hashed), kept on
   the board (fb:list, FB_KEEP; GET /feedback/admin with the admin token) with the screen it came from, the build and

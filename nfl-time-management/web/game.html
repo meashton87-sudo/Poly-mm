@@ -1165,6 +1165,8 @@ a.chip { color: var(--ink); text-decoration: none; display: inline-block; }
 .hcard:hover { border-color: var(--muted); }
 .hcard .hk { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
 .hcard.hsurv { border-top: 4px solid var(--sq-r); padding-top: 10px; }
+.hcard.hhoops { border-top: 4px solid #c9661f; padding-top: 10px; }
+.hmodes:not(.one) .hcard.hhoops { grid-column: 1 / -1; min-height: 0; }      /* (Hoops: a row of its own under Versus) */
 .hcard.hpro { border-top: 4px solid var(--gold); padding-top: 10px; background: linear-gradient(160deg, var(--gold-soft), transparent 70%), var(--card); }
 .hcard .hnum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; }
 .hcard .hnum b { flex: none; font: 900 40px/1 var(--display); font-variant-numeric: tabular-nums; }

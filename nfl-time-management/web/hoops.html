@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!--SITE-HEAD-->
+<title>Hoops: the last two minutes, you coach</title>
+<meta name="description" content="A daily basketball game: the last two minutes of a real game, one team yours, possession by possession. Every call graded on win chance, the real ending shown beside yours.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800;900&family=Libre+Franklin:wght@400;600;700&display=swap">
+<style>
+:root {
+  --paper: #f3f5f2; --card: #ffffff; --ink: #121a15; --muted: #5a675e; --line: #d3dbd5; --turf: #2c7549; --court: #b5581f; --sq-g: #2c7549; --sq-y: #c29a1b; --sq-r: #b23a3a;
+  --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "Libre Franklin", "Franklin Gothic Medium", "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; --court: #d97b3b; --sq-g: #3f9a63; --sq-y: #d9b23a; --sq-r: #d25555; color-scheme: dark;
+} }
+:root[data-theme="dark"] { --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; --court: #d97b3b; --sq-g: #3f9a63; --sq-y: #d9b23a; --sq-r: #d25555; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.5 var(--body); padding-top: env(safe-area-inset-top, 0px); }
+.wrap { max-width: 560px; margin: 0 auto; padding: 12px 16px 48px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 10px; }
+h1 { margin: 0; font: 900 26px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
+h1 a.home { color: inherit; text-decoration: none; }
+h1 small { display: block; font: 700 11px var(--body); letter-spacing: .16em; color: var(--court); margin-top: 4px; }
+h2 { font: 800 22px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; margin: 6px 0 8px; text-wrap: balance; }
+h3 { font: 800 15px/1.2 var(--display); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 18px 0 6px; }
+p { margin: 0 0 8px; max-width: 65ch; }
+a { color: var(--turf); }
+.eyebrow { font: 700 11px var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--court); }
+.note { color: var(--muted); font-size: 13px; }
+.lead { font-size: 16px; }
+/* the scoreboard */
+#board { background: #0f2340; color: #fff; border-radius: 12px; padding: 10px 12px; display: grid; gap: 4px; margin-bottom: 12px; font-variant-numeric: tabular-nums; }
+#board .tm { display: grid; grid-template-columns: 1fr auto auto auto; gap: 10px; align-items: baseline; opacity: .8; }
+#board .tm.me { opacity: 1; }
+#board .tm.ball .nm::before { content: "● "; color: var(--court); }
+#board .nm { font-weight: 700; }
+#board .sc { font: 900 30px/1 var(--display); }
+#board .to { color: #ffd37a; letter-spacing: 2px; font-size: 12px; }
+#board .fl { font-size: 11px; color: #b9c6d8; }
+#board .clk { display: flex; justify-content: space-between; align-items: baseline; border-top: 1px solid rgba(255,255,255,.15); padding-top: 6px; margin-top: 2px; }
+#board .clk b { font: 900 26px/1 var(--display); color: #ffd37a; }
+#board .clk span { font-size: 12px; color: #b9c6d8; }
+/* the card */
+#card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 8px; }
+.opts { display: grid; gap: 8px; margin-top: 4px; }
+.opt { display: grid; gap: 2px; text-align: left; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; }
+.opt b { font: 800 16px/1.1 var(--display); text-transform: uppercase; letter-spacing: .03em; }
+.opt span { font-size: 13px; color: var(--muted); }
+.opt:hover, .opt:focus-visible { border-color: var(--court); outline: none; }
+.last { background: var(--paper); border-left: 3px solid var(--court); padding: 8px 10px; border-radius: 6px; font-size: 14px; }
+.btn { font: 700 14px var(--body); color: #fff; background: var(--turf); border: 0; border-radius: 999px; padding: 10px 18px; cursor: pointer; text-decoration: none; display: inline-block; }
+.btn.big { font-size: 17px; padding: 12px 22px; justify-self: start; }
+.btn.ghostbtn { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.big { font: 900 64px/1 var(--display); letter-spacing: .02em; }
+.pct-lab { color: var(--muted); font-size: 14px; margin-top: -4px; }
+.calls { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13.5px; }
+.calls li { display: grid; grid-template-columns: 22px 1fr; gap: 6px; }
+.calls .sq { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 4px; color: #fff; font-weight: 700; font-size: 12px; }
+.calls li.g .sq { background: var(--sq-g); } .calls li.y .sq { background: var(--sq-y); } .calls li.r .sq { background: var(--sq-r); }
+.calls .sit { grid-column: 2; color: var(--muted); font-size: 12.5px; }
+.calls .what { grid-column: 2; }
+.verdict { font-size: 14px; }
+.real ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); display: grid; gap: 2px; }
+.streak { font-weight: 700; }
+.howto { margin-top: 22px; color: var(--muted); font-size: 13.5px; }
+.howto h3 { margin-top: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><a href="./" class="home">Two-Minute Drill</a><small>Hoops</small></h1>
+    <a class="btn ghostbtn" href="./">Football ›</a>
+  </header>
+  <div id="board" aria-live="polite"></div>
+  <main id="card">Loading today's game…</main>
+  <section class="howto">
+    <h3>How it works</h3>
+    <p>One real game a day, the same for everyone: the last two minutes, the real score, clock, timeouts and bonus. You coach one team, possession by possession. On your ball: go now, work for a shot, hunt a three, attack the rim, hold for the last shot, or burn a timeout to advance the ball. On theirs: play it straight, foul to stop the clock, or press.</p>
+    <p>Every call is graded on win chance: the rest of the game is simulated for every option you had, with the shooting, free-throw, turnover and rebound rates of these teams from two seasons of play-by-play, and your call is measured against the best one. Your score places you among typical coaches making the same decisions. At the end you see how the real game ended from the same spot.</p>
+    <p>Teams are named by city. Two-Minute Drill is an independent, fan-made game and is not affiliated with any league or team.</p>
+  </section>
+</div>
+<!--SITE-FOOT-->
+<script src="hoops.js"></script>
+</body>
+</html>
