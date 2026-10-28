@@ -83,6 +83,13 @@ jobs:
           python -c "from nflclock import webexport as w; w.export_engine()"
           python -c "from nflclock import dailygame as G; print(G.build())"
 
+      # Hoops (nfl-time-management/src/hoops/build.py): two seasons of public basketball play-by-play (shufinskiy/nba_data on
+      # GitHub, cached with the rest of data/raw) into web/hoops/hoops_data.json: the league's and the teams' late-game rates,
+      # one spot a game, the schedule. Never blocks the deploy: without its data the page says it could not load.
+      - name: Build the basketball daily (Hoops)
+        continue-on-error: true
+        run: PYTHONPATH=src python -m hoops.build
+
       # Pro: off until approved. To launch, set PRO_ON to "on" below (one line) and merge: the historic drives and playoff
       # runs build and ship, and the site turns the Pro tab on. See nfl-time-management/board/PRO_LAUNCH.md.
       - name: Export the historic drives and playoff runs (Pro)

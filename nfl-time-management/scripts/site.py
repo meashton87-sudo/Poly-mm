@@ -431,7 +431,7 @@ def move_page(script: str, new: str) -> str:
 
 # Every page: the same footer (the site's pages, the contact, the disclaimer and the data credit), its style, and the
 # canonical address of the page
-PAGES = [("", "Play", 1.0), ("how-it-works", "How it works", 0.8), ("faq", "FAQ", 0.7), ("drives", "The drives", 0.7), ("glossary", "Glossary", 0.6),
+PAGES = [("", "Play", 1.0), ("hoops", "Hoops", 0.9), ("how-it-works", "How it works", 0.8), ("faq", "FAQ", 0.7), ("drives", "The drives", 0.7), ("glossary", "Glossary", 0.6),
          ("play-callers", "Play-callers", 0.5), ("about", "About", 0.6), ("stats", "Stats", 0.6), ("patch-notes", "Patch notes", 0.5), ("privacy", "Privacy", 0.3)]
 SRC = WEB.parent / "src" / "nflclock"            # the committed data some pages are built from (the schedule, the drives, the play-callers)
 TEAM_CITY = {"ARI": "Arizona", "ATL": "Atlanta", "BAL": "Baltimore", "BUF": "Buffalo", "CAR": "Carolina", "CHI": "Chicago", "CIN": "Cincinnati",
@@ -566,7 +566,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         raise SystemExit(f"--google-client-id wants an OAuth client id like 1234-abc.apps.googleusercontent.com, not {google_client_id!r}")
     if ad_slot and not re.fullmatch(r"\d{6,12}", ad_slot):
         raise SystemExit(f"--ad-slot wants an ad unit's slot number, not {ad_slot!r}")
-    missing = [f for f in FILES + ["stats.html", "privacy.html", "about.html", "how-it-works.html", "faq.html", "glossary.html", "drives.html", "play-callers.html", "patch-notes.html", "patch_notes.json", "admin.html", "sw.js"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
+    missing = [f for f in FILES + ["stats.html", "privacy.html", "about.html", "how-it-works.html", "faq.html", "glossary.html", "drives.html", "play-callers.html", "hoops.html", "hoops.js", "patch-notes.html", "patch_notes.json", "admin.html", "sw.js"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
     if missing:
         raise SystemExit(f"build the game data first; missing in web/: {', '.join(missing)}")
     if out.exists():
@@ -717,6 +717,20 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
                                  ("play-callers.html", "play-callers", "The play-callers",
                                   "Who really called the plays, team by team and week by week: the list your calls are matched against.")):
         fill(name, (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, title, d, path), path)
+    # Hoops (web/hoops.html, hoops.js, hoops/hoops_data.json from src/hoops/build.py: generated, never committed): the basketball
+    # daily. Its script and data are not cached for good (_headers), so they carry a stamp of their own content in the page
+    import hashlib
+    hs = lambda f: hashlib.sha1(f.read_bytes()).hexdigest()[:12]
+    shutil.copy2(WEB / "hoops.js", out / "hoops.js")
+    hoops_data = WEB / "hoops" / "hoops_data.json"
+    (out / "hoops").mkdir(exist_ok=True)
+    if hoops_data.exists():
+        shutil.copy2(hoops_data, out / "hoops" / "hoops_data.json")
+    data_src = f"hoops/hoops_data.json?v={hs(hoops_data)}" if hoops_data.exists() else "hoops/hoops_data.json"
+    fill("hoops.html", (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Hoops: the last two minutes, you coach",
+         "A daily basketball game: the last two minutes of a real game, one team yours, every call graded on win chance.", "hoops")
+         + f'<meta name="hoops-data" content="{data_src}">', "hoops")
+    (out / "hoops.html").write_text((out / "hoops.html").read_text().replace('<script src="hoops.js"></script>', f'<script src="hoops.js?v={hs(WEB / "hoops.js")}"></script>'))
     # the pages built from the committed data: the drives (the schedule's featured days, Pro's drives and runs) and the play-callers
     (out / "drives.html").write_text((out / "drives.html").read_text().replace("<!--DRIVES-->", drives_html()))
     (out / "play-callers.html").write_text((out / "play-callers.html").read_text().replace("<!--CALLERS-->", callers_html()))

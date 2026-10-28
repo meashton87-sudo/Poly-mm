@@ -12219,6 +12219,7 @@
     modes.append(homeSurv());
     if (PRO_ON) modes.append(homePro(n));
     if (VS_ON) modes.append(homeVs());
+    modes.append(homeHoops());
     const had = adBox('home');                         // (between the day's card and the modes, labeled, never a card)
     box.append(h, day.el, ...(had ? [had] : []), modes, homeTools());
     const ls = myLeagues();
@@ -12310,6 +12311,16 @@
     a.append(el('div', 'hk', 'Survivor'), num,
       ...(alive ? [el('p', '', `Your run is alive: ${run.won} win${run.won === 1 ? '' : 's'} so far.`)] : []),
       el('span', 'cta', alive ? 'Continue' : 'Play'));
+    return a;
+  }
+  // Hoops: the basketball daily (hoops.html, its own page and script)
+  function homeHoops() {
+    const a = el('a', 'hcard hhoops');
+    a.href = 'hoops';
+    a.dataset.to = 'hoops';
+    a.append(el('div', 'hk', 'Hoops'), el('div', 'hpitch', 'New: the last two minutes'),
+      el('p', '', 'A real basketball game a day: the last two minutes, one bench yours, every call graded.'), el('span', 'cta', 'Play'));
+    a.addEventListener('click', () => track('hoops_home', { day: dayN }));
     return a;
   }
   // Versus: someone live (or the computer when nobody is on), college overtime

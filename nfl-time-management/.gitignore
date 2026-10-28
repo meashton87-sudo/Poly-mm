@@ -28,3 +28,4 @@ board/assets/vs/
 board/assets-loadtest/
 board/assets-test/
 web/rosters/
+web/hoops/hoops_data.json
