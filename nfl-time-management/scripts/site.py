@@ -549,7 +549,7 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
 
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
-          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, vs_pro: bool = False, vs_at: str | None = None, vs_free_at: str | None = None, pro_at: str | None = None, scn_at: str | None = None, no_ads: bool = False, ezoic: str | None = None, ezoic_head: bool = False, ezoic_ids: str | None = None,
+          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, vs_pro: bool = False, vs_at: str | None = None, vs_free_at: str | None = None, hoops_pro: bool = False, pro_at: str | None = None, scn_at: str | None = None, no_ads: bool = False, ezoic: str | None = None, ezoic_head: bool = False, ezoic_ids: str | None = None,
           fulldef: bool = False, google_client_id: str | None = None, old_domain: str | None = None, minify: bool = True) -> Path:
     global NO_ADS, EZOIC
     NO_ADS = no_ads
@@ -607,6 +607,10 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         extra += "<meta name=\"fulldef\" content=\"on\">"
     if vs:                                   # Versus (two players live, board/match.js): off until it is turned on
         extra += "<meta name=\"vs\" content=\"on\">"
+        if hoops_pro:                        # Hoops as part of Pro (the Home tile pitches it; the page itself gates on the device's Pro code)
+            if not pro:
+                raise SystemExit("--hoops-pro needs --pro")
+            extra += "<meta name=\"hoops-pro\" content=\"on\">"
         if vs_pro:                           # ... as part of Pro: its lobby takes Pro (a room's link plays for anyone)
             if not pro:
                 raise SystemExit("--vs-pro needs --pro")
@@ -729,7 +733,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     data_src = f"hoops/hoops_data.json?v={hs(hoops_data)}" if hoops_data.exists() else "hoops/hoops_data.json"
     fill("hoops.html", (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Hoops: the last two minutes, you coach",
          "A daily basketball game: the last two minutes of a real game, one team yours, every call graded on win chance.", "hoops")
-         + f'<meta name="hoops-data" content="{data_src}">', "hoops")
+         + f'<meta name="hoops-data" content="{data_src}">' + ('<meta name="hoops-pro" content="on">' if hoops_pro else ''), "hoops")
     (out / "hoops.html").write_text((out / "hoops.html").read_text().replace('<script src="hoops.js"></script>', f'<script src="hoops.js?v={hs(WEB / "hoops.js")}"></script>'))
     # the pages built from the committed data: the drives (the schedule's featured days, Pro's drives and runs) and the play-callers
     (out / "drives.html").write_text((out / "drives.html").read_text().replace("<!--DRIVES-->", drives_html()))
@@ -826,12 +830,13 @@ if __name__ == "__main__":
     ap.add_argument("--vs", action="store_true", help="turn on Versus (two players live); off until approved")
     ap.add_argument("--vs-pro", action="store_true", help="with --vs and --pro: Versus is part of Pro (its lobby takes Pro)")
     ap.add_argument("--vs-free-at", help="with --vs-pro: Versus is everyone's from this time (ISO 8601, UTC)")
+    ap.add_argument("--hoops-pro", action="store_true", help="with --pro: Hoops (the basketball daily) is part of Pro")
     ap.add_argument("--vs-at", help="with --vs: Versus stays hidden until this time (ISO 8601, UTC)")
     ap.add_argument("--fulldef", action="store_true", help="the full defensive call (personnel, front, coverage, rush) in every mode; off until approved")
     ap.add_argument("--google-client-id", help="a Google OAuth web client id (....apps.googleusercontent.com): Sign in with Google on the Pro tab; empty: off")
     ap.add_argument("--pro", action="store_true", help="turn on the Pro tab (the archive, the historic drives, the purchase); off until approved")
     a = ap.parse_args()
-    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, scn_at=a.scn_at, vs=a.vs, vs_pro=a.vs_pro, vs_at=a.vs_at, vs_free_at=a.vs_free_at, fulldef=a.fulldef, no_ads=a.no_ads, ezoic=a.ezoic, ezoic_head=a.ezoic_head, ezoic_ids=(a.ezoic_ids or '').strip() or None, minify=not a.no_minify,
+    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, scn_at=a.scn_at, vs=a.vs, vs_pro=a.vs_pro, vs_at=a.vs_at, vs_free_at=a.vs_free_at, hoops_pro=a.hoops_pro, fulldef=a.fulldef, no_ads=a.no_ads, ezoic=a.ezoic, ezoic_head=a.ezoic_head, ezoic_ids=(a.ezoic_ids or '').strip() or None, minify=not a.no_minify,
               google_client_id=a.google_client_id, old_domain=a.old_domain)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6
