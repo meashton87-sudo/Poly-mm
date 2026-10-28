@@ -72,6 +72,11 @@
     return ps[0].name;
   }
   const teamCity = (abbr) => (T[abbr] && T[abbr].city) || abbr;
+  // the real play-by-play's team events carry the nickname ("Heat Rebound", "Hawks Timeout"): shown by city, as everywhere
+  const NICK = { Hawks: 'Atlanta', Celtics: 'Boston', Nets: 'Brooklyn', Hornets: 'Charlotte', Bulls: 'Chicago', Cavaliers: 'Cleveland', Mavericks: 'Dallas', Nuggets: 'Denver', Pistons: 'Detroit', Warriors: 'Golden State', Rockets: 'Houston', Pacers: 'Indiana', Clippers: 'Los Angeles (LAC)', Lakers: 'Los Angeles (LAL)', Grizzlies: 'Memphis', Heat: 'Miami', Bucks: 'Milwaukee', Timberwolves: 'Minnesota', Pelicans: 'New Orleans', Knicks: 'New York', Thunder: 'Oklahoma City', Magic: 'Orlando', '76ers': 'Philadelphia', Suns: 'Phoenix', 'Trail Blazers': 'Portland', Kings: 'Sacramento', Spurs: 'San Antonio', Raptors: 'Toronto', Jazz: 'Utah', Wizards: 'Washington' };
+  const NICK_LOW = Object.fromEntries(Object.entries(NICK).map(([k, v]) => [k.toLowerCase(), v]));
+  const NICK_RE = new RegExp(`\\b(${Object.keys(NICK).join('|')})\\b`, 'gi');      // (the data writes team events in capitals too: "SUNS Timeout")
+  const byCity = (text) => String(text || '').replace(NICK_RE, (m) => NICK_LOW[m.toLowerCase()] || m);
   // one possession of side S.poss with the offense's approach a and the defense's answer d; returns the lines it made
   function possession(S, r, a, d) {
     const off = S.poss, def = other(off), A = APPROACH[a], lines = [];
@@ -182,7 +187,7 @@
   // ---- the game on the page -------------------------------------------------------------------------------------------
   let D = null, spot = null, S = null, G = null;            // the data, today's spot, the state, the game record
   const dayKey = () => `${STORE}:day:${dayISO()}`;
-  const dayN = () => { const a = new Date(2026, 9, 29), b = new Date(); b.setHours(12, 0, 0, 0); a.setHours(12, 0, 0, 0); return Math.max(1, Math.round((b - a) / 864e5) + 1); };
+  const dayN = () => { const a = new Date(2026, 9, 28), b = new Date(); b.setHours(12, 0, 0, 0); a.setHours(12, 0, 0, 0); return Math.max(1, Math.round((b - a) / 864e5) + 1); };
   function pickSpot(practice) {
     if (practice) return D.spots[Math.floor(Math.random() * D.spots.length)];
     const id = D.schedule[dayISO()];
@@ -210,7 +215,7 @@
       el('h2', '', `${teamCity(spot.away)} at ${teamCity(spot.home)}`),
       el('p', 'lead', `${spot.season}–${String(spot.season + 1).slice(2)} season. ${situation(S)}. You coach ${teamCity(teamOf(S, S.me))}.`),
       el('p', 'note', `Timeouts: you ${S.to[S.me]}, they ${S.to[other(S.me)]}. ${inBonus(S, other(S.me)) ? 'They are in the bonus: any foul on you is two free throws. ' : ''}${inBonus(S, S.me) ? 'You are in the bonus: any foul on them is two free throws.' : ''}`));
-    if (spot.lead) box.append(el('p', 'note', `How it got here: ${spot.lead}.`));
+    if (spot.lead) box.append(el('p', 'note', `How it got here: ${byCity(spot.lead)}.`));
     const go = el('button', 'btn big', 'Take over'); go.type = 'button';
     go.addEventListener('click', () => { G.started = true; saveGame(); step(); });
     box.append(go);
@@ -244,7 +249,7 @@
     // the grade: every option's win chance from here, the same bounces each
     const wp = evaluate(S, mine ? 'off' : 'def', opts, seed, N_EVAL), best = opts.reduce((a, b) => (wp[b] > wp[a] ? b : a));
     const typ = mine ? typicalOffense(S, rng(1)).weights : typicalDefense(S, rng(1)).weights;
-    const dec = { i, side: mine ? 'off' : 'def', situation: situation(S), chosen: k, best, wp: wp[k], bestWp: wp[best], cost: Math.max(0, wp[best] - wp[k]), opts: opts.map((o) => ({ k, label: (mine ? APPROACH : DEFENSE)[o].label, wp: wp[o], q: typ[o] || 0 })).map((o, j) => ({ ...o, k: opts[j] })) };
+    const dec = { i, side: mine ? 'off' : 'def', situation: situation(S), chosen: k, best, wp: wp[k], bestWp: wp[best], cost: Math.max(0, wp[best] - wp[k]), opts: opts.map((o) => ({ k: o, label: (mine ? APPROACH : DEFENSE)[o].label, wp: wp[o], q: typ[o] || 0 })) };
     G.decs.push(dec);
     // the possession, with the other bench typical, on the day's own bounces
     const r = rng(hash(G.seed, 'p', i));
@@ -311,7 +316,7 @@
     const ul = el('ul', ''); for (const t of G.lines) ul.append(el('li', '', t)); mine.append(ul); box.append(mine);
     const real = el('div', 'real'); real.append(el('h3', '', 'What really happened'));
     const rl = el('ul', '');
-    for (const e of (spot.real || []).slice(0, 40)) rl.append(el('li', '', `${clockText(e.t)}${e.p > 4 ? ' OT' : ''} · ${e.text}${e.score ? ` · ${e.score[1]}–${e.score[0]}` : ''}`));
+    for (const e of (spot.real || []).slice(0, 40)) rl.append(el('li', '', `${e.t != null ? `${clockText(e.t)}${e.p > 4 ? ' OT' : ''} · ` : ''}${byCity(e.text)}${e.score ? ` · ${e.score[1]}–${e.score[0]}` : ''}`));
     real.append(rl); box.append(real);
     if (!G.practice) { const st = load(`${STORE}:stats`, { days: {} }); box.append(el('p', 'streak', `🔥 ${streakOf(st)} day${streakOf(st) === 1 ? '' : 's'} in a row · come back tomorrow for a new game`)); }
     const row = el('div', 'row');
