@@ -8756,12 +8756,14 @@
     return { coach: rl.coach, who, v, both, like: both ? `${mm > 0 ? 'Won' : 'Lost'}, as ${rl.coach} did` : null,
       you: `${wl(result.mine, result.theirs)} ${result.mine}–${result.theirs}${G.root && G.root.ot ? ' (OT)' : ''}`, him: `${wl(hm, ht)} ${hm}–${ht}` };
   }
-  function hhCard(h) {
+  function hhCard(h, p) {
     const box = el('div', `h2h ${h.v > 0 ? 'beat' : h.v < 0 ? 'lost' : 'tie'}`);
     box.append(el('div', 'k', `You vs ${h.coach}`), el('div', `res${h.both ? ' both' : ''}`, h.v > 0 ? `You beat ${h.who}` : h.v < 0 ? `${h.who} did better` : h.both || `Same as ${h.who}`));
     const row = el('div', 'rows');
     [['You', h.you], [h.who, h.him]].forEach(([a, b]) => { const r = el('div', 'r'); r.append(el('span', 'a', a), el('span', 'b', b)); row.append(r); });
     box.append(row);
+    // the result against the real coach and the grade are two different things (the fan bots, Oct 27: "same as Carroll and a 40?")
+    if (p != null && h.v >= 0 && p < 0.5) box.append(el('p', 'hhwhy', `${h.v > 0 ? 'A better result than his' : 'The same result as his'} on the drive. The grade is something else: your calls, snap by snap, against what real play-callers do in each spot.`));
     return box;
   }
   // a drive's snaps (a snap's calls together: the tempo and the play, say), each with its mark, how it did against a
@@ -9517,7 +9519,7 @@
     const one = today.length === 1 ? (hh0 ? (rec[0] ? `Beat ${hh0.coach}` : rec[1] ? `${hh0.coach} did better` : hh0.like || `Matched ${hh0.coach}`)
       : rec[0] ? 'Beat the real coach' : rec[1] ? 'Lost to the real coach' : 'Matched the real coach') : null;
     const vs = met ? (one ? `\n${one}` : `\nVs the real coaches: ${recTxt}`) : '';
-    if (met && one && hh0) box.insertBefore(hhCard(hh0), box.children[k3] || null);      // beating the real coach is the hook: say who
+    if (met && one && hh0) box.insertBefore(hhCard(hh0, p), box.children[k3] || null);      // beating the real coach is the hook: say who
     else if (met && one) {
       const v = el('div', 'h2h-day');
       v.append(el('span', 'k', 'Vs the real coach'), el('b', '', rec[0] ? 'Better' : rec[1] ? 'Worse' : 'Same'));
@@ -9656,7 +9658,7 @@
         el('p', '', 'Real games back to back. One loss ends it.'), el('span', 'cta', alive ? 'Continue your run' : 'Play Survivor'));
     }
     a.addEventListener('click', () => { track('up_next', { to: vs ? 'versus' : 'survivor', day: dayN }); scrollTo(0, 0); });
-    const alt = el('a', 'unalt', 'or play a practice drive');
+    const alt = el('a', 'btn ghostbtn unalt', 'Play another drive now (practice)');
     alt.href = '#practice';
     alt.addEventListener('click', () => { practiceNext(); track('practice_start', { from: 'daily' }); scrollTo(0, 0); });
     w.append(el('div', 'unk', 'Up next'), a, alt);
