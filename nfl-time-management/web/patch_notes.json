@@ -2,6 +2,18 @@
   "about": "Every change to the game, newest first. Each update adds its notes here (scripts/site.py builds /patch-notes from this file). Game changes only: no ads, analytics, payments or behind-the-scenes work, and nothing that is not live yet.",
   "notes": [
     {
+      "date": "2026-10-28",
+      "title": "Versus Draft: the starters, better men more often; the end card says what cost you",
+      "items": [
+        "Every team's quarterback in the Draft and in Versus is its starter now: a rookie who took over keeps the slot, a starter out hurt keeps his.",
+        "The cards still come up at random, but the better a man is at his slot, the more often he comes up: the best about three times as often as the worst.",
+        "The end card names the one call that cost you the most and the call that was there, in points of win chance.",
+        "First visit: the opening tip says what the grade is, your calls against what real play-callers do, not the final score.",
+        "A day with no featured title shows its matchup on the end card instead of \"your score\".",
+        "A Draft lineup's replacement is marked as one nobody bid for."
+      ]
+    },
+    {
       "date": "2026-10-27",
       "title": "Versus: 20 seconds, and no free pass in the Draft",
       "items": [

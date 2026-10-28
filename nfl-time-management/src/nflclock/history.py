@@ -312,7 +312,8 @@ class History:
         if len(off):
             picks = []
             pos = off["position"].map(OFF_POS).fillna("WR")
-            picks += [(r.pfr_player_id, "QB") for r in off[pos == "QB"].head(1).itertuples()]
+            qb = self._qb_now(g[g["position"] == "QB"], season, to_gsis) or next(iter(off.loc[pos == "QB", "pfr_player_id"]), None)
+            picks += [(qb, "QB")] if qb else []
             picks += [(r.pfr_player_id, OFF_POS[r.position]) for r in off[pos.isin(["T", "G", "C"])].head(5).itertuples()]
             skill = off[pos.isin(["RB", "WR", "TE"])].assign(grp=pos[pos.isin(["RB", "WR", "TE"])])
             alloc = PL._allocate(skill.groupby("grp")["offense_pct"].sum().div(100).to_dict(), 11 - len(picks), skill["grp"].value_counts().to_dict())
@@ -328,6 +329,30 @@ class History:
                 picks += [(r.pfr_player_id, gr) for r in dfn[dfn["grp"] == gr].head(alloc.get(gr, 0)).itertuples()]
             out["def"] = [(to_gsis.get(p, "pfr:" + p), gr) for p, gr in picks]
         return out
+
+    def _qb_now(self, q: pd.DataFrame, season: int, to_gsis: dict) -> str | None:
+        """Versus's quarterback (the owner, Oct 27: no backup at the slot): the one with the most snaps over the team's
+        last three games, the latest counting most (3, 2, 1: a rookie who took over two weeks ago is the starter), except
+        the season's snap leader when he missed those games hurt (inactive or on a reserve list on the weekly roster for
+        each game he missed): a starter out for a stretch is still the starter at full strength. The head-to-head rule
+        of the other slots (ranked) fails here: a starter hurt early in a game shares it with his backup and loses it."""
+        q = q[q["offense_snaps"] > 0]
+        if not len(q):
+            return None
+        wk = lambda gid: int(str(gid).split("_")[1])
+        last = sorted(q["game_id"].unique(), key=wk)[-3:]
+        weight = {gid: i + 1 for i, gid in enumerate(last)}
+        recent = q[q["game_id"].isin(last)].assign(sc=lambda d: d["offense_snaps"] * d["game_id"].map(weight)).groupby("pfr_player_id")["sc"].sum()
+        total = q.groupby("pfr_player_id")["offense_snaps"].sum()
+        lead, now = total.idxmax(), (recent.idxmax() if len(recent) else total.idxmax())
+        if now != lead:
+            missed = [gid for gid in last if not ((q["game_id"] == gid) & (q["pfr_player_id"] == lead)).any()]
+            w = self._weekly_qbs(season)
+            st = dict(zip(zip(w["gsis_id"], w["week"].astype(int)), w["status"]))
+            gs = to_gsis.get(lead)
+            if missed and gs and all(st.get((gs, wk(gid))) in ("INA", "RES") for gid in missed):
+                now = lead
+        return now
 
     # players credited on a play, by what they did (nflverse play-by-play columns)
     BOX_OFF = {"passer_player_id": 3.0, "rusher_player_id": 1.0, "receiver_player_id": 1.0}
