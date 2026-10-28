@@ -2608,7 +2608,9 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     say(f"carriers standing in the open (0.5 s+): {len(stood)} of {len(tk)}" + (f" {sorted(stood, key=lambda x: -x['stall'])[:8]}" if stood else ""))
     # (a rare one passes, as the tackles' check above: about one play in ten thousand still has the field run out on the
     # pursuit, a beat of jog before the hit; fail only when this many would be unlikely, p < 0.01, at a 2% rate)
-    if len(waited) > 1 and binom_tail(len(tk), len(waited), 0.02) < 0.01:
+    # A short run logs about twenty tackles, where three waits of 0.7 to 1.1 s fail on noise (Oct 28): the check needs
+    # 30 tackles to say anything
+    if len(waited) > 1 and len(tk) >= 30 and binom_tail(len(tk), len(waited), 0.02) < 0.01:
         fail("breakaway", f"FAIL: a carrier waited in the open for his tackler {waited[:5]}")
     # nor jogs in space: under 60% of his sprint with nobody within 5 yards for half a second, after his first step
     # (a player saw a carrier slow for no reason, then the defense swarm him; 4.8% of tackles before the fix, 2.9% after:
