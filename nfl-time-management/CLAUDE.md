@@ -280,7 +280,7 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
 
 - Hoops (web/hoops.html, web/hoops.js; the data web/hoops/hoops_data.json from src/hoops/build.py: two seasons of public
   basketball play-by-play, shufinskiy/nba_data on GitHub, cached under data/raw/hoops; generated, never committed; site.yml
-  builds it, never blocking the deploy). The basketball daily: one real game's last two minutes a day (the data's
+  builds it, never blocking the deploy; HOOPS_ON "off" builds and shows nothing, "on" everyone, "pro" as part of Pro: site.py --hoops, --hoops-pro; the test server builds it open). Not live yet (the owner, Oct 28: needs the court and the players moving first). The basketball daily: one real game's last two minutes a day (the data's
   schedule by local date, hoops.js dayISO, a hash of the date when the schedule runs out), the player one bench. hoops.js
   holds the rules it keeps (the bonus: five team fouls a period or the second in the last two minutes; overtime 5:00 with
   two timeouts each; at most two timeouts in the last two minutes; a timeout advances the ball; 14 on the shot clock after

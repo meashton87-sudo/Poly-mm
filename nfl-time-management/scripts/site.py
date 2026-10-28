@@ -511,8 +511,9 @@ FOOT_CSS = ("<style>.sitefoot{max-width:680px;margin:28px auto 0;padding:14px 16
             ".sitefoot nav a{color:var(--ink);font-weight:700;text-decoration:none}.sitefoot nav a:hover{text-decoration:underline}"
             ".sitefoot p{margin:0 0 6px;max-width:72ch}.sitefoot p a{color:inherit}"
             "h1 a.home{color:inherit;text-decoration:none}</style>")
-FOOT = ('<footer class="sitefoot"><nav aria-label="Site">'
-        + "".join(f'<a href="{p or "./"}">{label}</a>' for p, label, _ in PAGES)
+def foot_html(pages) -> str:
+    return ('<footer class="sitefoot"><nav aria-label="Site">'
+        + "".join(f'<a href="{p or "./"}">{label}</a>' for p, label, _ in pages)
         + '<a href="./#feedback">Report a bug</a>'
         '<a href="https://x.com/TwoMinuteDrill0" rel="noopener">Contact (X)</a></nav>'
         '<p>Two-Minute Drill is an independent, fan-made game. It is not affiliated with, endorsed by or sponsored by the '
@@ -549,8 +550,10 @@ def share_tags(site_url: str, title: str, desc: str, path: str = "") -> str:
 
 
 def build(out: Path, domain: str | None = None, board_api: str | None = None, ga: str | None = None,
-          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, vs_pro: bool = False, vs_at: str | None = None, vs_free_at: str | None = None, hoops_pro: bool = False, pro_at: str | None = None, scn_at: str | None = None, no_ads: bool = False, ezoic: str | None = None, ezoic_head: bool = False, ezoic_ids: str | None = None,
+          site_url: str | None = None, adsense: str | None = None, ad_slot: str | None = None, pro: bool = False, vs: bool = False, vs_pro: bool = False, vs_at: str | None = None, vs_free_at: str | None = None, hoops: bool = False, hoops_pro: bool = False, pro_at: str | None = None, scn_at: str | None = None, no_ads: bool = False, ezoic: str | None = None, ezoic_head: bool = False, ezoic_ids: str | None = None,
           fulldef: bool = False, google_client_id: str | None = None, old_domain: str | None = None, minify: bool = True) -> Path:
+    pages = [p for p in PAGES if p[0] != "hoops" or hoops]       # (the footer nav and the sitemap: Hoops only when it is on)
+    FOOT = foot_html(pages)
     global NO_ADS, EZOIC
     NO_ADS = no_ads
     EZOIC = ezoic_head and not no_ads
@@ -607,9 +610,11 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         extra += "<meta name=\"fulldef\" content=\"on\">"
     if vs:                                   # Versus (two players live, board/match.js): off until it is turned on
         extra += "<meta name=\"vs\" content=\"on\">"
-        if hoops_pro:                        # Hoops as part of Pro (the Home tile pitches it; the page itself gates on the device's Pro code)
-            if not pro:
-                raise SystemExit("--hoops-pro needs --pro")
+        if hoops:                            # Hoops (the basketball daily, hoops.html): Home's tile, the footer nav, the sitemap
+            extra += "<meta name=\"hoops-on\" content=\"on\">"
+        if hoops_pro:                        # ... as part of Pro (the Home tile pitches it; the page itself gates on the device's Pro code)
+            if not pro or not hoops:
+                raise SystemExit("--hoops-pro needs --pro and --hoops")
             extra += "<meta name=\"hoops-pro\" content=\"on\">"
         if vs_pro:                           # ... as part of Pro: its lobby takes Pro (a room's link plays for anyone)
             if not pro:
@@ -703,6 +708,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     stats_head = (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Two-Minute Drill stats",
         "How everyone did on the daily drive: players per day, the score spread and the top ten.", "stats") + (
         f"<meta name=\"board-api\" content=\"{html.escape(board_api, quote=True)}\">" if board_api else "")
+    pages = [p for p in PAGES if p[0] != "hoops" or hoops]       # (the footer nav and the sitemap: Hoops only when it is on)
+    FOOT = foot_html(pages)
     fill = lambda name, head, path, ads=True: (out / name).write_text(own_fonts((WEB / name).read_text(), stamps).replace(DEFAULT_DOMAIN, home).replace("<!--SITE-HEAD-->",
         moving + head + canonical(site_url, path) + FOOT_CSS + AD_CSS).replace("<!--AD-MID-->", ad_frame("banner") if ads else "")
         .replace("<!--SITE-FOOT-->", (foot_ads() if ads else "") + FOOT))
@@ -722,19 +729,21 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
                                   "Who really called the plays, team by team and week by week: the list your calls are matched against.")):
         fill(name, (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, title, d, path), path)
     # Hoops (web/hoops.html, hoops.js, hoops/hoops_data.json from src/hoops/build.py: generated, never committed): the basketball
-    # daily. Its script and data are not cached for good (_headers), so they carry a stamp of their own content in the page
-    import hashlib
-    hs = lambda f: hashlib.sha1(f.read_bytes()).hexdigest()[:12]
-    shutil.copy2(WEB / "hoops.js", out / "hoops.js")
-    hoops_data = WEB / "hoops" / "hoops_data.json"
-    (out / "hoops").mkdir(exist_ok=True)
-    if hoops_data.exists():
-        shutil.copy2(hoops_data, out / "hoops" / "hoops_data.json")
-    data_src = f"hoops/hoops_data.json?v={hs(hoops_data)}" if hoops_data.exists() else "hoops/hoops_data.json"
-    fill("hoops.html", (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Hoops: the last two minutes, you coach",
-         "A daily basketball game: the last two minutes of a real game, one team yours, every call graded on win chance.", "hoops")
-         + f'<meta name="hoops-data" content="{data_src}">' + ('<meta name="hoops-pro" content="on">' if hoops_pro else ''), "hoops")
-    (out / "hoops.html").write_text((out / "hoops.html").read_text().replace('<script src="hoops.js"></script>', f'<script src="hoops.js?v={hs(WEB / "hoops.js")}"></script>'))
+    # daily, only with --hoops (site.yml HOOPS_ON). Its script and data are not cached for good (_headers), so they carry a
+    # stamp of their own content in the page
+    if hoops:
+        import hashlib
+        hs = lambda f: hashlib.sha1(f.read_bytes()).hexdigest()[:12]
+        shutil.copy2(WEB / "hoops.js", out / "hoops.js")
+        hoops_data = WEB / "hoops" / "hoops_data.json"
+        (out / "hoops").mkdir(exist_ok=True)
+        if hoops_data.exists():
+            shutil.copy2(hoops_data, out / "hoops" / "hoops_data.json")
+        data_src = f"hoops/hoops_data.json?v={hs(hoops_data)}" if hoops_data.exists() else "hoops/hoops_data.json"
+        fill("hoops.html", (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Hoops: the last two minutes, you coach",
+             "A daily basketball game: the last two minutes of a real game, one team yours, every call graded on win chance.", "hoops")
+             + f'<meta name="hoops-data" content="{data_src}">' + ('<meta name="hoops-pro" content="on">' if hoops_pro else ''), "hoops")
+        (out / "hoops.html").write_text((out / "hoops.html").read_text().replace('<script src="hoops.js"></script>', f'<script src="hoops.js?v={hs(WEB / "hoops.js")}"></script>'))
     # the pages built from the committed data: the drives (the schedule's featured days, Pro's drives and runs) and the play-callers
     (out / "drives.html").write_text((out / "drives.html").read_text().replace("<!--DRIVES-->", drives_html()))
     (out / "play-callers.html").write_text((out / "play-callers.html").read_text().replace("<!--CALLERS-->", callers_html()))
@@ -767,7 +776,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     (out / "sitemap.xml").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
         + "".join(f"  <url><loc>{base}/{p}</loc><lastmod>{day}</lastmod><changefreq>{'daily' if p in ('', 'stats') else 'monthly'}</changefreq>"
-                  f"<priority>{pr}</priority></url>\n" for p, _, pr in PAGES) + "</urlset>\n")
+                  f"<priority>{pr}</priority></url>\n" for p, _, pr in pages) + "</urlset>\n")
     # ads.txt: who may sell this site's ad space (Google's line, with our id, then any other network's lines)
     extra = (WEB / "ads" / "ads.txt").read_text().strip() if (WEB / "ads" / "ads.txt").exists() and not no_ads else ""
     lines = ([f"google.com, {adsense.replace('ca-', '', 1)}, DIRECT, f08c47fec0942fa0"] if adsense else []) + ([extra] if extra else [])
@@ -830,13 +839,14 @@ if __name__ == "__main__":
     ap.add_argument("--vs", action="store_true", help="turn on Versus (two players live); off until approved")
     ap.add_argument("--vs-pro", action="store_true", help="with --vs and --pro: Versus is part of Pro (its lobby takes Pro)")
     ap.add_argument("--vs-free-at", help="with --vs-pro: Versus is everyone's from this time (ISO 8601, UTC)")
-    ap.add_argument("--hoops-pro", action="store_true", help="with --pro: Hoops (the basketball daily) is part of Pro")
+    ap.add_argument("--hoops", action="store_true", help="Hoops, the basketball daily (hoops.html): Home's tile, the footer nav, the sitemap")
+    ap.add_argument("--hoops-pro", action="store_true", help="with --hoops and --pro: Hoops is part of Pro")
     ap.add_argument("--vs-at", help="with --vs: Versus stays hidden until this time (ISO 8601, UTC)")
     ap.add_argument("--fulldef", action="store_true", help="the full defensive call (personnel, front, coverage, rush) in every mode; off until approved")
     ap.add_argument("--google-client-id", help="a Google OAuth web client id (....apps.googleusercontent.com): Sign in with Google on the Pro tab; empty: off")
     ap.add_argument("--pro", action="store_true", help="turn on the Pro tab (the archive, the historic drives, the purchase); off until approved")
     a = ap.parse_args()
-    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, scn_at=a.scn_at, vs=a.vs, vs_pro=a.vs_pro, vs_at=a.vs_at, vs_free_at=a.vs_free_at, hoops_pro=a.hoops_pro, fulldef=a.fulldef, no_ads=a.no_ads, ezoic=a.ezoic, ezoic_head=a.ezoic_head, ezoic_ids=(a.ezoic_ids or '').strip() or None, minify=not a.no_minify,
+    o = build(Path(a.out), a.domain, a.board_api, a.ga, a.site_url, a.adsense, a.ad_slot, pro=a.pro, pro_at=a.pro_at, scn_at=a.scn_at, vs=a.vs, vs_pro=a.vs_pro, vs_at=a.vs_at, vs_free_at=a.vs_free_at, hoops=a.hoops, hoops_pro=a.hoops_pro, fulldef=a.fulldef, no_ads=a.no_ads, ezoic=a.ezoic, ezoic_head=a.ezoic_head, ezoic_ids=(a.ezoic_ids or '').strip() or None, minify=not a.no_minify,
               google_client_id=a.google_client_id, old_domain=a.old_domain)
     n = sum(1 for _ in o.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in o.rglob("*") if p.is_file()) / 1e6
