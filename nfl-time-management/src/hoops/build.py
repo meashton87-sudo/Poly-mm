@@ -685,7 +685,12 @@ def real_log(g: Game, start: int) -> list:
     for drop in ({TIMEOUT}, {VIOLATION, EJECTION}):  # thin the longest logs (overtime games)
         if len(evs) > REAL_MAX:
             evs = [e for e in evs if e.type not in drop]
-    return [{"t": float(e.clock), "p": e.period, "text": e.text, "score": list(e.score), "team": e.team} for e in evs]
+    out = [{"t": float(e.clock), "p": e.period, "text": e.text, "score": list(e.score), "team": e.team} for e in evs]
+    if out and out[-1]["score"] != list(g.final):
+        # A basket waved off on review stays in the data as a made shot; the
+        # period-end row then carries the corrected score (16 games in two seasons).
+        out.append({"t": 0.0, "p": g.events[-1].period, "text": "Score corrected on review", "score": list(g.final), "team": None})
+    return out
 
 
 def game_spot(g: Game, n: int) -> dict | None:
