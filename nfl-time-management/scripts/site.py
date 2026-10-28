@@ -431,8 +431,68 @@ def move_page(script: str, new: str) -> str:
 
 # Every page: the same footer (the site's pages, the contact, the disclaimer and the data credit), its style, and the
 # canonical address of the page
-PAGES = [("", "Play", 1.0), ("how-it-works", "How it works", 0.8), ("about", "About", 0.6), ("stats", "Stats", 0.6),
-         ("patch-notes", "Patch notes", 0.5), ("privacy", "Privacy", 0.3)]
+PAGES = [("", "Play", 1.0), ("how-it-works", "How it works", 0.8), ("faq", "FAQ", 0.7), ("drives", "The drives", 0.7), ("glossary", "Glossary", 0.6),
+         ("play-callers", "Play-callers", 0.5), ("about", "About", 0.6), ("stats", "Stats", 0.6), ("patch-notes", "Patch notes", 0.5), ("privacy", "Privacy", 0.3)]
+SRC = WEB.parent / "src" / "nflclock"            # the committed data some pages are built from (the schedule, the drives, the play-callers)
+TEAM_CITY = {"ARI": "Arizona", "ATL": "Atlanta", "BAL": "Baltimore", "BUF": "Buffalo", "CAR": "Carolina", "CHI": "Chicago", "CIN": "Cincinnati",
+             "CLE": "Cleveland", "DAL": "Dallas", "DEN": "Denver", "DET": "Detroit", "GB": "Green Bay", "HOU": "Houston", "IND": "Indianapolis",
+             "JAX": "Jacksonville", "KC": "Kansas City", "LA": "Los Angeles (NFC)", "LAC": "Los Angeles (AFC)", "LV": "Las Vegas", "MIA": "Miami",
+             "MIN": "Minnesota", "NE": "New England", "NO": "New Orleans", "NYG": "New York (NFC)", "NYJ": "New York (AFC)", "PHI": "Philadelphia",
+             "PIT": "Pittsburgh", "SEA": "Seattle", "SF": "San Francisco", "TB": "Tampa Bay", "TEN": "Tennessee", "WAS": "Washington",
+             "STL": "St. Louis", "SD": "San Diego", "OAK": "Oakland"}
+
+
+def drives_html() -> str:
+    """The drives page (/drives): the featured dailies so far (daily_schedule.json featured: the day's title or its matchup,
+    its date and its note), newest first, then Pro's historic drives (pro_drives.json) and playoff runs (pro_runs.json).
+    Days still to come are left out (a featured day is a surprise until it is up)."""
+    e = lambda x: html.escape(str(x), quote=False)
+    sched = json.loads((SRC / "daily_schedule.json").read_text())
+    launch = datetime.strptime(sched["launch"], "%Y-%m-%d").date()
+    today = datetime.now(timezone.utc).date()          # (a day is up at local midnight everywhere by noon UTC the next day; close enough)
+    out = []
+    for n, f in sorted(((int(k), v) for k, v in sched["featured"].items()), reverse=True):
+        day = launch + timedelta(days=n - 1)
+        if day > today or not f.get("note"):
+            continue
+        title = f.get("title")
+        if not title:                                  # the matchup from the spot id: season_week_away_home#...
+            parts = f["id"].split("#")[0].split("_")
+            away, home = TEAM_CITY.get(parts[2]), TEAM_CITY.get(parts[3]) if len(parts) > 3 else None
+            title = f"{away} at {home}" if away and home else f["id"].split("#")[0].replace("_", " ")
+        out.append(f'<article class="drive"><h3>{e(title)}</h3><time datetime="{day.isoformat()}">Day {n} · {day.strftime("%B")} {day.day}, {day.year}</time>'
+                   f'<p>{e(f["note"])}</p></article>')
+    drives = json.loads((SRC / "pro_drives.json").read_text())
+    out.append('<h2>Historic drives (Pro)</h2><p class="note">The famous endings, replayable any time: you take over where the real drive started, '
+               'with the real players, and the game grades you the same way as the daily.</p>')
+    for d in drives:
+        if d.get("note"):
+            out.append(f'<article class="drive"><h3>{e(d["title"])}</h3><p>{e(d["note"])}</p></article>')
+    runs = json.loads((SRC / "pro_runs.json").read_text())
+    if runs:
+        out.append('<h2>Playoff runs (Pro)</h2><p>A whole postseason, one game at a time, each from a spot where the game was still in the balance. '
+                   'Lose one and the run is over, as a real one is. The runs: ' + ", ".join(e(r["title"]) for r in runs) + '.</p>')
+    return "\n".join(out)
+
+
+def callers_html() -> str:
+    """The play-callers page (/play-callers): who called each side, by season (newest first) and team, with the weeks and
+    the source (src/nflclock/play_callers.json, the curated list the game matches your calls against)."""
+    e = lambda x: html.escape(str(x), quote=False)
+    callers = json.loads((SRC / "play_callers.json").read_text())["callers"]
+    out = ['<div class="callers">']
+    for season in sorted({c["season"] for c in callers}, reverse=True):
+        rows = sorted((c for c in callers if c["season"] == season), key=lambda c: (TEAM_CITY.get(c["team"], c["team"]), c["side"], c["from_week"]))
+        out.append(f'<h2>{season}</h2><table><thead><tr><th>Team</th><th>Side</th><th>Play-caller</th><th>Weeks</th><th>Source</th></tr></thead><tbody>')
+        for c in rows:
+            unc = ' class="unc"' if c.get("unverified") else ""
+            name = e(c["name"]) + (" (unconfirmed)" if c.get("unverified") else "")
+            src = e(c.get("source", "")) + (f' · {e(c["note"])}' if c.get("note") else "")
+            out.append(f'<tr{unc}><td>{e(TEAM_CITY.get(c["team"], c["team"]))}</td><td>{"Offense" if c["side"] == "off" else "Defense"}</td>'
+                       f'<td>{name}</td><td>{c["from_week"]}–{c["to_week"]}</td><td>{src}</td></tr>')
+        out.append("</tbody></table>")
+    out.append("</div>")
+    return "\n".join(out)
 
 
 def patch_notes_html(notes: dict) -> str:
@@ -506,7 +566,7 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         raise SystemExit(f"--google-client-id wants an OAuth client id like 1234-abc.apps.googleusercontent.com, not {google_client_id!r}")
     if ad_slot and not re.fullmatch(r"\d{6,12}", ad_slot):
         raise SystemExit(f"--ad-slot wants an ad unit's slot number, not {ad_slot!r}")
-    missing = [f for f in FILES + ["stats.html", "privacy.html", "about.html", "how-it-works.html", "patch-notes.html", "patch_notes.json", "admin.html", "sw.js"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
+    missing = [f for f in FILES + ["stats.html", "privacy.html", "about.html", "how-it-works.html", "faq.html", "glossary.html", "drives.html", "play-callers.html", "patch-notes.html", "patch_notes.json", "admin.html", "sw.js"] if not (WEB / f).exists()] + ([] if (WEB / "spots").is_dir() else ["spots/"])
     if missing:
         raise SystemExit(f"build the game data first; missing in web/: {', '.join(missing)}")
     if out.exists():
@@ -647,8 +707,19 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
     for name, path, title, d in (("how-it-works.html", "how-it-works", "How Two-Minute Drill works",
                                   "Real NFL late-game situations, 27 play calls, real plays on every snap, and calls graded on win chance."),
                                  ("about.html", "about", "About Two-Minute Drill",
-                                  "An independent, fan-made NFL play-calling game built on public nflverse data.")):
+                                  "An independent, fan-made NFL play-calling game built on public nflverse data."),
+                                 ("faq.html", "faq", "Two-Minute Drill FAQ",
+                                  "The grade, the daily, streaks, Survivor, Versus, the Draft, Pro and the data behind the game."),
+                                 ("glossary.html", "glossary", "Two-minute football glossary",
+                                  "Clock rules, the calls, the defense, how the grade works, and the game's own terms."),
+                                 ("drives.html", "drives", "The drives",
+                                  "The featured dailies so far and the story behind each, plus the historic drives and playoff runs."),
+                                 ("play-callers.html", "play-callers", "The play-callers",
+                                  "Who really called the plays, team by team and week by week: the list your calls are matched against.")):
         fill(name, (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, title, d, path), path)
+    # the pages built from the committed data: the drives (the schedule's featured days, Pro's drives and runs) and the play-callers
+    (out / "drives.html").write_text((out / "drives.html").read_text().replace("<!--DRIVES-->", drives_html()))
+    (out / "play-callers.html").write_text((out / "play-callers.html").read_text().replace("<!--CALLERS-->", callers_html()))
     # the patch notes (/patch-notes): every update to the game, from web/patch_notes.json
     fill("patch-notes.html", (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url,
          "Two-Minute Drill patch notes", "Every change to the game, newest first.", "patch-notes"), "patch-notes")

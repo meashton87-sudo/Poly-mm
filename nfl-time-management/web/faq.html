@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!--SITE-HEAD-->
+<title>Two-Minute Drill FAQ</title>
+<meta name="description" content="Answers to what players ask most: the grade, the daily, streaks, Survivor, Versus, the Draft, Pro and the data behind the game.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800;900&family=Libre+Franklin:wght@400;600;700&display=swap">
+<style>
+/* Same tokens as the game and the stats page */
+:root {
+  --paper: #f3f5f2; --card: #ffffff; --ink: #121a15; --muted: #5a675e; --line: #d3dbd5; --turf: #2c7549;
+  --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "Libre Franklin", "Franklin Gothic Medium", "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; color-scheme: dark;
+} }
+:root[data-theme="dark"] { --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.55 var(--body); padding-top: env(safe-area-inset-top, 0px); }
+.wrap { max-width: 640px; margin: 0 auto; padding: 14px 16px 48px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 8px; }
+h1 { margin: 0; font: 900 30px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
+h1 small { display: block; font: 700 11px var(--body); letter-spacing: .16em; color: var(--muted); margin-top: 4px; }
+h2 { font: 800 20px/1.15 var(--display); text-transform: uppercase; letter-spacing: .02em; margin: 26px 0 6px; text-wrap: balance; }
+p, li { max-width: 65ch; }
+a { color: var(--turf); }
+a.play { font-weight: 700; color: var(--ink); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; background: var(--card); white-space: nowrap; }
+.note { color: var(--muted); font-size: 13px; }
+dl { margin: 0; } dt { font-weight: 700; margin-top: 12px; } dd { margin: 2px 0 0; max-width: 65ch; }
+h3 { font: 700 16px/1.3 var(--body); margin: 18px 0 4px; } .drive { margin: 0 0 18px; } .drive time, .drive .tag { color: var(--muted); font-size: 12.5px; }
+.callers table { border-collapse: collapse; width: 100%; font-size: 13.5px; } .callers th, .callers td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.callers th { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); } .callers h2 { margin-top: 30px; } .unc { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><a href="./#home" class="home">Two-Minute Drill</a><small>FAQ</small></h1>
+    <a class="play" href="./">Play today ›</a>
+  </header>
+<main>
+
+  <p>Short answers to the questions players ask most, in the order they usually come up. The <a href="how-it-works">guide</a> has the longer version of the first few.</p>
+  <h2>The daily</h2>
+  <h3>When does the new daily come out?</h3>
+  <p>At your local midnight. Everyone plays the same spot on the same calendar day, so a player in Los Angeles and one in London get the same drive on their own day.</p>
+  <h3>I won the drive. Why is my grade low?</h3>
+  <p>Because the grade is not the result. Every call is graded by how much win chance it kept compared with the best call in that spot, found by simulating the rest of the game for every option. You can make three poor calls and still score on a lucky bounce; the grade says the calls were poor. The end card names the one call that cost you the most and the call that was there instead.</p>
+  <h3>The real coach made the same call I did and lost. Why am I graded down for it?</h3>
+  <p>Real coaches make costly calls too; that is half the fun of the game. "Same as the coach" on the end card compares the result of your drive with his. The grade is a separate thing: your calls, snap by snap, against what the numbers say was best there.</p>
+  <h3>What does "better than 40% of play-callers" mean?</h3>
+  <p>Thousands of typical NFL play-callers are simulated making your drive's decisions with the real league's mix of calls in each spot. Your calls are placed among them. A 40 means four in ten of them would have done worse than you.</p>
+  <h3>What does "coached like" mean?</h3>
+  <p>The real play-caller whose tendencies your calls most resembled: how often you ran, how fast you went, how much you gambled. The play-callers are listed on the <a href="play-callers">play-callers page</a>. It is a likeness, not a judgment.</p>
+  <h3>It says nothing I called mattered. What?</h3>
+  <p>Some spots are decided before you get them: down 25 in the fourth quarter, or up 10 with the ball and a minute left. On those snaps no call changes the win chance much, so none counts for or against you, and the end card says so rather than inventing a grade.</p>
+  <h3>Can I play more than one drive a day?</h3>
+  <p>Yes. After the day's drive there is a practice drive, graded the same way, as many as you like; it does not count for the day's list or your streak. Survivor and Versus are always open. Pro adds the historic drives, the playoff runs, the archive of past dailies and the scenario builder.</p>
+  <h3>How do streaks and freezes work?</h3>
+  <p>A streak is days in a row with the daily finished, counted from the days you played, so it is the same on every phone you sign in on. Every seven days in a row earns a freeze, two held at most. A freeze covers a day you missed once you play the next day; you do not have to do anything.</p>
+  <h3>I restarted the drive. Does it count?</h3>
+  <p>For you, yes: your score, your streak and your stats. Not for the day's leaderboard, because the day's draws are the same for everyone and a restart could learn them.</p>
+  <!--AD-MID-->
+  <h2>Survivor</h2>
+  <h3>How does Survivor work?</h3>
+  <p>Real fourth quarters, one after another, each a different game. Win and the next one starts; lose once and the run is over. A tie goes to overtime where both teams get the ball and then the next score wins. Your best run goes on the Survivor board under your name.</p>
+  <h3>I got knocked out on the first drive. Is that normal?</h3>
+  <p>Often. Survivor's spots are real fourth quarters with real deficits, and the real coach lost a good share of them too; the card tells you when he did. There is one extra life a run: free with Pro, or by watching an ad.</p>
+  <h2>Versus</h2>
+  <h3>How does a Versus match work?</h3>
+  <p>Two coaches, two phones, one game played by the room in the middle. Each snap the defense calls first, with 15 seconds; then the offense calls, with 20 seconds. On fourth down the offense says first whether it is going for it, kicking or punting, and the defense calls knowing that. A kick is a decision for both sides: the offense can fake it, the defense can go for the block. A tie goes to college-style overtime: both teams get the ball, then the next score wins.</p>
+  <h3>What happens if I lose my connection?</h3>
+  <p>You have 20 seconds to get back. Longer than that and the match is a forfeit. Let the play clock run out on two calls in a row and it is a forfeit too.</p>
+  <h3>What is ranked, and what is the season?</h3>
+  <p>A ranked match counts on the ladder: your rating goes up for a win and down for a loss, more against a stronger opponent. Ratings are kept by season; a new season starts everyone level. As a season ends, the top of its ladder with enough rated games plays a single-elimination Championship bracket, seeded by rating.</p>
+  <h3>Can I play a friend, or the computer?</h3>
+  <p>Both. A friend's room is a code you send; the computer is a tap in the lobby, and it is offered to you in the queue when nobody is free. Games against the computer and friends are never rated.</p>
+  <h2>The Draft</h2>
+  <h3>How does the Draft work?</h3>
+  <p>Before the toss, an auction. Both coaches get $50. Cards come up one at a time in a random order, each a real player at a slot: a quarterback, a running back, two wide receivers, a tight end, an offensive line and a defense with special teams. The bidding is open: whoever bids more at the deadline takes the card, and every bid puts time back on the clock. When every slot is filled, the two drafted sides play a Versus match. The player's rating is never shown; his name and team are.</p>
+  <h3>What is the floor?</h3>
+  <p>The least a card can open at. Every player has a sticker price from $1 to $8 by how he ranks among the league's starters at his slot, and a card also opens at no less than half of what the other coach paid for that position. So once your opponent has paid $20 for a quarterback, the next quarterback opens at $10, not $1.</p>
+  <h3>What are Pass and the Steal?</h3>
+  <p>Pass takes you out of the current card at once instead of waiting out the clock. The Steal, once a draft, lets you bid on a card for a position you already filled; if you win it, the new player takes the slot and the one you had there goes to the other coach.</p>
+  <h3>Why do I have a "replacement" player?</h3>
+  <p>Because nobody filled that slot. Pass on a position, or never bid on it, and the slot gets a replacement rated below the league's worst starter there, marked on your lineup. Bidding on every position is the only way to field a full-strength team.</p>
+  <h3>What is "still here?"</h3>
+  <p>The Draft's check on a coach who has let three cards in a row go by without a bid. A tap, a bid or a pass keeps your seat. No answer in 20 seconds and the draft ends as your forfeit, so the other coach is not left waiting.</p>
+  <h3>Who is the quarterback on each card?</h3>
+  <p>The team's starter now: the player with the most snaps over the team's last three games, the latest counting most. A starter out hurt for a stretch is still the starter; a rookie who took the job keeps it. Better players come up a little more often than worse ones, but every starter can come up.</p>
+  <h2>Pro, data and the rest</h2>
+  <h3>What is Pro and what does it cost?</h3>
+  <p>A one-time purchase of $4.99, not a subscription. It adds the historic drives, the playoff runs, the scenario builder with the real rosters from 2001 on, the archive of every past daily, the Who plays picker, and no ads. One code works on three devices, or on any device when it belongs to your account.</p>
+  <h3>Where does the data come from?</h3>
+  <p>Public play-by-play, participation and charting data from the nflverse project, including FTN charting. Every snap you play is a real play of the call you made, from the same kind of situation, and every situation is a real moment from a real game. Nothing in the game is affiliated with or endorsed by the league, its teams or its players.</p>
+  <h3>Why are teams named by city?</h3>
+  <p>Team nicknames and logos are trademarks. The game names teams by their city or region (Los Angeles and New York each have two, so they carry their conference) and uses no logos.</p>
+  <h3>Does it work offline?</h3>
+  <p>Once it has loaded once, the day's drive plays offline and your result posts when you are back online. Survivor's spots, Versus and the Draft need a connection.</p>
+  <h3>How do I report a bug or suggest something?</h3>
+  <p>The Report a bug link at the bottom of every page sends it straight to the people who build the game; many features started as a player's suggestion there. The <a href="patch-notes">patch notes</a> list every change, newest first.</p>
+  <h3>What do you keep about me?</h3>
+  <p>As little as the game needs: your results under the name you chose, and your email only if you make an account. The <a href="privacy">privacy page</a> has the whole of it.</p>
+
+</main>
+<!--SITE-FOOT-->
+</div>
+</body>
+</html>
