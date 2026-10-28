@@ -11,15 +11,15 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800;900&family=Libre+Franklin:wght@400;600;700&display=swap">
 <style>
 :root {
-  --paper: #f3f5f2; --card: #ffffff; --ink: #121a15; --muted: #5a675e; --line: #d3dbd5; --turf: #2c7549; --court: #b5581f; --sq-g: #2c7549; --sq-y: #c29a1b; --sq-r: #b23a3a;
+  --paper: #f3f5f2; --card: #ffffff; --ink: #121a15; --muted: #5a675e; --line: #d3dbd5; --turf: #2c7549; --court: #b5581f; --sq-g: #2c7549; --sq-y: #c29a1b; --sq-r: #b23a3a; --wood: #d9a066;
   --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
   --body: "Libre Franklin", "Franklin Gothic Medium", "Helvetica Neue", Arial, sans-serif;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; --court: #d97b3b; --sq-g: #3f9a63; --sq-y: #d9b23a; --sq-r: #d25555; color-scheme: dark;
+  --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; --court: #d97b3b; --sq-g: #3f9a63; --sq-y: #d9b23a; --sq-r: #d25555; --wood: #a8673a; color-scheme: dark;
 } }
-:root[data-theme="dark"] { --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; --court: #d97b3b; --sq-g: #3f9a63; --sq-y: #d9b23a; --sq-r: #d25555; color-scheme: dark; }
+:root[data-theme="dark"] { --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; --court: #d97b3b; --sq-g: #3f9a63; --sq-y: #d9b23a; --sq-r: #d25555; --wood: #a8673a; color-scheme: dark; }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body { background: var(--paper); color: var(--ink); font: 15px/1.5 var(--body); padding-top: env(safe-area-inset-top, 0px); }
@@ -47,13 +47,38 @@ a { color: var(--turf); }
 #board .clk { display: flex; justify-content: space-between; align-items: baseline; border-top: 1px solid rgba(255,255,255,.15); padding-top: 6px; margin-top: 2px; }
 #board .clk b { font: 900 26px/1 var(--display); color: #ffd37a; }
 #board .clk span { font-size: 12px; color: #b9c6d8; }
+/* the court */
+#courtbox { position: relative; border-radius: 12px; overflow: hidden; margin-bottom: 10px; background: var(--wood); cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; }
+#court { display: block; width: 100%; height: auto; }
+.wood { fill: var(--wood); }
+.ln { fill: none; stroke: rgba(255,255,255,.8); stroke-width: .28; stroke-linejoin: round; }
+.rim { fill: none; stroke: #e8552b; stroke-width: .32; }
+.net { fill: none; stroke: rgba(255,255,255,.95); stroke-width: .2; transform-box: fill-box; transform-origin: top center; transition: transform .25s ease; }
+.net.swish { transform: scaleY(1.6) scaleX(.8); }
+.man circle { stroke: rgba(255,255,255,.9); stroke-width: .22; }
+.man.me circle { fill: #1f5fbf; }
+.man.them circle { fill: #2b2f36; }
+.man text { font: 700 1.75px var(--body); fill: #fff; paint-order: stroke; stroke: rgba(0,0,0,.55); stroke-width: .4; stroke-linejoin: round; }
+.ball { fill: #e8762b; stroke: #5a2a0a; stroke-width: .12; }
+.shadow { fill: rgba(0,0,0,.28); }
+.badge { font: 900 5px var(--display); fill: #fff; paint-order: stroke; stroke: rgba(0,0,0,.55); stroke-width: .7; stroke-linejoin: round; letter-spacing: .15px; }
+.badge.score { fill: #ffd37a; } .badge.miss { fill: #ff9a8a; } .badge.foul { fill: #ffd37a; } .badge.to { fill: #fff; }
+#cap { position: absolute; left: 8px; right: 8px; top: 8px; background: rgba(15,35,64,.86); color: #fff; font-size: 13px; line-height: 1.35; padding: 6px 10px; border-radius: 8px; pointer-events: none; }
+#cap:empty { display: none; }
+/* the dock: the calls */
+#dock { display: grid; gap: 8px; margin-bottom: 12px; }
+#dock:empty { display: none; }
+#dock .sit { font-size: 13px; color: var(--muted); }
+.keys { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.key { display: grid; gap: 2px; text-align: left; font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; cursor: pointer; min-height: 56px; }
+.key b { font: 800 15px/1.1 var(--display); text-transform: uppercase; letter-spacing: .03em; }
+.key span { font-size: 12px; color: var(--muted); }
+.key.to { border-style: dashed; }
+.key:hover, .key:focus-visible { border-color: var(--court); outline: none; }
+/* the card */
+#card:empty { display: none; }
 /* the card */
 #card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 8px; }
-.opts { display: grid; gap: 8px; margin-top: 4px; }
-.opt { display: grid; gap: 2px; text-align: left; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; }
-.opt b { font: 800 16px/1.1 var(--display); text-transform: uppercase; letter-spacing: .03em; }
-.opt span { font-size: 13px; color: var(--muted); }
-.opt:hover, .opt:focus-visible { border-color: var(--court); outline: none; }
 .last { background: var(--paper); border-left: 3px solid var(--court); padding: 8px 10px; border-radius: 6px; font-size: 14px; }
 .btn { font: 700 14px var(--body); color: #fff; background: var(--turf); border: 0; border-radius: 999px; padding: 10px 18px; cursor: pointer; text-decoration: none; display: inline-block; }
 .btn.big { font-size: 17px; padding: 12px 22px; justify-self: start; }
@@ -81,10 +106,12 @@ a { color: var(--turf); }
     <a class="btn ghostbtn" href="./">Football ›</a>
   </header>
   <div id="board" aria-live="polite"></div>
+  <div id="courtbox" title="Tap to skip the play"><svg id="court" role="img" aria-label="The court"></svg><div id="cap" aria-live="polite"></div></div>
+  <div id="dock"></div>
   <main id="card">Loading today's game…</main>
   <section class="howto">
     <h3>How it works</h3>
-    <p>One real game a day, the same for everyone: the last two minutes, the real score, clock, timeouts and bonus. You coach one team, possession by possession. On your ball: go now, work for a shot, hunt a three, attack the rim, hold for the last shot, or burn a timeout to advance the ball. On theirs: play it straight, foul to stop the clock, or press.</p>
+    <p>One real game a day, the same for everyone: the last two minutes, the real score, clock, timeouts and bonus. You coach one team, possession by possession, and watch each one play out on the court (tap the court to skip ahead). On your ball: go now, work for a shot, hunt a three, attack the rim, hold for the last shot, or burn a timeout to advance the ball. On theirs: play it straight, foul to stop the clock, or press.</p>
     <p>Every call is graded on win chance: the rest of the game is simulated for every option you had, with the shooting, free-throw, turnover and rebound rates of these teams from two seasons of play-by-play, and your call is measured against the best one. Your score places you among typical coaches making the same decisions. At the end you see how the real game ended from the same spot.</p>
     <p>Teams are named by city. Two-Minute Drill is an independent, fan-made game and is not affiliated with any league or team.</p>
   </section>
