@@ -114,9 +114,13 @@
     const toP = L.to * A.to * (press ? 1.5 : 1);
     if (r() < toP) {
       S.clock = Math.max(0, S.clock - u(r, 1, t));
-      const who = Math.floor(r() * 5), steal = r() < 0.6;
-      if (ev) ev.push({ k: 'turnover', who, steal });
-      lines.push(`${name(who)} turns it over${press ? ' against the press' : steal ? ', stolen' : ''}`); S.poss = def; S.shot = SHOT; S.dead = false; return done();
+      // what kind: a live-ball steal, a pass thrown away, or a dead ball (out of bounds, an offensive foul, a travel), the
+      // way the league's turnovers split; a trap forces more steals
+      const who = Math.floor(r() * 5), z = r(), kind = press ? (z < 0.65 ? 'steal' : z < 0.9 ? 'badpass' : 'oob') : z < 0.42 ? 'steal' : z < 0.68 ? 'badpass' : z < 0.84 ? 'oob' : z < 0.94 ? 'ofoul' : 'travel';
+      const dead = kind === 'oob' || kind === 'ofoul' || kind === 'travel';
+      if (ev) ev.push({ k: 'turnover', who, steal: kind === 'steal', dead, kind });
+      lines.push(`${name(who)} ${{ steal: press ? 'has it stolen in the trap' : 'has it stolen', badpass: press ? 'throws it away against the press' : 'throws it away', oob: 'loses it out of bounds', ofoul: 'is called for the offensive foul', travel: 'travels' }[kind]}`);
+      S.poss = def; S.shot = SHOT; S.dead = dead; return done();
     }
     S.clock = Math.max(0, S.clock - t);
     const need = lead(S, off);                                 // (a team down three with no time hunts the three whatever was called)
@@ -563,6 +567,14 @@
           await wait(700);
           badge('');
           await otherWay(def, st, false);
+        } else if (e.dead) {
+          badge(e.kind === 'ofoul' ? 'OFFENSIVE FOUL' : e.kind === 'travel' ? 'TRAVEL' : 'OUT OF BOUNDS', 'foul'); caption(last());
+          if (e.kind === 'oob') await tween({ ms: 700, ball: { to: [from[0] < 25 ? -1.5 : W + 1.5, from[1] - 3], arc: 0.5 } });
+          await wait(1200);
+          badge('');
+          const g = nearest(def, court.bpos);
+          await tween({ ms: 600, moves: [{ side: def, i: g, to: [court.bpos[0] - 0.9, court.bpos[1] - 0.3] }], ball: { to: court.bpos.slice(0, 2), catch: { side: def, i: g } } });
+          await otherWay(def, g, true);
         } else {
           badge('TURNOVER', 'foul'); caption(last());
           const spot = onCourt([from[0] + (from[0] < 25 ? 10 : -10), from[1] - 7]);
