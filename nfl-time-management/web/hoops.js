@@ -783,10 +783,26 @@
   let D = null, spot = null, S = null, G = null, busy = false;            // the data, today's spot, the state, the game record
   const dayKey = () => `${STORE}:day:${dayISO()}`;
   const dayN = () => { const a = new Date(2026, 9, 28), b = new Date(); b.setHours(12, 0, 0, 0); a.setHours(12, 0, 0, 0); return Math.max(1, Math.round((b - a) / 864e5) + 1); };
-  function pickSpot(practice) {
-    if (practice) return D.spots[Math.floor(Math.random() * D.spots.length)];
+  const allSpots = () => D.spots.concat(D.playoffs || []);
+  const spotById = (id) => allSpots().find((s) => s.id === id);
+  const famousDay = () => (D.famous || {})[dayISO()] || null;
+  function pickSpot(mode, opt) {
+    if (opt && opt.spot) return opt.spot;
+    if (mode !== 'daily') { const all = allSpots(); return all[Math.floor(Math.random() * all.length)]; }
+    const fid = famousDay(); if (fid && spotById(fid)) return spotById(fid);
     const id = D.schedule[dayISO()];
     return D.spots.find((s) => s.id === id) || D.spots[hash('hoops', dayISO()) % D.spots.length];
+  }
+  // the spot's label: a playoff game's round and number, a built game's own
+  const poLine = (sp) => (sp.po ? `${sp.season + 1} playoffs · ${sp.po.name}, Game ${sp.po.game}` : sp.built ? 'A game you built' : `${sp.season}–${String(sp.season + 1).slice(2)} season`);
+  function modeLabel() {
+    const m = G.mode;
+    if (m === 'daily') { const f = famousDay(); return f ? `Famous Endings Week · day ${Object.keys(D.famous).sort().indexOf(dayISO()) + 1}` : `Day ${dayN()} · today's game`; }
+    if (m === 'surv') return `Survivor · game ${(G.opt.wins || 0) + 1}`;
+    if (m === 'run') return `Playoff run · ${teamCity(G.opt.run.team)} ${G.opt.run.season + 1} · game ${G.opt.k + 1} of ${G.opt.run.spots.length}`;
+    if (m === 'build') return 'Your game';
+    if (m === 'duel') return 'A duel: the same game, the same bounces';
+    return 'Practice game';
   }
   function situation(S) {
     const me = S.me, ld = lead(S, me);
@@ -807,9 +823,9 @@
   }
   function renderIntro(practice) {
     const box = $('card'); box.textContent = ''; $('dock').textContent = ''; caption('');
-    box.append(el('div', 'eyebrow', practice ? 'Practice game' : `Day ${dayN()} · today's game`),
+    box.append(el('div', 'eyebrow', modeLabel()),
       el('h2', '', `${teamCity(spot.away)} at ${teamCity(spot.home)}`),
-      el('p', 'lead', `${spot.season}–${String(spot.season + 1).slice(2)} season. ${situation(S)}. You coach ${teamCity(teamOf(S, S.me))}${coachOf(S.me) ? `, in ${coachOf(S.me)}'s seat, against ${coachOf(other(S.me)) || 'their bench'}` : ''}.`),
+      el('p', 'lead', `${poLine(spot)}. ${situation(S)}. You coach ${teamCity(teamOf(S, S.me))}${coachOf(S.me) ? `, in ${coachOf(S.me)}'s seat, against ${coachOf(other(S.me)) || 'their bench'}` : ''}.`),
       el('p', 'note', `Timeouts: you ${S.to[S.me]}, they ${S.to[other(S.me)]}. ${inBonus(S, other(S.me)) ? 'They are in the bonus: any foul on you is two free throws. ' : ''}${inBonus(S, S.me) ? 'You are in the bonus: any foul on them is two free throws.' : ''}`));
     if (spot.lead) box.append(el('p', 'note', `How it got here: ${byCity(spot.lead)}.`));
     const q = new URLSearchParams(location.search), vs = Number(q.get('vs'));
@@ -831,6 +847,8 @@
     go.addEventListener('click', () => { G.started = true; saveGame(); box.textContent = ''; step(); });
     box.append(go);
     if (!practice) { const st = load(`${STORE}:stats`, { days: {} }), n = Object.keys(st.days).length; if (n) box.append(el('p', 'note', `You have played ${n} day${n === 1 ? '' : 's'}. Streak: ${streakOf(st)}.`)); }
+    if (G.mode === 'surv') { const sv = load(`${STORE}:surv`, { best: 0, runs: 0 }); box.append(el('p', 'note', `Win and keep going; lose once and the run is over. Your best run: ${sv.best} win${sv.best === 1 ? '' : 's'}.`)); }
+    if (G.mode !== 'daily') box.append(moreHoops());
     drawBoard();
   }
   // one decision: the options in the dock; the evaluation is done when the call is in (never shown before)
@@ -951,18 +969,20 @@
     const box = $('card'); box.textContent = '';
     const won = lead(S, S.me) > 0, margin = Math.abs(lead(S, S.me)), decs = G.decs;
     badge(won ? 'YOU WIN' : 'FINAL', won ? 'score' : 'miss'); caption(`Final: ${teamCity(teamOf(S, S.me))} ${S.score[S.me]}, ${teamCity(teamOf(S, other(S.me)))} ${S.score[other(S.me)]}`);
-    const realMine = spot.me === spot.home ? spot.final[0] - spot.final[1] : spot.final[1] - spot.final[0];
-    const myMargin = lead(S, S.me), vsCoach = Math.sign(myMargin - realMine), coach = coachOf(S.me);
+    const hasReal = !!(spot.final && spot.final.length === 2), realMine = hasReal ? (spot.me === spot.home ? spot.final[0] - spot.final[1] : spot.final[1] - spot.final[0]) : 0;
+    const myMargin = lead(S, S.me), vsCoach = hasReal ? Math.sign(myMargin - realMine) : 0, coach = hasReal ? coachOf(S.me) : '';
     let fresh = false;
     if (G.score == null) {
       G.score = Math.round(percentile(decs) * 100); G.won = won; G.margin = margin; G.done = true; saveGame(); fresh = true;
       if (!G.practice) { const st = load(`${STORE}:stats`, { days: {} }); if (!st.days[dayISO()]) { st.days[dayISO()] = { score: G.score, won, vs: vsCoach }; save(`${STORE}:stats`, st); } }
     }
-    box.append(el('div', 'eyebrow', G.practice ? 'Practice game' : `Day ${dayN()} · ${teamCity(spot.away)} at ${teamCity(spot.home)}`),
+    if (fresh) modeResult(won);
+    box.append(el('div', 'eyebrow', `${modeLabel()} · ${teamCity(spot.away)} at ${teamCity(spot.home)}`),
       el('div', 'big', String(G.score)), el('div', 'pct-lab', `Better than ${G.score}% of coaches`),
       el('p', 'note', `The score is your calls, not the result: each one measured against the best option in that spot, the misses added up (${(decs.reduce((a, x) => a + x.cost, 0) * 100).toFixed(1)} points of win chance in all) and placed among a field of coaches making the same calls. Tap a call for every option's win chance.`),
       el('h2', '', `${won ? 'You won' : margin === 0 ? 'Tied' : 'You lost'} ${S.score[S.me]}–${S.score[other(S.me)]}${S.period > 4 ? ' in overtime' : ''}`),
-      el('p', 'note', `The real game: ${teamCity(teamOf(S, S.me))} ${realMine > 0 ? 'won' : realMine < 0 ? 'lost' : 'tied'} ${Math.abs(realMine) ? `by ${Math.abs(realMine)}` : ''} (${spot.final[1]}–${spot.final[0]} ${teamCity(spot.away)} at ${teamCity(spot.home)}).`));
+      el('p', 'note', hasReal ? `The real game: ${teamCity(teamOf(S, S.me))} ${realMine > 0 ? 'won' : realMine < 0 ? 'lost' : 'tied'} ${Math.abs(realMine) ? `by ${Math.abs(realMine)}` : ''} (${spot.final[1]}–${spot.final[0]} ${teamCity(spot.away)} at ${teamCity(spot.home)}).` : 'A game you built: no real ending to compare.'));
+    const ms = modeStatus(won); if (ms) box.append(ms);
     if (coach) {
       const vsBox = el('div', `vs ${vsCoach > 0 ? 'better' : vsCoach < 0 ? 'worse' : 'same'}`);
       const fmt = (m) => (m > 0 ? `Won by ${m}` : m < 0 ? `Lost by ${-m}` : 'Tied');
@@ -991,23 +1011,106 @@
     else box.append(el('p', 'verdict', 'Every call the best or close to it. That is a coach.'));
     const mine = el('div', 'real'); mine.append(el('h3', '', 'How your game went'));
     const ul = el('ul', ''); for (const t of G.lines) ul.append(el('li', '', t)); mine.append(ul); box.append(mine);
-    const real = el('div', 'real'); real.append(el('h3', '', 'What really happened'));
+    const real = el('div', 'real'); if (hasReal) real.append(el('h3', '', 'What really happened'));
     const rl = el('ul', '');
     for (const e of (spot.real || []).slice(0, 40)) rl.append(el('li', '', `${e.t != null ? `${clockText(e.t)}${e.p > 4 ? ' OT' : ''} · ` : ''}${byCity(e.text)}${e.score ? ` · ${e.score[1]}–${e.score[0]}` : ''}`));
     real.append(rl); box.append(real);
     if (!G.practice) { const st = load(`${STORE}:stats`, { days: {} }); box.append(el('p', 'streak', `🔥 ${streakOf(st)} day${streakOf(st) === 1 ? '' : 's'} in a row · come back tomorrow for a new game`)); }
     const row = el('div', 'row');
-    const share = el('button', 'btn', G.practice ? 'Share' : 'Share · challenge a friend'); share.type = 'button';
+    const share = el('button', 'btn', G.mode === 'daily' ? 'Share · challenge a friend' : spot.built ? 'Share' : 'Share · duel a friend'); share.type = 'button';
     share.addEventListener('click', async () => {
-      const nm = myName(), link = `https://2mindrills.com/hoops?vs=${G.score}${nm ? `&by=${encodeURIComponent(nm)}` : ''}`;
-      const text = `Two-Minute Drill: Hoops #${dayN()}\n${G.score} · better than ${G.score}% of coaches\n${decs.map((x) => ({ g: '🟩', y: '🟨', r: '🟥' }[markOf(x.cost)])).join('')}\n${won ? 'Won' : 'Lost'} ${S.score[S.me]}–${S.score[other(S.me)]}${coach ? ` · vs ${lastOf(coach)}: ${vsCoach > 0 ? 'better' : vsCoach < 0 ? 'worse' : 'even'}` : ''}\nCan you beat it? ${link}`;
+      const nm = myName(), by = `${nm ? `&by=${encodeURIComponent(nm)}` : ''}`;
+      const link = G.mode === 'daily' ? `https://2mindrills.com/hoops?vs=${G.score}${by}` : spot.built ? '' : `https://2mindrills.com/hoops?duel=${encodeURIComponent(spot.id)}.${G.seed}&vs=${G.score}${by}`;
+      const text = `Two-Minute Drill: Hoops ${G.mode === 'daily' ? `#${dayN()}` : `· ${modeLabel()}`}\n${G.score} · better than ${G.score}% of coaches\n${decs.map((x) => ({ g: '🟩', y: '🟨', r: '🟥' }[markOf(x.cost)])).join('')}\n${won ? 'Won' : 'Lost'} ${S.score[S.me]}–${S.score[other(S.me)]}${coach ? ` · vs ${lastOf(coach)}: ${vsCoach > 0 ? 'better' : vsCoach < 0 ? 'worse' : 'even'}` : ''}${link ? `\nCan you beat it? ${link}` : ''}`;
       try { await navigator.clipboard.writeText(text); share.textContent = 'Copied'; } catch (e) { share.textContent = text; }
     });
-    const again = el('button', 'btn ghostbtn', 'Play another game (practice)'); again.type = 'button';
-    again.addEventListener('click', () => start(true));
     const home = el('a', 'btn ghostbtn', 'Home'); home.href = './';
-    row.append(share, again, home); box.append(row);
+    row.append(share, ...nextButtons(won), home); box.append(row);
+    box.append(moreHoops());
     box.scrollIntoView({ behavior: REDUCED ? 'auto' : 'smooth', block: 'start' });
+  }
+  // a finished game in a mode: Survivor's run and best, a playoff run's record
+  function modeResult(won) {
+    if (G.mode === 'surv') {
+      G.opt.wins = (G.opt.wins || 0) + (won ? 1 : 0);
+      if (!won) { const sv = load(`${STORE}:surv`, { best: 0, runs: 0 }); sv.runs += 1; sv.best = Math.max(sv.best, G.opt.wins); save(`${STORE}:surv`, sv); }
+    }
+    if (G.mode === 'run') {
+      const k = `${STORE}:run:${G.opt.run.season}-${G.opt.run.team}`, rec = load(k, { w: 0, l: 0, at: 0 });
+      if (won) rec.w += 1; else rec.l += 1; rec.at = G.opt.k + 1; save(k, rec);
+    }
+  }
+  function modeStatus(won) {
+    if (G.mode === 'surv') {
+      const sv = load(`${STORE}:surv`, { best: 0, runs: 0 });
+      return el('p', 'challenge', won ? `Survivor: ${G.opt.wins} win${G.opt.wins === 1 ? '' : 's'} and counting.` : `Survivor: the run is over at ${G.opt.wins} win${G.opt.wins === 1 ? '' : 's'}. Your best: ${sv.best}.`);
+    }
+    if (G.mode === 'run') {
+      const rec = load(`${STORE}:run:${G.opt.run.season}-${G.opt.run.team}`, { w: 0, l: 0 });
+      return el('p', 'challenge', `${teamCity(G.opt.run.team)}'s ${G.opt.run.season + 1} run: you're ${rec.w}–${rec.l} in its close endings.`);
+    }
+    if (G.mode === 'duel' && G.opt.vs != null) return el('p', 'challenge', G.score > G.opt.vs ? `You beat ${G.opt.by}'s ${G.opt.vs}.` : G.score === G.opt.vs ? `Tied with ${G.opt.by}'s ${G.opt.vs}.` : `${G.opt.by}'s ${G.opt.vs} stands.`);
+    return null;
+  }
+  function nextButtons(won) {
+    const b = (t, f, cls) => { const x = el('button', `btn ${cls || 'ghostbtn'}`, t); x.type = 'button'; x.addEventListener('click', f); return x; };
+    if (G.mode === 'surv') return [won ? b(`Next game (${G.opt.wins} wins)`, () => start('surv', { wins: G.opt.wins }), 'big') : b('New Survivor run', () => start('surv', { wins: 0 }))];
+    if (G.mode === 'run') {
+      const n = G.opt.k + 1, run = G.opt.run;
+      return n < run.spots.length ? [b(`Next game in the run (${n + 1} of ${run.spots.length})`, () => start('run', { run, k: n, spot: spotById(run.spots[n]) }), 'big')] : [b('Run complete: pick another', () => renderRuns())];
+    }
+    if (G.mode === 'build') return [b('Play it again', () => start('build', { spot })), b('Build another', () => renderBuilder())];
+    return [b('Play another game (practice)', () => start('practice'))];
+  }
+  const proOpen = () => !HOOPS_PRO || hasPro();
+  function moreHoops() {
+    const wrap = el('div', 'more'); wrap.append(el('h3', '', 'More Hoops'));
+    if (!proOpen()) { const a = el('a', 'btn ghostbtn', 'Survivor, playoff runs and more come with Pro'); a.href = './#archive'; wrap.append(a); return wrap; }
+    const row = el('div', 'row'), b = (t, f) => { const x = el('button', 'btn ghostbtn', t); x.type = 'button'; x.addEventListener('click', f); row.append(x); };
+    b('Survivor', () => start('surv', { wins: 0 })); b('Playoff runs', () => renderRuns()); b('Build a game', () => renderBuilder()); b('Practice', () => start('practice'));
+    wrap.append(row); return wrap;
+  }
+  function renderRuns() {
+    $('dock').textContent = ''; caption(''); const box = $('card'); box.textContent = '';
+    box.append(el('div', 'eyebrow', 'Playoff runs'), el('h2', '', 'Coach a team through its playoffs'),
+      el('p', 'note', "Every close ending of a real playoff run, in order: the spot the real game was in, the real coaches, the real result to beat."));
+    const list = el('div', 'runs');
+    for (const run of D.runs || []) {
+      const rec = load(`${STORE}:run:${run.season}-${run.team}`, null), x = el('button', 'runbtn'); x.type = 'button';
+      x.append(el('b', '', `${teamCity(run.team)} · ${run.season + 1}`), el('span', '', `${run.spots.length} close endings · reached the ${['', 'first round', 'conference semifinals', 'conference finals', 'Finals'][run.deepest]}${rec ? ` · you: ${rec.w}–${rec.l}` : ''}`));
+      x.addEventListener('click', () => start('run', { run, k: rec && rec.at < run.spots.length ? rec.at : 0, spot: spotById(run.spots[rec && rec.at < run.spots.length ? rec.at : 0]) }));
+      list.append(x);
+    }
+    box.append(list, moreHoops());
+    box.scrollIntoView({ block: 'start' });
+  }
+  // build a game: any two teams, the score, the clock, whose ball, the timeouts; each side's five its most-used men
+  function renderBuilder() {
+    $('dock').textContent = ''; caption(''); const box = $('card'); box.textContent = '';
+    box.append(el('div', 'eyebrow', 'Build a game'), el('h2', '', 'Any two teams, any ending'));
+    const f = el('form', 'builder'), teams = Object.keys(T).sort((a, b) => teamCity(a).localeCompare(teamCity(b)));
+    const sel = (id, label, opts, val) => { const l = el('label', ''), s2 = el('select'); s2.id = id; opts.forEach(([v, t]) => { const o = el('option', '', t); o.value = v; if (String(v) === String(val)) o.selected = true; s2.append(o); }); l.append(el('span', '', label), s2); f.append(l); return s2; };
+    const me = sel('hb-me', 'You coach', teams.map((t) => [t, teamCity(t)]), 'BOS'), opp = sel('hb-opp', 'Against', teams.map((t) => [t, teamCity(t)]), 'LAL');
+    const where = sel('hb-where', 'Where', [['home', 'At home'], ['away', 'On the road']], 'home');
+    const margin = sel('hb-margin', 'The score', [-6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6].map((m) => [m, m < 0 ? `Down ${-m}` : m ? `Up ${m}` : 'Tied']), -2);
+    const clock = sel('hb-clock', 'Time left', [[120, '2:00'], [90, '1:30'], [60, '1:00'], [45, '0:45'], [30, '0:30'], [20, '0:20'], [10, '0:10'], [5, '0:05']], 60);
+    const ball = sel('hb-ball', 'The ball', [['me', 'Yours'], ['them', 'Theirs']], 'me');
+    const tme = sel('hb-tme', 'Your timeouts', [[2, '2'], [1, '1'], [0, '0']], 2), tth = sel('hb-tth', 'Their timeouts', [[2, '2'], [1, '1'], [0, '0']], 2);
+    const go = el('button', 'btn big', 'Tip it off'); go.type = 'submit'; f.append(go);
+    f.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (me.value === opp.value) { go.textContent = 'Pick two different teams'; return; }
+      const home = where.value === 'home' ? me.value : opp.value, away = home === me.value ? opp.value : me.value, m = Number(margin.value), base = 100;
+      const score = home === me.value ? [base + Math.max(0, m), base - Math.min(0, m)] : [base - Math.min(0, m), base + Math.max(0, m)];
+      const five = (t) => ((T[t] && T[t].players) || []).slice(0, 5).map((p) => p.name);
+      const toMe = Number(tme.value), toTh = Number(tth.value), mine = ball.value === 'me';
+      const sp = { id: `built-${home}-${away}-${m}-${clock.value}-${ball.value}`, built: true, season: 2024, n: 0, home, away, me: me.value, period: 4, clock: Number(clock.value),
+        score, poss: (mine ? me.value : opp.value) === home ? 'home' : 'away', shotclock: 24, timeouts: home === me.value ? [toMe, toTh] : [toTh, toMe], fouls: [4, 4], lead: '',
+        real: [], final: null, players: { home: five(home), away: five(away) }, coaches: null };
+      start('build', { spot: sp });
+    });
+    box.append(f, moreHoops());
+    box.scrollIntoView({ block: 'start' });
   }
   async function dayNumbers(box, fresh, vsCoach) {
     if (!API) return;
@@ -1058,12 +1161,16 @@
     for (const t of possession(S, r, a, d, null)) G.lines.push(t);
   }
   // today's game, or a practice one; a day's saved game is replayed from its calls (the same seed: the same bounces), no animation
-  async function start(practice) {
-    spot = pickSpot(practice); S = newState(spot);
+  async function start(mode, opt) {
+    if (mode === true) mode = 'practice'; if (mode === false || mode == null) mode = 'daily';
+    const practice = mode !== 'daily';
+    spot = pickSpot(mode, opt); S = newState(spot);
+    if (spot.me !== (spot.poss === 'home' ? spot.home : spot.away) && !spot.built) { /* (a spot's me has the ball) */ }
     FIVE = { home: (spot.players && spot.players.home || []).slice(0, 5), away: (spot.players && spot.players.away || []).slice(0, 5) };
     while (FIVE.home.length < 5) FIVE.home.push(`${teamCity(spot.home)} ${FIVE.home.length + 1}`);
     while (FIVE.away.length < 5) FIVE.away.push(`${teamCity(spot.away)} ${FIVE.away.length + 1}`);
-    G = { seed: practice ? (Math.random() * 1e9) >>> 0 : hash('hoops', dayISO(), spot.id), decs: [], lines: [], practice: !!practice, done: false, score: null, started: false, realCall: realCall(spot) };
+    G = { seed: opt && opt.seed != null ? opt.seed >>> 0 : practice ? (Math.random() * 1e9) >>> 0 : hash('hoops', dayISO(), spot.id), decs: [], lines: [], practice, mode, opt: opt || {},
+      done: false, score: null, started: false, realCall: spot.built ? null : realCall(spot) };
     if (!practice && !CROWD) api(`/hoops/day?date=${dayISO()}`).then((v) => { if (v && v.calls) CROWD = v.calls; });
     drawCourt(); badge(''); caption('');
     const saved = practice ? null : load(dayKey(), null);
@@ -1093,8 +1200,10 @@
     box.append(el('p', 'note', 'Already have Pro? Open the football game on this phone once so it knows, then come back.'));
     $('board').hidden = true; $('courtbox').hidden = true; $('dock').hidden = true;
   }
+  // a free day: Sundays the daily is open to everyone (the modes stay Pro); game.js homeHoops says so on the tile
+  const freeDay = () => new Date().getDay() === 0;
   async function boot() {
-    if (HOOPS_PRO && !hasPro()) return renderPitch();
+    if (HOOPS_PRO && !hasPro() && !freeDay()) return renderPitch();
     const src = document.querySelector('meta[name="hoops-data"]');
     try {
       const r = await fetch((src && src.content) || 'hoops/hoops_data.json');
@@ -1102,7 +1211,16 @@
     } catch (e) { $('card').textContent = 'The game could not load its data. Try again in a minute.'; return; }
     $('courtbox').addEventListener('click', () => { skipNow = true; });
     syncStats();
-    start(false);
+    const q = new URLSearchParams(location.search), duel = String(q.get('duel') || ''), m = /^(.+)\.(\d{1,10})$/.exec(duel);
+    if (m && spotById(m[1]) && proOpen()) {
+      const vs = Number(q.get('vs'));
+      return start('duel', { spot: spotById(m[1]), seed: Number(m[2]), vs: q.has('vs') && vs >= 0 && vs <= 100 ? Math.round(vs) : null, by: String(q.get('by') || 'A friend').slice(0, 24) });
+    }
+    const h = location.hash.slice(1);
+    if (proOpen() && h === 'survivor') return start('surv', { wins: 0 });
+    if (proOpen() && h === 'runs') { start('daily'); return renderRuns(); }
+    if (proOpen() && h === 'build') { start('daily'); return renderBuilder(); }
+    start('daily');
   }
   boot();
 })();

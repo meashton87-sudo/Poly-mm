@@ -295,7 +295,12 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   coach_of by season, team and game number for a change mid-season) ride on each spot; hoops.js realCall reads the
   real bench's first move off the play-by-play. A share carries ?vs=<score>&by=<name>: the intro's challenge line. Who gets it (hoops.js PICK -> S.pick, one possession; the man
   called for gets it three times in four); each player shoots his own rates (build.py: both seasons, shrunk toward the
-  team's by SHRINK2/SHRINK3 attempts). explain() puts each grade in words from the spot's facts (dec.ctx). Teams by city (the data's
+  team's by SHRINK2/SHRINK3 attempts). explain() puts each grade in words from the spot's facts (dec.ctx). The playoffs (build.py: nbastats_po_<season>,
+  their own spots with po: round, game; never in the daily schedule's shuffle, so set days never move) feed data.famous
+  (Famous Endings Week from FAMOUS_START: the most dramatic by drama(), one a series), data.runs (a team's close playoff
+  endings in order) and the modes (hoops.js start(mode, opt): daily, practice, surv, run, build, duel; G.mode). Only the
+  daily posts or keeps a stats day. A duel link (?duel=<spot id>.<seed>&vs=&by=) replays that game on its seed. Sundays
+  the daily is free to everyone (hoops.js freeDay, game.js homeHoops); the modes stay Pro. Teams by city (the data's
   "city"; the two Los Angeles teams tagged, no nicknames). Home's tile (game.js homeHoops), the footer nav and the
   sitemap (site.py PAGES "hoops").
 - Player feedback (game.js renderFeedback, #feedback from every page's footer "Report a bug"; worker.js /feedback): a

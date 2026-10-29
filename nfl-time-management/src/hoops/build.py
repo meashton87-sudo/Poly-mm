@@ -102,13 +102,13 @@ COLUMNS = ["GAME_ID", "EVENTNUM", "EVENTMSGTYPE", "EVENTMSGACTIONTYPE", "PERIOD"
            "PLAYER3_ID", "PLAYER3_NAME", "PLAYER3_TEAM_ABBREVIATION"]
 
 
-def fetch_season(season: int, raw_dir: str) -> str:
-    """Return the path of the season's tar.xz, downloading it into raw_dir if missing."""
-    path = os.path.join(raw_dir, f"nbastats_{season}.tar.xz")
+def fetch_season(season: int, raw_dir: str, kind: str = "") -> str:
+    """Return the path of the season's tar.xz (kind "po_": its playoffs), downloading it into raw_dir if missing."""
+    path = os.path.join(raw_dir, f"nbastats_{kind}{season}.tar.xz")
     if os.path.exists(path):
         return path
     os.makedirs(raw_dir, exist_ok=True)
-    url = URL.format(season=season)
+    url = URL.format(season=f"{kind}{season}")
     print(f"downloading {url} -> {path}")
     ctx = ssl.create_default_context()  # honours SSL_CERT_FILE / the proxy's CA bundle
     with urllib.request.urlopen(url, context=ctx, timeout=120) as r, open(path + ".part", "wb") as f:
@@ -121,15 +121,15 @@ def fetch_season(season: int, raw_dir: str) -> str:
     return path
 
 
-def load_season(season: int, raw_dir: str) -> pd.DataFrame:
-    """Read a season's play-by-play. A CSV next to the archive is used as is;
-    otherwise the CSV is read straight out of the tar.xz."""
-    csv = os.path.join(raw_dir, f"nbastats_{season}.csv")
+def load_season(season: int, raw_dir: str, kind: str = "") -> pd.DataFrame:
+    """Read a season's play-by-play (kind "po_": its playoffs). A CSV next to the
+    archive is used as is; otherwise the CSV is read straight out of the tar.xz."""
+    csv = os.path.join(raw_dir, f"nbastats_{kind}{season}.csv")
     if os.path.exists(csv):
         print(f"reading {csv}")
         df = pd.read_csv(csv, usecols=COLUMNS, low_memory=False)
     else:
-        tar = fetch_season(season, raw_dir)
+        tar = fetch_season(season, raw_dir, kind)
         print(f"reading {tar}")
         with tarfile.open(tar, "r:xz") as t:
             member = next(m for m in t.getmembers() if m.name.endswith(".csv"))
@@ -137,8 +137,8 @@ def load_season(season: int, raw_dir: str) -> pd.DataFrame:
     # Keep the file's order (it is chronological; EVENTNUM is not always), but make
     # every game one contiguous block.
     df = df.sort_values("GAME_ID", kind="stable").reset_index(drop=True)
-    # Regular season only: game ids starting with "2".
-    df = df[df.GAME_ID.astype(str).str.startswith("2")].reset_index(drop=True)
+    # The regular season's game ids start with "2", the playoffs' with "4"
+    df = df[df.GAME_ID.astype(str).str.startswith("4" if kind else "2")].reset_index(drop=True)
     df["season"] = season
     return df
 
@@ -734,6 +734,8 @@ def coach_of(season: int, team: str, gid: str) -> str | None:
     c = COACHES.get(season, {}).get(team)
     if not c or isinstance(c, str):
         return c
+    if str(gid).startswith("4"):                 # the playoffs: the coach at the season's end
+        return c[-1][1]
     try:
         n = int(str(gid)[-5:])
     except ValueError:
@@ -779,6 +781,54 @@ def game_spot(g: Game, n: int) -> dict | None:
             "coaches": [coach_of(g.season, g.home, g.gid), coach_of(g.season, g.away, g.gid)],
         }
     return None
+
+
+ROUND = {1: "First round", 2: "Conference semifinals", 3: "Conference finals", 4: "Finals"}
+FAMOUS_START = dt.date(2026, 11, 2)   # Famous Endings Week: the seven most dramatic playoff endings, a day each from here
+FAMOUS_DAYS = 7
+
+
+def playoff_info(gid) -> dict:
+    """A playoff game id (4YY00RSG): its round, series and game number."""
+    g = str(gid)
+    r, sr, n = int(g[-3]), int(g[-2]), int(g[-1])
+    return {"round": r, "name": ROUND.get(r, "Playoffs"), "series": sr, "game": n}
+
+
+def drama(s: dict) -> float:
+    """How famous an ending: the later the round, the closer the score at the spot and at the end, the later the spot."""
+    po = s["po"]
+    at = abs(s["score"][0] - s["score"][1]); fin = abs(s["final"][0] - s["final"][1])
+    return po["round"] * 2.0 + (3 - min(at, 3)) * 1.2 + (4 - min(fin, 4)) * 0.8 + max(0, 90 - s["clock"]) / 45 + (s["period"] > 4) * 1.5
+
+
+def famous_week(po_spots: list) -> dict:
+    """The week's days, each a different series' ending, most dramatic first."""
+    seen, out = set(), []
+    for s in sorted(po_spots, key=lambda x: (-drama(x), x["id"])):
+        key = (s["season"], s["home"], s["away"], s["po"]["round"])
+        if key in seen:
+            continue
+        seen.add(key); out.append(s["id"])
+        if len(out) == FAMOUS_DAYS:
+            break
+    return {str(FAMOUS_START + dt.timedelta(days=d)): i for d, i in enumerate(out)}
+
+
+def playoff_runs(po_spots: list) -> list:
+    """Each team's playoff run: its close endings in order (three or more)."""
+    runs = defaultdict(list)
+    for s in po_spots:
+        for tm in (s["home"], s["away"]):
+            runs[(s["season"], tm)].append(s)
+    out = []
+    for (season, tm), ss in sorted(runs.items()):
+        if len(ss) < 3:
+            continue
+        ss.sort(key=lambda x: x["id"])
+        out.append({"season": season, "team": tm, "deepest": max(x["po"]["round"] for x in ss), "spots": [x["id"] for x in ss]})
+    out.sort(key=lambda r: (-r["deepest"], -len(r["spots"]), -r["season"], r["team"]))
+    return out
 
 
 def build_schedule(spots: list) -> dict:
@@ -830,7 +880,12 @@ def validate(data: dict, games: list[Game]):
     assert len(data["schedule"]) == SCHEDULE_DAYS
     assert set(data["schedule"].values()) <= {s["id"] for s in data["spots"]}
     assert len({s["id"] for s in data["spots"]}) == len(data["spots"])
-    assert len(data) == 6
+    assert len(data) == 9
+    po_ids = {s["id"] for s in data["playoffs"]}
+    assert len(po_ids) == len(data["playoffs"]) and not po_ids & {s["id"] for s in data["spots"]}
+    for s in data["playoffs"]:
+        assert s["real"] and s["real"][-1]["score"] == s["final"] and s["me"] in (s["home"], s["away"]) and s["po"]["round"] in ROUND, s["id"]
+    assert set(data["famous"].values()) <= po_ids and all(set(r["spots"]) <= po_ids for r in data["runs"])
 
 
 def _walk_all(x, path="root"):
@@ -877,6 +932,21 @@ def main(argv=None):
         if s:
             spots.append(s)
     spots.sort(key=lambda s: (s["season"], s["n"]))
+    # the playoffs: their own spots (never in the daily schedule's shuffle, so the days already set stay as they are),
+    # each with its round and game, me the side that has the ball
+    po_games = []
+    for season in SEASONS:
+        pdf = load_season(season, args.raw, "po_")
+        for gid, rows in pdf.groupby("GAME_ID", sort=True):
+            po_games.append(Game(int(gid), season, rows.itertuples(index=False)))
+    po_spots = []
+    for g in po_games:
+        s = game_spot(g, 0)
+        if s:
+            s["po"] = playoff_info(g.gid)
+            po_spots.append(s)
+    po_spots.sort(key=lambda s: s["id"])
+    print(f"playoffs: {len(po_games)} games, {len(po_spots)} spots")
     data = {
         "built": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "seasons": SEASONS,
@@ -884,6 +954,9 @@ def main(argv=None):
         "teams": teams,
         "spots": spots,
         "schedule": build_schedule(spots),
+        "playoffs": po_spots,
+        "famous": famous_week(po_spots),
+        "runs": playoff_runs(po_spots),
     }
     validate(data, games)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
