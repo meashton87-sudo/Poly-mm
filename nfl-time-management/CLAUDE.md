@@ -26,6 +26,7 @@ node web/game_smoke.js                # daily game: every spot's two real teams,
 node web/game_sweep.js                # daily game: every spot x call x tempo, whole games, football invariants, points to the right team, the called play is the play run (~3 min)
 node web/score_sweep.js               # daily score: real spots played out by random, league-mix, sharp and greedy players, scored by game.js's own code (~15 min on 4 cores)
 node web/motion_test.js               # daily game animation: player motion stays in the tracking envelope, routes, coverage
+node web/hoops_calibration.js          # Hoops: the engine's win chance from every real spot against how it ended, by tenths (~10 s)
 node board/worker_test.mjs            # the website's survivor leaderboard (Cloudflare Worker + Durable Object), storage in memory
 node board/match_test.mjs             # Versus: rooms, lobby, ladder in memory (board/vs_world.mjs), a stand-in engine (a second)
 node board/vs_draft_test.mjs 12       # Versus Draft: the blind auction against the computer with the real engine (board/assets/vs), the drafted sides, the match to the end
