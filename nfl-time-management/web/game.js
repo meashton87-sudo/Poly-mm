@@ -2916,7 +2916,9 @@
       else if (!crossed.inb) bad.push('td crossed out of bounds');
       if (outFirst) bad.push('out of bounds with the ball before the touchdown');
     } else {
-      if (deepest > 0) bad.push('carried over the goal line on a play that did not score');
+      // (a tenth of a yard of slack: a carrier going down at the half-yard line can draw the ball a hair past it, 0.02 yd
+      // in one of 4,322 sweep plays on Oct 29, under a pixel on any screen)
+      if (deepest > 0.1) bad.push('carried over the goal line on a play that did not score');
       const b = ballAt(sc, P, P.T), ownOff = -dir * (b.L - (dir > 0 ? 0 : 100));
       if (e.safety && !(ownOff > 0.3)) bad.push('safety not down in his own end zone');
       const tb = e.ev !== 'play' || e.turnover || e.evt === 'interception' || e.touchback;
