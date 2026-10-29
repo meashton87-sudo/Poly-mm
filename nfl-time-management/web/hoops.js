@@ -29,6 +29,7 @@
     work: { label: 'Work for a shot', sub: 'Run the offense, use the clock', t: [12, 22], three: null, p2: 0.02, p3: 0.01, to: 1.0, foul: 1.0 },
     three: { label: 'Hunt a three', sub: 'Everything for the three', t: [4, 12], three: 0.88, p2: 0, p3: -0.04, to: 0.9, foul: 0.7 },
     rim: { label: 'Attack the rim', sub: 'Drive it, draw the foul', t: [4, 11], three: 0.06, p2: 0.04, p3: 0, to: 1.1, foul: 2.0 },
+    two4one: { label: 'Two-for-one', sub: 'Shoot early, get the ball back for the last shot', t: [3, 7], three: 0.35, p2: -0.02, p3: -0.02, to: 0.95, foul: 1.0 },
     last: { label: 'Hold for the last shot', sub: 'Shoot with two or three left', t: null, three: null, p2: 0.01, p3: 0, to: 1.0, foul: 0.8 },
     tquick: { label: 'Timeout, then attack', sub: 'Advance the ball, set a play', t: [3, 8], three: 0.35, p2: 0.02, p3: 0.02, to: 0.85, foul: 1.1, timeout: true },
     tthree: { label: 'Timeout, set a three', sub: 'Advance it, draw up a three', t: [3, 8], three: 0.9, p2: 0, p3: -0.01, to: 0.85, foul: 0.7, timeout: true },
@@ -64,6 +65,7 @@
   // the five on the floor a side (the spot's names), and who takes the shots and the free throws among them (the team's
   // season shares where a man is in its list; a little for the rest)
   let FIVE = { home: [], away: [] };
+  const playerOf = (S, side, i) => { const t = T[teamOf(S, side)]; return t && t.players && t.players.find((p) => p.name === FIVE[side][i]); };
   function shooter(S, side, kind, r) {
     const five = FIVE[side], t = T[teamOf(S, side)], ps = (t && t.players) || [];
     const key = kind === 3 ? 'att3' : kind === 'ft' ? 'fta' : 'att2';
@@ -74,7 +76,7 @@
   }
   // one free-throw trip: n shots; the last one missed is live
   function freeThrows(S, r, side, n, who, ev) {
-    const p = rate(teamOf(S, side), 'ft'), made = [];
+    const pl = playerOf(S, side, who), p = pl && pl.ft ? pl.ft : rate(teamOf(S, side), 'ft'), made = [];
     for (let i = 0; i < n; i++) made.push(r() < p);
     const m = made.filter(Boolean).length;
     S.score[side] += m;
@@ -92,8 +94,9 @@
   function possession(S, r, a, d, ev) {
     const off = S.poss, def = other(off), A = APPROACH[a], lines = [], clock0 = S.clock, five = FIVE[off];
     const name = (i) => five[i] || teamCity(teamOf(S, off));
-    const bring = S.dead;
-    if (ev) ev.push({ k: 'start', a, d });
+    const bring = S.dead, pick = S.pick;
+    S.pick = null;                                            // (the man called for: this possession only)
+    if (ev) ev.push({ k: 'start', a, d, shot: S.shot });
     if (A.timeout && S.to[off] > 0) { S.to[off]--; if (ev) ev.push({ k: 'timeout', side: off }); lines.push(`${teamCity(teamOf(S, off))} calls timeout, the ball comes to the frontcourt`); }
     if (ev) ev.push({ k: bring ? 'bring' : 'live', advanced: !!A.timeout });
     // a foul before the shot: the defense stopping the clock (in the bonus: two free throws; else the ball inbounded with a second gone)
@@ -126,7 +129,8 @@
     const need = lead(S, off);                                 // (a team down three with no time hunts the three whatever was called)
     let three = A.three == null ? rate(teamOf(S, off), 'share3') : A.three;
     if (S.clock <= 0 && need < 0 && need >= -3 && a !== 'three') three = need === -3 ? 0.95 : three;
-    const isThree = r() < three, kind = isThree ? 3 : 2, who = shooter(S, off, kind, r);
+    const isThree = r() < three, kind = isThree ? 3 : 2;
+    const who = pick != null && off === S.me && r() < 0.75 ? pick : shooter(S, off, kind, r);   // (the man you called for gets it three times in four: the defense has a say)
     const passes = a === 'work' ? 2 + Math.floor(r() * 2) : a === 'quick' || a === 'rim' ? (r() < 0.5 ? 1 : 0) : a === 'last' ? 1 + Math.floor(r() * 2) : 1;
     const drive = !isThree && (a === 'rim' || a === 'quick' || r() < 0.5);
     const foulP = (isThree ? L.foul3 : L.foul2) * A.foul * (press ? 1.6 : 1);     // (reaching in a press: more fouls)
@@ -140,7 +144,8 @@
       if (ev) ev.push({ k: 'shot', who, three: isThree, drive, passes, made: false, fouled: true, secs: t });
       const ft = freeThrows(S, r, off, isThree ? 3 : 2, who, ev); lines.push(`${name(who)} is fouled ${isThree ? 'on a three' : 'going up'}: ${ft.text}`); return done();
     }
-    let p = rate(teamOf(S, off), isThree ? 'p3' : 'p2') + (isThree ? A.p3 : A.p2) + (press ? (isThree ? 0.02 : 0.08) : 0)   // (a press beaten is an easy one)
+    const pl = playerOf(S, off, who), tm = T[teamOf(S, off)] || {}, own = pl && pl[isThree ? 'p3' : 'p2'], base = tm[isThree ? 'p3' : 'p2'];
+    let p = rate(teamOf(S, off), isThree ? 'p3' : 'p2') + (own && base ? own - base : 0) + (isThree ? A.p3 : A.p2) + (press ? (isThree ? 0.02 : 0.08) : 0)   // (a press beaten is an easy one; the shooter's own touch)
       + (a === 'quick' && !bring && !isThree ? 0.07 : 0);                                                            // (the push on a live ball: the defense not set)
     if (r() < p) {
       S.score[off] += kind;
@@ -170,7 +175,7 @@
       else if (c <= 30) { w.quick = 0.45; w.rim = 0.2; w.three = ld <= -3 ? 0.25 : 0.1; w.work = 0.1; if (S.dead && S.to[off] > 0) { w.tquick = 0.35; w.tthree = ld <= -3 ? 0.2 : 0.05; } }
       else { w.work = 0.5; w.quick = 0.25; w.rim = 0.15; w.three = 0.1; }
     } else if (ld === 0) {
-      if (c <= SHOT + 4) { w.last = 0.75; w.work = 0.2; w.rim = 0.05; } else { w.work = 0.7; w.rim = 0.15; w.quick = 0.15; }
+      if (c <= SHOT + 4) { w.last = 0.75; w.work = 0.2; w.rim = 0.05; } else if (c >= 29 && c <= 46) { w.two4one = 0.45; w.work = 0.4; w.rim = 0.15; } else { w.work = 0.7; w.rim = 0.15; w.quick = 0.15; }
     } else {
       if (c <= SHOT + 4) { w.last = 0.8; w.work = 0.2; } else { w.work = 0.85; w.rim = 0.1; w.quick = 0.05; }
     }
@@ -194,6 +199,7 @@
   function offenseOptions(S) {
     const off = S.poss, out = ['quick', 'work', 'three', 'rim'];
     if (S.clock <= SHOT + 6) out.push('last');
+    if (S.clock >= 29 && S.clock <= 46) out.push('two4one');     // (shoot by the 24 left and the other team's shot clock runs out first)
     if (S.dead && S.to[off] > 0 && S.clock > 2) out.push('tquick', 'tthree');
     if (S.clock <= 3) return ['quick', 'three', 'rim'].concat(S.dead && S.to[off] > 0 ? ['tquick', 'tthree'] : []);
     return out;
@@ -235,6 +241,21 @@
   // actions real benches run (the pick-and-roll, a screen for the shooter, the push in transition, the isolation for a
   // last shot, the set out of a timeout); the defense follows on its own, each man between his man and the rim, shading
   // toward the ball, getting back in transition, trapping the ball in a press, sliding at a man's speed.
+  // each team's colors (primary, secondary): the dots wear them; when the two benches' primaries are too close, the
+  // road team wears its second color
+  const COLORS = { ATL: ['#C8102E', '#FDB927'], BOS: ['#007A33', '#BA9653'], BKN: ['#111111', '#AAAAAA'], CHA: ['#1D1160', '#00788C'], CHI: ['#CE1141', '#111111'],
+    CLE: ['#860038', '#FDBB30'], DAL: ['#00538C', '#B8C4CA'], DEN: ['#0E2240', '#FEC524'], DET: ['#C8102E', '#1D42BA'], GSW: ['#1D428A', '#FFC72C'],
+    HOU: ['#CE1141', '#C4CED4'], IND: ['#002D62', '#FDBB30'], LAC: ['#C8102E', '#1D428A'], LAL: ['#552583', '#FDB927'], MEM: ['#5D76A9', '#12173F'],
+    MIA: ['#98002E', '#F9A01B'], MIL: ['#00471B', '#EEE1C6'], MIN: ['#0C2340', '#236192'], NOP: ['#0C2340', '#C8102E'], NYK: ['#006BB6', '#F58426'],
+    OKC: ['#007AC1', '#EF3B24'], ORL: ['#0077C0', '#C4CED4'], PHI: ['#006BB6', '#ED174C'], PHX: ['#1D1160', '#E56020'], POR: ['#E03A3E', '#111111'],
+    SAC: ['#5A2D81', '#63727A'], SAS: ['#111111', '#C4CED4'], TOR: ['#CE1141', '#111111'], UTA: ['#002B5C', '#F9A01B'], WAS: ['#002B5C', '#E31837'] };
+  const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const cdist = (a, b) => { const x = rgb(a), y = rgb(b); return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]); };
+  const light = (h) => { const [r, g, b] = rgb(h); return 0.299 * r + 0.587 * g + 0.114 * b > 160; };
+  function teamColors() {
+    const hc = (COLORS[S.home] || ['#1f5fbf'])[0], ac = COLORS[S.away] || ['#2b2f36', '#2b2f36'];
+    return { home: hc, away: cdist(hc, ac[0]) < 130 ? ac[1] : ac[0] };
+  }
   const W = 50, H = 47, LEN = 94, RIM = { x: 25, y: H - 5.25 }, R3 = 23.75, VIEW = window.innerWidth < 480 ? 50 : 62;
   const SPOTS = [[25, 13], [9, 22], [41, 22], [7, 38], [43, 38]];          // the set: the point, two wings, two corners
   const BACK = [[25, -41], [11, -33], [39, -33], [17, -45], [33, -45]];    // the backcourt after a score: the point, the wings ahead, the bigs behind
@@ -269,7 +290,9 @@
       court.dots[side] = []; court.pin[side] = [false, false, false, false, false];
       for (let i = 0; i < 5; i++) {
         const g = svgEl('g', { class: `man ${side === S.me ? 'me' : 'them'}` });
-        g.append(svgEl('circle', { r: 1.35 }), svgEl('text', { y: -1.9, 'text-anchor': 'middle' }));
+        const col = teamColors()[side], ci = svgEl('circle', { r: 1.35 });
+        ci.style.fill = col; if (light(col)) ci.style.stroke = '#1b1b1b';
+        g.append(ci, svgEl('text', { y: -1.9, 'text-anchor': 'middle' }));
         g.querySelector('text').textContent = lastName(FIVE[side][i] || '');
         s.append(g); court.dots[side].push(g);
       }
@@ -369,15 +392,44 @@
         const b = seg.ball;
         if (b && b.to) { const z = (b.arc || 0) * 4 * k * (1 - k) + (b.rest || 0) * k; court.bpos = [b0[0] + (b.to[0] - b0[0]) * k, b0[1] + (b.to[1] - b0[1]) * k, z]; }
         else if (court.handler) { const [x, y] = hand(court.pos[court.handler.side][court.handler.i]); court.bpos = [x, y, !REDUCED && ((b && b.dribble) || seg.dribble) ? Math.abs(Math.sin((now - t0) / 1000 * Math.PI * 1.7)) * 1.1 : 0]; }
-        if (seg.secs) { court.clock = Math.max(0, c0 - seg.secs * k); $('bclock').textContent = clockText(court.clock); }
+        if (seg.secs) { court.clock = Math.max(0, c0 - seg.secs * k); $('bclock').textContent = clockText(court.clock); shotShow(); }
         place(dt);
         if (k < 1) requestAnimationFrame(frame); else finish();
       };
       requestAnimationFrame(frame);
     });
   }
+  // the shot clock on the board during a play: what it was when the possession started, run down with the game clock
+  // (off when the game clock is under it)
+  function shotShow() {
+    const e = $('bshot');
+    if (!e || court.shot0 == null) return;
+    const left = Math.max(0, court.shot0 - (court.clock0 - court.clock));
+    e.textContent = court.clock <= left ? 'shot clock off' : `shot clock ${Math.ceil(left)}`;
+  }
   const wait = (ms) => new Promise((r) => setTimeout(r, skipNow ? 0 : ms * tempo()));
-  function badge(text, cls) { court.badge.textContent = text || ''; court.badge.setAttribute('class', `badge${cls ? ` ${cls}` : ''}`); }
+  const SOUND_KEY = `${STORE}:sound`;
+  let AC = null;
+  function sound(kind) {
+    if (!load(SOUND_KEY, false) || skipNow) return;
+    try {
+      AC = AC || new (window.AudioContext || window.webkitAudioContext)();
+      const t = AC.currentTime, g = AC.createGain(); g.connect(AC.destination);
+      const tone = (type, f, d, v, f2) => { const o = AC.createOscillator(); o.type = type; o.frequency.setValueAtTime(f, t); if (f2) o.frequency.exponentialRampToValueAtTime(f2, t + d); o.connect(g); g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.001, t + d); o.start(t); o.stop(t + d); };
+      if (kind === 'swish') { const n = AC.createBufferSource(), b = AC.createBuffer(1, AC.sampleRate * 0.35, AC.sampleRate), d = b.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length); n.buffer = b; const f = AC.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 2500; n.connect(f); f.connect(g); g.gain.setValueAtTime(0.25, t); n.start(t); }
+      else if (kind === 'clank') tone('square', 420, 0.18, 0.12, 300);
+      else if (kind === 'whistle') tone('sine', 2900, 0.45, 0.12, 2700);
+      else if (kind === 'buzzer') tone('sawtooth', 110, 1.0, 0.15);
+    } catch (e) { /* no audio */ }
+  }
+  function badge(text, cls) {
+    court.badge.textContent = text || ''; court.badge.setAttribute('class', `badge${cls ? ` ${cls}` : ''}`);
+    if (!text) return;
+    if (/^\+|AND ONE/.test(text)) sound('swish');
+    else if (/MISS/.test(text)) sound('clank');
+    else if (/HORN|FINAL|WIN/.test(text)) sound('buzzer');
+    else if (/FOUL|STEAL|TURNOVER|TIMEOUT|TRAVEL|OUT OF/.test(text)) sound('whistle');
+  }
   function caption(text) { $('cap').textContent = text || ''; }
   const swish = () => { const n = court.nets[court.dir > 0 ? 1 : 0]; n.classList.add('swish'); setTimeout(() => n.classList.remove('swish'), 700); };
   const nearest = (side, p) => court.pos[side].reduce((best, q, i) => (dist(q, p) < dist(court.pos[side][best], p) ? i : best), 0);
@@ -516,6 +568,7 @@
     const endEv = ev.find((e) => e.k === 'end') || { clock0: S.clock, clock1: S.clock }, startEv = ev.find((e) => e.k === 'start') || {};
     const A = startEv.a || 'work';
     court.clock = endEv.clock0; $('bclock').textContent = clockText(court.clock);
+    court.clock0 = endEv.clock0; court.shot0 = startEv.shot != null ? startEv.shot : SHOT; shotShow();
     let left = Math.max(0, endEv.clock0 - endEv.clock1);                       // the game seconds this possession took, spent phase by phase
     const spend = (s) => { s = Math.max(0, Math.min(s, left)); left -= s; return s; };
     const last = () => lines[lines.length - 1];
@@ -748,7 +801,8 @@
       b.append(row);
     }
     const c = el('div', 'clk'); const bc = el('b', '', clockText(S.clock)); bc.id = 'bclock';
-    c.append(bc, el('span', '', `${periodText(S.period)}${S.clock > SHOT ? ` · shot clock ${S.shot}` : ''}`));
+    const sp = el('span', '', `${periodText(S.period)} · `), sh = el('span', '', S.clock > SHOT ? `shot clock ${S.shot}` : 'shot clock off'); sh.id = 'bshot'; sp.append(sh);
+    c.append(bc, sp);
     b.append(c);
   }
   function renderIntro(practice) {
@@ -761,7 +815,19 @@
     const q = new URLSearchParams(location.search), vs = Number(q.get('vs'));
     if (!practice && q.has('vs') && vs >= 0 && vs <= 100) box.append(el('p', 'challenge', `${String(q.get('by') || 'A friend').slice(0, 24)} scored ${Math.round(vs)} on today's game. Beat it.`));
     if (coachOf(S.me)) box.append(el('p', 'note', `Can you do better than ${coachOf(S.me)} did?`));
+    const first = !Object.keys(load(`${STORE}:stats`, { days: {} }).days).length && !load(`${STORE}:guided`, false);
+    const guide = el('details', 'guide'); guide.open = first;
+    guide.append(el('summary', '', 'What the calls mean'));
+    const gl = el('ul', '');
+    [['Go now', 'Push it and take the first good shot.'], ['Work for a shot', 'Run the offense and use the clock for a better look.'], ['Hunt a three', 'Everything for a three-pointer.'],
+      ['Attack the rim', 'Drive it: the best percentage, and fouls.'], ['Hold for the last shot', 'Late in a period, shoot with two or three seconds left so they never get it back.'],
+      ['Two-for-one', 'With 30 to 45 seconds left, shoot early so you get the ball again.'], ['Timeout', 'Stops the clock and moves the ball to the frontcourt.'],
+      ['Who gets it', 'Pick the man you want shooting, or let the play find the open man.'], ['On defense', 'Play it straight; foul to stop the clock when you trail; press to gamble for a steal.'],
+      ['Grading', 'Each call is measured against the best one in that spot, by win chance. Skip any play, or run them at double speed.']]
+      .forEach(([a, b]) => { const li = el('li', ''); li.append(el('b', '', `${a}: `), document.createTextNode(b)); gl.append(li); });
+    guide.append(gl); box.append(guide);
     const go = el('button', 'btn big', 'Take over'); go.type = 'button';
+    go.addEventListener('click', () => save(`${STORE}:guided`, true));
     go.addEventListener('click', () => { G.started = true; saveGame(); box.textContent = ''; step(); });
     box.append(go);
     if (!practice) { const st = load(`${STORE}:stats`, { days: {} }), n = Object.keys(st.days).length; if (n) box.append(el('p', 'note', `You have played ${n} day${n === 1 ? '' : 's'}. Streak: ${streakOf(st)}.`)); }
@@ -783,7 +849,19 @@
       grid.append(b);
     }
     dock.append(grid);
+    if (mine) {                                              // who gets it: anyone (the play's own read), or a man you call for
+      const who = el('div', 'who'), lab = el('span', 'wl', 'Who gets it'), chips = el('div', 'chips');
+      const chip = (i, text, sub) => {
+        const b = el('button', `chip${PICK === i ? ' on' : ''}`); b.type = 'button'; b.append(el('b', '', text)); if (sub) b.append(el('span', '', sub));
+        b.addEventListener('click', () => { PICK = i; chips.querySelectorAll('.chip').forEach((c) => c.classList.remove('on')); b.classList.add('on'); });
+        chips.append(b);
+      };
+      chip(null, 'Anyone', 'the open man');
+      FIVE[S.me].forEach((n, i) => { const pl = playerOf(S, S.me, i); chip(i, lastName(n), pl ? `${Math.round(100 * pl.p3)}% from 3 · ${Math.round(100 * pl.ft)}% FT` : ''); });
+      who.append(lab, chips); dock.append(who);
+    }
   }
+  let PICK = null;                                           // the man the next call goes to (null: anyone)
   function note(t) { G.lines.push(t); }
   async function call(k, opts, mine, live) {
     if (busy) return;
@@ -796,16 +874,22 @@
       const skip = el('button', 'btn ghostbtn small', 'Skip the play ›'); skip.type = 'button'; skip.addEventListener('click', () => { skipNow = true; });
       const fast = el('button', 'btn ghostbtn small', load(FAST_KEY, false) ? 'Speed: 2×' : 'Speed: 1×'); fast.type = 'button';
       fast.addEventListener('click', () => { const v = !load(FAST_KEY, false); save(FAST_KEY, v); fast.textContent = v ? 'Speed: 2×' : 'Speed: 1×'; });
-      row.append(skip, fast); dock.append(row);
+      const snd = el('button', 'btn ghostbtn small', load(SOUND_KEY, false) ? 'Sound: on' : 'Sound: off'); snd.type = 'button';
+      snd.addEventListener('click', () => { const v = !load(SOUND_KEY, false); save(SOUND_KEY, v); snd.textContent = v ? 'Sound: on' : 'Sound: off'; });
+      row.append(skip, fast, snd); dock.append(row);
       const top = $('board').getBoundingClientRect().top;                 // the board and the court in view for the play
       if (top < 0 || top > 60) window.scrollTo({ top: window.scrollY + top - 8, behavior: REDUCED ? 'auto' : 'smooth' });
     }
+    if (mine && PICK != null) S.pick = PICK;
+    const pick = mine ? PICK : null; PICK = null;
+    const ctx = { ld: lead(S, S.me), clock: S.clock, bonusMe: inBonus(S, other(S.me)), bonusThem: inBonus(S, S.me), to: S.to[S.me] };
     // the grade: every option's win chance from here, the same bounces each
     const wp = evaluate(S, mine ? 'off' : 'def', opts, seed, N_EVAL), best = opts.reduce((a, b) => (wp[b] > wp[a] ? b : a));
     const typ = mine ? typicalOffense(S, rng(1)).weights : typicalDefense(S, rng(1)).weights;
-    G.decs.push({ i, side: mine ? 'off' : 'def', situation: situation(S), ck: crowdKey(i, S), chosen: k, best, wp: wp[k], bestWp: wp[best], cost: Math.max(0, wp[best] - wp[k]),
+    G.decs.push({ i, side: mine ? 'off' : 'def', situation: situation(S), ck: crowdKey(i, S), ctx, pick, chosen: k, best, wp: wp[k], bestWp: wp[best], cost: Math.max(0, wp[best] - wp[k]),
       opts: opts.map((o) => ({ k: o, label: (mine ? APPROACH : DEFENSE)[o].label, wp: wp[o], q: typ[o] || 0 })) });
     // the possession, with the other bench typical, on the day's own bounces
+    if (pick != null) S.pick = pick;
     const r = rng(hash(G.seed, 'p', i)), off = S.poss;
     const a = mine ? k : typicalOffense(S, r).pick, d = mine ? typicalDefense(S, r).pick : k;
     const ev = [], lines = possession(S, r, a, d, ev);
@@ -834,6 +918,25 @@
       if (tot > mine + 1e-9) worse++; else if (Math.abs(tot - mine) <= 1e-9) worse += 0.5;
     }
     return worse / N;
+  }
+  // why the best call was the best, in a coach's words, from the spot's facts (the margin, the clock, the bonus)
+  function explain(x) {
+    const c = x.ctx || {}, ld = c.ld || 0, clk = clockText(c.clock || 0), lab = (k) => (x.opts.find((o) => o.k === k) || {}).label || k;
+    const why = {
+      foul: `Down ${-ld} with ${clk} left, fouling stops the clock: their free throws for your next possession.`,
+      straight: ld > 0 ? `Up ${ld}, a stop without a foul lets the clock run; a foul hands them free points and the clock back.` : 'Making them earn a basket here beats gambling for the ball.',
+      press: `Behind with ${clk} left, the press risks an easy basket for the chance at a turnover.`,
+      rim: `A drive is the best shot here: shots at the rim go in more and draw fouls${c.bonusMe ? ', and in the bonus every foul is two free throws' : ''}.`,
+      three: ld <= -3 ? `Down ${-ld}, a two doesn't tie it. The three does.` : 'The extra point is worth the lower percentage from this spot.',
+      work: ld > 0 ? `Up ${ld}, a full possession burns clock and leaves them less time.` : 'A set play gets a better shot than the first look.',
+      last: 'With the game clock under the shot clock, holding for the last shot means they never get the ball back.',
+      quick: ld < 0 ? `Down ${-ld} with ${clk} left, you need extra possessions: shoot early.` : 'An early look beats a set defense here.',
+      tquick: 'The timeout moves the ball to the frontcourt and saves seconds, worth more than keeping it.',
+      tthree: 'The timeout moves the ball up and sets up a clean look from three.',
+      two4one: 'Shooting early here gets you two shots to their one before the period ends.',
+    }[x.best] || '';
+    const yours = x.best !== x.chosen ? ` Your call kept ${(x.wp * 100).toFixed(1)}% win chance; ${lab(x.best).toLowerCase()} ${(x.bestWp * 100).toFixed(1)}%.` : '';
+    return (why + yours).trim();
   }
   const markOf = (c) => (c < 0.01 ? 'g' : c < 0.04 ? 'y' : 'r');
   function streakOf(st) {
@@ -874,6 +977,8 @@
       const li = el('li', markOf(x.cost)), det = el('details', 'call'), sm = el('summary', '');
       sm.append(el('span', 'sq', { g: '✓', y: '~', r: '✗' }[markOf(x.cost)]), el('span', 'sit', x.situation), el('span', 'what', `You: ${x.opts.find((o) => o.k === x.chosen).label}${x.cost >= 0.01 ? ` · best: ${x.opts.find((o) => o.k === x.best).label} (${(x.cost * 100).toFixed(1)} pts of win chance)` : ''}`));
       const all = el('ul', 'wps');
+      const ex = explain(x); if (ex) all.append(el('li', 'why', ex));
+      if (x.pick != null) all.append(el('li', '', `You called for ${lastName(FIVE[S.me][x.pick] || '')}.`));
       if (x.i === 0 && G.realCall && x.opts.some((o) => o.k === G.realCall)) all.append(el('li', 'realc', `${coach || 'The real bench'} went: ${x.opts.find((o) => o.k === G.realCall).label}`));
       const cl = !G.practice && x.ck ? crowdLine(x.ck, x.chosen) : '';
       if (cl) all.append(el('li', 'crowd', cl));
@@ -882,7 +987,7 @@
     }
     box.append(el('h3', '', 'Your calls'), list);
     const worst = decs.filter((x) => x.cost >= 0.01).sort((a, b) => b.cost - a.cost)[0];
-    if (worst) box.append(el('p', 'verdict', `What cost the most: ${worst.situation}. You called ${worst.opts.find((o) => o.k === worst.chosen).label.toLowerCase()}; ${worst.opts.find((o) => o.k === worst.best).label.toLowerCase()} was the call there, ${(worst.cost * 100).toFixed(1)} points of win chance better.`));
+    if (worst) box.append(el('p', 'verdict', `What cost the most: ${worst.situation}. You called ${worst.opts.find((o) => o.k === worst.chosen).label.toLowerCase()}; ${worst.opts.find((o) => o.k === worst.best).label.toLowerCase()} was the call there, ${(worst.cost * 100).toFixed(1)} points of win chance better. ${explain(worst).split(' Your call')[0]}`));
     else box.append(el('p', 'verdict', 'Every call the best or close to it. That is a coach.'));
     const mine = el('div', 'real'); mine.append(el('h3', '', 'How your game went'));
     const ul = el('ul', ''); for (const t of G.lines) ul.append(el('li', '', t)); mine.append(ul); box.append(mine);
@@ -947,6 +1052,7 @@
       const typ = mine ? typicalOffense(S, rng(1)).weights : typicalDefense(S, rng(1)).weights;
       G.decs.push({ i, side: mine ? 'off' : 'def', situation: situation(S), chosen: k, best, wp: wp[k], bestWp: wp[best], cost: Math.max(0, wp[best] - wp[k]), opts: opts.map((o) => ({ k: o, label: (mine ? APPROACH : DEFENSE)[o].label, wp: wp[o], q: typ[o] || 0 })) });
     }
+    if (graded && graded.pick != null) S.pick = graded.pick;
     const r = rng(hash(G.seed, 'p', i));
     const a = mine ? k : typicalOffense(S, r).pick, d = mine ? typicalDefense(S, r).pick : k;
     for (const t of possession(S, r, a, d, null)) G.lines.push(t);

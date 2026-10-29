@@ -487,6 +487,7 @@ class Tally:
         self.c["made" + k] += e.made
         if e.p1:
             self.players[e.p1]["att" + k] += 1
+            self.players[e.p1]["made" + k] += e.made
 
     def ft(self, e: Ev):
         self.c["fta"] += 1
@@ -577,6 +578,9 @@ def league_rates(games: list[Game]) -> dict:
     }
 
 
+SHRINK2, SHRINK3 = 120, 80   # a player's own shooting, shrunk toward his team's by this many of its attempts
+
+
 def team_profiles(games: list[Game]) -> dict:
     """Every team's season-long profile (all periods) for the latest season it
     appears in, with up to eight players and their shares of the team's shots."""
@@ -609,15 +613,27 @@ def team_profiles(games: list[Game]) -> dict:
                 continue
             tal[p.team].c["poss"] += 1
             tal[p.team].c["to"] += sum(1 for e in p.events if e.type == TURNOVER and e.team == p.team)
+    # the players: both seasons (a spot's five come from either), each with his shares of the team's shots and his own
+    # shooting, shrunk toward the team's (SHRINK attempts of the team's rate added: a man with few shots shoots like his team)
+    ptal = defaultdict(Tally)
+    for g in games:
+        for e in g.events:
+            if e.team and e.type in (MADE, MISSED):
+                ptal[e.team].shot(e)
+            elif e.team and e.type == FT:
+                ptal[e.team].ft(e)
     out = {}
     for tm in sorted(tal):
-        t, c = tal[tm], tal[tm].c
-        ranked = sorted(t.players.items(), key=lambda kv: -(kv[1]["att2"] + kv[1]["att3"] + 0.44 * kv[1]["fta"]))[:8]
+        t, c, pt = tal[tm], tal[tm].c, ptal[tm]
+        p2t, p3t = rate(c["made2"], c["att2"]), rate(c["made3"], c["att3"])
+        ranked = sorted(pt.players.items(), key=lambda kv: -(kv[1]["att2"] + kv[1]["att3"] + 0.44 * kv[1]["fta"]))[:14]
         players = [{"name": name,
-                    "att2": rate(s["att2"], c["att2"]),
-                    "att3": rate(s["att3"], c["att3"]),
+                    "att2": rate(s["att2"], pt.c["att2"]),
+                    "att3": rate(s["att3"], pt.c["att3"]),
+                    "p2": round((s["made2"] + SHRINK2 * p2t) / (s["att2"] + SHRINK2), 4),
+                    "p3": round((s["made3"] + SHRINK3 * p3t) / (s["att3"] + SHRINK3), 4),
                     "ft": rate(s["ftm"], s["fta"]) if s["fta"] >= 20 else 0.75,
-                    "fta": rate(s["fta"], c["fta"])} for name, s in ranked]
+                    "fta": rate(s["fta"], pt.c["fta"])} for name, s in ranked]
         out[tm] = {"city": None,
                    "p2": rate(c["made2"], c["att2"]), "p3": rate(c["made3"], c["att3"]), "ft": rate(c["ftm"], c["fta"]),
                    "to": rate(c["to"], c["poss"]), "oreb": rate(c["miss_oreb"], c["miss_reb"]),
