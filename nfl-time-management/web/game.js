@@ -12320,10 +12320,10 @@
   // Hoops: the basketball daily (hoops.html, its own page and script)
   function homeHoops() {
     const a = el('a', 'hcard hhoops');
-    const locked = HOOPS_PRO && !isPro();
+    const free = new Date().getDay() === 0, locked = HOOPS_PRO && !isPro() && !free;      // (Sundays the Hoops daily is free: hoops.js freeDay)
     a.href = locked ? '#archive' : 'hoops';
     a.dataset.to = locked ? 'hoops_pitch' : 'hoops';
-    a.append(el('div', 'hk', locked ? 'Hoops beta, with Pro' : 'Hoops beta'), el('div', 'hpitch', 'New: the last two minutes'),
+    a.append(el('div', 'hk', locked ? 'Hoops beta, with Pro' : HOOPS_PRO && !isPro() ? 'Hoops beta · free today' : 'Hoops beta'), el('div', 'hpitch', 'New: the last two minutes'),
       el('p', '', 'A real basketball game a day: the last two minutes, one bench yours, every call graded.'), el('span', 'cta', locked ? 'Take a look' : 'Play'));
     a.addEventListener('click', () => track('hoops_home', { day: dayN }));
     return a;
