@@ -11,15 +11,15 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800;900&family=Libre+Franklin:wght@400;600;700&display=swap">
 <style>
 :root {
-  --paper: #f3f5f2; --card: #ffffff; --ink: #121a15; --muted: #5a675e; --line: #d3dbd5; --turf: #2c7549; --court: #b5581f; --sq-g: #2c7549; --sq-y: #c29a1b; --sq-r: #b23a3a; --wood: #d9a066;
+  --paper: #f3f5f2; --card: #ffffff; --ink: #121a15; --muted: #5a675e; --line: #d3dbd5; --turf: #2c7549; --court: #b5581f; --sq-g: #2c7549; --sq-y: #c29a1b; --sq-r: #b23a3a; --wood: #d9a066; --apron: #c48a52;
   --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
   --body: "Libre Franklin", "Franklin Gothic Medium", "Helvetica Neue", Arial, sans-serif;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; --court: #d97b3b; --sq-g: #3f9a63; --sq-y: #d9b23a; --sq-r: #d25555; --wood: #a8673a; color-scheme: dark;
+  --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; --court: #d97b3b; --sq-g: #3f9a63; --sq-y: #d9b23a; --sq-r: #d25555; --wood: #a8673a; --apron: #8a5330; color-scheme: dark;
 } }
-:root[data-theme="dark"] { --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; --court: #d97b3b; --sq-g: #3f9a63; --sq-y: #d9b23a; --sq-r: #d25555; --wood: #a8673a; color-scheme: dark; }
+:root[data-theme="dark"] { --paper: #0d120f; --card: #161d18; --ink: #e8eee9; --muted: #98a59c; --line: #29342d; --turf: #3f9a63; --court: #d97b3b; --sq-g: #3f9a63; --sq-y: #d9b23a; --sq-r: #d25555; --wood: #a8673a; --apron: #8a5330; color-scheme: dark; }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body { background: var(--paper); color: var(--ink); font: 15px/1.5 var(--body); padding-top: env(safe-area-inset-top, 0px); }
@@ -51,6 +51,8 @@ a { color: var(--turf); }
 #courtbox { position: relative; border-radius: 12px; overflow: hidden; margin-bottom: 10px; background: var(--wood); cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; }
 #court { display: block; width: 100%; height: auto; }
 .wood { fill: var(--wood); }
+.apron { fill: var(--apron); }
+.ln.board { stroke: #f3f3f3; stroke-width: .5; }
 .ln { fill: none; stroke: rgba(255,255,255,.8); stroke-width: .28; stroke-linejoin: round; }
 .rim { fill: none; stroke: #e8552b; stroke-width: .32; }
 .net { fill: none; stroke: rgba(255,255,255,.95); stroke-width: .2; transform-box: fill-box; transform-origin: top center; transition: transform .25s ease; }
@@ -106,7 +108,7 @@ a { color: var(--turf); }
     <a class="btn ghostbtn" href="./">Football ›</a>
   </header>
   <div id="board" aria-live="polite"></div>
-  <div id="courtbox" title="Tap to skip the play"><svg id="court" role="img" aria-label="The court"></svg><div id="cap" aria-live="polite"></div></div>
+  <div id="courtbox" title="Tap to skip the play"><svg id="court" role="img" aria-label="The court" viewBox="16 -3 62 56"></svg><div id="cap" aria-live="polite"></div></div>
   <div id="dock"></div>
   <main id="card">Loading today's game…</main>
   <section class="howto">
