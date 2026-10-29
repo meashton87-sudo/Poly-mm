@@ -40,7 +40,7 @@ jobs:
       PRO_AT: ""   # and not before this time (UTC, e.g. "2026-10-16T18:00:00Z"): the page turns Pro on then; "" for at once
       SCN_AT: "2026-10-19T17:00:00Z"   # Build a scenario (#custom) stays hidden until this time (UTC; 1 p.m. ET); "" for at once
       VS_ON: "pro"            # Versus (two players live): "on" for everyone, "pro" as part of Pro (its lobby takes Pro), "off"; the Pro preview always has it
-      HOOPS_ON: "off"         # Hoops (the basketball daily): "off" (nothing built or shown), "on" for everyone, "pro" as part of Pro (the tile and the page pitch Pro)
+      HOOPS_ON: "pro"         # Hoops (the basketball daily): "off" (nothing built or shown), "on" for everyone, "pro" as part of Pro (the tile and the page pitch Pro)
       VS_AT: "2026-10-23T15:00:00Z"   # ... and not before this time (UTC; 11 a.m. ET: the beta, the owner); "" for at once
       VS_FREE_AT: "2026-10-26T14:00:00Z"   # ... with "pro": everyone's from this time (Season 1, 10 a.m. ET, the owner); "" never
       ADS_ON: "on"           # "on" shows the ads (AdSense and the units in web/ads); "off": no ads anywhere, and no extra life

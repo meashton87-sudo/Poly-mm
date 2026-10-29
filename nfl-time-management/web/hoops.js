@@ -879,7 +879,7 @@
   const hasPro = () => !!String((load('tmd:v3:pro', null) || {}).code || '');
   function renderPitch() {
     const box = $('card'); box.textContent = '';
-    box.append(el('div', 'eyebrow', 'Hoops · part of Pro'), el('h2', '', 'The last two minutes of a real basketball game, every day'),
+    box.append(el('div', 'eyebrow', 'Hoops beta · part of Pro'), el('h2', '', 'The last two minutes of a real basketball game, every day'),
       el('p', 'lead', 'One real game a day: the real score, clock, timeouts and bonus, and you coach one bench, possession by possession, on the court. Every call graded on win chance, the real ending beside yours.'),
       el('p', '', 'Hoops comes with Two-Minute Drill Pro, a one-time purchase with the historic drives, the playoff runs, the scenario builder and no ads.'));
     const a = el('a', 'btn big', 'Get Pro'); a.href = './#archive'; box.append(a);
