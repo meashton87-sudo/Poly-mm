@@ -12321,7 +12321,7 @@
     const locked = HOOPS_PRO && !isPro();
     a.href = locked ? '#archive' : 'hoops';
     a.dataset.to = locked ? 'hoops_pitch' : 'hoops';
-    a.append(el('div', 'hk', locked ? 'Hoops, with Pro' : 'Hoops'), el('div', 'hpitch', 'New: the last two minutes'),
+    a.append(el('div', 'hk', locked ? 'Hoops beta, with Pro' : 'Hoops beta'), el('div', 'hpitch', 'New: the last two minutes'),
       el('p', '', 'A real basketball game a day: the last two minutes, one bench yours, every call graded.'), el('span', 'cta', locked ? 'Take a look' : 'Play'));
     a.addEventListener('click', () => track('hoops_home', { day: dayN }));
     return a;

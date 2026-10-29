@@ -608,14 +608,14 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         extra += f"<meta name=\"google-client-id\" content=\"{html.escape(google_client_id, quote=True)}\">"
     if fulldef:                              # the full defensive call in the daily and survivor: off until it is approved
         extra += "<meta name=\"fulldef\" content=\"on\">"
+    if hoops:                                # Hoops (the basketball daily, hoops.html): Home's tile, the footer nav, the sitemap
+        extra += "<meta name=\"hoops-on\" content=\"on\">"
+    if hoops_pro:                            # ... as part of Pro (the Home tile pitches it; the page itself gates on the device's Pro code)
+        if not pro or not hoops:
+            raise SystemExit("--hoops-pro needs --pro and --hoops")
+        extra += "<meta name=\"hoops-pro\" content=\"on\">"
     if vs:                                   # Versus (two players live, board/match.js): off until it is turned on
         extra += "<meta name=\"vs\" content=\"on\">"
-        if hoops:                            # Hoops (the basketball daily, hoops.html): Home's tile, the footer nav, the sitemap
-            extra += "<meta name=\"hoops-on\" content=\"on\">"
-        if hoops_pro:                        # ... as part of Pro (the Home tile pitches it; the page itself gates on the device's Pro code)
-            if not pro or not hoops:
-                raise SystemExit("--hoops-pro needs --pro and --hoops")
-            extra += "<meta name=\"hoops-pro\" content=\"on\">"
         if vs_pro:                           # ... as part of Pro: its lobby takes Pro (a room's link plays for anyone)
             if not pro:
                 raise SystemExit("--vs-pro needs --pro")

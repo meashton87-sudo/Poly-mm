@@ -2,6 +2,16 @@
   "about": "Every change to the game, newest first. Each update adds its notes here (scripts/site.py builds /patch-notes from this file). Game changes only: no ads, analytics, payments or behind-the-scenes work, and nothing that is not live yet.",
   "notes": [
     {
+      "date": "2026-10-29",
+      "title": "Hoops beta: a real basketball ending a day, for Pro",
+      "items": [
+        "Hoops is open to Pro players as a beta. One real basketball game a day, the last two minutes with the real score, clock, timeouts and bonus, and you coach one bench, possession by possession.",
+        "Every possession plays out on a full court in real time: the ball brought up, pick-and-rolls, screens for shooters, drives, free throws, rebounds and steals. Skip the play, or run it at double speed.",
+        "Every call is graded on win chance against the best one, and the end card shows every option's chance, what cost you most, and how the real game ended.",
+        "It's a beta: tell us what feels off with Report a bug."
+      ]
+    },
+    {
       "date": "2026-10-28",
       "title": "After the drive: why the grade, and another drive",
       "items": [
