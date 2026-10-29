@@ -1010,6 +1010,9 @@ export class Match {
       try { q.exec("ALTER TABLE players ADD COLUMN season TEXT NOT NULL DEFAULT 'beta'"); } catch (e) { /* (there already) */ }
       q.exec(`CREATE TABLE IF NOT EXISTS past (kh TEXT NOT NULL, season TEXT NOT NULL, name TEXT NOT NULL, rating REAL NOT NULL, games INTEGER NOT NULL,
         w INTEGER NOT NULL, l INTEGER NOT NULL, peak REAL NOT NULL, PRIMARY KEY (kh, season))`);
+      // /vs/standings reads only the games after a time; rank() and the ladder's count only this season's players
+      q.exec('CREATE INDEX IF NOT EXISTS games_at ON games (at)');
+      q.exec('CREATE INDEX IF NOT EXISTS players_season ON players (season, rating)');
       this.ready = true;
     }
     return this.ctx.storage.sql;
@@ -1043,11 +1046,15 @@ export class Match {
     // minGames rated games by then, best first
     if (url.pathname === '/vs/standings') {
       const at = Number(body.at) || Date.now(), n = Math.max(1, Math.min(64, Number(body.n) || 16)), min = Number(body.minGames) || 0;
-      const rows = q.exec(`SELECT p.kh AS kh, p.name AS name,
-          p.rating - COALESCE((SELECT SUM(g.da) FROM games g WHERE g.a = p.kh AND g.rated = 1 AND g.at > ?), 0)
-                   - COALESCE((SELECT SUM(g.db) FROM games g WHERE g.b = p.kh AND g.rated = 1 AND g.at > ?), 0) AS r,
-          p.games - (SELECT COUNT(*) FROM games g WHERE (g.a = p.kh OR g.b = p.kh) AND g.rated = 1 AND g.at > ?) AS n
-        FROM players p WHERE p.season = ? AND p.games > 0`, at, at, at, se.id).toArray()
+      // One pass over the games after `at` (games_at), summed per player, then joined: never a scan of the games per
+      // player (the subqueries this replaced read every game once per player, billions of rows a day while the Cup's
+      // projection refreshed). `at` now (the projection): no game is after it, so no game is read.
+      const rows = q.exec(`WITH g AS (
+            SELECT a AS kh, da AS d FROM games WHERE at > ? AND rated = 1
+            UNION ALL SELECT b AS kh, db AS d FROM games WHERE at > ? AND rated = 1),
+          s AS (SELECT kh, SUM(d) AS d, COUNT(*) AS n FROM g GROUP BY kh)
+        SELECT p.kh AS kh, p.name AS name, p.rating - COALESCE(s.d, 0) AS r, p.games - COALESCE(s.n, 0) AS n
+        FROM players p LEFT JOIN s ON s.kh = p.kh WHERE p.season = ? AND p.games > 0`, at, at, se.id).toArray()
         .filter((x) => x.n >= min).sort((a, b) => b.r - a.r || b.n - a.n || (a.kh < b.kh ? -1 : 1)).slice(0, n);
       return reply({ top: rows.map((x) => ({ kh: x.kh, name: x.name || 'Anonymous', rating: Math.round(x.r), games: x.n })) });
     }
