@@ -84,6 +84,19 @@ a { color: var(--turf); }
 .calls details.call summary::-webkit-details-marker { display: none; }
 .calls .wps { list-style: none; margin: 4px 0 2px 28px; padding: 0; font-size: 12.5px; color: var(--muted); display: grid; gap: 2px; }
 .calls .wps li.mine { color: var(--ink); font-weight: 700; }
+.calls .wps li.realc { color: var(--court); font-weight: 600; }
+.calls .wps li.crowd { font-style: italic; }
+.vs { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 2px; background: var(--paper); }
+.vs .vsh { font: 700 11px var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.vs .vsr { font: 900 26px/1.05 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.vs.better .vsr { color: var(--sq-g); } .vs.worse .vsr { color: var(--sq-r); }
+.vs .vsl { font-size: 13px; color: var(--muted); }
+.today h3 { margin-top: 6px; }
+.today ol.top { margin: 4px 0 0; padding-left: 22px; font-size: 13.5px; display: grid; gap: 2px; font-variant-numeric: tabular-nums; }
+.today ol.top li.me { font-weight: 700; }
+.nameform { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.nameform input { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); flex: 1 1 140px; min-width: 0; }
+.challenge { background: var(--paper); border-left: 3px solid var(--court); padding: 8px 10px; border-radius: 6px; font-weight: 600; }
 /* the card */
 #card:empty { display: none; }
 /* the card */

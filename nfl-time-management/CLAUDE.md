@@ -280,7 +280,7 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
 
 - Hoops (web/hoops.html, web/hoops.js; the data web/hoops/hoops_data.json from src/hoops/build.py: two seasons of public
   basketball play-by-play, shufinskiy/nba_data on GitHub, cached under data/raw/hoops; generated, never committed; site.yml
-  builds it, never blocking the deploy; HOOPS_ON "off" builds and shows nothing, "on" everyone, "pro" as part of Pro: site.py --hoops, --hoops-pro; the test server builds it open). Not live yet (the owner, Oct 28: needs the court and the players moving first). The basketball daily: one real game's last two minutes a day (the data's
+  builds it, never blocking the deploy; HOOPS_ON "off" builds and shows nothing, "on" everyone, "pro" as part of Pro: site.py --hoops, --hoops-pro; the test server builds it open). Live for Pro as a beta since Oct 29. The basketball daily: one real game's last two minutes a day (the data's
   schedule by local date, hoops.js dayISO, a hash of the date when the schedule runs out), the player one bench. hoops.js
   holds the rules it keeps (the bonus: five team fouls a period or the second in the last two minutes; overtime 5:00 with
   two timeouts each; at most two timeouts in the last two minutes; a timeout advances the ball; 14 on the shot clock after
@@ -288,7 +288,12 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   (typicalOffense/typicalDefense: the opponent, the simulations and the mix the score is measured against) and the grade
   (evaluate: every option's win chance from the spot, N_EVAL games each on the same seeds; the score the share of typical
   coaches giving up more win chance in total, percentile). A day's game replays from its saved calls on the same seed. Its
-  record is its own (tmd:hoops:stats, days and the streak from them) and posts nowhere yet. Teams by city (the data's
+  record is its own (tmd:hoops:stats, days and the streak from them). Social (worker.js /hoops/day, /hoops/stats; the
+  football game's device key, name and session, the board-api meta): the day's first result a device posts once (score,
+  won, vs the real coach, the crowd's calls by hoops.js crowdKey), the day's numbers, a named top 20 and the crowd's
+  shares (10+ players) come back; signed in, the days merge with hstats:<acct>. The real coaches (build.py COACHES,
+  coach_of by season, team and game number for a change mid-season) ride on each spot; hoops.js realCall reads the
+  real bench's first move off the play-by-play. A share carries ?vs=<score>&by=<name>: the intro's challenge line. Teams by city (the data's
   "city"; the two Los Angeles teams tagged, no nicknames). Home's tile (game.js homeHoops), the footer nav and the
   sitemap (site.py PAGES "hoops").
 - Player feedback (game.js renderFeedback, #feedback from every page's footer "Report a bug"; worker.js /feedback): a

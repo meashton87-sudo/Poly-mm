@@ -1943,4 +1943,18 @@ function addDays0(date, k) { return new Date(Date.parse(date + 'T12:00:00Z') + k
   delete env.GITHUB_TOKEN; delete env.GITHUB_REPO; delete board.env.GITHUB_TOKEN; delete board.env.GITHUB_REPO;
   globalThis.fetch = realFetch;
 }
+// Hoops (/hoops/day, /hoops/stats): one result a device a day, the day's numbers, the named top, the crowd's calls
+{
+  const date = new Date().toISOString().slice(0, 10), hp = (i, o = {}) => call('POST', { date, key: `hoops-device-key-${String(i).padStart(8, '0')}`, score: 40 + i, won: i % 2 === 0, vs: i % 3 - 1, calls: [['0', 'rim'], ['1.u2', 'straight']], ...o }, { path: '/hoops/day' });
+  let v = await (await hp(1, { name: 'Hoopster' })).json();
+  assert.deepStrictEqual([v.counted, v.n, v.avg, v.top.map((x) => [x.name, x.score]), v.you.rank], [true, 1, 41, [['Hoopster', 41]], 1], 'a first result counts');
+  v = await (await hp(1, { score: 99 })).json();
+  assert.deepStrictEqual([v.counted, v.n, v.you.score], [false, 1, 41], 'the day\'s first result stands');
+  for (let i = 2; i <= 11; i++) await hp(i);
+  v = await (await call('GET', null, { path: `/hoops/day?date=${date}` })).json();
+  assert.deepStrictEqual([v.n, v.calls['0'] && v.calls['0'].c.rim, v.won, v.vs.reduce((a, x) => a + x, 0)], [11, 11, 5, 11], 'the day\'s numbers and the crowd\'s calls');
+  assert.strictEqual((await hp(12, { score: 101 })).status, 400, 'a score past 100');
+  assert.strictEqual((await hp(13, { calls: 'x' })).status, 400, 'calls not a list');
+  assert.strictEqual((await call('POST', { session: 'f'.repeat(64), days: {} }, { path: '/hoops/stats' })).status, 401, 'stats need a session');
+}
 console.log('board worker ok');

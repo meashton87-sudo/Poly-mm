@@ -678,6 +678,54 @@
     court.auto = true; court.press = false;
   }
 
+  // ---- the social layer: the real coaches, what the real bench called, the day's players (board/worker.js /hoops/*) ------
+  const API = (document.querySelector('meta[name="board-api"]') || {}).content || '';
+  const FB = 'tmd:v3';                                     // the football game's keys: the same device, name and account
+  function deviceKey() {
+    let k = load(`${FB}:boardkey`, '');
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(k)) { const b = new Uint8Array(18); crypto.getRandomValues(b); k = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join(''); save(`${FB}:boardkey`, k); }
+    return k;
+  }
+  const myName = () => String(load(`${FB}:name`, '') || load(`${FB}:username`, '') || '').slice(0, 24);
+  const session = () => { const t = String(load(`${FB}:session`, '') || ''); return /^[0-9a-f]{64}$/.test(t) ? t : ''; };
+  async function api(path, body) {
+    if (!API) return null;
+    try {
+      const r = await fetch(API + path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+      return r.ok ? await r.json() : null;
+    } catch (e) { return null; }
+  }
+  const coachOf = (side) => (spot.coaches || [])[side === 'home' ? 0 : 1] || '';
+  const lastOf = (n) => String(n || '').split(' ').slice(-1)[0];
+  // what the real bench did with the ball you take over: the first thing it did (a timeout, the shot it took, a drive,
+  // a turnover), read off the play-by-play as one of the calls you had
+  function realCall(sp) {
+    const me = sp.me, t0 = sp.clock;
+    for (const e of sp.real || []) {
+      if (e.team !== me) continue;
+      const x = String(e.text || ''), used = t0 - (e.t == null ? t0 : e.t);
+      if (/Timeout/i.test(x)) { const nx = (sp.real || []).find((f) => f.team === me && f !== e && /Shot|Layup|Dunk|3PT/i.test(f.text || '')); return nx && /3PT/.test(nx.text) ? 'tthree' : 'tquick'; }
+      if (/3PT/.test(x)) return used <= 7 ? 'quick' : 'three';
+      if (/Layup|Dunk|Driving|Tip|Alley/i.test(x) || /Free Throw/i.test(x)) return 'rim';
+      if (/Shot|Jumper|Turnover|Foul/i.test(x)) return sp.clock <= SHOT + 6 && (e.t || 0) <= 4 ? 'last' : used <= 7 ? 'quick' : 'work';
+    }
+    return null;
+  }
+  // a coarse key of a decision's spot, so players meet in the crowd's counts: the first call is everyone's spot; later ones
+  // by the margin, the clock in 15-second bands and whose ball (worker.js HSIT_RE)
+  function crowdKey(i, S) {
+    if (i === 0) return '0';
+    const ld = lead(S, S.me), m = ld <= -4 ? 'd4' : ld < 0 ? `d${-ld}` : ld === 0 ? 't' : ld < 4 ? `u${ld}` : 'u4';
+    return `${Math.min(i, 99)}.${m}.c${Math.min(9, Math.floor(S.clock / 15))}.${S.poss === S.me ? 'o' : 'x'}`;
+  }
+  let CROWD = null;                                         // today's crowd's calls, { <key>: { n, c } }
+  function crowdLine(key, k) {
+    const x = CROWD && CROWD[key];
+    if (!x || !x.n) return '';
+    const pct = Math.round(100 * (x.c[k] || 0) / x.n);
+    return `${pct}% of ${x.n} players called this`;
+  }
+
   // ---- the game on the page -------------------------------------------------------------------------------------------
   let D = null, spot = null, S = null, G = null, busy = false;            // the data, today's spot, the state, the game record
   const dayKey = () => `${STORE}:day:${dayISO()}`;
@@ -707,9 +755,12 @@
     const box = $('card'); box.textContent = ''; $('dock').textContent = ''; caption('');
     box.append(el('div', 'eyebrow', practice ? 'Practice game' : `Day ${dayN()} · today's game`),
       el('h2', '', `${teamCity(spot.away)} at ${teamCity(spot.home)}`),
-      el('p', 'lead', `${spot.season}–${String(spot.season + 1).slice(2)} season. ${situation(S)}. You coach ${teamCity(teamOf(S, S.me))}.`),
+      el('p', 'lead', `${spot.season}–${String(spot.season + 1).slice(2)} season. ${situation(S)}. You coach ${teamCity(teamOf(S, S.me))}${coachOf(S.me) ? `, in ${coachOf(S.me)}'s seat, against ${coachOf(other(S.me)) || 'their bench'}` : ''}.`),
       el('p', 'note', `Timeouts: you ${S.to[S.me]}, they ${S.to[other(S.me)]}. ${inBonus(S, other(S.me)) ? 'They are in the bonus: any foul on you is two free throws. ' : ''}${inBonus(S, S.me) ? 'You are in the bonus: any foul on them is two free throws.' : ''}`));
     if (spot.lead) box.append(el('p', 'note', `How it got here: ${byCity(spot.lead)}.`));
+    const q = new URLSearchParams(location.search), vs = Number(q.get('vs'));
+    if (!practice && q.has('vs') && vs >= 0 && vs <= 100) box.append(el('p', 'challenge', `${String(q.get('by') || 'A friend').slice(0, 24)} scored ${Math.round(vs)} on today's game. Beat it.`));
+    if (coachOf(S.me)) box.append(el('p', 'note', `Can you do better than ${coachOf(S.me)} did?`));
     const go = el('button', 'btn big', 'Take over'); go.type = 'button';
     go.addEventListener('click', () => { G.started = true; saveGame(); box.textContent = ''; step(); });
     box.append(go);
@@ -740,7 +791,8 @@
     const i = G.decs.length, seed = hash(G.seed, 'd', i);
     if (live) {
       const dock = $('dock'); dock.textContent = '';
-      const row = el('div', 'playing'); row.append(el('span', 'sit', `${(mine ? APPROACH : DEFENSE)[k].label}…`));
+      const cl = !G.practice ? crowdLine(crowdKey(G.decs.length, S), k) : '';
+      const row = el('div', 'playing'); row.append(el('span', 'sit', `${(mine ? APPROACH : DEFENSE)[k].label}…${cl ? ` ${cl}` : ''}`));
       const skip = el('button', 'btn ghostbtn small', 'Skip the play ›'); skip.type = 'button'; skip.addEventListener('click', () => { skipNow = true; });
       const fast = el('button', 'btn ghostbtn small', load(FAST_KEY, false) ? 'Speed: 2×' : 'Speed: 1×'); fast.type = 'button';
       fast.addEventListener('click', () => { const v = !load(FAST_KEY, false); save(FAST_KEY, v); fast.textContent = v ? 'Speed: 2×' : 'Speed: 1×'; });
@@ -751,7 +803,7 @@
     // the grade: every option's win chance from here, the same bounces each
     const wp = evaluate(S, mine ? 'off' : 'def', opts, seed, N_EVAL), best = opts.reduce((a, b) => (wp[b] > wp[a] ? b : a));
     const typ = mine ? typicalOffense(S, rng(1)).weights : typicalDefense(S, rng(1)).weights;
-    G.decs.push({ i, side: mine ? 'off' : 'def', situation: situation(S), chosen: k, best, wp: wp[k], bestWp: wp[best], cost: Math.max(0, wp[best] - wp[k]),
+    G.decs.push({ i, side: mine ? 'off' : 'def', situation: situation(S), ck: crowdKey(i, S), chosen: k, best, wp: wp[k], bestWp: wp[best], cost: Math.max(0, wp[best] - wp[k]),
       opts: opts.map((o) => ({ k: o, label: (mine ? APPROACH : DEFENSE)[o].label, wp: wp[o], q: typ[o] || 0 })) });
     // the possession, with the other bench typical, on the day's own bounces
     const r = rng(hash(G.seed, 'p', i)), off = S.poss;
@@ -796,21 +848,35 @@
     const box = $('card'); box.textContent = '';
     const won = lead(S, S.me) > 0, margin = Math.abs(lead(S, S.me)), decs = G.decs;
     badge(won ? 'YOU WIN' : 'FINAL', won ? 'score' : 'miss'); caption(`Final: ${teamCity(teamOf(S, S.me))} ${S.score[S.me]}, ${teamCity(teamOf(S, other(S.me)))} ${S.score[other(S.me)]}`);
-    if (G.score == null) {
-      G.score = Math.round(percentile(decs) * 100); G.won = won; G.margin = margin; G.done = true; saveGame();
-      if (!G.practice) { const st = load(`${STORE}:stats`, { days: {} }); if (!st.days[dayISO()]) { st.days[dayISO()] = { score: G.score, won }; save(`${STORE}:stats`, st); } }
-    }
     const realMine = spot.me === spot.home ? spot.final[0] - spot.final[1] : spot.final[1] - spot.final[0];
+    const myMargin = lead(S, S.me), vsCoach = Math.sign(myMargin - realMine), coach = coachOf(S.me);
+    let fresh = false;
+    if (G.score == null) {
+      G.score = Math.round(percentile(decs) * 100); G.won = won; G.margin = margin; G.done = true; saveGame(); fresh = true;
+      if (!G.practice) { const st = load(`${STORE}:stats`, { days: {} }); if (!st.days[dayISO()]) { st.days[dayISO()] = { score: G.score, won, vs: vsCoach }; save(`${STORE}:stats`, st); } }
+    }
     box.append(el('div', 'eyebrow', G.practice ? 'Practice game' : `Day ${dayN()} · ${teamCity(spot.away)} at ${teamCity(spot.home)}`),
       el('div', 'big', String(G.score)), el('div', 'pct-lab', `Better than ${G.score}% of coaches`),
       el('p', 'note', `The score is your calls, not the result: each one measured against the best option in that spot, the misses added up (${(decs.reduce((a, x) => a + x.cost, 0) * 100).toFixed(1)} points of win chance in all) and placed among a field of coaches making the same calls. Tap a call for every option's win chance.`),
       el('h2', '', `${won ? 'You won' : margin === 0 ? 'Tied' : 'You lost'} ${S.score[S.me]}–${S.score[other(S.me)]}${S.period > 4 ? ' in overtime' : ''}`),
       el('p', 'note', `The real game: ${teamCity(teamOf(S, S.me))} ${realMine > 0 ? 'won' : realMine < 0 ? 'lost' : 'tied'} ${Math.abs(realMine) ? `by ${Math.abs(realMine)}` : ''} (${spot.final[1]}–${spot.final[0]} ${teamCity(spot.away)} at ${teamCity(spot.home)}).`));
+    if (coach) {
+      const vsBox = el('div', `vs ${vsCoach > 0 ? 'better' : vsCoach < 0 ? 'worse' : 'same'}`);
+      const fmt = (m) => (m > 0 ? `Won by ${m}` : m < 0 ? `Lost by ${-m}` : 'Tied');
+      vsBox.append(el('div', 'vsh', `You vs ${coach}`), el('div', 'vsr', `${vsCoach > 0 ? 'You did better' : vsCoach < 0 ? `${lastOf(coach)} did better` : 'Dead even'}`),
+        el('div', 'vsl', `You: ${fmt(myMargin)} · ${lastOf(coach)}: ${fmt(realMine)}`));
+      box.append(vsBox);
+    }
+    const daybox = el('div', 'today'); box.append(daybox);
+    if (!G.practice) dayNumbers(daybox, fresh, vsCoach);
     const list = el('ol', 'calls');
     for (const x of decs) {
       const li = el('li', markOf(x.cost)), det = el('details', 'call'), sm = el('summary', '');
       sm.append(el('span', 'sq', { g: '✓', y: '~', r: '✗' }[markOf(x.cost)]), el('span', 'sit', x.situation), el('span', 'what', `You: ${x.opts.find((o) => o.k === x.chosen).label}${x.cost >= 0.01 ? ` · best: ${x.opts.find((o) => o.k === x.best).label} (${(x.cost * 100).toFixed(1)} pts of win chance)` : ''}`));
       const all = el('ul', 'wps');
+      if (x.i === 0 && G.realCall && x.opts.some((o) => o.k === G.realCall)) all.append(el('li', 'realc', `${coach || 'The real bench'} went: ${x.opts.find((o) => o.k === G.realCall).label}`));
+      const cl = !G.practice && x.ck ? crowdLine(x.ck, x.chosen) : '';
+      if (cl) all.append(el('li', 'crowd', cl));
       for (const o of [...x.opts].sort((a, b) => b.wp - a.wp)) all.append(el('li', o.k === x.chosen ? 'mine' : '', `${o.label}: ${(o.wp * 100).toFixed(1)}% to win${o.k === x.chosen ? ' (yours)' : ''}${o.k === x.best ? ' · best' : ''}`));
       det.append(sm, all); li.append(det); list.append(li);
     }
@@ -826,9 +892,10 @@
     real.append(rl); box.append(real);
     if (!G.practice) { const st = load(`${STORE}:stats`, { days: {} }); box.append(el('p', 'streak', `🔥 ${streakOf(st)} day${streakOf(st) === 1 ? '' : 's'} in a row · come back tomorrow for a new game`)); }
     const row = el('div', 'row');
-    const share = el('button', 'btn', 'Share'); share.type = 'button';
+    const share = el('button', 'btn', G.practice ? 'Share' : 'Share · challenge a friend'); share.type = 'button';
     share.addEventListener('click', async () => {
-      const text = `Two-Minute Drill: Hoops #${dayN()}\n${G.score} · better than ${G.score}% of coaches\n${decs.map((x) => ({ g: '🟩', y: '🟨', r: '🟥' }[markOf(x.cost)])).join('')}\n${won ? 'Won' : 'Lost'} ${S.score[S.me]}–${S.score[other(S.me)]}\nhttps://2mindrills.com/hoops`;
+      const nm = myName(), link = `https://2mindrills.com/hoops?vs=${G.score}${nm ? `&by=${encodeURIComponent(nm)}` : ''}`;
+      const text = `Two-Minute Drill: Hoops #${dayN()}\n${G.score} · better than ${G.score}% of coaches\n${decs.map((x) => ({ g: '🟩', y: '🟨', r: '🟥' }[markOf(x.cost)])).join('')}\n${won ? 'Won' : 'Lost'} ${S.score[S.me]}–${S.score[other(S.me)]}${coach ? ` · vs ${lastOf(coach)}: ${vsCoach > 0 ? 'better' : vsCoach < 0 ? 'worse' : 'even'}` : ''}\nCan you beat it? ${link}`;
       try { await navigator.clipboard.writeText(text); share.textContent = 'Copied'; } catch (e) { share.textContent = text; }
     });
     const again = el('button', 'btn ghostbtn', 'Play another game (practice)'); again.type = 'button';
@@ -836,6 +903,39 @@
     const home = el('a', 'btn ghostbtn', 'Home'); home.href = './';
     row.append(share, again, home); box.append(row);
     box.scrollIntoView({ behavior: REDUCED ? 'auto' : 'smooth', block: 'start' });
+  }
+  async function dayNumbers(box, fresh, vsCoach) {
+    if (!API) return;
+    const body = { date: dayISO(), key: deviceKey(), score: G.score, won: !!G.won, vs: vsCoach, calls: G.decs.filter((x) => x.ck).map((x) => [x.ck, x.chosen]),
+      ...(myName() ? { name: myName() } : {}), ...(session() ? { session: session() } : {}) };
+    const v = await api('/hoops/day', body);
+    if (!v) return;
+    if (v.calls) CROWD = v.calls;
+    box.textContent = '';
+    const beat = v.n ? Math.round(100 * (v.vs[2] || 0) / v.n) : 0;
+    box.append(el('h3', '', "Today's players"), el('p', '', `${v.n} played today · average ${v.avg ?? '–'}${v.you ? ` · you're #${v.you.rank}` : ''} · ${beat}% beat their real coach`));
+    if (v.top && v.top.length) {
+      const ol = el('ol', 'top');
+      v.top.slice(0, 10).forEach((r) => ol.append(el('li', r.name === myName() ? 'me' : '', `${r.name} · ${r.score}`)));
+      box.append(ol);
+    }
+    if (!myName()) {
+      const f = el('form', 'nameform'), inp = el('input'), b = el('button', 'btn small', 'Put my name on the list');
+      inp.id = 'hoops-name'; inp.maxLength = 24; inp.placeholder = 'Your name'; b.type = 'submit';
+      f.append(inp, b);
+      f.addEventListener('submit', async (e) => {
+        e.preventDefault(); const n = inp.value.trim().slice(0, 24); if (!n) return;
+        save(`${FB}:name`, n); dayNumbers(box, false, vsCoach);
+      });
+      box.append(f);
+    }
+    syncStats();
+  }
+  // signed in (the football game's account): the Hoops record follows it, both ways, the higher score of a day kept
+  async function syncStats() {
+    if (!session()) return;
+    const st = load(`${STORE}:stats`, { days: {} }), r = await api('/hoops/stats', { session: session(), days: st.days });
+    if (r && r.days) { st.days = { ...st.days, ...r.days }; save(`${STORE}:stats`, st); }
   }
   function saveGame() { if (!G.practice) save(dayKey(), { seed: G.seed, spotId: spot.id, decs: G.decs.map((x) => x.chosen), graded: G.decs, done: G.done, score: G.score, lines: G.lines, started: G.started }); }
   // a saved call replayed: the possession on the day's own bounces, the grade from the save (none: graded again)
@@ -857,7 +957,8 @@
     FIVE = { home: (spot.players && spot.players.home || []).slice(0, 5), away: (spot.players && spot.players.away || []).slice(0, 5) };
     while (FIVE.home.length < 5) FIVE.home.push(`${teamCity(spot.home)} ${FIVE.home.length + 1}`);
     while (FIVE.away.length < 5) FIVE.away.push(`${teamCity(spot.away)} ${FIVE.away.length + 1}`);
-    G = { seed: practice ? (Math.random() * 1e9) >>> 0 : hash('hoops', dayISO(), spot.id), decs: [], lines: [], practice: !!practice, done: false, score: null, started: false };
+    G = { seed: practice ? (Math.random() * 1e9) >>> 0 : hash('hoops', dayISO(), spot.id), decs: [], lines: [], practice: !!practice, done: false, score: null, started: false, realCall: realCall(spot) };
+    if (!practice && !CROWD) api(`/hoops/day?date=${dayISO()}`).then((v) => { if (v && v.calls) CROWD = v.calls; });
     drawCourt(); badge(''); caption('');
     const saved = practice ? null : load(dayKey(), null);
     if (saved && saved.spotId === spot.id) {
@@ -894,6 +995,7 @@
       D = await r.json(); L = D.league; T = D.teams;
     } catch (e) { $('card').textContent = 'The game could not load its data. Try again in a minute.'; return; }
     $('courtbox').addEventListener('click', () => { skipNow = true; });
+    syncStats();
     start(false);
   }
   boot();
