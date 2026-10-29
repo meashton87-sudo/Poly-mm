@@ -256,7 +256,7 @@
     const hc = (COLORS[S.home] || ['#1f5fbf'])[0], ac = COLORS[S.away] || ['#2b2f36', '#2b2f36'];
     return { home: hc, away: cdist(hc, ac[0]) < 130 ? ac[1] : ac[0] };
   }
-  const W = 50, H = 47, LEN = 94, RIM = { x: 25, y: H - 5.25 }, R3 = 23.75, VIEW = window.innerWidth < 480 ? 50 : 62;
+  const W = 50, H = 47, LEN = 94, RIM = { x: 25, y: H - 5.25 }, R3 = 23.75, VIEW = window.innerWidth < 480 ? 58 : 62;
   const SPOTS = [[25, 13], [9, 22], [41, 22], [7, 38], [43, 38]];          // the set: the point, two wings, two corners
   const BACK = [[25, -41], [11, -33], [39, -33], [17, -45], [33, -45]];    // the backcourt after a score: the point, the wings ahead, the bigs behind
   const MS_PER_SEC = 1000, SPEED = 20, SLIDE = 14;
@@ -342,7 +342,7 @@
     const bw = world([court.bpos[0], court.bpos[1]]);
     const camT = Math.min(LEN - VIEW / 2 + 3, Math.max(VIEW / 2 - 3, bw[0]));
     court.cam = dt == null ? camT : court.cam + (camT - court.cam) * Math.min(1, dt / 320);
-    court.svg.setAttribute('viewBox', `${(court.cam - VIEW / 2).toFixed(2)} -3 ${VIEW} ${W + 6}`);
+    court.svg.setAttribute('viewBox', `${(court.cam - VIEW / 2).toFixed(2)} -1.5 ${VIEW} ${W + 3}`);
     court.badge.setAttribute('x', court.cam.toFixed(2));
     for (const side of ['home', 'away']) court.dots[side].forEach((g, i) => {
       const [x, y] = world(court.pos[side][i]);
@@ -405,7 +405,7 @@
     const e = $('bshot');
     if (!e || court.shot0 == null) return;
     const left = Math.max(0, court.shot0 - (court.clock0 - court.clock));
-    e.textContent = court.clock <= left ? 'shot clock off' : `shot clock ${Math.ceil(left)}`;
+    e.textContent = court.clock <= left ? '–' : String(Math.ceil(left));
   }
   const wait = (ms) => new Promise((r) => setTimeout(r, skipNow ? 0 : ms * tempo()));
   const SOUND_KEY = `${STORE}:sound`;
@@ -808,31 +808,42 @@
     const me = S.me, ld = lead(S, me);
     return `${ld > 0 ? `Up ${ld}` : ld < 0 ? `Down ${-ld}` : 'Tied'}, ${clockText(S.clock)} left in the ${periodText(S.period).toLowerCase()}, ${S.poss === me ? 'your ball' : 'their ball'}`;
   }
+  // the score bug, broadcast style: each team a block in its color (its code, the score, the possession arrow), the
+  // timeouts as pips and the bonus under it; then the period, the game clock and the shot clock
+  const periodShort = (p) => (p <= 4 ? `${p}${['ST', 'ND', 'RD', 'TH'][p - 1]}` : p === 5 ? 'OT' : `${p - 4}OT`);
   function drawBoard() {
-    const b = $('board'); b.textContent = '';
+    const b = $('board'); b.textContent = ''; b.className = 'bug';
+    const cols = teamColors();
     for (const side of ['away', 'home']) {
-      const row = el('div', `tm${side === S.me ? ' me' : ''}${S.poss === side && !S.over ? ' ball' : ''}`);
-      row.append(el('span', 'nm', teamCity(teamOf(S, side)) + (side === S.me ? ' (you)' : '')), el('b', 'sc', String(S.score[side])),
-        el('span', 'to', `${'●'.repeat(S.to[side])}${'○'.repeat(Math.max(0, 2 - S.to[side]))}`), el('span', 'fl', inBonus(S, other(side)) ? 'in the bonus' : `${S.fouls[other(side)]} team fouls on them`));
-      b.append(row);
+      const tm = teamOf(S, side), cell = el('div', `tm${side === S.me ? ' me' : ''}${S.poss === side && !S.over ? ' ball' : ''}`);
+      cell.style.setProperty('--tc', cols[side]); cell.title = teamCity(tm);
+      const top = el('div', 'tt'); top.append(el('span', 'ab', tm), el('b', 'sc', String(S.score[side])));
+      const sub = el('div', 'ts');
+      sub.append(el('span', 'pips', `${'▮'.repeat(S.to[side])}${'▯'.repeat(Math.max(0, 2 - S.to[side]))}`), el('span', 'bn', inBonus(S, other(side)) ? 'BONUS' : side === S.me ? 'YOU' : ''));
+      cell.append(top, sub); b.append(cell);
     }
-    const c = el('div', 'clk'); const bc = el('b', '', clockText(S.clock)); bc.id = 'bclock';
-    const sp = el('span', '', `${periodText(S.period)} · `), sh = el('span', '', S.clock > SHOT ? `shot clock ${S.shot}` : 'shot clock off'); sh.id = 'bshot'; sp.append(sh);
-    c.append(bc, sp);
+    const c = el('div', 'clk'), bc = el('b', '', clockText(S.clock)); bc.id = 'bclock';
+    const sh = el('span', 'shot', S.clock > SHOT ? String(S.shot) : '–'); sh.id = 'bshot';
+    c.append(el('span', 'per', periodShort(S.period)), bc, sh);
     b.append(c);
   }
   function renderIntro(practice) {
     const box = $('card'); box.textContent = ''; $('dock').textContent = ''; caption('');
-    box.append(el('div', 'eyebrow', modeLabel()),
-      el('h2', '', `${teamCity(spot.away)} at ${teamCity(spot.home)}`),
-      el('p', 'lead', `${poLine(spot)}. ${situation(S)}. You coach ${teamCity(teamOf(S, S.me))}${coachOf(S.me) ? `, in ${coachOf(S.me)}'s seat, against ${coachOf(other(S.me)) || 'their bench'}` : ''}.`),
-      el('p', 'note', `Timeouts: you ${S.to[S.me]}, they ${S.to[other(S.me)]}. ${inBonus(S, other(S.me)) ? 'They are in the bonus: any foul on you is two free throws. ' : ''}${inBonus(S, S.me) ? 'You are in the bonus: any foul on them is two free throws.' : ''}`));
-    if (spot.lead) box.append(el('p', 'note', `How it got here: ${byCity(spot.lead)}.`));
+    const start = () => { save(`${STORE}:guided`, true); G.started = true; saveGame(); box.textContent = ''; playOverlay(false); step(); };
+    const go = el('button', 'btn big go', '▶ Play'); go.type = 'button'; go.addEventListener('click', start);
+    const head = el('div', 'introhead'), ht = el('div', '');
+    ht.append(el('div', 'eyebrow', modeLabel()), el('h2', '', `You coach ${teamCity(teamOf(S, S.me))}`),
+      el('p', 'lead', `${situation(S)}${coachOf(S.me) ? `. Beat ${coachOf(S.me)}` : ''}.`));
+    head.append(ht, go); box.append(head);
     const q = new URLSearchParams(location.search), vs = Number(q.get('vs'));
     if (!practice && q.has('vs') && vs >= 0 && vs <= 100) box.append(el('p', 'challenge', `${String(q.get('by') || 'A friend').slice(0, 24)} scored ${Math.round(vs)} on today's game. Beat it.`));
-    if (coachOf(S.me)) box.append(el('p', 'note', `Can you do better than ${coachOf(S.me)} did?`));
+    playOverlay(true, start);
+    const more = el('details', 'gameinfo'); more.append(el('summary', '', `${teamCity(spot.away)} at ${teamCity(spot.home)} · ${poLine(spot)}`));
+    more.append(el('p', 'note', `${coachOf(S.me) ? `You're in ${coachOf(S.me)}'s seat, against ${coachOf(other(S.me)) || 'their bench'}. ` : ''}Timeouts: you ${S.to[S.me]}, they ${S.to[other(S.me)]}. ${inBonus(S, other(S.me)) ? 'They are in the bonus: any foul on you is two free throws. ' : ''}${inBonus(S, S.me) ? 'You are in the bonus: any foul on them is two free throws.' : ''}`));
+    if (spot.lead) more.append(el('p', 'note', `How it got here: ${byCity(spot.lead)}.`));
+    box.append(more);
     const first = !Object.keys(load(`${STORE}:stats`, { days: {} }).days).length && !load(`${STORE}:guided`, false);
-    const guide = el('details', 'guide'); guide.open = first;
+    const guide = el('details', 'guide'); guide.open = false; if (first) guide.classList.add('first');
     guide.append(el('summary', '', 'What the calls mean'));
     const gl = el('ul', '');
     [['Go now', 'Push it and take the first good shot.'], ['Work for a shot', 'Run the offense and use the clock for a better look.'], ['Hunt a three', 'Everything for a three-pointer.'],
@@ -842,14 +853,18 @@
       ['Grading', 'Each call is measured against the best one in that spot, by win chance. Skip any play, or run them at double speed.']]
       .forEach(([a, b]) => { const li = el('li', ''); li.append(el('b', '', `${a}: `), document.createTextNode(b)); gl.append(li); });
     guide.append(gl); box.append(guide);
-    const go = el('button', 'btn big', 'Take over'); go.type = 'button';
-    go.addEventListener('click', () => save(`${STORE}:guided`, true));
-    go.addEventListener('click', () => { G.started = true; saveGame(); box.textContent = ''; step(); });
-    box.append(go);
     if (!practice) { const st = load(`${STORE}:stats`, { days: {} }), n = Object.keys(st.days).length; if (n) box.append(el('p', 'note', `You have played ${n} day${n === 1 ? '' : 's'}. Streak: ${streakOf(st)}.`)); }
     if (G.mode === 'surv') { const sv = load(`${STORE}:surv`, { best: 0, runs: 0 }); box.append(el('p', 'note', `Win and keep going; lose once and the run is over. Your best run: ${sv.best} win${sv.best === 1 ? '' : 's'}.`)); }
     if (G.mode !== 'daily') box.append(moreHoops());
     drawBoard();
+  }
+  // the Play button on the court before the game starts
+  function playOverlay(on, f) {
+    const old = $('courtplay'); if (old) old.remove();
+    if (!on) return;
+    const b = el('button', 'courtplay', '▶ Play'); b.id = 'courtplay'; b.type = 'button';
+    b.addEventListener('click', (e) => { e.stopPropagation(); f(); });
+    $('courtbox').append(b);
   }
   // one decision: the options in the dock; the evaluation is done when the call is in (never shown before)
   function step() {
@@ -858,6 +873,8 @@
     drawBoard();
     const mine = S.poss === S.me, dock = $('dock'); dock.textContent = '';
     dock.append(el('div', 'sit', `${mine ? 'Your ball' : 'Their ball'} · ${situation(S)}`));
+    const top = $('board').getBoundingClientRect().top;
+    if (top < -4 || top > 80) window.scrollTo({ top: window.scrollY + top - 6, behavior: REDUCED ? 'auto' : 'smooth' });
     const opts = mine ? offenseOptions(S) : Object.keys(DEFENSE), src = mine ? APPROACH : DEFENSE;
     const grid = el('div', `keys${opts.length > 4 ? ' many' : ''}`);
     for (const k of opts) {
