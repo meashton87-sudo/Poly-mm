@@ -86,6 +86,16 @@ a { color: var(--turf); }
 .calls .wps li.mine { color: var(--ink); font-weight: 700; }
 .calls .wps li.realc { color: var(--court); font-weight: 600; }
 .calls .wps li.crowd { font-style: italic; }
+.calls .wps li.why { color: var(--ink); }
+#dock .who { display: grid; gap: 6px; }
+#dock .who .wl { font: 700 11px var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+#dock .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+#dock .chip { display: grid; text-align: left; font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+#dock .chip b { font: 700 13px var(--body); } #dock .chip span { font-size: 10.5px; color: var(--muted); }
+#dock .chip.on { border-color: var(--court); background: var(--paper); box-shadow: inset 0 0 0 1px var(--court); }
+.guide { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 13.5px; }
+.guide summary { cursor: pointer; font-weight: 700; }
+.guide ul { margin: 6px 0 2px; padding-left: 18px; display: grid; gap: 3px; }
 .vs { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 2px; background: var(--paper); }
 .vs .vsh { font: 700 11px var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
 .vs .vsr { font: 900 26px/1.05 var(--display); text-transform: uppercase; letter-spacing: .02em; }

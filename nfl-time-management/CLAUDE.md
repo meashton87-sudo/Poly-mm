@@ -293,7 +293,9 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   won, vs the real coach, the crowd's calls by hoops.js crowdKey), the day's numbers, a named top 20 and the crowd's
   shares (10+ players) come back; signed in, the days merge with hstats:<acct>. The real coaches (build.py COACHES,
   coach_of by season, team and game number for a change mid-season) ride on each spot; hoops.js realCall reads the
-  real bench's first move off the play-by-play. A share carries ?vs=<score>&by=<name>: the intro's challenge line. Teams by city (the data's
+  real bench's first move off the play-by-play. A share carries ?vs=<score>&by=<name>: the intro's challenge line. Who gets it (hoops.js PICK -> S.pick, one possession; the man
+  called for gets it three times in four); each player shoots his own rates (build.py: both seasons, shrunk toward the
+  team's by SHRINK2/SHRINK3 attempts). explain() puts each grade in words from the spot's facts (dec.ctx). Teams by city (the data's
   "city"; the two Los Angeles teams tagged, no nicknames). Home's tile (game.js homeHoops), the footer nav and the
   sitemap (site.py PAGES "hoops").
 - Player feedback (game.js renderFeedback, #feedback from every page's footer "Report a bug"; worker.js /feedback): a
