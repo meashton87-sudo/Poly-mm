@@ -3,6 +3,15 @@
   "notes": [
     {
       "date": "2026-10-29",
+      "title": "Hoops: a broadcast score bug, and Play without scrolling",
+      "items": [
+        "A new score bug: each team in its colors with the score, the possession arrow, timeouts and the bonus, and the period, game clock and shot clock beside them.",
+        "Play is on the court itself: no scrolling to start, and the game's details fold away under it.",
+        "The board, the court and your calls fit on one phone screen."
+      ]
+    },
+    {
+      "date": "2026-10-29",
       "title": "Hoops in the top bar",
       "items": [
         "Hoops has its own tab in the top bar, next to Versus and Pro."
