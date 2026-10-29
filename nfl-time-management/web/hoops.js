@@ -93,6 +93,7 @@
     const off = S.poss, def = other(off), A = APPROACH[a], lines = [], clock0 = S.clock, five = FIVE[off];
     const name = (i) => five[i] || teamCity(teamOf(S, off));
     const bring = S.dead;
+    if (ev) ev.push({ k: 'start', a, d });
     if (A.timeout && S.to[off] > 0) { S.to[off]--; if (ev) ev.push({ k: 'timeout', side: off }); lines.push(`${teamCity(teamOf(S, off))} calls timeout, the ball comes to the frontcourt`); }
     if (ev) ev.push({ k: bring ? 'bring' : 'live', advanced: !!A.timeout });
     // a foul before the shot: the defense stopping the clock (in the bonus: two free throws; else the ball inbounded with a second gone)
@@ -219,37 +220,46 @@
   }
   const N_EVAL = 1200;
 
-  // ---- the court: a half court, the basket at the bottom, ten men and the ball ----------------------------------------
-  // Feet. x across the court (0 to 50), y down it (0 the half-court line, 47 the baseline). The rim 5.25 from the baseline.
-  // Every live phase runs at one steady pace, real time (MS_PER_SEC of real time for each second of game clock), so the clock on the
-  // board runs evenly through a possession; dead-ball moments (a timeout, the line, a whistle) take their own time with
-  // the clock stopped. The offense moves on scripted paths; the defense follows on its own, each man between his man
-  // and the rim, shading toward the ball, sliding at a man's speed.
-  const W = 50, H = 47, RIM = { x: 25, y: H - 5.25 }, R3 = 23.75;
-  const SPOTS = [[25, 13], [9, 22], [41, 22], [7, 38], [43, 38]];          // the offense's set: the point, two wings, two corners
-  const TOP = [[25, 3], [13, 5.5], [37, 5.5], [7, 8.5], [43, 8.5]];        // the backcourt, where a team gathers before it brings the ball up
-  const MS_PER_SEC = 1000, SPEED = 20, SLIDE = 14;                        // the pace; a sprint and a defensive slide, feet per second
-  const court = { svg: null, off: null, auto: true, dots: { home: [], away: [] }, pos: { home: [], away: [] }, pin: { home: [], away: [] }, spot: [0, 1, 2, 3, 4],
-    bpos: [25, 13, 0], handler: null, ball: null, shadow: null, badge: null, net: null, cap: null, clock: 0, jump: null, last: 0 };
+  // ---- the court: the full floor, sideways, a camera on the ball, ten men and the ball ----------------------------------
+  // Feet. The floor is X 0 to 94 down its length (the baskets at 5.25 and 88.75) and Y 0 to 50 across. The view is a
+  // camera VIEW feet wide that follows the ball. The play is written in the offense's own frame, (u, v): u across the
+  // court (0 to 50), v toward the basket it attacks (47 the baseline, negative the backcourt); court.dir says which
+  // basket (+1 the right one: your team attacks right all game) and world() puts it on the floor. Every live phase runs
+  // at real time (MS_PER_SEC of real time a second of game clock), the clock on the board running evenly; dead-ball
+  // moments (a timeout, the line, a whistle) take their own time with the clock stopped. The offense runs the late-game
+  // actions real benches run (the pick-and-roll, a screen for the shooter, the push in transition, the isolation for a
+  // last shot, the set out of a timeout); the defense follows on its own, each man between his man and the rim, shading
+  // toward the ball, getting back in transition, trapping the ball in a press, sliding at a man's speed.
+  const W = 50, H = 47, LEN = 94, RIM = { x: 25, y: H - 5.25 }, R3 = 23.75, VIEW = 62;
+  const SPOTS = [[25, 13], [9, 22], [41, 22], [7, 38], [43, 38]];          // the set: the point, two wings, two corners
+  const BACK = [[25, -41], [11, -33], [39, -33], [17, -45], [33, -45]];    // the backcourt after a score: the point, the wings ahead, the bigs behind
+  const MS_PER_SEC = 1000, SPEED = 20, SLIDE = 14;
+  const court = { svg: null, dir: 1, off: null, auto: true, press: false, trap: -1, dots: { home: [], away: [] }, pos: { home: [], away: [] }, pin: { home: [], away: [] }, spot: [0, 1, 2, 3, 4],
+    bpos: [25, 13, 0], handler: null, ball: null, shadow: null, badge: null, nets: [], clock: 0, jump: null, cam: 47 };
   const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
   const toward = (a, b, d) => { const l = dist(a, b) || 1; return [a[0] + (b[0] - a[0]) / l * d, a[1] + (b[1] - a[1]) / l * d]; };
-  const onCourt = ([x, y]) => [Math.min(W - 1.5, Math.max(1.5, x)), Math.min(H - 1.6, y)];
+  const onCourt = ([x, y]) => [Math.min(W - 1.5, Math.max(1.5, x)), Math.min(H - 1.6, Math.max(-(H - 1.6), y))];
   const hand = ([x, y]) => [x + 0.9, y + 0.3];
+  const world = ([u, v]) => (court.dir > 0 ? [47 + v, u] : [47 - v, W - u]);
+  const flip = ([u, v]) => [W - u, -v];
+  const RIMW = () => world([RIM.x, RIM.y]);
   function drawCourt() {
     const s = $('court'); s.textContent = '';
-    s.setAttribute('viewBox', `0 -2 ${W} ${H + 2}`);
-    s.append(svgEl('rect', { x: 0, y: -2, width: W, height: H + 2, class: 'wood' }));
+    s.append(svgEl('rect', { x: -4, y: -4, width: LEN + 8, height: W + 8, class: 'apron' }));
+    s.append(svgEl('rect', { x: 0, y: 0, width: LEN, height: W, class: 'wood' }));
     const line = (a) => s.append(svgEl('path', { d: a, class: 'ln' }));
-    line(`M0 0 H${W}`);                                                   // the half-court line
-    s.append(svgEl('path', { d: `M19 0 A6 6 0 0 0 31 0`, class: 'ln' }));   // the center circle's half
-    line(`M17 ${H} V${H - 19} H33 V${H}`);                               // the lane
-    s.append(svgEl('path', { d: `M19 ${H - 19} A6 6 0 0 0 31 ${H - 19}`, class: 'ln' }));   // the free-throw circle
-    const yc = H - 14;                                                    // the three-point line: straight from the baseline 14 feet, then the arc
-    line(`M3 ${H} V${yc} A${R3} ${R3} 0 0 0 ${W - 3} ${yc} V${H}`);
-    line(`M22 ${H - 4} H28`);                                           // the backboard
-    s.append(svgEl('circle', { cx: RIM.x, cy: RIM.y, r: 0.75, class: 'rim' }));
-    court.net = svgEl('path', { d: `M${RIM.x - 0.7} ${RIM.y} L${RIM.x - 0.45} ${RIM.y + 1.3} L${RIM.x + 0.45} ${RIM.y + 1.3} L${RIM.x + 0.7} ${RIM.y}`, class: 'net' });
-    s.append(court.net);
+    line(`M0 0 H${LEN} V${W} H0 Z`);
+    line(`M47 0 V${W}`); s.append(svgEl('circle', { cx: 47, cy: 25, r: 6, class: 'ln' }));
+    for (const end of [0, 1]) {                                            // each end: the lane, the circle, the three-point line, the board, the rim
+      const X = (x) => (end ? LEN - x : x), sw = end ? 0 : 1;
+      line(`M${X(0)} 17 H${X(19)} V33 H${X(0)}`);
+      s.append(svgEl('circle', { cx: X(19), cy: 25, r: 6, class: 'ln' }));
+      line(`M${X(0)} 3 H${X(14.2)} A${R3} ${R3} 0 0 ${sw} ${X(14.2)} 47 H${X(0)}`);
+      s.append(svgEl('path', { d: `M${X(4)} 22 V28`, class: 'ln board' }));
+      s.append(svgEl('circle', { cx: X(5.25), cy: 25, r: 0.75, class: 'rim' }));
+      const n = svgEl('path', { d: `M${X(5.25)} 24.3 L${X(5.25) + (end ? 1.3 : -1.3)} 24.55 L${X(5.25) + (end ? 1.3 : -1.3)} 25.45 L${X(5.25)} 25.7`, class: 'net' });
+      s.append(n); court.nets[end] = n;
+    }
     for (const side of ['home', 'away']) {
       court.dots[side] = []; court.pin[side] = [false, false, false, false, false];
       for (let i = 0; i < 5; i++) {
@@ -261,30 +271,37 @@
     }
     court.shadow = svgEl('ellipse', { rx: 0.7, ry: 0.35, class: 'shadow' }); s.append(court.shadow);
     court.ball = svgEl('circle', { r: 0.6, class: 'ball' }); s.append(court.ball);
-    court.badge = svgEl('text', { x: 25, y: 22, 'text-anchor': 'middle', class: 'badge' }); s.append(court.badge);
+    court.badge = svgEl('text', { x: 47, y: 9, 'text-anchor': 'middle', class: 'badge' }); s.append(court.badge);
     court.svg = s; court.clock = S.clock;
     setPositions(S.poss, false);
     place();
   }
-  // the offense in its set (or gathered in the backcourt), the handler the point; the defense on its men
+  // the offense in its set (or in its backcourt, a score just against it), the handler the point; the defense on its men
   function setPositions(off, backcourt) {
-    const def = other(off), at = backcourt ? TOP : SPOTS;
-    court.off = off; court.auto = true; court.spot = [0, 1, 2, 3, 4]; court.handler = { side: off, i: 0 }; court.jump = null;
+    const def = other(off), at = backcourt ? BACK : SPOTS;
+    court.dir = off === S.me ? 1 : -1; court.off = off; court.auto = true; court.press = false; court.spot = [0, 1, 2, 3, 4]; court.handler = { side: off, i: 0 }; court.jump = null;
     court.pin[off] = [false, false, false, false, false]; court.pin[def] = [false, false, false, false, false];
     for (let i = 0; i < 5; i++) court.pos[off][i] = at[i].slice();
     court.bpos = [...hand(court.pos[off][0]), 0];
     for (let i = 0; i < 5; i++) court.pos[def][i] = guardTarget(def, i);
+    court.cam = world([court.bpos[0], court.bpos[1]])[0];
   }
-  // where a defender wants to be: between his man and the rim, the man on the ball tight, the rest a step toward the ball
+  // where a defender wants to be: between his man and the rim, tight on the ball, a step toward it off the ball; ahead
+  // of his man getting back while the ball is in the backcourt; in a press, on the ball the length of the floor and a
+  // second man trapping it as it nears midcourt
   function guardTarget(def, i) {
-    const off = other(def), man = court.pos[off][i], h = court.handler;
-    const onBall = h && h.side === off && h.i === i;
+    const off = other(def), man = court.pos[off][i], h = court.handler, onBall = h && h.side === off && h.i === i, ball = [court.bpos[0], court.bpos[1]];
+    if (court.press) {
+      if (onBall) return onCourt(toward(man, [RIM.x, RIM.y], 2.5));
+      if (i === court.trap && ball[1] > -22) return onCourt([ball[0] + (ball[0] < 25 ? 2.6 : -2.6), ball[1] + 1.2]);
+      return onCourt(toward(man, [RIM.x, RIM.y], 3.5));
+    }
     let p = toward(man, [RIM.x, RIM.y], onBall ? 3 : 4.5);
-    if (!onBall) p = toward(p, [court.bpos[0], court.bpos[1]], 1.5);
+    if (!onBall) p = toward(p, ball, 1.5);
+    if (man[1] < 4) p = [p[0], Math.max(p[1], Math.min(26, man[1] + 16))];
     return onCourt(p);
   }
-  const guard = (p) => onCourt(toward(p, [RIM.x, RIM.y], 4));
-  // draw everyone; dt the milliseconds since the last frame, for the defense's slides (none: they are put in place)
+  // draw everyone, the camera easing after the ball; dt the milliseconds since the last frame (none: all put in place)
   function place(dt) {
     if (court.auto && court.off) {
       const def = other(court.off), step = dt == null ? 1e9 : SLIDE * dt / 1000;
@@ -294,20 +311,26 @@
         court.pos[def][i] = d <= step ? t : toward(p, t, step);
       }
     }
+    const bw = world([court.bpos[0], court.bpos[1]]);
+    const camT = Math.min(LEN - VIEW / 2 + 3, Math.max(VIEW / 2 - 3, bw[0]));
+    court.cam = dt == null ? camT : court.cam + (camT - court.cam) * Math.min(1, dt / 320);
+    court.svg.setAttribute('viewBox', `${(court.cam - VIEW / 2).toFixed(2)} -3 ${VIEW} ${W + 6}`);
+    court.badge.setAttribute('x', court.cam.toFixed(2));
     for (const side of ['home', 'away']) court.dots[side].forEach((g, i) => {
-      const [x, y] = court.pos[side][i];
+      const [x, y] = world(court.pos[side][i]);
       g.setAttribute('transform', `translate(${x.toFixed(2)} ${y.toFixed(2)})`);
       g.lastChild.setAttribute('y', side === court.off ? -1.9 : 3.4);
       const j = court.jump, up = j && j.side === side && j.i === i ? Math.sin(Math.PI * Math.min(1, (performance.now() - j.t0) / j.ms)) : 0;
       g.firstChild.setAttribute('r', (1.35 * (1 + 0.3 * Math.max(0, up))).toFixed(2));
       if (j && j.side === side && j.i === i && performance.now() - j.t0 >= j.ms) court.jump = null;
     });
-    const [bx, by, bz] = court.bpos;
-    court.ball.setAttribute('cx', bx.toFixed(2)); court.ball.setAttribute('cy', (by - bz).toFixed(2)); court.ball.setAttribute('r', (0.6 + Math.max(0, bz) * 0.05).toFixed(2));
-    court.shadow.setAttribute('cx', bx.toFixed(2)); court.shadow.setAttribute('cy', by.toFixed(2)); court.shadow.setAttribute('rx', (0.7 + Math.max(0, bz) * 0.08).toFixed(2));
+    const bz = court.bpos[2];
+    court.ball.setAttribute('cx', bw[0].toFixed(2)); court.ball.setAttribute('cy', (bw[1] - bz).toFixed(2)); court.ball.setAttribute('r', (0.6 + Math.max(0, bz) * 0.05).toFixed(2));
+    court.shadow.setAttribute('cx', bw[0].toFixed(2)); court.shadow.setAttribute('cy', bw[1].toFixed(2)); court.shadow.setAttribute('rx', (0.7 + Math.max(0, bz) * 0.08).toFixed(2));
   }
-  // one segment of the timeline: men on paths (a straight line, or a curve through `via`), the ball with a man (dribbled
-  // or held) or in flight to a point with an arc, the clock running `secs` evenly, all over `ms`; a tap ends it at once
+  // one segment of the timeline: men on paths (a line, or a curve through `via`, each after its `delay`), the ball with a
+  // man (dribbled or held) or in flight to a point with an arc, the clock running `secs` evenly, all over `ms`; a tap
+  // on the court ends it at once. Positions and paths are in the offense's frame.
   const ease = (t) => (t < 0.5 ? 2 * t * t : 1 - (2 - 2 * t) ** 2 / 2);
   const bez = (a, v, b, t) => [(1 - t) * (1 - t) * a[0] + 2 * (1 - t) * t * v[0] + t * t * b[0], (1 - t) * (1 - t) * a[1] + 2 * (1 - t) * t * v[1] + t * t * b[1]];
   const dur = (secs, feet) => Math.max(secs * MS_PER_SEC, ((feet || 0) / SPEED) * 1000, 260);
@@ -326,14 +349,14 @@
         else if (court.handler) court.bpos = [...hand(court.pos[court.handler.side][court.handler.i]), 0];
         if (seg.secs) court.clock = Math.max(0, c0 - seg.secs);
         $('bclock').textContent = clockText(court.clock);
-        place();
+        place(skipNow ? null : 16);
         resolve();
       };
       const frame = (now) => {
         if (skipNow) return finish();
         const k = ms ? Math.min(1, (now - t0) / ms) : 1, dt = now - last; last = now;
         for (const m of seg.moves || []) {
-          const d = m.delay ? Math.max(0, (m.delay / seg.ms)) : 0, kk = Math.min(1, Math.max(0, (k - d) / (1 - d || 1))), e = ease(kk), f = from[m.side][m.i];
+          const d = m.delay ? Math.min(0.9, m.delay / seg.ms) : 0, kk = Math.min(1, Math.max(0, (k - d) / (1 - d))), e = ease(kk), f = from[m.side][m.i];
           court.pos[m.side][m.i] = m.via ? bez(f, m.via, m.to, e) : [f[0] + (m.to[0] - f[0]) * e, f[1] + (m.to[1] - f[1]) * e];
         }
         const b = seg.ball;
@@ -349,102 +372,194 @@
   const wait = (ms) => new Promise((r) => setTimeout(r, skipNow ? 0 : ms));
   function badge(text, cls) { court.badge.textContent = text || ''; court.badge.setAttribute('class', `badge${cls ? ` ${cls}` : ''}`); }
   function caption(text) { $('cap').textContent = text || ''; }
-  const swish = () => { court.net.classList.add('swish'); setTimeout(() => court.net.classList.remove('swish'), 700); };
+  const swish = () => { const n = court.nets[court.dir > 0 ? 1 : 0]; n.classList.add('swish'); setTimeout(() => n.classList.remove('swish'), 700); };
   const nearest = (side, p) => court.pos[side].reduce((best, q, i) => (dist(q, p) < dist(court.pos[side][best], p) ? i : best), 0);
-  const stagger = (i) => i * 160;
-  // the men of `off` to their spots (the handler to the point), the ball dribbled up, over `secs` of clock
-  function toSet(off, secs, extra) {
-    const h = court.handler && court.handler.side === off ? court.handler.i : 0, rest = [0, 1, 2, 3, 4].filter((i) => i !== h);
-    court.spot = []; court.spot[h] = 0; rest.forEach((i, n) => { court.spot[i] = n + 1; });
-    const moves = [0, 1, 2, 3, 4].map((i) => ({ side: off, i, to: SPOTS[court.spot[i]].slice(), delay: stagger(court.spot[i]) }));
+  const manAt = (spot) => court.spot.indexOf(spot);
+  const nm = (side, i) => lastName(FIVE[side][i] || '');
+  // the men of `off` to their set from wherever they are, the wings running the lanes ahead, the bigs trailing, the
+  // handler dribbling up, over `secs` of clock
+  function toSet(off, secs, partial) {
+    const h = court.handler && court.handler.side === off ? court.handler.i : manAt(0);
+    if (court.spot[h] !== 0) { const o = manAt(0); court.spot[o] = court.spot[h]; court.spot[h] = 0; }
+    const moves = [0, 1, 2, 3, 4].map((i) => {
+      const sp = court.spot[i], p = court.pos[off][i], to = SPOTS[sp].slice();
+      if (partial) { to[0] = p[0] + (to[0] - p[0]) * partial; to[1] = p[1] + (to[1] - p[1]) * partial; }
+      const lane = sp === 1 || sp === 2, via = lane && p[1] < 0 ? [sp === 1 ? 5 : 45, (p[1] + to[1]) / 2] : null;
+      return { side: off, i, to, via, delay: sp === 0 ? 150 : lane ? 0 : 420 };
+    });
     const far = Math.max(...moves.map((m) => dist(court.pos[off][m.i], m.to)));
     court.handler = { side: off, i: h }; court.auto = true; court.pin[other(off)] = [false, false, false, false, false];
-    return tween({ ms: dur(secs, far), secs, moves: moves.concat(extra || []), dribble: true });
+    return tween({ ms: dur(secs, far), secs, moves, dribble: true });
   }
-  // the ball changes hands: `side` gathers in the backcourt with `who` carrying it, the other team retreating to its men
-  async function otherWay(side, who) {
-    const rest = [0, 1, 2, 3, 4].filter((i) => i !== who);
-    court.off = side; court.handler = { side, i: who }; court.auto = true; court.spot = []; court.spot[who] = 0; rest.forEach((i, n) => { court.spot[i] = n + 1; });
-    court.pin[side] = [false, false, false, false, false]; court.pin[other(side)] = [false, false, false, false, false];
-    const moves = [0, 1, 2, 3, 4].map((i) => ({ side, i, to: TOP[court.spot[i]].slice(), delay: i === who ? 0 : 200 + stagger(court.spot[i]) }));
-    await tween({ ms: 1900, moves, dribble: true });
+  // the ball changes hands: the frame turns to `side`'s basket, `who` has the ball. Dead (after a score): he steps out
+  // behind the baseline to inbound, the point waits for it, the wings start up the floor. Live (a rebound, a steal): the
+  // wings run, the point comes to the outlet.
+  async function otherWay(side, who, dead) {
+    const prev = other(side);
+    for (const s of ['home', 'away']) court.pos[s] = court.pos[s].map(flip);
+    court.bpos = [...flip(court.bpos), 0]; court.dir = -court.dir;
+    court.off = side; court.handler = { side, i: who }; court.auto = true; court.press = false; court.jump = null;
+    court.pin[side] = [false, false, false, false, false]; court.pin[prev] = [false, false, false, false, false];
+    const pg = (() => { const p = manAt(0); return p >= 0 && p !== who ? p : [0, 1, 2, 3, 4].find((i) => i !== who); })();
+    const rest = [0, 1, 2, 3, 4].filter((i) => i !== who && i !== pg);
+    court.spot = []; court.spot[pg] = 0; court.spot[who] = dead ? 4 : 3; rest.forEach((i, n) => { court.spot[i] = [1, 2, dead ? 3 : 4][n]; });
+    const moves = [0, 1, 2, 3, 4].map((i) => {
+      const sp = court.spot[i];
+      if (i === who) return { side, i, to: dead ? [court.pos[side][i][0] < 25 ? 21 : 29, -49.5] : court.pos[side][i].slice() };
+      if (sp === 0) return { side, i, to: dead ? BACK[0].slice() : [court.pos[side][who][0] < 25 ? 9 : 41, -31], delay: 100 };
+      return { side, i, to: BACK[sp].slice(), delay: sp < 3 ? 0 : 250 };
+    });
+    await tween({ ms: dead ? 1700 : 1300, moves, dribble: !dead });
   }
-  // passes among the offense over `secs`, the last one to `who` (or none), a cut through the lane while the ball is held
-  async function passPhase(off, secs, passes, who) {
-    const slots = Math.max(1, passes), each = secs / slots;
-    let holder = court.handler && court.handler.side === off ? court.handler.i : 0;
-    for (let p = 0; p < slots; p++) {
-      const lastPass = p === slots - 1;
-      let to = passes === 0 ? holder : lastPass ? who : [1, 2, 3, 4, 0].map((s) => court.spot.indexOf(s)).find((j) => j !== holder && j !== who);
-      if (to == null || to === holder) to = passes === 0 ? holder : who;
-      // a cut: two men not in the pass swap spots through the lane
-      const free = [0, 1, 2, 3, 4].filter((j) => j !== holder && j !== to), cut = [];
-      if (free.length >= 2 && each >= 1.2) {
-        const a = free[Math.floor(Math.random() * free.length)], others = free.filter((j) => j !== a), b = others[Math.floor(Math.random() * others.length)];
-        const sa = court.spot[a], sb = court.spot[b]; court.spot[a] = sb; court.spot[b] = sa;
-        cut.push({ side: off, i: a, to: SPOTS[sb].slice(), via: [25, 30] }, { side: off, i: b, to: SPOTS[sa].slice(), via: [25 + (SPOTS[sa][0] < 25 ? 6 : -6), 26], delay: 150 });
-      }
-      const passMs = to === holder ? 0 : 380 + 22 * dist(court.pos[off][holder], court.pos[off][to]);
-      const holdMs = Math.max(650, each * MS_PER_SEC - passMs), holdSecs = each * holdMs / (holdMs + passMs);
-      await tween({ ms: holdMs, secs: holdSecs, moves: cut, dribble: true });
-      if (to !== holder) {
-        caption(`${lastName(FIVE[off][holder])} to ${lastName(FIVE[off][to])}`);
-        await tween({ ms: passMs, secs: each - holdSecs, ball: { to: hand(court.pos[off][to]), arc: 0.35, catch: { side: off, i: to } } });
-        holder = to;
-      }
+  // the outlet or the inbound to the point, then up the floor
+  async function bringUp(off, secs, partial) {
+    const h = court.handler ? court.handler.i : manAt(0), pg = manAt(0);
+    if (h !== pg && pg >= 0) {
+      caption(`${nm(off, h)} to ${nm(off, pg)}`);
+      await tween({ ms: 380 + 22 * dist(court.pos[off][h], court.pos[off][pg]), ball: { to: hand(court.pos[off][pg]), arc: 0.5, catch: { side: off, i: pg } } });
     }
-    return holder;
+    caption(`${nm(off, pg >= 0 ? pg : h)} brings it up`);
+    await toSet(off, secs, partial);
   }
+  // ---- the half-court actions ----------------------------------------------------------------------------------------
+  const pass = async (off, from, to, secs) => {
+    caption(`${nm(off, from)} to ${nm(off, to)}`);
+    await tween({ ms: 380 + 22 * dist(court.pos[off][from], court.pos[off][to]), secs: secs || 0, ball: { to: hand(court.pos[off][to]), arc: 0.4, catch: { side: off, i: to } } });
+  };
+  // the handler probes with the dribble while the men off the ball relocate: a corner lifts, a wing drops, a cut through the lane
+  async function probe(off, secs) {
+    const h = court.handler.i, steps = Math.max(1, Math.min(3, Math.round(secs / 1.1)));
+    for (let k = 0; k < steps; k++) {
+      const hp = court.pos[off][h], dx = (k % 2 ? -1 : 1) * (2.5 + Math.random() * 2);
+      const moves = [{ side: off, i: h, to: onCourt([hp[0] + dx, hp[1] + (Math.random() - 0.5) * 2]) }];
+      const others = [0, 1, 2, 3, 4].filter((i) => i !== h);
+      const a = others[Math.floor(Math.random() * others.length)], sa = court.spot[a];
+      if (sa >= 3 && Math.random() < 0.5) { const sb = sa === 3 ? 4 : 3, b = manAt(sb); if (b >= 0 && b !== h) { court.spot[a] = sb; court.spot[b] = sa; moves.push({ side: off, i: a, to: SPOTS[sb].slice(), via: [25, 34] }, { side: off, i: b, to: SPOTS[sa].slice(), via: [25, 20], delay: 200 }); } }
+      else { const [su, sv] = SPOTS[sa]; moves.push({ side: off, i: a, to: onCourt([su + (su < 25 ? 1 : -1) * (Math.random() * 4 - 1), sv + (sa <= 2 ? -2 : -5) + Math.random() * 3]) }); }
+      await tween({ ms: dur(secs / steps, 0), secs: secs / steps, moves, dribble: true });
+    }
+  }
+  // the pick-and-roll: the big sets it beside the handler's man, the handler comes off it to the elbow, the big rolls to
+  // the rim, the weak side lifts; ends with the ball at the elbow (or, `who` the big, the pocket pass to the roller)
+  async function pickAndRoll(off, secs, who) {
+    const h = court.handler.i, b = [manAt(2), manAt(4), manAt(1), manAt(3)].find((i) => i >= 0 && i !== h && i !== who) ?? [0, 1, 2, 3, 4].find((i) => i !== h);
+    const hp = court.pos[off][h], side = court.pos[off][b][0] >= 25 ? 1 : -1;
+    const screen = [hp[0] + side * 3.2, hp[1] + 1.4];
+    const weakCorner = manAt(side > 0 ? 3 : 4), weakWing = manAt(side > 0 ? 1 : 2);
+    caption(`${nm(off, b)} comes to set the screen`);
+    const lift = [];
+    if (weakCorner >= 0 && weakCorner !== h) lift.push({ side: off, i: weakCorner, to: [side > 0 ? 7 : 43, 26], delay: 300 });
+    if (weakWing >= 0 && weakWing !== h) lift.push({ side: off, i: weakWing, to: [side > 0 ? 12 : 38, 12], delay: 300 });
+    await tween({ ms: dur(secs * 0.4, dist(court.pos[off][b], screen)), secs: secs * 0.4, moves: [{ side: off, i: b, to: screen }, { side: off, i: h, to: [hp[0] - side * 1.2, hp[1] - 0.6] }].concat(lift), dribble: true });
+    caption(`${nm(off, h)} comes off the screen`);
+    const elbow = [25 + side * 6.5, 27], roll = [25 - side * 1.5, 39];
+    await tween({ ms: dur(secs * 0.6, 16), secs: secs * 0.6, moves: [{ side: off, i: h, to: elbow, via: [screen[0] + side * 2.6, screen[1] + 2.5] }, { side: off, i: b, to: roll, via: [screen[0] - side * 1.5, screen[1] + 7], delay: 250 }], dribble: true });
+    return { h, b };
+  }
+  // a screen away from the ball for the shooter: he starts in the corner, the big screens his man at the wing, he comes
+  // off it to the wing above the break and the pass meets him there
+  async function pinDown(off, secs, who) {
+    const h = court.handler.i;
+    let sp = court.spot[who];
+    if (sp < 3) { const c = Math.random() < 0.5 ? 3 : 4, m = manAt(c); if (m >= 0 && m !== h) { court.spot[m] = sp; court.spot[who] = c; await tween({ ms: dur(secs * 0.3, 20), secs: secs * 0.3, moves: [{ side: off, i: who, to: SPOTS[c].slice(), via: [25, 30] }, { side: off, i: m, to: SPOTS[sp].slice(), via: [25, 18], delay: 150 }], dribble: true }); secs *= 0.7; sp = c; } }
+    const side = SPOTS[sp][0] < 25 ? -1 : 1, b = [manAt(side < 0 ? 1 : 2), manAt(side < 0 ? 4 : 3), manAt(side < 0 ? 2 : 1)].find((i) => i >= 0 && i !== h && i !== who);
+    const screen = [25 + side * 17, 29];
+    caption(`${nm(off, b)} screens for ${nm(off, who)}`);
+    await tween({ ms: dur(secs * 0.45, dist(court.pos[off][b], screen)), secs: secs * 0.45, moves: [{ side: off, i: b, to: screen }], dribble: true });
+    const out = [25 + side * 15, 15];
+    caption(`${nm(off, who)} comes off it`);
+    await tween({ ms: dur(secs * 0.55, 24), secs: secs * 0.55, moves: [{ side: off, i: who, to: out, via: [25 + side * 20, 26] }, { side: off, i: b, to: [25 + side * 4, 40], via: [25 + side * 12, 36], delay: 500 }], dribble: true });
+    return { h, b };
+  }
+  // the isolation: everyone clears to the corners and the deep wings, the handler works his man at the top
+  async function isolation(off, secs) {
+    const h = court.handler.i, moves = [];
+    for (const i of [0, 1, 2, 3, 4]) if (i !== h) { const sp = court.spot[i]; moves.push({ side: off, i, to: [[25, 10], [4, 31], [46, 31], [6, 43], [44, 43]][sp] || SPOTS[sp], delay: 100 * sp }); }
+    caption(`${nm(off, h)} works at the top`);
+    await tween({ ms: dur(Math.min(secs * 0.3, 1.5), 12), secs: Math.min(secs * 0.3, 1.5), moves, dribble: true });
+    const left = secs - Math.min(secs * 0.3, 1.5), steps = Math.max(2, Math.min(4, Math.round(left / 1.2)));
+    for (let k = 0; k < steps; k++) { const hp = court.pos[off][h]; await tween({ ms: dur(left / steps, 0), secs: left / steps, moves: [{ side: off, i: h, to: onCourt([hp[0] + (k % 2 ? -3.5 : 3.5), hp[1] + (k === steps - 1 ? 2.5 : 0)]) }], dribble: true }); }
+  }
+  // out of a timeout: the inbound from the sideline at the frontcourt into a set: a stagger screen for the shooter, or
+  // the point taking it into the pick-and-roll
+  async function afterTimeout(off, three, who) {
+    const inb = manAt(1) >= 0 ? manAt(1) : 1, pg = manAt(0) !== inb ? manAt(0) : manAt(2), sh = who != null && who !== inb && who !== pg ? who : manAt(3) !== inb ? manAt(3) : manAt(4);
+    const others = [0, 1, 2, 3, 4].filter((i) => i !== inb && i !== pg && i !== sh);
+    court.handler = { side: off, i: inb }; court.auto = true;
+    const moves = [{ side: off, i: inb, to: [-1.8, 19] }, { side: off, i: pg, to: [13, 13] }, { side: off, i: sh, to: [7, 40] }, { side: off, i: others[0], to: [19, 28] }, { side: off, i: others[1], to: [43, 36] }];
+    court.spot = []; court.spot[inb] = 1; court.spot[pg] = 0; court.spot[sh] = 3; court.spot[others[0]] = 2; court.spot[others[1]] = 4;
+    caption('The ball comes in at the sideline');
+    await tween({ ms: 1500, moves });
+    await wait(400);
+    await pass(off, inb, pg, 0);
+    if (three) {
+      caption(`${nm(off, sh)} comes off the staggered screens`);
+      await tween({ ms: dur(2.2, 30), secs: 2.2, moves: [{ side: off, i: sh, to: [27, 11], via: [12, 24] }, { side: off, i: others[0], to: [12, 26], delay: 200 }, { side: off, i: inb, to: [8, 24], delay: 400 }], dribble: true });
+      await pass(off, pg, sh, 0.4);
+    } else {
+      await tween({ ms: 900, secs: 0.9, moves: [{ side: off, i: inb, to: [8, 26] }], dribble: true });
+    }
+  }
+  // the shooter gets the ball: a kick-out or a swing to him if he does not have it
+  async function ballTo(off, who, secs) { const h = court.handler ? court.handler.i : manAt(0); if (h !== who) await pass(off, h, who, secs); }
   // play a possession's steps on the court
   async function animate(ev, off, lines) {
     skipNow = false;
-    const def = other(off), five = FIVE[off], dname = (i) => lastName(five[i] || '');
-    const endEv = ev.find((e) => e.k === 'end') || { clock0: S.clock, clock1: S.clock };
+    const def = other(off), dname = (i) => nm(off, i);
+    const endEv = ev.find((e) => e.k === 'end') || { clock0: S.clock, clock1: S.clock }, startEv = ev.find((e) => e.k === 'start') || {};
+    const A = startEv.a || 'work';
     court.clock = endEv.clock0; $('bclock').textContent = clockText(court.clock);
     let left = Math.max(0, endEv.clock0 - endEv.clock1);                       // the game seconds this possession took, spent phase by phase
     const spend = (s) => { s = Math.max(0, Math.min(s, left)); left -= s; return s; };
     const last = () => lines[lines.length - 1];
     const hold = async (ms) => { await wait(ms); badge(''); };
-    for (const e of ev) {
+    const nextIs = (idx, k) => ev[idx + 1] && ev[idx + 1].k === k;
+    for (let idx = 0; idx < ev.length; idx++) {
+      const e = ev[idx];
+      if (e.k === 'start') {
+        court.press = startEv.d === 'press';
+        if (court.press) { const h = court.handler && court.handler.side === off ? court.handler.i : 0; court.trap = [0, 1, 2, 3, 4].filter((i) => i !== h).reduce((a, i) => (dist(court.pos[off][i], court.pos[off][h]) < dist(court.pos[off][a], court.pos[off][h]) ? i : a)); caption(`${teamCity(teamOf(S, def))} picks up full court`); }
+      }
       if (e.k === 'timeout') {
         badge('TIMEOUT', 'to'); caption(`${teamCity(teamOf(S, off))} calls timeout`);
         court.auto = false;
-        const ring = (cx, i) => [cx + 3.6 * Math.cos(Math.PI * 2 * i / 5 - Math.PI / 2), 9 + 3.2 * Math.sin(Math.PI * 2 * i / 5 - Math.PI / 2)];
-        const moves = [0, 1, 2, 3, 4].flatMap((i) => [{ side: off, i, to: ring(9, i), delay: stagger(i) }, { side: def, i, to: ring(41, i), delay: stagger(i) }]);
-        await tween({ ms: 1600, moves });
+        const ring = (v, i) => [5 + 3.4 * Math.cos(Math.PI * 2 * i / 5 - Math.PI / 2) + 3.4, v + 3.2 * Math.sin(Math.PI * 2 * i / 5 - Math.PI / 2)];
+        const moves = [0, 1, 2, 3, 4].flatMap((i) => [{ side: off, i, to: ring(-7, i), delay: i * 160 }, { side: def, i, to: ring(7, i), delay: i * 160 }]);
+        await tween({ ms: 1800, moves });
         await hold(2200);
       }
       if (e.k === 'bring') {
-        if (e.advanced) { caption('The ball comes in at the frontcourt'); court.auto = true; court.pin[def] = [false, false, false, false, false]; await toSet(off, spend(1)); }
+        if (e.advanced) { court.pin[def] = [false, false, false, false, false]; await afterTimeout(off, A === 'tthree', ev.find((x) => x.k === 'shot') ? ev.find((x) => x.k === 'shot').who : null); spend(1); }
         else {
-          if (court.off !== off) { setPositions(off, true); place(); }
-          caption(`${dname(court.handler ? court.handler.i : 0)} brings it up`);
-          await toSet(off, spend(Math.min(5, left * 0.4)));
+          if (court.off !== off || court.pos[off][court.handler ? court.handler.i : 0][1] > -10) { setPositions(off, true); court.handler = { side: off, i: 4 }; court.pos[off][4] = [29, -49.5]; court.bpos = [...hand(court.pos[off][4]), 0]; place(); }
+          const foul = nextIs(idx, 'foul');
+          await bringUp(off, spend(foul ? Math.min(left, 2) : Math.min(5.5, left * 0.42)), foul ? 0.3 : 0);
         }
       }
       if (e.k === 'live') {
         if (court.off !== off) { setPositions(off, true); place(); }
-        caption(`${dname(court.handler ? court.handler.i : 0)} pushes it up`);
-        await toSet(off, spend(Math.min(4, left * 0.35)));
+        await bringUp(off, spend(Math.min(4.5, left * 0.4)), nextIs(idx, 'foul') ? 0.3 : 0);
       }
       if (e.k === 'foul' && e.early) {
-        const h = court.handler ? court.handler.i : 0, secs = spend(Math.min(left, 2.5));
-        await tween({ ms: dur(secs * 0.6, 0), secs: secs * 0.6, dribble: true });
+        const h = court.handler ? court.handler.i : 0, secs = spend(Math.min(left, 1.5));
         const hp = court.pos[off][h];
-        await tween({ ms: 600, secs: secs * 0.4, moves: [{ side: def, i: h, to: [hp[0] + 1.3, hp[1] + 0.9] }], dribble: true });
+        await tween({ ms: dur(secs, 0), secs, moves: [{ side: def, i: h, to: [hp[0] + 1.3, hp[1] + 0.9] }], dribble: true });
         badge('FOUL', 'foul'); caption(`${teamCity(teamOf(S, def))} fouls on purpose`); await hold(1600);
-        if (e.inbound) { caption('Not in the bonus: the ball comes back in'); court.pin[def][h] = false; await tween({ ms: 900, moves: [{ side: off, i: h, to: [court.pos[off][h][0], court.pos[off][h][1] - 1.5] }] }); }
+        if (e.inbound) { caption('Not in the bonus: the ball comes back in'); court.pin[def][h] = false; await tween({ ms: 900, moves: [{ side: off, i: h, to: [hp[0], hp[1] - 1.5] }] }); }
       }
       if (e.k === 'turnover') {
-        const secs = spend(Math.max(0, left - 0.6));
-        const who = e.who, n = secs > 2.5 ? 1 : 0;
-        await passPhase(off, secs, n, who);
-        const from = court.pos[off][who];
+        const secs = spend(Math.max(0, left - 0.6)), who = e.who;
+        if (court.press) { await tween({ ms: dur(secs, 0), secs, dribble: true }); }
+        else if (secs > 2) { await probe(off, secs * 0.6); if (who !== court.handler.i && Math.random() < 0.5) await pass(off, court.handler.i, who, secs * 0.2); }
+        const hi = court.handler.i, from = court.pos[off][hi];
         if (e.steal) {
-          await tween({ ms: 650, moves: [{ side: def, i: who, to: [from[0] + 1.4, from[1] + 0.8] }], dribble: true });
+          const st = court.press && court.trap >= 0 ? court.trap : hi;
+          await tween({ ms: 650, moves: [{ side: def, i: st, to: [from[0] + 1.4, from[1] + 0.8] }], dribble: true });
           badge('STEAL', 'foul'); caption(last());
-          await tween({ ms: 350, ball: { to: hand(court.pos[def][who]), arc: 0.2, catch: { side: def, i: who } } });
-          await wait(800);
+          await tween({ ms: 350, ball: { to: hand(court.pos[def][st]), arc: 0.2, catch: { side: def, i: st } } });
+          await wait(700);
+          badge('');
+          await otherWay(def, st, false);
         } else {
           badge('TURNOVER', 'foul'); caption(last());
           const spot = onCourt([from[0] + (from[0] < 25 ? 10 : -10), from[1] - 7]);
@@ -452,33 +567,37 @@
           const g = nearest(def, spot);
           await tween({ ms: 700, moves: [{ side: def, i: g, to: spot.slice() }], ball: { to: spot, arc: 0, catch: { side: def, i: g } } });
           await wait(500);
+          badge('');
+          await otherWay(def, g, false);
         }
-        badge('');
-        await otherWay(def, court.handler.i);
       }
       if (e.k === 'shot') {
-        const who = e.who, holder0 = court.handler && court.handler.side === off ? court.handler.i : 0;
-        const passes = Math.max(e.passes || 0, who === holder0 ? 0 : 1);     // the shooter has the ball: at least the pass to him
-        const driveSecs = e.drive ? 1.5 : passes === 0 ? 0.9 : 0.5, flightSecs = e.three ? 1.4 : e.drive ? 0.8 : 1.1, after = e.reb ? 1.2 : 0;
-        let passSecs = Math.max(0.7, left - driveSecs - flightSecs - after);
-        if (e.horn) passSecs = Math.max(0.5, left - driveSecs - flightSecs);
-        await passPhase(off, spend(passSecs), passes, who);
-        // the drive, a step in, or the gather
-        const p = court.pos[off][who];
-        const ds = spend(driveSecs);
+        const who = e.who, h0 = court.handler && court.handler.side === off ? court.handler.i : manAt(0);
+        const flightSecs = e.three ? 1.5 : e.drive ? 0.9 : 1.2, after = e.reb ? 1.2 : 0;
+        let act = Math.max(0.8, left - flightSecs - after - (e.drive ? 1.2 : 0.5));
+        if (e.horn) act = Math.max(0.6, left - flightSecs - (e.drive ? 1.2 : 0.5));
+        act = spend(act);
+        // the action by the call
+        let roll = null;
+        if (A === 'tthree' || A === 'tquick') { if (act > 1.5 && court.handler.i !== who) await probe(off, act * 0.5); }
+        else if (A === 'quick') { if ((e.passes || 0) >= 1 && who !== h0) { await tween({ ms: dur(act * 0.5, 0), secs: act * 0.5, dribble: true }); } else await tween({ ms: dur(act * 0.5, 0), secs: act * 0.5, dribble: true }); }
+        else if (A === 'last') { await isolation(off, act); }
+        else if (A === 'three') { if ((e.passes || 0) >= 2 && act > 4) { const w = manAt(1) !== h0 ? manAt(1) : manAt(2); await pass(off, h0, w, act * 0.12); await pass(off, w, h0, act * 0.12); act *= 0.76; } await pinDown(off, act, who); }
+        else { if ((e.passes || 0) >= 2 && act > 5) { await probe(off, act * 0.35); act *= 0.65; } else if (act > 6) { await probe(off, act - 4.5); act = 4.5; } roll = await pickAndRoll(off, act, who); }
+        // the ball to the shooter: the roller's pocket pass, the kick-out, the swing
+        if (court.handler.i !== who) await ballTo(off, who, 0);
+        const ds = spend(e.drive ? 1.2 : 0.5), p = court.pos[off][who];
         if (e.drive) {
-          const dest = [RIM.x + (p[0] < 25 ? -3.2 : 3.2), RIM.y - 2.4], via = [p[0] < 25 ? Math.min(p[0], dest[0]) - 4 : Math.max(p[0], dest[0]) + 4, (p[1] + dest[1]) / 2];
-          caption(`${dname(who)} drives`);
-          await tween({ ms: dur(ds, dist(p, dest)), secs: ds, moves: [{ side: off, i: who, to: dest, via }], dribble: true });
-        } else if (passes === 0) {
-          await tween({ ms: dur(ds, 8), secs: ds, moves: [{ side: off, i: who, to: toward(p, [RIM.x, RIM.y], 6) }], dribble: true });
+          const dest = [RIM.x + (p[0] < 25 ? -2.8 : 2.8), RIM.y - 2.2], via = [p[0] < 25 ? Math.min(p[0], dest[0]) - 3 : Math.max(p[0], dest[0]) + 3, (p[1] + dest[1]) / 2];
+          caption(`${dname(who)} ${roll && roll.b === who ? 'rolls to the rim' : 'drives'}`);
+          await tween({ ms: dur(ds, dist(p, dest)), secs: ds, moves: [{ side: off, i: who, to: dest, via: dist(p, dest) > 8 ? via : null }], dribble: true });
         } else {
-          await tween({ ms: dur(ds, 0), secs: ds, moves: [{ side: off, i: who, to: toward(p, [RIM.x, RIM.y], 0.8) }], dribble: true });
+          await tween({ ms: dur(ds, 0), secs: ds, moves: [{ side: off, i: who, to: toward(p, [RIM.x, RIM.y], A === 'last' && e.three ? -2.5 : 0.8) }], dribble: true });
         }
         // the shot
         const from = court.pos[off][who], far = dist(from, [RIM.x, RIM.y]);
         if (!REDUCED) court.jump = { side: off, i: who, t0: performance.now(), ms: 900 };
-        caption(`${dname(who)} ${e.three ? 'from three' : e.drive ? 'at the rim' : 'pulls up'}…`);
+        caption(`${dname(who)} ${e.three ? (A === 'last' ? 'steps back for three' : 'from three') : e.drive ? 'at the rim' : 'pulls up'}…`);
         const fs = spend(e.horn ? Math.max(0.3, left) : flightSecs);
         await tween({ ms: dur(Math.max(fs, e.three ? 1.5 : e.drive ? 0.9 : 1.2), 0), secs: fs, ball: { to: [RIM.x, RIM.y], arc: 2 + far / 9 } });
         if (e.made) {
@@ -486,7 +605,7 @@
           await tween({ ms: 380, ball: { to: [RIM.x, RIM.y + 1.6], arc: 0, rest: -1.3 } });
           await tween({ ms: 520, ball: { to: [RIM.x + 1.5, RIM.y + 2.8], arc: 0.5 } });
           await hold(e.and1 ? 1600 : 1400);
-          if (!e.and1) { const g = nearest(def, court.bpos); await tween({ ms: 700, moves: [{ side: def, i: g, to: [court.bpos[0] - 0.9, court.bpos[1] - 0.3] }], ball: { to: court.bpos.slice(0, 2), catch: { side: def, i: g } } }); await otherWay(def, g); }
+          if (!e.and1) { const g = nearest(def, court.bpos); await tween({ ms: 700, moves: [{ side: def, i: g, to: [court.bpos[0] - 0.9, court.bpos[1] - 0.3] }], ball: { to: court.bpos.slice(0, 2), catch: { side: def, i: g } } }); await otherWay(def, g, true); }
         } else if (e.fouled) {
           badge('FOUL', 'foul'); caption(`${dname(who)} is fouled`);
           await tween({ ms: 600, ball: { to: [RIM.x + 2.2, RIM.y - 1.5], arc: 0.6 } });
@@ -501,20 +620,20 @@
             await tween({ ms: dur(spend(after), dist(court.pos[side][i], [rx, ry])), secs: after, moves: [{ side, i, to: [rx - 0.9, ry - 0.3] }], ball: { to: [rx, ry], arc: 0, catch: { side, i } } });
             badge(e.reb === 'def' ? 'REBOUND' : 'OFFENSIVE REBOUND', e.reb === 'def' ? 'to' : 'score');
             await hold(1000);
-            if (e.reb === 'def') await otherWay(def, i);
-            else { court.pin[def] = [false, false, false, false, false]; }
+            if (e.reb === 'def') await otherWay(def, i, false);
+            else court.pin[def] = [false, false, false, false, false];
           }
         }
       }
       if (e.k === 'ft') {
         const who = e.who;
-        // the line: the shooter at the stripe, two a side on the lane, the rest at the top
+        // the line: the shooter at the stripe, two a side on the lane, the rest out at the arc
         const lane = [[18.5, 42], [31.5, 42], [18.5, 36.5], [31.5, 36.5]], top = [[14, 24], [36, 24], [25, 20]];
         court.auto = false;
         const moves = [{ side: off, i: who, to: [25, H - 19 - 0.6] }];
         let ti = 0;
-        [0, 1, 2, 3, 4].filter((i) => i !== who).forEach((i, n) => moves.push({ side: off, i, to: n < 2 ? lane[2 + n] : top[ti++], delay: stagger(n) }));
-        [0, 1, 2, 3, 4].forEach((i, n) => moves.push({ side: def, i, to: n < 2 ? lane[n] : [top[n - 2][0] + (n === 4 ? 0 : n === 2 ? -4 : 4), top[n - 2][1] - 3.5], delay: stagger(n) }));
+        [0, 1, 2, 3, 4].filter((i) => i !== who).forEach((i, n) => moves.push({ side: off, i, to: n < 2 ? lane[2 + n] : top[ti++], delay: n * 160 }));
+        [0, 1, 2, 3, 4].forEach((i, n) => moves.push({ side: def, i, to: n < 2 ? lane[n] : [top[n - 2][0] + (n === 4 ? 0 : n === 2 ? -4 : 4), top[n - 2][1] - 3.5], delay: n * 160 }));
         caption(`${dname(who)} at the line`);
         await tween({ ms: 1500, moves, ball: { to: hand([25, H - 19 - 0.6]), arc: 0.6, catch: { side: off, i: who } } });
         for (let k = 0; k < e.made.length; k++) {
@@ -532,16 +651,16 @@
           const bp = court.bpos.slice(0, 2), side = e.reb === 'off' ? off : def, i = nearest(side, bp);
           await tween({ ms: 650, moves: [{ side, i, to: [bp[0] - 0.9, bp[1] - 0.3] }], ball: { to: bp, arc: 0, catch: { side, i } } });
           await wait(500);
-          if (e.reb === 'def') await otherWay(def, i); else court.auto = true;
+          if (e.reb === 'def') await otherWay(def, i, false); else court.auto = true;
         } else {
           const g = nearest(def, court.bpos);
           await tween({ ms: 650, moves: [{ side: def, i: g, to: [court.bpos[0] - 0.9, court.bpos[1] - 0.3] }], ball: { to: court.bpos.slice(0, 2), catch: { side: def, i: g } } });
-          await otherWay(def, g);
+          await otherWay(def, g, true);
         }
       }
     }
     court.clock = S.clock; $('bclock').textContent = clockText(S.clock);
-    court.auto = true;
+    court.auto = true; court.press = false;
   }
 
   // ---- the game on the page -------------------------------------------------------------------------------------------
