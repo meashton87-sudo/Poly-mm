@@ -733,7 +733,9 @@ async function runAnswering(w, a, ms) {
   assert.deepStrictEqual([v.last.seat, v.last.amount, v.budget, v.picks[1][0].team, v.picks[1][0].name, v.need[1][card0.k], v.i], [1, 22, [50, 28], card0.team, card0.name, SLOTS[card0.k] - 1, 1], 'the clock ran out: the high bid took him at its price');
   // the owner's case: the first man of a kind went for $22, so the next of that kind opens at $11 for the side without one, not his sticker
   const nextSame = v.card.k === card0.k;
-  if (nextSame) assert.deepStrictEqual([v.floor[0], SLOTS[card0.k] > 1 ? v.floor[1] : v.max[1]], [Math.max(11, v.card.sticker), SLOTS[card0.k] > 1 ? Math.max(11, v.card.sticker) : 0], 'the floor is half what the other side paid');
+  // (a side whose only slot of the kind is filled may still bid with its Steal, keeping a dollar for each slot open)
+  const open1 = Object.values(v.need[1]).reduce((a, b) => a + b, 0), stealMax1 = v.steal && v.steal[1] ? Math.max(0, v.budget[1] - open1) : 0;
+  if (nextSame) assert.deepStrictEqual([v.floor[0], SLOTS[card0.k] > 1 ? v.floor[1] : v.max[1]], [Math.max(11, v.card.sticker), SLOTS[card0.k] > 1 ? v.card.sticker : stealMax1], 'the floor is half what the other side paid (the side that paid: its sticker)');
   else assert.strictEqual(v.floor[0], v.card.sticker, 'another kind: its sticker');
   // a card nobody claims passes to nobody when the clock runs out
   const Rb = await state(w, ma.room);
