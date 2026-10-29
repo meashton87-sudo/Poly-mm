@@ -77,6 +77,13 @@ a { color: var(--turf); }
 .key span { font-size: 12px; color: var(--muted); }
 .key.to { border-style: dashed; }
 .key:hover, .key:focus-visible { border-color: var(--court); outline: none; }
+#dock .playing { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+#dock .playing .sit { flex: 1 1 140px; }
+.btn.small { font-size: 12px; padding: 6px 10px; }
+.calls details.call summary { display: grid; grid-template-columns: 22px 1fr; gap: 6px; cursor: pointer; list-style: none; }
+.calls details.call summary::-webkit-details-marker { display: none; }
+.calls .wps { list-style: none; margin: 4px 0 2px 28px; padding: 0; font-size: 12.5px; color: var(--muted); display: grid; gap: 2px; }
+.calls .wps li.mine { color: var(--ink); font-weight: 700; }
 /* the card */
 #card:empty { display: none; }
 /* the card */
@@ -92,6 +99,8 @@ a { color: var(--turf); }
 .calls li { display: grid; grid-template-columns: 22px 1fr; gap: 6px; }
 .calls .sq { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 4px; color: #fff; font-weight: 700; font-size: 12px; }
 .calls li.g .sq { background: var(--sq-g); } .calls li.y .sq { background: var(--sq-y); } .calls li.r .sq { background: var(--sq-r); }
+ol.calls > li { display: block; }
+.calls .wps li { display: block; }
 .calls .sit { grid-column: 2; color: var(--muted); font-size: 12.5px; }
 .calls .what { grid-column: 2; }
 .verdict { font-size: 14px; }
@@ -113,7 +122,7 @@ a { color: var(--turf); }
   <main id="card">Loading today's game…</main>
   <section class="howto">
     <h3>How it works</h3>
-    <p>One real game a day, the same for everyone: the last two minutes, the real score, clock, timeouts and bonus. You coach one team, possession by possession, and watch each one play out on the court (tap the court to skip ahead). On your ball: go now, work for a shot, hunt a three, attack the rim, hold for the last shot, or burn a timeout to advance the ball. On theirs: play it straight, foul to stop the clock, or press.</p>
+    <p>One real game a day, the same for everyone: the last two minutes, the real score, clock, timeouts and bonus. You coach one team, possession by possession, and watch each one play out on the court in real time (Skip, or a tap on the court, jumps to the end of a play; Speed 2× runs every play at double time). On your ball: go now, work for a shot, hunt a three, attack the rim, hold for the last shot, or burn a timeout to advance the ball. On theirs: play it straight, foul to stop the clock, or press.</p>
     <p>Every call is graded on win chance: the rest of the game is simulated for every option you had, with the shooting, free-throw, turnover and rebound rates of these teams from two seasons of play-by-play, and your call is measured against the best one. Your score places you among typical coaches making the same decisions. At the end you see how the real game ended from the same spot.</p>
     <p>Teams are named by city. Two-Minute Drill is an independent, fan-made game and is not affiliated with any league or team.</p>
   </section>
