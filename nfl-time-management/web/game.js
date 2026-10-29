@@ -14363,6 +14363,7 @@
       setInterval(at, 15000);
     }
     $('modeVs').hidden = !VS_ON;
+    $('modeHoops').hidden = !HOOPS_ON;                                    // (Hoops: its own page; the page itself pitches Pro to anyone without it)
     if (VS || VS_LOBBY) { $('modeDaily').removeAttribute('aria-current'); $('modeVs').setAttribute('aria-current', 'page'); }
     $('statsBtn').addEventListener('click', openStats);
     // (a tap on the scoreboard where it sits over the field while a play runs is a tap on the play: a phone's, or one
