@@ -693,6 +693,38 @@ def real_log(g: Game, start: int) -> list:
     return out
 
 
+# The head coach on each bench, by season and team; a change during the season as [(from game number, coach), ...]
+# (the game number is the last five digits of the regular season's game id, about seven games a day, so a change
+# lands within a day or two of its date). Interim coaches who ran a few games are left out.
+COACHES = {
+    2023: {"ATL": "Quin Snyder", "BOS": "Joe Mazzulla", "BKN": [(1, "Jacque Vaughn"), (835, "Kevin Ollie")], "CHA": "Steve Clifford",
+           "CHI": "Billy Donovan", "CLE": "J.B. Bickerstaff", "DAL": "Jason Kidd", "DEN": "Michael Malone", "DET": "Monty Williams",
+           "GSW": "Steve Kerr", "HOU": "Ime Udoka", "IND": "Rick Carlisle", "LAC": "Tyronn Lue", "LAL": "Darvin Ham",
+           "MEM": "Taylor Jenkins", "MIA": "Erik Spoelstra", "MIL": [(1, "Adrian Griffin"), (665, "Doc Rivers")], "MIN": "Chris Finch",
+           "NOP": "Willie Green", "NYK": "Tom Thibodeau", "OKC": "Mark Daigneault", "ORL": "Jamahl Mosley", "PHI": "Nick Nurse",
+           "PHX": "Frank Vogel", "POR": "Chauncey Billups", "SAC": "Mike Brown", "SAS": "Gregg Popovich", "TOR": "Darko Rajaković",
+           "UTA": "Will Hardy", "WAS": [(1, "Wes Unseld Jr."), (668, "Brian Keefe")]},
+    2024: {"ATL": "Quin Snyder", "BOS": "Joe Mazzulla", "BKN": "Jordi Fernández", "CHA": "Charles Lee", "CHI": "Billy Donovan",
+           "CLE": "Kenny Atkinson", "DAL": "Jason Kidd", "DEN": [(1, "Michael Malone"), (1195, "David Adelman")], "DET": "J.B. Bickerstaff",
+           "GSW": "Steve Kerr", "HOU": "Ime Udoka", "IND": "Rick Carlisle", "LAC": "Tyronn Lue", "LAL": "JJ Redick",
+           "MEM": [(1, "Taylor Jenkins"), (1115, "Tuomas Iisalo")], "MIA": "Erik Spoelstra", "MIL": "Doc Rivers", "MIN": "Chris Finch",
+           "NOP": "Willie Green", "NYK": "Tom Thibodeau", "OKC": "Mark Daigneault", "ORL": "Jamahl Mosley", "PHI": "Nick Nurse",
+           "PHX": "Mike Budenholzer", "POR": "Chauncey Billups", "SAC": [(1, "Mike Brown"), (470, "Doug Christie")],
+           "SAS": [(1, "Gregg Popovich"), (80, "Mitch Johnson")], "TOR": "Darko Rajaković", "UTA": "Will Hardy", "WAS": "Brian Keefe"},
+}
+
+
+def coach_of(season: int, team: str, gid: str) -> str | None:
+    c = COACHES.get(season, {}).get(team)
+    if not c or isinstance(c, str):
+        return c
+    try:
+        n = int(str(gid)[-5:])
+    except ValueError:
+        return c[-1][1]
+    return [name for start, name in c if n >= start][-1]
+
+
 def game_spot(g: Game, n: int) -> dict | None:
     """The game's spot: the first possession of the 4th period or overtime that
     starts (after a made field goal, a made last free throw, a defensive rebound
@@ -728,6 +760,7 @@ def game_spot(g: Game, n: int) -> dict | None:
             "real": real_log(g, p.first.i),
             "final": list(g.final),
             "players": players_on_court(g, p.first.i - 1),
+            "coaches": [coach_of(g.season, g.home, g.gid), coach_of(g.season, g.away, g.gid)],
         }
     return None
 
@@ -768,7 +801,7 @@ def walk_numbers(x, path="root"):
 def validate(data: dict, games: list[Game]):
     bad = [(p, v) for p, v in walk_numbers(data) if v is None or (isinstance(v, float) and not math.isfinite(v))]
     assert not bad, f"non-finite numbers: {bad[:5]}"
-    nulls = [p for p, v in ((p, v) for p, v in _walk_all(data)) if v is None and not p.endswith(".date") and not p.endswith(".team")]
+    nulls = [p for p, v in ((p, v) for p, v in _walk_all(data)) if v is None and not p.endswith(".date") and not p.endswith(".team") and ".coaches" not in p]
     assert not nulls, f"unexpected nulls: {nulls[:5]}"
     finals = {g.gid: g.final for g in games}
     for s in data["spots"]:

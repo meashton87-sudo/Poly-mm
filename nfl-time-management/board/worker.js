@@ -1752,6 +1752,129 @@ async function recover(req, env, storage, hits, h) {
   return json({ ok: true }, 200, h);
 }
 
+// ---- Hoops (web/hoops.js): the basketball daily's own results. One spot a day, the same for everyone, so a result
+// is comparable: the device's first result of the day counts (hk:<date>:<kh>), the day's numbers are kept as
+// hday:<date> { n, sum, hist[11] (scores by tens), won, vs: [worse, same, better] against the real bench, top: [{ name,
+// score, at }] named ones only, best HOOPS_TOP }; the crowd's calls as hcs:<date>:<situation> { <call>: n } (hoops.js
+// crowdKey: the decision's number and a coarse key of the spot, so players meet) for the last HOOPS_KEEP days. Signed
+// in, the page's Hoops record follows the account (hstats:<acct> { days: { <date>: { score, won, vs } } }, the higher
+// score of a day stands).
+//   GET  /hoops/day?date=2026-10-29  -> { date, n, avg, hist, won, vs, top, calls: { <situation>: { n, c } } (n >= HOOPS_CALL_MIN) }
+//   POST /hoops/day   { date, key, score (0-100), won, vs (-1|0|1), calls?: [[situation, call]], name?, session? }
+//                    -> the day's view, with counted (the first result of the device's day) and you: { score, rank }
+//   POST /hoops/stats { session, days? } -> { days }   merged with the account's, both ways
+const HOOPS_PATHS = ['/hoops/day', '/hoops/stats'];
+const HOOPS_TOP = 20, HOOPS_KEEP = 4, HOOPS_CALL_MIN = 10, HOOPS_CALLS = 60, HOOPS_DAYS_MAX = 2000;
+const HSIT_RE = /^[0-9]{1,2}(?:\.[a-z0-9-]{1,6}){0,4}$/, HCALL_RE = /^[a-z0-9]{2,12}$/;
+const hoopsEmpty = () => ({ n: 0, sum: 0, hist: Array(11).fill(0), won: 0, vs: [0, 0, 0], top: [] });
+async function hoopsView(storage, date) {
+  const d = (await storage.get(`hday:${date}`)) || hoopsEmpty(), calls = {}, pre = `hcs:${date}:`;
+  for (const [k, m] of await storage.list({ prefix: pre })) {
+    const n = Object.values(m || {}).reduce((a, x) => a + x, 0);
+    if (n >= HOOPS_CALL_MIN) calls[k.slice(pre.length)] = { n, c: m };
+  }
+  return { date, n: d.n, avg: d.n ? Math.round(d.sum / d.n) : null, hist: d.hist, won: d.won, vs: d.vs, top: d.top.map(({ name, score }) => ({ name, score })), calls, min: HOOPS_CALL_MIN };
+}
+function hoopsCalls(v) {
+  if (v == null) return [];
+  if (!Array.isArray(v) || v.length > HOOPS_CALLS) return null;
+  const seen = new Set(), out = [];
+  for (const x of v) {
+    if (!Array.isArray(x) || x.length !== 2 || typeof x[0] !== 'string' || typeof x[1] !== 'string' || !HSIT_RE.test(x[0]) || !HCALL_RE.test(x[1]) || seen.has(x[0])) continue;
+    seen.add(x[0]); out.push(x);
+  }
+  return out;
+}
+async function hoopsSweep(storage, date) {
+  const ds = ((await storage.get('hdays')) || []).filter((d) => d !== date);
+  ds.push(date); ds.sort();
+  while (ds.length > HOOPS_KEEP) {
+    const old = ds.shift();
+    for (const [k] of await storage.list({ prefix: `hcs:${old}:` })) await storage.delete(k);
+  }
+  await storage.put('hdays', ds);
+}
+const hoopsDayEntry = (v) => {
+  const score = v && num(v.score, 0, 100);
+  if (score === null || score === undefined) return null;
+  const vs = num(v.vs, -1, 1);
+  return { score: Math.round(score), won: !!v.won, ...(vs !== null ? { vs: Math.sign(vs) } : {}) };
+};
+function hoopsDays(v) {
+  if (v == null) return {};
+  if (typeof v !== 'object' || Array.isArray(v) || Object.keys(v).length > HOOPS_DAYS_MAX) return null;
+  const out = {};
+  for (const [k, x] of Object.entries(v)) { const e = DATE_RE.test(k) && hoopsDayEntry(x); if (e) out[k] = e; }
+  return out;
+}
+async function hoops(req, env, storage, hits, h, url) {
+  if (url.pathname === '/hoops/day' && req.method === 'GET') {
+    const date = String(url.searchParams.get('date') || '');
+    if (!DATE_RE.test(date)) return json({ error: 'date (YYYY-MM-DD) wanted' }, 400, h);
+    return json(await hoopsView(storage, date), 200, h);
+  }
+  if (req.method !== 'POST') return json({ error: 'method' }, 405, h);
+  if (limited(req, hits)) return json({ error: 'slow down' }, 429, h);
+  let body;
+  try { body = await req.json(); } catch (e) { return json({ error: 'bad json' }, 400, h); }
+  if (url.pathname === '/hoops/stats') {
+    const acct = await sessionAcct(storage, env, body && body.session);
+    if (!acct) return json({ error: 'sign in' }, 401, h);
+    const mine = hoopsDays(body.days);
+    if (mine === null) return json({ error: 'days wanted' }, 400, h);
+    const had = ((await storage.get(`hstats:${acct}`)) || {}).days || {}, days = { ...had };
+    for (const [k, v] of Object.entries(mine)) if (!days[k] || v.score > days[k].score) days[k] = v;
+    const keep = Object.fromEntries(Object.entries(days).sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, HOOPS_DAYS_MAX));
+    await storage.put(`hstats:${acct}`, { days: keep });
+    return json({ days: keep }, 200, h);
+  }
+  const date = String((body && body.date) || ''), devKey = String((body && body.key) || ''), score = num(body && body.score, 0, 100);
+  const calls = hoopsCalls(body && body.calls), raw = clean(body && body.name), name = raw && !blocked(raw) ? raw : '';
+  if (!dateOk(date)) return json({ error: 'date (YYYY-MM-DD, today) wanted' }, 400, h);
+  if (score === null) return json({ error: 'score (0-100) wanted' }, 400, h);
+  if (!KEY_RE.test(devKey)) return json({ error: 'key wanted' }, 400, h);
+  if (calls === null) return json({ error: 'calls wanted' }, 400, h);
+  const kh = await sha256(devKey), mk = `hk:${date}:${kh}`, prev = await storage.get(mk);
+  if (prev) {           // the day's first result stands; a name given afterwards puts that result on the day's top
+    if (name && !prev.named) {
+      const d = (await storage.get(`hday:${date}`)) || hoopsEmpty(), lower = name.toLowerCase(), owner = await ownerOf(storage, lower);
+      if (!owner || owner === kh) {
+        d.top = d.top.filter((r) => r.name.toLowerCase() !== lower);
+        d.top.push({ name, score: prev.score, at: prev.at });
+        d.top.sort((a, b) => b.score - a.score || a.at - b.at);
+        d.top = d.top.slice(0, HOOPS_TOP);
+        await storage.put(`hday:${date}`, d);
+        await storage.put(mk, { ...prev, named: true });
+      }
+    }
+    const v = await hoopsView(storage, date);
+    return json({ ...v, counted: false, you: { score: prev.score, rank: 1 + Math.round(v.hist.slice(Math.floor(prev.score / 10) + 1).reduce((a, x) => a + x, 0)) } }, 200, h);
+  }
+  const d = (await storage.get(`hday:${date}`)) || hoopsEmpty(), sc = Math.round(score), vs = num(body.vs, -1, 1);
+  if (!d.n) await hoopsSweep(storage, date);
+  d.n += 1; d.sum += sc; d.hist[Math.min(10, Math.floor(sc / 10))] += 1; if (body.won === true) d.won += 1;
+  if (vs !== null) d.vs[Math.sign(vs) + 1] += 1;
+  if (name) {
+    const lower = name.toLowerCase(), owner = await ownerOf(storage, lower);
+    if (!owner || owner === kh) {
+      d.top = d.top.filter((r) => r.name.toLowerCase() !== lower);
+      d.top.push({ name, score: sc, at: Date.now() });
+      d.top.sort((a, b) => b.score - a.score || a.at - b.at);
+      d.top = d.top.slice(0, HOOPS_TOP);
+    }
+  }
+  await storage.put(`hday:${date}`, d);
+  await storage.put(mk, { score: sc, at: Date.now(), named: !!name });
+  for (const [sit, call] of calls) {
+    const k = `hcs:${date}:${sit}`, m = (await storage.get(k)) || {};
+    if (!(call in m) && Object.keys(m).length >= 12) continue;
+    m[call] = (m[call] || 0) + 1;
+    await storage.put(k, m);
+  }
+  const v = await hoopsView(storage, date);
+  return json({ ...v, counted: true, you: { score: sc, rank: 1 + d.hist.slice(Math.floor(sc / 10) + 1).reduce((a, x) => a + x, 0) } }, 200, h);
+}
+
 // The board itself: `storage` is the Durable Object's (get/put), `hits` its in-memory per-IP counts.
 export async function handle(req, env, storage, hits) {
   const h = cors(req, env), url = new URL(req.url);
@@ -1762,6 +1885,7 @@ export async function handle(req, env, storage, hits) {
   if (COMM_PATHS.includes(url.pathname)) return community(req, env, storage, hits, h, url);
   if (url.pathname === '/race' || url.pathname.startsWith('/race/')) return race(req, env, storage, hits, h, url);
   if (url.pathname === '/daily') return daily(req, env, storage, hits, h, url);
+  if (HOOPS_PATHS.includes(url.pathname)) return hoops(req, env, storage, hits, h, url);
   if (isSocial(url.pathname)) return social(req, env, storage, hits, h, url);
   if (FB_PATHS.includes(url.pathname)) return feedback(req, env, storage, hits, h, url);
   if (url.pathname === '/week') return week(req, env, storage, h, url);
@@ -2110,7 +2234,7 @@ export default {
   fetch(req, env) {
     const url = new URL(req.url);
     if (['/vs/ws', '/vs/queue', '/vs/ladder', '/vs/me', '/vs/cup', '/vs/cup/admin'].includes(url.pathname)) return versus(req, env, url);
-    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, ...COMM_PATHS, ...FB_PATHS, '/board', '/daily', '/week', '/days', '/tally'].includes(url.pathname) && !isSocial(url.pathname)) return handle(req, env, null, null);
+    if (req.method === 'OPTIONS' || ![...PRO_PATHS, ...RACE_PATHS, ...AUTH_PATHS, ...LEAGUE_PATHS, ...COMM_PATHS, ...FB_PATHS, ...HOOPS_PATHS, '/board', '/daily', '/week', '/days', '/tally'].includes(url.pathname) && !isSocial(url.pathname)) return handle(req, env, null, null);
     return env.BOARD.get(env.BOARD.idFromName('board')).fetch(req);
   },
   // the cron trigger (wrangler.toml): the day's reminder emails, sent by the Board (its storage); the day is the run's

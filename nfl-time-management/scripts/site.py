@@ -742,7 +742,8 @@ def build(out: Path, domain: str | None = None, board_api: str | None = None, ga
         data_src = f"hoops/hoops_data.json?v={hs(hoops_data)}" if hoops_data.exists() else "hoops/hoops_data.json"
         fill("hoops.html", (GA_TAG.format(id=ga) if ga else "") + ads_head(adsense, ad_slot) + share_tags(site_url, "Hoops: the last two minutes, you coach",
              "A daily basketball game: the last two minutes of a real game, one team yours, every call graded on win chance.", "hoops")
-             + f'<meta name="hoops-data" content="{data_src}">' + ('<meta name="hoops-pro" content="on">' if hoops_pro else ''), "hoops")
+             + f'<meta name="hoops-data" content="{data_src}">' + ('<meta name="hoops-pro" content="on">' if hoops_pro else '')
+             + (f'<meta name="board-api" content="{html.escape(board_api, quote=True)}">' if board_api else ''), "hoops")
         (out / "hoops.html").write_text((out / "hoops.html").read_text().replace('<script src="hoops.js"></script>', f'<script src="hoops.js?v={hs(WEB / "hoops.js")}"></script>'))
     # the pages built from the committed data: the drives (the schedule's featured days, Pro's drives and runs) and the play-callers
     (out / "drives.html").write_text((out / "drives.html").read_text().replace("<!--DRIVES-->", drives_html()))
