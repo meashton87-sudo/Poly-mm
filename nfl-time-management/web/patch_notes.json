@@ -2,6 +2,13 @@
   "about": "Every change to the game, newest first. Each update adds its notes here (scripts/site.py builds /patch-notes from this file). Game changes only: no ads, analytics, payments or behind-the-scenes work, and nothing that is not live yet.",
   "notes": [
     {
+      "date": "2026-10-30",
+      "title": "Draft a friend in Versus",
+      "items": [
+        "Versus has a Draft a friend button: send your friend a code or link, bid against each other for real players, then play out the overtime with the lineups you drafted."
+      ]
+    },
+    {
       "date": "2026-10-29",
       "title": "Hoops opens for every Pro player",
       "items": [
