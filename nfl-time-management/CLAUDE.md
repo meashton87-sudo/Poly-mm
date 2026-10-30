@@ -296,7 +296,8 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   coach_of by season, team and game number for a change mid-season) ride on each spot; hoops.js realCall reads the
   real bench's first move off the play-by-play. A share carries ?vs=<score>&by=<name>: the intro's challenge line. Who gets it (hoops.js PICK -> S.pick, one possession; the man
   called for gets it three times in four); each player shoots his own rates (build.py: both seasons, shrunk toward the
-  team's by SHRINK2/SHRINK3 attempts). explain() puts each grade in words from the spot's facts (dec.ctx). The playoffs (build.py: nbastats_po_<season>,
+  team's by SHRINK2/SHRINK3 attempts). Each spot carries the real game's points so far (build.py points_before: spot.pts,
+  a side's top 8); hoops.js PTS adds what the five score here (tally): the intro's scorer cards (hotHands) and the chips. explain() puts each grade in words from the spot's facts (dec.ctx). The playoffs (build.py: nbastats_po_<season>,
   their own spots with po: round, game; never in the daily schedule's shuffle, so set days never move) feed data.famous
   (Famous Endings Week from FAMOUS_START: the most dramatic by drama(), one a series), data.runs (a team's close playoff
   endings in order) and the modes (hoops.js start(mode, opt): daily, practice, surv, run, build, duel; G.mode). Only the

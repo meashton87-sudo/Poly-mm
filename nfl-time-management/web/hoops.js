@@ -65,6 +65,14 @@
   // the five on the floor a side (the spot's names), and who takes the shots and the free throws among them (the team's
   // season shares where a man is in its list; a little for the rest)
   let FIVE = { home: [], away: [] };
+  // each man's points in the game: the real game's up to the spot (build.py points_before), then what he scores here
+  let PTS = { home: {}, away: {} };
+  function tally(ev, off) {
+    for (const x of ev) {
+      if (x.k === 'shot' && x.made) { const n = FIVE[off][x.who]; if (n) PTS[off][n] = (PTS[off][n] || 0) + (x.three ? 3 : 2); }
+      if (x.k === 'ft') { const sd = x.side || off, n = FIVE[sd][x.who]; if (n) PTS[sd][n] = (PTS[sd][n] || 0) + x.made.filter(Boolean).length; }
+    }
+  }
   const playerOf = (S, side, i) => { const t = T[teamOf(S, side)]; return t && t.players && t.players.find((p) => p.name === FIVE[side][i]); };
   function shooter(S, side, kind, r) {
     const five = FIVE[side], t = T[teamOf(S, side)], ps = (t && t.players) || [];
@@ -85,7 +93,7 @@
     if (made[n - 1]) { S.poss = other(side); S.shot = SHOT; S.dead = true; }
     else if (r() < L.oreb_ft) { S.poss = side; S.shot = SHOT_OREB; S.dead = false; reb = 'off'; }
     else { S.poss = other(side); S.shot = SHOT; S.dead = false; S.clock = Math.max(0, S.clock - 1.5); reb = 'def'; }
-    if (ev) ev.push({ k: 'ft', who, made, reb });
+    if (ev) ev.push({ k: 'ft', side, who, made, reb });
     const text = made[n - 1] ? `${name} makes ${m} of ${n} free throw${n > 1 ? 's' : ''}` : `${name} ${m ? `makes ${m} of ${n}, ` : ''}misses the last free throw, ${reb === 'off' ? 'the offense gets the rebound' : `${teamCity(teamOf(S, other(side)))} rebounds`}`;
     return { text, m, n };
   }
@@ -835,6 +843,8 @@
     ht.append(el('div', 'eyebrow', modeLabel()), el('h2', '', `You coach ${teamCity(teamOf(S, S.me))}`),
       el('p', 'lead', `${situation(S)}${coachOf(S.me) ? `. Beat ${coachOf(S.me)}` : ''}.`));
     head.append(ht, go); box.append(head);
+    const hot = hotHands();
+    if (hot) box.append(hot);
     const q = new URLSearchParams(location.search), vs = Number(q.get('vs'));
     if (!practice && q.has('vs') && vs >= 0 && vs <= 100) box.append(el('p', 'challenge', `${String(q.get('by') || 'A friend').slice(0, 24)} scored ${Math.round(vs)} on today's game. Beat it.`));
     playOverlay(true, start);
@@ -857,6 +867,37 @@
     if (G.mode === 'surv') { const sv = load(`${STORE}:surv`, { best: 0, runs: 0 }); box.append(el('p', 'note', `Win and keep going; lose once and the run is over. Your best run: ${sv.best} win${sv.best === 1 ? '' : 's'}.`)); }
     if (G.mode !== 'daily') box.append(moreHoops());
     drawBoard();
+  }
+  // who has it going tonight (the owner, Oct 30: the Versus cards, for Hoops): each side's two top scorers in the real
+  // game so far, yours on the left; dealt in, the points counting up, on the floor or on the bench
+  function hotHands() {
+    if (!spot.pts) return null;
+    const top = (side) => Object.entries(PTS[side]).sort((a, b) => b[1] - a[1]).slice(0, 2);
+    const mine = S.me, theirs = other(S.me), a = top(mine), b = top(theirs);
+    if (!a.length || !b.length) return null;
+    const still = REDUCED, col = teamColors(), wrap = el('div', `hot${still ? ' still' : ''}`), h = el('div', 'hot-h');
+    h.append(el('span', '', teamCity(teamOf(S, mine))), el('span', 'mid', 'Tonight’s scorers'), el('span', 'op', teamCity(teamOf(S, theirs))));
+    wrap.append(h);
+    const card = (x, side, i) => {
+      const c = el('div', `hcard ${side === mine ? 'me' : 'op'}${x ? '' : ' none'}`);
+      c.style.setProperty('--i', i);
+      if (!x) return c;
+      c.style.setProperty('--tc', col[side]);
+      const [name, pts] = x, on = FIVE[side].includes(name), p = el('span', 'pts'), pb = el('b', '', still ? String(pts) : '0');
+      pb.dataset.to = pts;
+      p.append(pb, el('i', '', 'PTS'));
+      c.append(p, el('span', 'tag', on ? 'On the floor' : 'On the bench'), el('b', 'nm', name));
+      return c;
+    };
+    for (let i = 0; i < 2; i++) { const row = el('div', 'hrow'); row.append(card(a[i], mine, i), card(b[i], theirs, i)); wrap.append(row); }
+    if (!still) {
+      setTimeout(() => wrap.querySelectorAll('.pts b').forEach((pb) => {
+        const to = Number(pb.dataset.to) || 0, at = performance.now() + 380 + 260 * Number(pb.closest('.hcard').style.getPropertyValue('--i') || 0);
+        const stepN = (t) => { const f = Math.min(1, Math.max(0, (t - at) / 650)); pb.textContent = String(Math.round(to * (1 - (1 - f) ** 3))); if (f < 1 && pb.isConnected) requestAnimationFrame(stepN); };
+        requestAnimationFrame(stepN);
+      }), 0);
+    }
+    return wrap;
   }
   // the Play button on the court before the game starts
   function playOverlay(on, f) {
@@ -892,7 +933,10 @@
         chips.append(b);
       };
       chip(null, 'Anyone', 'the open man');
-      FIVE[S.me].forEach((n, i) => { const pl = playerOf(S, S.me, i); chip(i, lastName(n), pl ? `${Math.round(100 * pl.p3)}% from 3 · ${Math.round(100 * pl.ft)}% FT` : ''); });
+      FIVE[S.me].forEach((n, i) => {
+        const pl = playerOf(S, S.me, i), pts = PTS[S.me][n];
+        chip(i, lastName(n), [pts != null && spot.pts ? `${pts} pts` : '', pl && pl.att3 >= 0.02 ? `${Math.round(100 * pl.p3)}% from 3` : ''].filter(Boolean).join(' · '));     // (a man who hardly shoots threes: his rate is mostly his team's)
+      });
       who.append(lab, chips); dock.append(who);
     }
   }
@@ -928,6 +972,7 @@
     const r = rng(hash(G.seed, 'p', i)), off = S.poss;
     const a = mine ? k : typicalOffense(S, r).pick, d = mine ? typicalDefense(S, r).pick : k;
     const ev = [], lines = possession(S, r, a, d, ev);
+    tally(ev, off);
     for (const t of lines) G.lines.push(t);
     saveGame();
     if (live) await animate(ev, off, lines);
@@ -1174,8 +1219,9 @@
     }
     if (graded && graded.pick != null) S.pick = graded.pick;
     const r = rng(hash(G.seed, 'p', i));
-    const a = mine ? k : typicalOffense(S, r).pick, d = mine ? typicalDefense(S, r).pick : k;
-    for (const t of possession(S, r, a, d, null)) G.lines.push(t);
+    const a = mine ? k : typicalOffense(S, r).pick, d = mine ? typicalDefense(S, r).pick : k, off = S.poss, ev = [];
+    for (const t of possession(S, r, a, d, ev)) G.lines.push(t);
+    tally(ev, off);
   }
   // today's game, or a practice one; a day's saved game is replayed from its calls (the same seed: the same bounces), no animation
   async function start(mode, opt) {
@@ -1186,6 +1232,7 @@
     FIVE = { home: (spot.players && spot.players.home || []).slice(0, 5), away: (spot.players && spot.players.away || []).slice(0, 5) };
     while (FIVE.home.length < 5) FIVE.home.push(`${teamCity(spot.home)} ${FIVE.home.length + 1}`);
     while (FIVE.away.length < 5) FIVE.away.push(`${teamCity(spot.away)} ${FIVE.away.length + 1}`);
+    PTS = { home: { ...((spot.pts || {}).home || {}) }, away: { ...((spot.pts || {}).away || {}) } };
     G = { seed: opt && opt.seed != null ? opt.seed >>> 0 : practice ? (Math.random() * 1e9) >>> 0 : hash('hoops', dayISO(), spot.id), decs: [], lines: [], practice, mode, opt: opt || {},
       done: false, score: null, started: false, realCall: spot.built ? null : realCall(spot) };
     if (!practice && !CROWD) api(`/hoops/day?date=${dayISO()}`).then((v) => { if (v && v.calls) CROWD = v.calls; });
