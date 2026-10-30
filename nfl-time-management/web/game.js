@@ -13458,7 +13458,9 @@
     const oppName = vs.names[1 - vs.seat], drafted = vsDrafted();
     box.append(el('div', 'cat', `${vsModeName()} · College overtime`),
       el('div', 'game', drafted ? `Your draft vs ${oppName ? `${oppName}’s` : 'their'} draft` : `Your ${teamName(me)} vs ${oppName ? `${oppName}’s` : 'their'} ${teamName(op)}`), el('div', 'big', 'Overtime'));
-    if (drafted) box.append(el('p', 'story', `You: ${vsDraftLine(me)}`), el('p', 'story', `${oppName || 'They'}: ${vsDraftLine(op)}`));
+    const duel = vsDuel(me, op, oppName);
+    if (duel) { box.classList.add('duel'); box.append(duel); }
+    if (drafted && !duel) box.append(el('p', 'story', `You: ${vsDraftLine(me)}`), el('p', 'story', `${oppName || 'They'}: ${vsDraftLine(op)}`));
     const seen = load(`${STORE}:vsintro`, 0);
     save(`${STORE}:vsintro`, seen + 1);
     if (seen >= 2) {          // (you know the rules: who chooses, and go)
@@ -13470,8 +13472,67 @@
     const go = el('button', 'btn', 'Kick it off');
     go.type = 'button';
     go.addEventListener('click', () => { G.started = true; persist(); enterField(); });
-    box.append(go, el('div', 'from legal', 'Fan-made. Not affiliated with or endorsed by the NFL or its teams.'));
+    box.append(go);
+    if (drafted && duel) box.append(moreEl('The drafts', `You: ${vsDraftLine(me)}. ${oppName || 'They'}: ${vsDraftLine(op)}.`));     // (under the cards' kickoff)
+    box.append(el('div', 'from legal', 'Fan-made. Not affiliated with or endorsed by the NFL or its teams.'));
     go.focus({ preventScroll: true });
+  }
+  // the key players before the kickoff (the owner, Oct 30: cards, animated, not a list of names): three face-offs, the
+  // quarterbacks, each side's best weapon (back, receiver or tight end by rating) and best defender, yours on the left;
+  // dealt in from each side, the rating counting up, the better man of each pair marked Edge. A team's lineup is the
+  // room's pool (teams.json); a draft's is its drafted side (vs.draftTeams), each man in his own team's colors
+  const vsSide = (c) => (vsDrafted() ? (vs.draftTeams || {})[c] : ((vs.pool || {}).teams || {})[c]);
+  function vsStars(c) {
+    const t = vsSide(c);
+    if (!t || !t.lineup) return null;
+    const best = (xs) => xs.filter((x) => x && x.name && Number.isFinite(x.ovr)).sort((a, b) => b.ovr - a.ovr)[0] || null;
+    const off = t.lineup.off || [], picks = t.draft || [];
+    const teamOf = (x, def) => {
+      if (!picks.length) return c;
+      const k = def ? picks.find((y) => y.k === 'DST') : picks.find((y) => y.name === x.name);
+      if (k && k.team && TEAMS[k.team]) return k.team;
+      // (a man the picks do not name, a Steal's for one: his team by the league's lineups)
+      const lg = Object.values((vs.pool || {}).teams || {}).find((t2) => ['off', 'def'].some((s2) => ((t2.lineup || {})[s2] || []).some((y) => y.name === x.name)));
+      return lg ? lg.team : c;
+    };
+    const qb = off.find((x) => x.pos === 'QB' && x.name) || null, wpn = best(off.filter((x) => x.pos === 'RB' || x.pos === 'WR' || x.pos === 'TE')), d = best(t.lineup.def || []);
+    return [qb && { ...qb, team: teamOf(qb) }, wpn && { ...wpn, team: teamOf(wpn) }, d && { ...d, team: teamOf(d, true) }];
+  }
+  function vsDuel(me, op, oppName) {
+    const a = vsStars(me), b = vsStars(op);
+    if (!a || !b || !a.some(Boolean) || !b.some(Boolean)) return null;
+    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const wrap = el('div', `vsduel${still ? ' still' : ''}`), head = el('div', 'vsduel-h');
+    head.append(el('span', 'me', 'You'), el('span', 'vsx', 'Key players'), el('span', 'op', oppName || 'Them'));
+    wrap.append(head);
+    const card = (x, side, i, edge) => {
+      const c = el('div', `vscard ${side}${edge ? ' edge' : ''}${x ? '' : ' none'}`);
+      c.style.setProperty('--i', i);
+      if (!x) { c.append(el('span', 'nm', '—')); return c; }
+      c.style.setProperty('--tc', color(x.team));
+      if (x.num != null) c.append(el('span', 'num', String(x.num)));
+      const o = el('span', 'ovr'), ob = el('b', '', still ? String(x.ovr) : '0');
+      o.append(ob, el('i', '', 'OVR'));
+      ob.dataset.to = x.ovr;
+      c.append(o, el('span', 'pos', x.kind || x.pos), el('b', 'nm', x.name), el('span', 'tm', teamShort(x.team)));
+      if (edge) c.append(el('span', 'tag', 'Edge'));
+      if (x.stat) c.title = x.stat;
+      return c;
+    };
+    ['QB', 'Weapon', 'Defense'].forEach((role, i) => {
+      const x = a[i], y = b[i], row = el('div', 'vsrow');
+      const ea = !!(x && y && x.ovr > y.ovr), eb = !!(x && y && y.ovr > x.ovr);
+      row.append(card(x, 'me', i, ea), el('span', 'vsrole', role), card(y, 'op', i, eb));
+      wrap.append(row);
+    });
+    if (!still) {                    // the ratings count up as each card lands
+      setTimeout(() => wrap.querySelectorAll('.ovr b').forEach((ob) => {
+        const to = Number(ob.dataset.to) || 0, card0 = ob.closest('.vscard'), at = performance.now() + 380 + 260 * Number(card0.style.getPropertyValue('--i') || 0);
+        const step = (t) => { const f = Math.min(1, Math.max(0, (t - at) / 650)); ob.textContent = String(Math.round(to * (1 - (1 - f) ** 3))); if (f < 1 && ob.isConnected) requestAnimationFrame(step); };
+        requestAnimationFrame(step);
+      }), 0);
+    }
+    return wrap;
   }
   // the team picker: your team for every versus match until you change it
   function vsTeamPicker(onPick, skip) {
