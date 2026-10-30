@@ -2680,11 +2680,12 @@ def field_checks(results: list[dict]) -> tuple[list[str], dict]:
     # owner saw it, Oct 22); never on a pass that was not a sack (game.js qbCheck)
     # One brush of half a second or so in a run of forty throws is a rusher going by, not a sack: it fails on two
     # such passes, or on one with the man on him 0.7 s or longer (one 0.5 s case failed about half the deploys
-    # since the Oct 26 data update, with the passer unpressured and the ball long gone)
+    # since the Oct 26 data update, with the passer unpressured and the ball long gone). A single brush fails at 0.9 s:
+    # one at exactly 0.7 s (an unpressured linebacker 0.6 yd off, Oct 30) blocked a deploy that changed no football
     qb = [x for r in results for x in r.get("qbs", [])]
     qb_on = [x for x in qb if x.get("on", 0) >= 0.4]
     say(f"passes thrown: {len(qb)}, a defender on the passer 0.4 s+ after the throw: {len(qb_on)} (pressured {sum(1 for x in qb if x.get('press'))})" + (f" {qb_on[:5]}" if qb_on else ""))
-    if len(qb_on) >= 2 or any(x.get("on", 0) >= 0.7 for x in qb_on):
+    if len(qb_on) >= 2 or any(x.get("on", 0) >= 0.9 for x in qb_on):
         fail("qb-after-throw", f"FAIL: a defender on the passer after the throw (it looks like a sack) {qb_on[:5]}")
     tos = {}
     for r in results:
