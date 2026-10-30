@@ -1545,6 +1545,17 @@ assert.strictEqual((await call('POST', {}, { path: '/days' })).status, 405);
   assert.deepStrictEqual(await ok(await blast(note), 'again'), { sent: 0, skipped: nAll, failed: 0, done: true }, 'a second call sends nobody twice');
   assert.deepStrictEqual(await ok(await call('GET', null, { path: '/auth/blast?id=winback-test', ...adm }), 'counts'), { sent: n1, inProgress: false });
   assert.strictEqual((await call('GET', null, { path: '/auth/blast?id=winback-test' })).status, 403, 'counts: admin only');
+  // the owner's counts (/auth/admin/count, admin): every account, the ones with an email, a username, Pro; never an address
+  const cnt = await ok(await call('GET', null, { path: '/auth/admin/count', ...adm }), 'count');
+  const accts = [...store.keys()].filter((k) => k.startsWith('acct:')).length, codes = [...store.keys()].filter((k) => k.startsWith('pro:code:')).length;
+  assert.ok(cnt.accounts === accts && accts > 0 && cnt.proCodes === codes && cnt.withEmail <= cnt.accounts && cnt.withPro <= cnt.accounts && cnt.newWeek <= cnt.accounts, `counts ${JSON.stringify(cnt)}`);
+  assert.ok(!JSON.stringify(cnt).includes('@'), 'no address in the counts');
+  store.set('acct:e:countme@example.com', { email: 'countme@example.com', name: 'countme', at: new Date().toISOString() });
+  const cnt2 = await ok(await call('GET', null, { path: '/auth/admin/count', ...adm }), 'count 2');
+  assert.deepStrictEqual([cnt2.accounts - cnt.accounts, cnt2.withEmail - cnt.withEmail, cnt2.withUsername - cnt.withUsername, cnt2.newDay - cnt.newDay], [1, 1, 1, 1], 'a new account counted');
+  store.delete('acct:e:countme@example.com');
+  assert.strictEqual((await call('GET', null, { path: '/auth/admin/count' })).status, 403, 'count: admin only');
+  assert.strictEqual((await call('GET', null, { path: '/auth/admin/count', auth: 'Bearer wrong' })).status, 403, 'count: a wrong token');
   // the cap and the continuation: 250 a call, the rest in the next calls, done at the end; a refused batch goes again
   set({ BLAST_CAP: '250' });
   for (let i = 0; i < 600; i++) store.set(`acct:e:r${i}@example.com`, { email: `r${i}@example.com` });
