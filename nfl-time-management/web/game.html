@@ -563,22 +563,14 @@ button:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline:
 .vscard .pos { font: 800 9.5px var(--body); letter-spacing: .08em; text-transform: uppercase; opacity: .9; max-width: calc(100% - 34px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vscard .nm { font: 900 17px/1.02 var(--display); letter-spacing: .02em; text-transform: uppercase; text-wrap: balance; text-shadow: 0 1px 2px rgba(0,0,0,.35); }
 .vscard .tm { font: 700 10px var(--body); letter-spacing: .1em; opacity: .8; }
-.vscard .tag { position: absolute; top: 8px; left: 10px; font: 900 9px var(--body); letter-spacing: .14em; text-transform: uppercase; color: #1b1400; background: #ffd34d; border-radius: 4px; padding: 2px 5px;
-  animation: vsPop .35s cubic-bezier(.3,1.6,.5,1) both; animation-delay: calc(var(--i) * .26s + 1.05s); }
-.vscard.edge { animation-name: vsDealL, vsEdge; animation-duration: .55s, .4s; animation-delay: calc(var(--i) * .26s + .1s), calc(var(--i) * .26s + 1.05s); }
-.vscard.op.edge { animation-name: vsDealR, vsEdge; }
-@keyframes vsEdge { to { box-shadow: 0 0 0 2px #ffd34d, 0 8px 20px -8px rgba(255,190,40,.7); } }
-.vsduel.still .vscard.edge { box-shadow: 0 0 0 2px #ffd34d, 0 8px 20px -8px rgba(255,190,40,.7); }
-.vscard.edge .pos { visibility: hidden; }
 .vscard.none { background: var(--card); color: var(--muted); align-content: center; justify-items: center; box-shadow: inset 0 0 0 1px var(--line); }
 .vscard.none::after, .vscard.none::before { display: none; }
 @keyframes vsDealL { from { opacity: 0; transform: translateX(-46px) rotateY(55deg) scale(.92); } }
 @keyframes vsDealR { from { opacity: 0; transform: translateX(46px) rotateY(-55deg) scale(.92); } }
 @keyframes vsShine { from { left: -60%; } to { left: 130%; } }
-@keyframes vsPop { from { opacity: 0; transform: scale(.4); } }
-.vsduel.still .vscard, .vsduel.still .vscard .tag { animation: none; }
+.vsduel.still .vscard { animation: none; }
 .vsduel.still .vscard::after { display: none; }
-@media (prefers-reduced-motion: reduce) { .vscard, .vscard .tag { animation: none !important; } .vscard::after { display: none; } .vscard.edge { box-shadow: 0 0 0 2px #ffd34d, 0 8px 20px -8px rgba(255,190,40,.7); } }
+@media (prefers-reduced-motion: reduce) { .vscard { animation: none !important; } .vscard::after { display: none; } }
 .matchup { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; margin: 4px 0; }
 .matchup .t { display: grid; justify-items: center; gap: 4px; }
 .matchup .sw { width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center; font: 900 20px var(--display); color: #fff; box-shadow: inset 0 0 0 3px rgba(255,255,255,.25); }

@@ -13479,7 +13479,7 @@
   }
   // the key players before the kickoff (the owner, Oct 30: cards, animated, not a list of names): three face-offs, the
   // quarterbacks, each side's best weapon (back, receiver or tight end by rating) and best defender, yours on the left;
-  // dealt in from each side, the rating counting up, the better man of each pair marked Edge. A team's lineup is the
+  // dealt in from each side, the rating counting up (no Edge: the owner, Oct 30). A team's lineup is the
   // room's pool (teams.json); a draft's is its drafted side (vs.draftTeams), each man in his own team's colors
   const vsSide = (c) => (vsDrafted() ? (vs.draftTeams || {})[c] : ((vs.pool || {}).teams || {})[c]);
   function vsStars(c) {
@@ -13505,8 +13505,8 @@
     const wrap = el('div', `vsduel${still ? ' still' : ''}`), head = el('div', 'vsduel-h');
     head.append(el('span', 'me', 'You'), el('span', 'vsx', 'Key players'), el('span', 'op', oppName || 'Them'));
     wrap.append(head);
-    const card = (x, side, i, edge) => {
-      const c = el('div', `vscard ${side}${edge ? ' edge' : ''}${x ? '' : ' none'}`);
+    const card = (x, side, i) => {
+      const c = el('div', `vscard ${side}${x ? '' : ' none'}`);
       c.style.setProperty('--i', i);
       if (!x) { c.append(el('span', 'nm', '—')); return c; }
       c.style.setProperty('--tc', color(x.team));
@@ -13515,14 +13515,12 @@
       o.append(ob, el('i', '', 'OVR'));
       ob.dataset.to = x.ovr;
       c.append(o, el('span', 'pos', x.kind || x.pos), el('b', 'nm', x.name), el('span', 'tm', teamShort(x.team)));
-      if (edge) c.append(el('span', 'tag', 'Edge'));
       if (x.stat) c.title = x.stat;
       return c;
     };
     ['QB', 'Weapon', 'Defense'].forEach((role, i) => {
       const x = a[i], y = b[i], row = el('div', 'vsrow');
-      const ea = !!(x && y && x.ovr > y.ovr), eb = !!(x && y && y.ovr > x.ovr);
-      row.append(card(x, 'me', i, ea), el('span', 'vsrole', role), card(y, 'op', i, eb));
+      row.append(card(x, 'me', i), el('span', 'vsrole', role), card(y, 'op', i));
       wrap.append(row);
     });
     if (!still) {                    // the ratings count up as each card lands
