@@ -66,13 +66,8 @@
   // season shares where a man is in its list; a little for the rest)
   let FIVE = { home: [], away: [] };
   // each man's points in the game: the real game's up to the spot (build.py points_before), then what he scores here
+  // (possession's pts, on the played possessions only: never in a simulation)
   let PTS = { home: {}, away: {} };
-  function tally(ev, off) {
-    for (const x of ev) {
-      if (x.k === 'shot' && x.made) { const n = FIVE[off][x.who]; if (n) PTS[off][n] = (PTS[off][n] || 0) + (x.three ? 3 : 2); }
-      if (x.k === 'ft') { const sd = x.side || off, n = FIVE[sd][x.who]; if (n) PTS[sd][n] = (PTS[sd][n] || 0) + x.made.filter(Boolean).length; }
-    }
-  }
   const playerOf = (S, side, i) => { const t = T[teamOf(S, side)]; return t && t.players && t.players.find((p) => p.name === FIVE[side][i]); };
   function shooter(S, side, kind, r) {
     const five = FIVE[side], t = T[teamOf(S, side)], ps = (t && t.players) || [];
@@ -102,6 +97,7 @@
   function possession(S, r, a, d, ev) {
     const off = S.poss, def = other(off), A = APPROACH[a], lines = [], clock0 = S.clock, five = FIVE[off];
     const name = (i) => five[i] || teamCity(teamOf(S, off));
+    const pts = (i, n) => { if (!ev || !n || !five[i]) return ''; PTS[off][five[i]] = (PTS[off][five[i]] || 0) + n; return ` (${PTS[off][five[i]]} PTS)`; };   // (the call's line, as on a broadcast)
     const bring = S.dead, pick = S.pick;
     S.pick = null;                                            // (the man called for: this possession only)
     if (ev) ev.push({ k: 'start', a, d, shot: S.shot });
@@ -111,7 +107,7 @@
     if (d === 'foul') {
       const t = u(r, 0.5, 2.5); S.clock = Math.max(0, S.clock - t); S.fouls[def]++; S.fouls2[def]++;
       const who = 0;
-      if (inBonus(S, def)) { if (ev) ev.push({ k: 'foul', on: who, early: true }); const ft = freeThrows(S, r, off, 2, who, ev); lines.push(`${teamCity(teamOf(S, def))} fouls on purpose: ${ft.text}`); return done(); }
+      if (inBonus(S, def)) { if (ev) ev.push({ k: 'foul', on: who, early: true }); const ft = freeThrows(S, r, off, 2, who, ev); lines.push(`${teamCity(teamOf(S, def))} fouls on purpose: ${ft.text}${pts(who, ft.m)}`); return done(); }
       if (ev) ev.push({ k: 'foul', on: who, early: true, inbound: true });
       lines.push(`${teamCity(teamOf(S, def))} fouls on purpose, not in the bonus yet: ${teamCity(teamOf(S, off))} inbounds again`); S.dead = true; return done();
     }
@@ -147,10 +143,10 @@
       if (!isThree && r() < L.and1) {
         S.score[off] += 2;
         if (ev) ev.push({ k: 'shot', who, three: false, drive: true, passes, made: true, and1: true, secs: t });
-        const ft = freeThrows(S, r, off, 1, who, ev); lines.push(`${name(who)} scores through the foul, and one: ${ft.m ? 'makes' : 'misses'} the free throw`); return done();
+        const ft = freeThrows(S, r, off, 1, who, ev); lines.push(`${name(who)} scores through the foul, and one: ${ft.m ? 'makes' : 'misses'} the free throw${pts(who, 2 + ft.m)}`); return done();
       }
       if (ev) ev.push({ k: 'shot', who, three: isThree, drive, passes, made: false, fouled: true, secs: t });
-      const ft = freeThrows(S, r, off, isThree ? 3 : 2, who, ev); lines.push(`${name(who)} is fouled ${isThree ? 'on a three' : 'going up'}: ${ft.text}`); return done();
+      const ft = freeThrows(S, r, off, isThree ? 3 : 2, who, ev); lines.push(`${name(who)} is fouled ${isThree ? 'on a three' : 'going up'}: ${ft.text}${pts(who, ft.m)}`); return done();
     }
     const pl = playerOf(S, off, who), tm = T[teamOf(S, off)] || {}, own = pl && pl[isThree ? 'p3' : 'p2'], base = tm[isThree ? 'p3' : 'p2'];
     let p = rate(teamOf(S, off), isThree ? 'p3' : 'p2') + (own && base ? own - base : 0) + (isThree ? A.p3 : A.p2) + (press ? (isThree ? 0.02 : 0.08) : 0)   // (a press beaten is an easy one; the shooter's own touch)
@@ -158,7 +154,7 @@
     if (r() < p) {
       S.score[off] += kind;
       if (ev) ev.push({ k: 'shot', who, three: isThree, drive, passes, made: true, secs: t });
-      lines.push(`${name(who)} ${isThree ? 'hits the three' : drive ? 'scores at the rim' : 'hits the jumper'}`); S.poss = def; S.shot = SHOT; S.dead = true; return done();
+      lines.push(`${name(who)} ${isThree ? 'hits the three' : drive ? 'scores at the rim' : 'hits the jumper'}${pts(who, kind)}`); S.poss = def; S.shot = SHOT; S.dead = true; return done();
     }
     if (S.clock <= 0) { if (ev) ev.push({ k: 'shot', who, three: isThree, drive, passes, made: false, horn: true, secs: t }); lines.push(`${name(who)} misses ${isThree ? 'the three' : 'the shot'} at the horn`); return done(); }
     const oreb = r() < rate(teamOf(S, off), 'oreb'), rebBy = Math.floor(r() * 5);
@@ -868,6 +864,25 @@
     if (G.mode !== 'daily') box.append(moreHoops());
     drawBoard();
   }
+  // the end card's box score: each side's top three scorers at the end of your game, what each scored in it
+  function boxScore() {
+    if (!spot.pts) return null;
+    const wrap = el('div', 'box'), at0 = (side, n) => ((spot.pts[side] || {})[n] || 0);
+    wrap.append(el('h3', '', 'Top scorers'));
+    const cols = el('div', 'boxcols');
+    for (const side of [S.me, other(S.me)]) {
+      const col = el('div', 'boxcol');
+      col.append(el('div', 'boxt', `${teamCity(teamOf(S, side))} ${S.score[side]}`));
+      Object.entries(PTS[side]).sort((a, b) => b[1] - a[1]).slice(0, 3).forEach(([n, v]) => {
+        const row = el('div', 'boxr'), here = v - at0(side, n);
+        row.append(el('span', 'bn', n), el('b', '', String(v)), el('span', 'bh', here ? `+${here} here` : ''));
+        col.append(row);
+      });
+      cols.append(col);
+    }
+    wrap.append(cols);
+    return wrap;
+  }
   // who has it going tonight (the owner, Oct 30: the Versus cards, for Hoops): each side's two top scorers in the real
   // game so far, yours on the left; dealt in, the points counting up, on the floor or on the bench
   function hotHands() {
@@ -972,7 +987,6 @@
     const r = rng(hash(G.seed, 'p', i)), off = S.poss;
     const a = mine ? k : typicalOffense(S, r).pick, d = mine ? typicalDefense(S, r).pick : k;
     const ev = [], lines = possession(S, r, a, d, ev);
-    tally(ev, off);
     for (const t of lines) G.lines.push(t);
     saveGame();
     if (live) await animate(ev, off, lines);
@@ -1052,6 +1066,7 @@
         el('div', 'vsl', `You: ${fmt(myMargin)} · ${lastOf(coach)}: ${fmt(realMine)}`));
       box.append(vsBox);
     }
+    const bs = boxScore(); if (bs) box.append(bs);
     const daybox = el('div', 'today'); box.append(daybox);
     if (!G.practice) dayNumbers(daybox, fresh, vsCoach);
     const list = el('ol', 'calls');
@@ -1219,9 +1234,8 @@
     }
     if (graded && graded.pick != null) S.pick = graded.pick;
     const r = rng(hash(G.seed, 'p', i));
-    const a = mine ? k : typicalOffense(S, r).pick, d = mine ? typicalDefense(S, r).pick : k, off = S.poss, ev = [];
-    for (const t of possession(S, r, a, d, ev)) G.lines.push(t);
-    tally(ev, off);
+    const a = mine ? k : typicalOffense(S, r).pick, d = mine ? typicalDefense(S, r).pick : k;
+    for (const t of possession(S, r, a, d, [])) G.lines.push(t);     // (an event list: the points tally as when it was played)
   }
   // today's game, or a practice one; a day's saved game is replayed from its calls (the same seed: the same bounces), no animation
   async function start(mode, opt) {
