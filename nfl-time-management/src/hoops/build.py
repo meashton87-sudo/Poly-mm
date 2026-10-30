@@ -743,6 +743,16 @@ def coach_of(season: int, team: str, gid: str) -> str | None:
     return [name for start, name in c if n >= start][-1]
 
 
+def points_before(g: Game, upto: int) -> dict:
+    """Each side's scorers before event index `upto` (made field goals and free throws), the most first: the
+    page's key players and the points on its shooter chips."""
+    pts = {g.home: Counter(), g.away: Counter()}
+    for e in g.events[:upto]:
+        if e.p1 and e.p1team in pts and e.made and e.type in (MADE, FT):
+            pts[e.p1team][e.p1] += 1 if e.type == FT else 3 if e.is3 else 2
+    return {side: {name: int(v) for name, v in pts[tm].most_common(8)} for side, tm in (("home", g.home), ("away", g.away))}
+
+
 def game_spot(g: Game, n: int) -> dict | None:
     """The game's spot: the first possession of the 4th period or overtime that
     starts (after a made field goal, a made last free throw, a defensive rebound
@@ -778,6 +788,7 @@ def game_spot(g: Game, n: int) -> dict | None:
             "real": real_log(g, p.first.i),
             "final": list(g.final),
             "players": players_on_court(g, p.first.i - 1),
+            "pts": points_before(g, p.first.i),
             "coaches": [coach_of(g.season, g.home, g.gid), coach_of(g.season, g.away, g.gid)],
         }
     return None
