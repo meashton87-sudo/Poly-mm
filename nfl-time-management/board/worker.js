@@ -780,7 +780,7 @@ async function signedByStripe(req, body, secret) {
 // /pro/data and /race/* take { session } in place of { code, key }: the account's code, without the device limit (the
 // account is its own protection; the code is the same, so the Gauntlet entry is the same).
 const AUTH_PATHS = ['/auth', '/auth/google', '/auth/email', '/auth/email/verify', '/auth/me', '/auth/logout', '/auth/link', '/auth/name',
-  '/auth/stats', '/auth/remind', '/auth/unsub', '/auth/blast'];
+  '/auth/stats', '/auth/remind', '/auth/unsub', '/auth/blast', '/auth/admin/count'];
 const UNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9 _.'-]{1,18})[A-Za-z0-9.]$/;
 // a session lasts SESS_DAYS; a link LOGIN_MS; an address is at most 198 characters (e:<address> fits Stripe's
 // 200-character client_reference_id)
@@ -888,6 +888,10 @@ const siteFor = (req, env) => {
 };
 async function auth(req, env, storage, hits, h, url) {
   if (url.pathname === '/auth') return req.method === 'GET' ? json({ google: googleOn(env), email: emailOn(env) }, 200, h) : json({ error: 'method' }, 405, h);
+  if (url.pathname === '/auth/admin/count') {                             // how many have signed up (admin): counts only, never an address
+    if (!isAdmin(req, env)) return json({ error: 'forbidden' }, 403, h);
+    return req.method === 'GET' ? json(await accountCounts(storage), 200, h) : json({ error: 'method' }, 405, h);
+  }
   if (url.pathname === '/auth/blast') {                                   // the owner's one-time email (admin)
     if (!isAdmin(req, env)) return json({ error: 'forbidden' }, 403, h);
     if (req.method === 'GET') return json(await blastCounts(storage, url.searchParams.get('id') || ''), 200, h);
@@ -1514,6 +1518,22 @@ async function reminders(env, storage, date) {
 // unsubscribed (rmd on: false); every email carries the same unsubscribe link (which also turns the daily email off).
 const BLAST_CAP = 1000, BLAST_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const blastCap = (env) => { const n = Math.floor(Number(env.BLAST_CAP)); return n > 0 ? n : BLAST_CAP; };
+// the owner's numbers (GET /auth/admin/count, admin): the accounts (with an email, a username, Pro, made in the last day
+// and week) and the Pro codes sold or claimed, with or without an account
+async function accountCounts(storage) {
+  const now = Date.now(), out = { accounts: 0, withEmail: 0, withUsername: 0, withPro: 0, newDay: 0, newWeek: 0, proCodes: 0, proCodesNoAccount: 0, at: new Date(now).toISOString() };
+  for (const [, a] of await storage.list({ prefix: 'acct:' })) {
+    out.accounts++;
+    if (a && EMAIL_RE.test(String(a.email || ''))) out.withEmail++;
+    if (a && a.name) out.withUsername++;
+    if (a && a.code) out.withPro++;
+    const t = Date.parse((a && a.at) || '');
+    if (t > now - 864e5) out.newDay++;
+    if (t > now - 7 * 864e5) out.newWeek++;
+  }
+  for (const [, c] of await storage.list({ prefix: 'pro:code:' })) { out.proCodes++; if (!(c && c.acct)) out.proCodesNoAccount++; }
+  return out;
+}
 async function blastCounts(storage, id) {
   if (!BLAST_ID_RE.test(id)) return { error: 'id' };
   return { sent: [...(await storage.list({ prefix: `blast:${id}:s:` }))].length, inProgress: !!(await storage.get(`blast:${id}:from`)) };

@@ -138,6 +138,13 @@ details.cl > summary { cursor: pointer; font: 700 12px var(--body); color: var(-
   decision list, win chances included, so only a copied or shared run matches; lists of fewer than three calls are skipped,
   since the first call of a drive is the same for everyone). The board sends the entries a page at a time: the counts and
   the same-calls flag cover the entries loaded, so load them all before a prize.</p>
+<section class="card" id="players">
+  <h2>Players</h2>
+  <div class="row"><button class="ghost" id="loadCounts" type="button">Load the counts</button></div>
+  <div id="counts" class="calls"></div>
+  <p class="note">Signed-up accounts and Pro codes on the board (/auth/admin/count, the admin token): counts only, never an
+    address. Playing needs no account, so the accounts are fewer than the players.</p>
+</section>
 <section class="card" id="diff">
   <h2>Daily difficulty</h2>
   <div class="row"><button class="ghost" id="loadDays" type="button">Load the dailies</button></div>
@@ -406,6 +413,23 @@ details.cl > summary { cursor: pointer; font: 700 12px var(--body); color: var(-
     } catch (e) { box.textContent = `Could not load the dailies: ${e.message}`; }
   }
   $('loadDays').addEventListener('click', loadDays);
+  // signed-up accounts and Pro codes (admin)
+  async function loadCounts() {
+    const box = $('counts');
+    if (!api() || !$('tok').value.trim()) { box.textContent = 'The board API and the admin token are both needed.'; return; }
+    box.textContent = 'Loading…';
+    try {
+      const d = await call('/auth/admin/count');
+      const t = document.createElement('table'), tb = document.createElement('tbody');
+      [['Accounts', d.accounts], ['With an email', d.withEmail], ['With a username', d.withUsername], ['With Pro', d.withPro],
+        ['New in the last day', d.newDay], ['New in the last week', d.newWeek], ['Pro codes', d.proCodes], ['Pro codes with no account', d.proCodesNoAccount]]
+        .forEach(([k, v]) => { const tr = document.createElement('tr'); [k, Number(v || 0).toLocaleString()].forEach((x) => { const td = document.createElement('td'); td.textContent = x; tr.append(td); }); tb.append(tr); });
+      t.append(tb);
+      box.textContent = '';
+      box.append(t, el('p', 'note', `As of ${when(d.at)}`));
+    } catch (e) { box.textContent = `Could not load the counts: ${e.message}`; }
+  }
+  $('loadCounts').addEventListener('click', loadCounts);
   $('cfg').addEventListener('submit', (ev) => { ev.preventDefault(); loadAll(); });
   $('more').addEventListener('click', loadMore);
   $('forget').addEventListener('click', () => { ss.set('gadm:tok', ''); $('tok').value = ''; S.data = null; $('entries').textContent = ''; $('tiles').hidden = $('filters').hidden = $('more').hidden = true; say('Token forgotten.'); });
