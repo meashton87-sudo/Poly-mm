@@ -13234,6 +13234,7 @@
   const vsCpuLevel = () => (VS_CPU_LEVELS[load(VS_CPU_KEY, 'pro')] ? load(VS_CPU_KEY, 'pro') : 'pro');
   const VS_CPU_DECIDE_MS = 10 * 60e3;       // against the computer: no play clock to speak of (match.js CPU_DECIDE_MS)
   const VS_FORFEIT = 20;             // seconds a phone can be gone before its side forfeits (match.js FORFEIT_MS)
+  const vsModeName = () => (vs.mode === 'friend' && (vs.draft || vs.draftTeams) ? 'Friend draft' : VS_MODES[vs.mode] || 'Versus');
   const vs = { ws: null, seat: -1, mode: 'friend', teams: [null, null], taken: '', names: ['', ''], full: false, online: [false, false], off: [0, 0],
     phase: 'wait', n: 0, ms: null, ms0: null, got: {}, waiting: -1, last: null, deadline: 0, skew: 0, result: null, rated: null, started: false,
     timer: null, retry: 0, closedByUs: false, pool: null, banner: '', oppLocked: -1, ui: 'none', cardTimer: null, q: null,
@@ -13253,7 +13254,9 @@
     let mode = 'friend';
     try { mode = sessionStorage.getItem(`tmd:vsmode:${VS_ROOM}`) || 'friend'; } catch (e) { /* none */ }
     const since = vs.started && G ? G.vsN : vsSince();
-    const url = `${BOARD.api.replace(/^http/, 'ws')}/vs/ws?room=${VS_ROOM}&key=${encodeURIComponent(deviceKey())}&mode=${mode}&since=${since}`;
+    let draft = false;                               // (a friend's draft: the room is made with its draft, match.js draft=1)
+    try { draft = sessionStorage.getItem(`tmd:vsdraft:${VS_ROOM}`) === '1'; } catch (e) { /* none */ }
+    const url = `${BOARD.api.replace(/^http/, 'ws')}/vs/ws?room=${VS_ROOM}&key=${encodeURIComponent(deviceKey())}&mode=${mode}&since=${since}${draft ? '&draft=1' : ''}`;
     let ws;
     try { ws = new WebSocket(url); } catch (e) { return vsRetry(); }
     vs.ws = ws;
@@ -13400,7 +13403,7 @@
       league: pool.league, start: { qtr: 4, clock: VSCore.COT_T, score: [0, 0], pos: H, down: 1, ytg: 10, yl: 25, to: [1, 1], running: false, receive2h: H },
       real: { season: pool.season, week: pool.week, type: 'REG', coach: null, call: null, drive: null, final: null } };
     today = [buildScen(sp, { home: TH, away: TA })];
-    $('dayLabel').textContent = `${VS_MODES[vs.mode] || 'Versus'} · ${VS_ROOM}`;
+    $('dayLabel').textContent = `${vsModeName()} · ${VS_ROOM}`;
     state = load(stateKey(), null) || { spots: [], current: 0, done: false };
     startWorkers();
     track('vs_start', { mode: vs.mode, seat: vs.seat });
@@ -13453,7 +13456,7 @@
   function renderVsIntro() {
     const box = $('intro'), me = code(G.me), op = code(1 - G.me), first = G.cot ? G.cot.toss : 0;
     const oppName = vs.names[1 - vs.seat], drafted = vsDrafted();
-    box.append(el('div', 'cat', `${VS_MODES[vs.mode] || 'Versus'} · College overtime`),
+    box.append(el('div', 'cat', `${vsModeName()} · College overtime`),
       el('div', 'game', drafted ? `Your draft vs ${oppName ? `${oppName}’s` : 'their'} draft` : `Your ${teamName(me)} vs ${oppName ? `${oppName}’s` : 'their'} ${teamName(op)}`), el('div', 'big', 'Overtime'));
     if (drafted) box.append(el('p', 'story', `You: ${vsDraftLine(me)}`), el('p', 'story', `${oppName || 'They'}: ${vsDraftLine(op)}`));
     const seen = load(`${STORE}:vsintro`, 0);
@@ -13525,7 +13528,9 @@
     const wrap = el('div', 'vsdraft');
     box.append(wrap);
     if (!d || d.pending || !d.budget) {
-      wrap.append(el('h2', '', 'Draft'), el('p', 'lead', vs.full || vs.mode !== 'friend' ? 'Opponent found. Setting up the draft…' : 'Waiting for your opponent…'));
+      wrap.append(el('h2', '', 'Draft'));
+      if (vs.full || vs.mode !== 'friend') wrap.append(el('p', 'lead', 'Opponent found. Setting up the draft…'));
+      else wrap.append(...vsInvite('The draft starts when they open it.'));
       return;
     }
     const nm = (s) => (s === me ? 'You' : vs.names[s] || 'Them'), toWhom = (s) => (s === me ? 'you' : vs.names[s] || 'them');
@@ -13633,7 +13638,7 @@
     show('arch');
     const box = $('arch');
     box.textContent = '';
-    box.append(el('h2', '', VS_MODES[vs.mode] || 'Versus'));
+    box.append(el('h2', '', vsModeName()));
     if (vs.seat >= 0 && !vs.teams[vs.seat] && (!vsMyTeam() || vs.taken) && !vs.draft && vs.mode !== 'draft') {
       const lead = vs.taken ? `Your opponent already has ${teamName(vs.taken)}. Pick another team.` : 'Pick your team for this match: its real lineup this week.';
       box.append(el('p', 'lead', lead), vsTeamPicker(() => { vs.taken = ''; vsSendTeam(); renderVsWaiting(); }, vs.taken));
@@ -13642,7 +13647,12 @@
     const mine = vs.teams[vs.seat] || vsMyTeam();
     if (mine) box.append(el('p', 'note', `Your team: ${teamName(mine)}`));
     if (vs.full || vs.mode !== 'friend') { box.append(el('p', 'lead', 'Opponent found. Getting the match ready…')); return; }
-    box.append(el('p', 'lead', 'Send this to a friend. The match starts when they open it.'));
+    box.append(...vsInvite('The match starts when they open it.'));
+  }
+  // a friend's room before they are in: the code, the link to copy or share, Back to the lobby
+  function vsInvite(when) {
+    const box = document.createDocumentFragment();
+    box.append(el('p', 'lead', `Send this to a friend. ${when}`));
     box.append(el('div', 'vscode', VS_ROOM));
     const row = el('div', 'row'), copy = el('button', 'btn', 'Copy the link');
     copy.type = 'button';
@@ -13653,13 +13663,15 @@
     if (navigator.share) {
       const sh = el('button', 'btn ghostbtn', 'Share');
       sh.type = 'button';
-      sh.addEventListener('click', () => { navigator.share({ title: 'Two-Minute Drill: versus', text: 'College overtime, you and me. Pick your team.', url: vsLink(VS_ROOM) }).catch(() => {}); });
+      const text = vs.draft ? `Draft me: $${VSCore.DRAFT.budget} each to bid on real players, then we play it out.` : 'College overtime, you and me. Pick your team.';
+      sh.addEventListener('click', () => { navigator.share({ title: 'Two-Minute Drill: versus', text, url: vsLink(VS_ROOM) }).catch(() => {}); });
       row.append(sh);
     }
     box.append(row, el('p', 'note', 'Keep this page open.'));
     const back = el('a', 'chip', '◀ Back');
     back.href = '#vs';
     box.append(back);
+    return [box];
   }
   // matchmaking: in the lobby's queue until it finds you an opponent (ranked: someone near your rating)
   function vsQueue(mode) {
@@ -13827,25 +13839,28 @@
     };
     drawSeason();
     const go = (mode) => {
-      if (mode !== 'draft' && !vsMyTeam()) { toast('Pick your team first'); return; }
+      if (mode !== 'draft' && mode !== 'fdraft' && !vsMyTeam()) { toast('Pick your team first'); return; }
       if (mode === 'play') mode = vsInSeason(season) ? 'ranked' : 'casual';
       if (mode === 'ranked' && !myName()) { toast(`Set your name for the ${season.name} ladder`); nameIn.focus(); return; }
-      if (mode === 'friend') {
+      if (mode === 'friend' || mode === 'fdraft') {
         const a = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', room = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => a[b % a.length]).join('');
-        try { sessionStorage.setItem(`tmd:vsmode:${room}`, 'friend'); } catch (e) { /* none */ }
-        track('vs_friend');
+        try { sessionStorage.setItem(`tmd:vsmode:${room}`, 'friend'); if (mode === 'fdraft') sessionStorage.setItem(`tmd:vsdraft:${room}`, '1'); } catch (e) { /* none */ }
+        track(mode === 'fdraft' ? 'vs_friend_draft' : 'vs_friend');
         location.hash = `#vs-${room}`;
         return;
       }
       vsQueue(mode);
     };
     // the four modes, two by two, every one on the first screen: Play (in the season a rated match, else a quick one),
-    // the computer, a friend, the Draft (nobody brings a team; both bid for a lineup first, VSCore.DRAFT.budget each)
+    // the computer, a friend, the Draft (nobody brings a team; both bid for a lineup first, VSCore.DRAFT.budget each);
+    // under them the Draft against a friend (the owner, Oct 30: a code to send, as the Friend match)
     const modes = el('div', 'ptiles vsmodes');
     const playSub = () => (vsInSeason(season) ? `${season.name} match` : 'Quick match');
     [['play', 'play', 'Play', playSub()], ['cpu', 'cpu', 'Computer', 'Practice, unrated'], ['friend', 'friend', 'Friend', 'A code to share'],
-      ['draft', 'draft', 'Draft', `Bid for a lineup, $${VSCore.DRAFT.budget} each`]].forEach(([m, kind, title, sub]) => {
+      ['draft', 'draft', 'Draft', `Bid for a lineup, $${VSCore.DRAFT.budget} each`],
+      ['fdraft', 'draft', 'Draft a friend', 'Send a code, bid against each other, then play']].forEach(([m, kind, title, sub]) => {
       const b = proCard(kind, title, sub, () => go(m), {});
+      if (m === 'fdraft') b.classList.add('wide');
       b.dataset.mode = m;
       b.disabled = !BOARD.api;
       modes.append(b);
@@ -14259,8 +14274,8 @@
     if (res.by === 'forfeit') card.append(el('p', 'note', won ? (res.why === 'afk' ? 'They let the play clock run out on two calls in a row.' : `They left the match for more than ${VS_FORFEIT} seconds.`)
       : (res.why === 'afk' ? 'The play clock ran out on two of your calls in a row.' : `You were away from the match for more than ${VS_FORFEIT} seconds.`)));
     if (res.by === 'error') card.append(el('p', 'note', 'Something went wrong in the match. Nobody’s rating changed.'));
-    card.append(el('p', 'note', vsDrafted() ? `Your draft vs ${vs.names[1 - vs.seat] ? `${vs.names[1 - vs.seat]}’s` : 'their'} draft · ${VS_MODES[vs.mode] || 'Versus'}`
-      : `Your ${teamName(code(G.me))} vs ${vs.names[1 - vs.seat] ? `${vs.names[1 - vs.seat]}’s` : 'their'} ${teamName(code(1 - G.me))} · ${VS_MODES[vs.mode] || 'Versus'}`));
+    card.append(el('p', 'note', vsDrafted() ? `Your draft vs ${vs.names[1 - vs.seat] ? `${vs.names[1 - vs.seat]}’s` : 'their'} draft · ${vsModeName()}`
+      : `Your ${teamName(code(G.me))} vs ${vs.names[1 - vs.seat] ? `${vs.names[1 - vs.seat]}’s` : 'their'} ${teamName(code(1 - G.me))} · ${vsModeName()}`));
     card.append(el('p', 'vsrating', ''));
     const row = el('div', 'row');
     if (vs.mode === 'ranked') {
