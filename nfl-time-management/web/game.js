@@ -11077,7 +11077,7 @@
   // storage opens nothing, and the Pro data itself is served by the board to a valid code only (proFile)
   let PRO_LIVE = null;                     // true: confirmed; false: no code or refused; null: could not ask (offline)
   const isPro = () => PRO_LIVE === true;
-  function proOff(why) { PRO_LIVE = false; if (proCode()) { try { localStorage.removeItem(PRO_KEY); } catch (e) { /* no storage */ } if (why) toast(why); } }
+  function proOff(why) { PRO_LIVE = false; try { localStorage.removeItem(`${STORE}:proseen`); } catch (e) { /* no storage */ } if (proCode()) { try { localStorage.removeItem(PRO_KEY); } catch (e) { /* no storage */ } if (why) toast(why); } }
   // the launch time came with the page open: the Pro tab appears, and a code bought earlier is checked
   function proLaunch() {
     PRO_ON = true;
@@ -11119,7 +11119,7 @@
         const r = await fetch(`${BOARD.api}/auth/me`, POST_JSON({ session: authSession() }));
         if (r.ok) {
           ACCT.me = acctOf(await r.json());
-          if (ACCT.me.pro) { PRO_LIVE = true; return; }
+          if (ACCT.me.pro) { PRO_LIVE = true; save(`${STORE}:proseen`, Date.now()); return; }     // (proseen: Hoops reads it, hoops.js hasPro)
         } else if (r.status === 401 || r.status === 503) authLost();
         else if (!proCode()) { PRO_LIVE = null; return; }
       } catch (e) { if (!proCode()) { PRO_LIVE = null; return; } }
@@ -11129,7 +11129,7 @@
     if (!BOARD.api) { PRO_LIVE = null; return; }
     try {
       const r = await fetch(`${BOARD.api}/restore`, POST_JSON({ code, key: deviceKey() }));
-      if (r.ok) { PRO_LIVE = true; return; }
+      if (r.ok) { PRO_LIVE = true; save(`${STORE}:proseen`, Date.now()); return; }
       if (r.status === 409) { const d = await r.json().catch(() => ({})); proOff(d.error || 'This code is in use on too many devices'); return; }
       if (r.status === 404 || r.status === 400) { proOff('That Pro code is not valid any more'); return; }
       PRO_LIVE = null;                                                   // the board is down: neither on nor off

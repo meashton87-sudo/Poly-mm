@@ -3,6 +3,13 @@
   "notes": [
     {
       "date": "2026-10-29",
+      "title": "Hoops opens for every Pro player",
+      "items": [
+        "Pro through your signed-in account now opens Hoops on any phone, not only the one with your Pro code."
+      ]
+    },
+    {
+      "date": "2026-10-29",
       "title": "Hoops: a broadcast score bug, and Play without scrolling",
       "items": [
         "A new score bug: each team in its colors with the score, the possession arrow, timeouts and the bonus, and the period, game clock and shot clock beside them.",

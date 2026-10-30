@@ -1207,20 +1207,30 @@
   }
   // Hoops as part of Pro (<meta name="hoops-pro">, site.py --hoops-pro): the device's Pro code, as the game keeps it, opens it
   const HOOPS_PRO = !!document.querySelector('meta[name="hoops-pro"]');
-  const hasPro = () => !!String((load('tmd:v3:pro', null) || {}).code || '');
+  const hasPro = () => !!String((load('tmd:v3:pro', null) || {}).code || '') || Date.now() - (Number(load('tmd:v3:proseen', 0)) || 0) < 30 * 864e5;
+  // Pro the way the football game knows it: a code on this device, the football page having seen Pro here in the last
+  // 30 days (game.js proCheck keeps tmd:v3:proseen), or the signed-in account's own Pro (board /auth/me)
+  async function proCheck() {
+    if (hasPro()) return true;
+    if (!session() || !API) return false;
+    const me = await api('/auth/me', { session: session() });
+    if (me && me.pro) { save('tmd:v3:proseen', Date.now()); if (me.code && !load('tmd:v3:pro', null)) save('tmd:v3:pro', { code: me.code, at: Date.now() }); return true; }
+    return false;
+  }
   function renderPitch() {
     const box = $('card'); box.textContent = '';
     box.append(el('div', 'eyebrow', 'Hoops beta · part of Pro'), el('h2', '', 'The last two minutes of a real basketball game, every day'),
       el('p', 'lead', 'One real game a day: the real score, clock, timeouts and bonus, and you coach one bench, possession by possession, on the court. Every call graded on win chance, the real ending beside yours.'),
       el('p', '', 'Hoops comes with Two-Minute Drill Pro, a one-time purchase with the historic drives, the playoff runs, the scenario builder and no ads.'));
     const a = el('a', 'btn big', 'Get Pro'); a.href = './#archive'; box.append(a);
-    box.append(el('p', 'note', 'Already have Pro? Open the football game on this phone once so it knows, then come back.'));
+    const note = el('p', 'note', 'Already have Pro? '), a2 = el('a', '', 'Open the football game'); a2.href = './#archive';
+    note.append(a2, document.createTextNode(' on this phone once (or sign in there), then come back.')); box.append(note);
     $('board').hidden = true; $('courtbox').hidden = true; $('dock').hidden = true;
   }
   // a free day: Sundays the daily is open to everyone (the modes stay Pro); game.js homeHoops says so on the tile
   const freeDay = () => new Date().getDay() === 0;
   async function boot() {
-    if (HOOPS_PRO && !hasPro() && !freeDay()) return renderPitch();
+    if (HOOPS_PRO && !freeDay() && !(await proCheck())) return renderPitch();
     const src = document.querySelector('meta[name="hoops-data"]');
     try {
       const r = await fetch((src && src.content) || 'hoops/hoops_data.json');
