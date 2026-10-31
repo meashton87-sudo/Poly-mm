@@ -2325,7 +2325,8 @@ async def snap_reach(browser, base: str, sizes: tuple = SIZES) -> list[str]:
                         await check("drawn run", "#drawGo")
                         break
                 else:
-                    out.append(f"{at}: no run drawn to check its key")
+                    if rb:                                  # (a formation with no back, the empty set: no run to draw, nothing to check)
+                        out.append(f"{at}: no run drawn to check its key")
             for what in ("vdef", "defense", "kick", "fgdef", "puntdef", "pat"):
                 await watch("#dock .snapbar .key")
                 await page.evaluate(SHOW, what)
