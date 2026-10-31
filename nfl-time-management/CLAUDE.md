@@ -300,7 +300,10 @@ python scripts/daily_check.py browsers --live http://127.0.0.1:8000 --browser ch
   a side's top 8); hoops.js PTS adds what the five score here (possession pts, played possessions only; the line says the total): the intro's scorer cards (hotHands), the chips and the end card's box score (boxScore). explain() puts each grade in words from the spot's facts (dec.ctx). The playoffs (build.py: nbastats_po_<season>,
   their own spots with po: round, game; never in the daily schedule's shuffle, so set days never move) feed data.famous
   (Famous Endings Week from FAMOUS_START: the most dramatic by drama(), one a series), data.runs (a team's close playoff
-  endings in order) and the modes (hoops.js start(mode, opt): daily, practice, surv, run, build, duel; G.mode). Only the
+  endings in order) and the modes (hoops.js start(mode, opt): daily, practice, surv, run, build, duel, archive (a past day by
+  date on that day's own seed: spotForDate, renderArchive), whatif (the calls before opt.upto replayed on the game's seed, then live from
+  it); G.mode). Your style (renderStyle): the saved daily games' calls on the device against the typical bench's weights
+  (STYLE_NAME). Archive, What if and Your style are Pro (moreHoops, proOpen). Only the
   daily posts or keeps a stats day. A duel link (?duel=<spot id>.<seed>&vs=&by=) replays that game on its seed. Sundays
   the daily is free to everyone (hoops.js freeDay, game.js homeHoops); the modes stay Pro. Teams by city (the data's
   "city"; the two Los Angeles teams tagged, no nicknames). Home's tile (game.js homeHoops), the footer nav and the

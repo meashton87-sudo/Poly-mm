@@ -789,13 +789,20 @@
   const dayN = () => { const a = new Date(2026, 9, 28), b = new Date(); b.setHours(12, 0, 0, 0); a.setHours(12, 0, 0, 0); return Math.max(1, Math.round((b - a) / 864e5) + 1); };
   const allSpots = () => D.spots.concat(D.playoffs || []);
   const spotById = (id) => allSpots().find((s) => s.id === id);
-  const famousDay = () => (D.famous || {})[dayISO()] || null;
+  const famousDay = (date = dayISO()) => (D.famous || {})[date] || null;
+  // a date's daily game: a Famous Endings day's, else the schedule's (a hash of the date when the schedule runs out)
+  function spotForDate(date) {
+    const fid = famousDay(date); if (fid && spotById(fid)) return spotById(fid);
+    const id = D.schedule[date];
+    return D.spots.find((s) => s.id === id) || D.spots[hash('hoops', date) % D.spots.length];
+  }
+  const DAY1 = '2026-10-28';                                  // (the first daily: dayN's day 1)
+  const dayNOf = (date) => { const a = new Date(`${DAY1}T12:00:00`), b = new Date(`${date}T12:00:00`); return Math.max(1, Math.round((b - a) / 864e5) + 1); };
   function pickSpot(mode, opt) {
     if (opt && opt.spot) return opt.spot;
+    if (mode === 'archive') return spotForDate(opt.date);
     if (mode !== 'daily') { const all = allSpots(); return all[Math.floor(Math.random() * all.length)]; }
-    const fid = famousDay(); if (fid && spotById(fid)) return spotById(fid);
-    const id = D.schedule[dayISO()];
-    return D.spots.find((s) => s.id === id) || D.spots[hash('hoops', dayISO()) % D.spots.length];
+    return spotForDate(dayISO());
   }
   // the spot's label: a playoff game's round and number, a built game's own
   const poLine = (sp) => (sp.po ? `${sp.season + 1} playoffs · ${sp.po.name}, Game ${sp.po.game}` : sp.built ? 'A game you built' : `${sp.season}–${String(sp.season + 1).slice(2)} season`);
@@ -806,6 +813,8 @@
     if (m === 'run') return `Playoff run · ${teamCity(G.opt.run.team)} ${G.opt.run.season + 1} · game ${G.opt.k + 1} of ${G.opt.run.spots.length}`;
     if (m === 'build') return 'Your game';
     if (m === 'duel') return 'A duel: the same game, the same bounces';
+    if (m === 'archive') { const f = famousDay(G.opt.date); return `Archive · ${f ? `Famous Endings Week · day ${Object.keys(D.famous).sort().indexOf(G.opt.date) + 1}` : `Day ${dayNOf(G.opt.date)}`}`; }
+    if (m === 'whatif') return `What if · from call ${G.opt.upto + 1}`;
     return 'Practice game';
   }
   function situation(S) {
@@ -929,6 +938,7 @@
     drawBoard();
     const mine = S.poss === S.me, dock = $('dock'); dock.textContent = '';
     dock.append(el('div', 'sit', `${mine ? 'Your ball' : 'Their ball'} · ${situation(S)}`));
+    if (G.mode === 'whatif' && G.decs.length === G.opt.upto) { const x = G.opt.calls[G.opt.upto]; if (x) dock.append(el('div', 'whatif', `The first time you called ${x.opts.find((o) => o.k === x.chosen).label.toLowerCase()}. Try something else.`)); }
     const top = $('board').getBoundingClientRect().top;
     if (top < -4 || top > 80) window.scrollTo({ top: window.scrollY + top - 6, behavior: REDUCED ? 'auto' : 'smooth' });
     const opts = mine ? offenseOptions(S) : Object.keys(DEFENSE), src = mine ? APPROACH : DEFENSE;
@@ -1080,6 +1090,11 @@
       const cl = !G.practice && x.ck ? crowdLine(x.ck, x.chosen) : '';
       if (cl) all.append(el('li', 'crowd', cl));
       for (const o of [...x.opts].sort((a, b) => b.wp - a.wp)) all.append(el('li', o.k === x.chosen ? 'mine' : '', `${o.label}: ${(o.wp * 100).toFixed(1)}% to win${o.k === x.chosen ? ' (yours)' : ''}${o.k === x.best ? ' · best' : ''}`));
+      if (proOpen() && G.mode !== 'whatif' && x.i < decs.length) {
+        const wi = el('button', 'btn small ghostbtn whatifbtn', '↺ What if: replay from here'); wi.type = 'button';
+        wi.addEventListener('click', () => start('whatif', { spot, seed: G.seed, upto: x.i, calls: decs, first: [S.score[S.me], S.score[other(S.me)]], fromMode: G.mode, fromOpt: G.opt }));
+        all.append(el('li', 'wi')); all.lastChild.append(wi);
+      }
       det.append(sm, all); li.append(det); list.append(li);
     }
     box.append(el('h3', '', 'Your calls'), list);
@@ -1126,6 +1141,7 @@
       const rec = load(`${STORE}:run:${G.opt.run.season}-${G.opt.run.team}`, { w: 0, l: 0 });
       return el('p', 'challenge', `${teamCity(G.opt.run.team)}'s ${G.opt.run.season + 1} run: you're ${rec.w}–${rec.l} in its close endings.`);
     }
+    if (G.mode === 'whatif') { const [a, b] = G.opt.first; return el('p', 'challenge', `The first time: ${a > b ? 'won' : a < b ? 'lost' : 'tied'} ${a}–${b}. This time: ${won ? 'won' : S.score[S.me] === S.score[other(S.me)] ? 'tied' : 'lost'} ${S.score[S.me]}–${S.score[other(S.me)]}.`); }
     if (G.mode === 'duel' && G.opt.vs != null) return el('p', 'challenge', G.score > G.opt.vs ? `You beat ${G.opt.by}'s ${G.opt.vs}.` : G.score === G.opt.vs ? `Tied with ${G.opt.by}'s ${G.opt.vs}.` : `${G.opt.by}'s ${G.opt.vs} stands.`);
     return null;
   }
@@ -1137,6 +1153,8 @@
       return n < run.spots.length ? [b(`Next game in the run (${n + 1} of ${run.spots.length})`, () => start('run', { run, k: n, spot: spotById(run.spots[n]) }), 'big')] : [b('Run complete: pick another', () => renderRuns())];
     }
     if (G.mode === 'build') return [b('Play it again', () => start('build', { spot })), b('Build another', () => renderBuilder())];
+    if (G.mode === 'whatif') return [b('Try another call', () => start('whatif', G.opt)), b('Back to your game', () => (G.opt.fromMode === 'daily' ? start('daily') : start(G.opt.fromMode, { ...G.opt.fromOpt, spot, seed: G.opt.seed })))];
+    if (G.mode === 'archive') return [b('Back to the archive', () => renderArchive()), b('Play another game (practice)', () => start('practice'))];
     return [b('Play another game (practice)', () => start('practice'))];
   }
   const proOpen = () => !HOOPS_PRO || hasPro();
@@ -1144,8 +1162,82 @@
     const wrap = el('div', 'more'); wrap.append(el('h3', '', 'More Hoops'));
     if (!proOpen()) { const a = el('a', 'btn ghostbtn', 'Survivor, playoff runs and more come with Pro'); a.href = './#archive'; wrap.append(a); return wrap; }
     const row = el('div', 'row'), b = (t, f) => { const x = el('button', 'btn ghostbtn', t); x.type = 'button'; x.addEventListener('click', f); row.append(x); };
+    b('Past games', () => renderArchive()); b('Your style', () => renderStyle());
     b('Survivor', () => start('surv', { wins: 0 })); b('Playoff runs', () => renderRuns()); b('Build a game', () => renderBuilder()); b('Practice', () => start('practice'));
     wrap.append(row); return wrap;
+  }
+  // the archive (Pro): every daily since day 1, each on its own day's seed (the same bounces everyone had); played here it
+  // is graded but posts nowhere and keeps no stats day
+  function renderArchive() {
+    $('dock').textContent = ''; caption(''); const box = $('card'); box.textContent = '';
+    box.append(el('div', 'eyebrow', 'Past games'), el('h2', '', 'Every daily game so far'),
+      el('p', 'note', 'The same game and the same bounces everyone had that day. Played from here it is graded, and your streak and the day’s list stay as they were.'));
+    const st = load(`${STORE}:stats`, { days: {} }), list = el('div', 'runs'), today = dayISO();
+    for (let d = new Date(`${today}T12:00:00`); ; ) {
+      d.setDate(d.getDate() - 1);
+      const date = dayISO(d); if (date < DAY1) break;
+      const sp = spotForDate(date), mine = st.days[date], f = famousDay(date), x = el('button', 'runbtn'); x.type = 'button';
+      x.append(el('b', '', `${f ? `Famous Endings · ` : ''}Day ${dayNOf(date)} · ${teamCity(sp.away)} at ${teamCity(sp.home)}`),
+        el('span', '', `${new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} · you coach ${teamCity(sp.me)} · ${poLine(sp)}${mine ? ` · you: ${mine.score}${mine.won ? ', won' : ', lost'}` : ' · not played'}`));
+      x.addEventListener('click', () => start('archive', { date }));
+      list.append(x);
+    }
+    if (!list.childNodes.length) list.append(el('p', 'note', 'Yesterday’s game shows up here tomorrow.'));
+    box.append(list, moreHoops());
+    box.scrollIntoView({ block: 'start' });
+  }
+  // your style (Pro): every daily you have played on this phone (the saved calls), what you call against the typical bench
+  // in the same spots, a name for it, the calls that cost you, and your record against the real coaches
+  const STYLE_NAME = { three: ['Gunslinger', 'You hunt threes far more than real benches do.'], quick: ['Run and Gun', 'You push the pace when others set it up.'],
+    work: ['Clock Killer', 'You work the clock and wait for the good one.'], last: ['Clock Killer', 'You hold for the last shot and make them wait.'],
+    rim: ['Downhill', 'You attack the rim and live at the line.'], two4one: ['Chess Player', 'You play the clock for the extra possession.'],
+    tquick: ['Chess Player', 'You use your timeouts to set the play.'], tthree: ['Chess Player', 'You use your timeouts to draw one up.'],
+    foul: ['Hack Artist', 'You foul early to stop the clock.'], press: ['Press Machine', 'You press and trap, chasing the steal.'], straight: ['Lockdown', 'You trust your defense and play it straight.'] };
+  function renderStyle() {
+    $('dock').textContent = ''; caption(''); const box = $('card'); box.textContent = '';
+    box.append(el('div', 'eyebrow', 'Your style'));
+    const games = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(`${STORE}:day:`)) { const g = load(k, null); if (g && g.done && Array.isArray(g.graded) && g.graded.length) games.push({ date: k.slice(STORE.length + 5), ...g }); }
+    }
+    if (games.length < 3) {
+      box.append(el('h2', '', 'Play a few more dailies'), el('p', 'note', `Your style shows after 3 daily games on this phone (you have ${games.length}). Every call you make in them counts.`), moreHoops());
+      return;
+    }
+    const mine = {}, typ = {}, calls = games.flatMap((g) => g.graded);
+    let good = 0;
+    for (const x of calls) {
+      mine[x.chosen] = (mine[x.chosen] || 0) + 1;
+      for (const o of x.opts || []) typ[o.k] = (typ[o.k] || 0) + (o.q || 0);
+      if (x.cost < 0.01) good++;
+    }
+    const lift = Object.keys(mine).filter((k) => STYLE_NAME[k] && mine[k] >= 2).map((k) => [k, (mine[k] + 0.5) / ((typ[k] || 0) + 0.5)]).sort((a, b) => b[1] - a[1]);
+    const top = lift[0] ? lift[0][0] : 'straight', [name, line] = STYLE_NAME[top];
+    box.append(el('h2', 'stylename', name), el('p', 'lead', line));
+    const st = load(`${STORE}:stats`, { days: {} }), days = Object.values(st.days), vs = { b: 0, s: 0, w: 0 };
+    days.forEach((d) => { if (d.vs > 0) vs.b++; else if (d.vs < 0) vs.w++; else vs.s++; });
+    const avg = days.length ? Math.round(days.reduce((a, d) => a + (d.score || 0), 0) / days.length) : 0, best = days.reduce((a, d) => Math.max(a, d.score || 0), 0);
+    const kv = el('div', 'stylekv');
+    [[String(days.length), 'dailies'], [String(avg), 'average score'], [String(best), 'best'], [`${Math.round(100 * good / calls.length)}%`, 'calls the best or close'],
+      [`${vs.b}–${vs.w}`, 'vs the real coaches'], [`${days.filter((d) => d.won).length}–${days.filter((d) => !d.won).length}`, 'won–lost']].forEach(([a, b]) => { const c = el('div', ''); c.append(el('b', '', a), el('span', '', b)); kv.append(c); });
+    box.append(kv);
+    const tbl = el('div', 'stylebars'); tbl.append(el('h3', '', 'What you call, against real benches in the same spots'));
+    Object.keys(mine).sort((a, b) => mine[b] - mine[a]).forEach((k) => {
+      const label = (APPROACH[k] || DEFENSE[k] || { label: k }).label, you = mine[k] / calls.length, them = (typ[k] || 0) / calls.length, row = el('div', 'sbar');
+      const bars = el('div', 'bars'), b1 = el('i', 'you'), b2 = el('i', 'them');
+      b1.style.width = `${Math.round(100 * you)}%`; b2.style.width = `${Math.round(100 * them)}%`; bars.append(b1, b2);
+      row.append(el('span', 'sl', label), bars, el('span', 'sv', `${Math.round(100 * you)}% · ${Math.round(100 * them)}%`));
+      tbl.append(row);
+    });
+    tbl.append(el('p', 'note', 'Top bar: you. Bottom bar: the typical bench in the same spots.'));
+    box.append(tbl);
+    const costly = calls.filter((x) => x.cost >= 0.01), byk = {};
+    costly.forEach((x) => { byk[x.chosen] = (byk[x.chosen] || 0) + x.cost; });
+    const worst = Object.entries(byk).sort((a, b) => b[1] - a[1])[0];
+    if (worst) box.append(el('p', 'verdict', `What costs you most: ${(APPROACH[worst[0]] || DEFENSE[worst[0]]).label.toLowerCase()} in the wrong spots, ${(worst[1] * 100).toFixed(1)} points of win chance across your games. Tap a call on any end card and replay from there to see the difference.`));
+    box.append(moreHoops());
+    box.scrollIntoView({ block: 'start' });
   }
   function renderRuns() {
     $('dock').textContent = ''; caption(''); const box = $('card'); box.textContent = '';
@@ -1247,10 +1339,21 @@
     while (FIVE.home.length < 5) FIVE.home.push(`${teamCity(spot.home)} ${FIVE.home.length + 1}`);
     while (FIVE.away.length < 5) FIVE.away.push(`${teamCity(spot.away)} ${FIVE.away.length + 1}`);
     PTS = { home: { ...((spot.pts || {}).home || {}) }, away: { ...((spot.pts || {}).away || {}) } };
-    G = { seed: opt && opt.seed != null ? opt.seed >>> 0 : practice ? (Math.random() * 1e9) >>> 0 : hash('hoops', dayISO(), spot.id), decs: [], lines: [], practice, mode, opt: opt || {},
+    G = { seed: opt && opt.seed != null ? opt.seed >>> 0 : mode === 'archive' ? hash('hoops', opt.date, spot.id) : practice ? (Math.random() * 1e9) >>> 0 : hash('hoops', dayISO(), spot.id), decs: [], lines: [], practice, mode, opt: opt || {},
       done: false, score: null, started: false, realCall: spot.built ? null : realCall(spot) };
     if (!practice && !CROWD) api(`/hoops/day?date=${dayISO()}`).then((v) => { if (v && v.calls) CROWD = v.calls; });
     drawCourt(); badge(''); caption('');
+    if (mode === 'whatif') {                                // the same game, the same bounces, your calls up to the one picked
+      opt.calls.slice(0, opt.upto).forEach((x) => {
+        if (S.over) return;
+        if (S.clock <= 0) { const t = endOfPeriod(S); if (!t) return; note(t); }
+        const mine = S.poss === S.me, opts = mine ? offenseOptions(S) : Object.keys(DEFENSE);
+        if (opts.includes(x.chosen)) replay(x.chosen, opts, mine, x);
+      });
+      G.started = true; $('card').textContent = ''; playOverlay(false);
+      setPositions(S.poss, S.dead); place(); if (G.lines.length) caption(G.lines[G.lines.length - 1]);
+      return step();
+    }
     const saved = practice ? null : load(dayKey(), null);
     if (saved && saved.spotId === spot.id) {
       G.seed = saved.seed; G.started = saved.started;
