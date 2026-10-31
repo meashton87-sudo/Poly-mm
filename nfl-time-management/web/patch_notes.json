@@ -2,6 +2,15 @@
   "about": "Every change to the game, newest first. Each update adds its notes here (scripts/site.py builds /patch-notes from this file). Game changes only: no ads, analytics, payments or behind-the-scenes work, and nothing that is not live yet.",
   "notes": [
     {
+      "date": "2026-10-31",
+      "title": "Hoops for Pro: past games, What if, your style",
+      "items": [
+        "Past games: every Hoops daily so far, the same game and bounces everyone had that day. Your streak and the day's list stay as they were.",
+        "What if: tap any call on the end card and replay the game from there with a different call. The end card compares it with the first time.",
+        "Your style: how you coach across your dailies, against real benches in the same spots, with a name for it and your record against the real coaches."
+      ]
+    },
+    {
       "date": "2026-10-30",
       "title": "Hoops: the call and the box score",
       "items": [
